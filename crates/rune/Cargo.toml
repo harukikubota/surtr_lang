@@ -1,0 +1,16 @@
+[package]
+name = "rune"
+version = "0.1.0"
+edition = "2021"
+description = "Runtime User-facing Node Entry — the Surtr CLI"
+
+[[bin]]
+name = "surtr"
+path = "src/main.rs"
+
+[dependencies]
+spire = { path = "../spire" }
+sigil = { path = "../sigil" }
+scar  = { path = "../scar" }
+forge = { path = "../forge" }
+eldr  = { path = "../eldr" }

@@ -1,0 +1,18 @@
+# step7.srt
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+user: User = User { name: "alice", age: 30 }
+print(to_string(user))
+print(to_string(user.name))
+print(to_string(user.age))
+
+defrecord Point(x: Float, y: Float)
+point = Point(1.0, 2.0)
+print(to_string(point))
+print(to_string(point.x))
+
+point2 = Point(y: 5.0, x: 3.0)
+print(to_string(point2.x))

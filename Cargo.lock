@@ -3,5 +3,58 @@
 version = 4
 
 [[package]]
+name = "eldr"
+version = "0.1.0"
+dependencies = [
+ "forge",
+]
+
+[[package]]
+name = "forge"
+version = "0.1.0"
+dependencies = [
+ "scar",
+ "sigil",
+ "spire",
+]
+
+[[package]]
+name = "rune"
+version = "0.1.0"
+dependencies = [
+ "eldr",
+ "forge",
+ "scar",
+ "sigil",
+ "spire",
+]
+
+[[package]]
+name = "scar"
+version = "0.1.0"
+dependencies = [
+ "sigil",
+ "spire",
+]
+
+[[package]]
+name = "sigil"
+version = "0.1.0"
+dependencies = [
+ "spire",
+]
+
+[[package]]
+name = "spire"
+version = "0.1.0"
+
+[[package]]
 name = "surtr"
 version = "0.1.0"
+dependencies = [
+ "eldr",
+ "forge",
+ "scar",
+ "sigil",
+ "spire",
+]

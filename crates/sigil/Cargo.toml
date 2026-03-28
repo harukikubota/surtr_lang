@@ -1,0 +1,8 @@
+[package]
+name = "sigil"
+version = "0.1.0"
+edition = "2021"
+description = "Name resolver — binds identifiers to unique definitions"
+
+[dependencies]
+spire = { path = "../spire" }

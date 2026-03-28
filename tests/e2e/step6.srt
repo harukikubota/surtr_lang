@@ -1,0 +1,9 @@
+# step6.srt
+nums = [1, 2, 3]
+print(to_string(nums))
+
+strs = ["a", "b", "c"]
+print(to_string(strs))
+
+empty: [Int] = []
+print(to_string(empty))

@@ -1,0 +1,9 @@
+[package]
+name = "scar"
+version = "0.1.0"
+edition = "2021"
+description = "Surtr's Checker And type Reasoner"
+
+[dependencies]
+spire = { path = "../spire" }
+sigil = { path = "../sigil" }

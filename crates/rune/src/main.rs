@@ -5,7 +5,12 @@ use std::process;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let file_path = &args[1];
+    if args.len() < 3 || args[1] != "run" {
+        eprintln!("Usage: surtr run <file.srt>");
+        process::exit(1);
+    }
+
+    let file_path = &args[2];
     let source = match fs::read_to_string(file_path) {
         Ok(s) => s,
         Err(e) => {
@@ -32,11 +37,6 @@ fn run_pipeline(source: &str, file_path: &str) -> Result<(), Box<dyn std::error:
 
     // Phase 4: Forge — generate bytecode
     let bytecode = forge::codegen(typed)?;
-
-    println!("-----------------------------------");
-    println!("{:?}", bytecode.clone());
-    println!("-----------------------------------");
-    
 
     // Phase 5: Eldr — execute
     let mut vm = eldr::VM::new(bytecode)

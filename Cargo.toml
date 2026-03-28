@@ -6,3 +6,19 @@ license = "MIT"
 readme = "README.md"
 
 [dependencies]
+spire = { path = "crates//spire" }
+sigil = { path = "crates//sigil" }
+scar  = { path = "crates//scar" }
+forge = { path = "crates//forge" }
+eldr  = { path = "crates//eldr" }
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/spire",
+    "crates/sigil",
+    "crates/scar",
+    "crates/forge",
+    "crates/eldr",
+    "crates/rune",
+]

@@ -1,0 +1,10 @@
+[package]
+name = "forge"
+version = "0.1.0"
+edition = "2021"
+description = "Function Outputting Resolved Graph Emissions — code generator"
+
+[dependencies]
+spire = { path = "../spire" }
+sigil = { path = "../sigil" }
+scar  = { path = "../scar" }

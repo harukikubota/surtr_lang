@@ -1,0 +1,7 @@
+[package]
+name = "spire"
+version = "0.1.0"
+edition = "2021"
+description = "Surtr's Parser Ingesting Raw Expressions"
+
+[dependencies]
