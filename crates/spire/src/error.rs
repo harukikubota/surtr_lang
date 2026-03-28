@@ -8,7 +8,11 @@ pub struct ParseError {
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ParseError at {}..{}: {}", self.span.start, self.span.end, self.message)
+        write!(
+            f,
+            "ParseError at {}..{}: {}",
+            self.span.start, self.span.end, self.message
+        )
     }
 }
 

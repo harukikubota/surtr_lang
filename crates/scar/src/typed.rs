@@ -1,5 +1,5 @@
-use spire::ast::{BinOp, Lit, Span};
 use sigil::resolved::ResolvedId;
+use spire::ast::{BinOp, Lit, Span};
 
 use crate::types::Ty;
 
@@ -30,8 +30,8 @@ pub enum TypedInner {
     /// Struct literal — tag + field values (in definition order)
     StructLit(u32, Vec<TypedNode>),
 
-    /// Record literal — tag + field values (in definition order)
-    RecordLit(u32, Vec<TypedNode>),
+    /// Constructor call — tag + field values (in definition order)
+    ConstructorCall(u32, Vec<TypedNode>),
 
     /// Error type definition — tag + show expression
     DeferrorDef(u32, Box<TypedNode>),

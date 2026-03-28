@@ -71,8 +71,16 @@ impl Parser {
 
     #[allow(dead_code)]
     fn at_stmt_end(&self) -> bool {
-        matches!(self.peek(), Token::Newline | Token::Semicolon | Token::Eof
-            | Token::RBrace | Token::RParen | Token::RBrack | Token::Comma)
+        matches!(
+            self.peek(),
+            Token::Newline
+                | Token::Semicolon
+                | Token::Eof
+                | Token::RBrace
+                | Token::RParen
+                | Token::RBrack
+                | Token::Comma
+        )
     }
 
     // ── Program ──
@@ -171,7 +179,10 @@ impl Parser {
         while matches!(self.peek(), Token::Dot) {
             self.advance(); // consume .
             let (field, fspan) = self.expect_ident()?;
-            let span = Span { start: expr.span().start, end: fspan.end };
+            let span = Span {
+                start: expr.span().start,
+                end: fspan.end,
+            };
             expr = Ast::FieldAccess(span, Box::new(expr), field);
         }
 
@@ -217,14 +228,29 @@ impl Parser {
                 let end = inner.span().end;
                 // Fold negative literals directly
                 match inner {
-                    Ast::Lit(_, Lit::Int(n)) => Ok(Ast::Lit(Span { start: sp.start, end }, Lit::Int(-n))),
-                    Ast::Lit(_, Lit::Float(f)) => Ok(Ast::Lit(Span { start: sp.start, end }, Lit::Float(-f))),
+                    Ast::Lit(_, Lit::Int(n)) => Ok(Ast::Lit(
+                        Span {
+                            start: sp.start,
+                            end,
+                        },
+                        Lit::Int(-n),
+                    )),
+                    Ast::Lit(_, Lit::Float(f)) => Ok(Ast::Lit(
+                        Span {
+                            start: sp.start,
+                            end,
+                        },
+                        Lit::Float(-f),
+                    )),
                     _ => {
-                        // General unary minus: desugar to 0 - expr (for Int) 
+                        // General unary minus: desugar to 0 - expr (for Int)
                         // For now, only support literal negation
                         Err(ParseError {
                             message: "Unary minus is only supported on numeric literals".into(),
-                            span: Span { start: sp.start, end },
+                            span: Span {
+                                start: sp.start,
+                                end,
+                            },
                         })
                     }
                 }
@@ -240,13 +266,21 @@ impl Parser {
                     while matches!(self.peek(), Token::Comma) {
                         self.advance();
                         self.skip_newlines();
-                        if matches!(self.peek(), Token::RBrack) { break; }
+                        if matches!(self.peek(), Token::RBrack) {
+                            break;
+                        }
                         elems.push(self.parse_expr()?);
                     }
                 }
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RBrack)?;
-                Ok(Ast::List(Span { start: sp.start, end: end_span.end }, elems))
+                Ok(Ast::List(
+                    Span {
+                        start: sp.start,
+                        end: end_span.end,
+                    },
+                    elems,
+                ))
             }
 
             // Parenthesized expression
@@ -258,9 +292,7 @@ impl Parser {
             }
 
             // Match expression
-            Token::Match => {
-                self.parse_match_expr()
-            }
+            Token::Match => self.parse_match_expr(),
 
             // Identifier — could be: variable, binding, function call
             Token::Ident(name) => {
@@ -277,12 +309,20 @@ impl Parser {
 
     /// After seeing an identifier, figure out what it is:
     /// - `Name { field: val }` → StructLit (uppercase start + `{`)
-    /// - `Name(args)` → RecordLit if uppercase, App if lowercase
+    /// - `Name(args)` → ConstructorCall if uppercase, App if lowercase
     /// - `name: Type = expr` → Bind (annotated)
     /// - `name = expr` → Bind
     /// - otherwise → Var
-    fn parse_ident_continuation(&mut self, name: Symbol, name_span: Span) -> Result<Ast, ParseError> {
-        let is_uppercase = name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false);
+    fn parse_ident_continuation(
+        &mut self,
+        name: Symbol,
+        name_span: Span,
+    ) -> Result<Ast, ParseError> {
+        let is_uppercase = name
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false);
 
         // Struct literal: Name { field: val, ... }
         if is_uppercase && matches!(self.peek(), Token::LBrace) {
@@ -300,7 +340,9 @@ impl Parser {
                     if matches!(self.peek(), Token::Comma) {
                         self.advance();
                         self.skip_newlines();
-                        if matches!(self.peek(), Token::RBrace) { break; }
+                        if matches!(self.peek(), Token::RBrace) {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -308,31 +350,39 @@ impl Parser {
             }
             self.skip_newlines();
             let end_span = self.expect(&Token::RBrace)?;
-            let span = Span { start: name_span.start, end: end_span.end };
+            let span = Span {
+                start: name_span.start,
+                end: end_span.end,
+            };
             return Ok(Ast::StructLit(span, name, fields));
         }
 
-        // Function call or record literal: name(args)
+        // Function call or constructor call: name(args)
         if matches!(self.peek(), Token::LParen) {
             self.advance();
             self.skip_newlines();
 
             if is_uppercase {
-                // Record literal: Name(val, ...) or Name(field: val, ...)
+                // Constructor call: Name(val, ...) or Name(field: val, ...)
                 let mut args = Vec::new();
                 if !matches!(self.peek(), Token::RParen) {
                     args.push(self.parse_record_lit_arg()?);
                     while matches!(self.peek(), Token::Comma) {
                         self.advance();
                         self.skip_newlines();
-                        if matches!(self.peek(), Token::RParen) { break; }
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
                         args.push(self.parse_record_lit_arg()?);
                     }
                 }
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                let span = Span { start: name_span.start, end: end_span.end };
-                return Ok(Ast::RecordLit(span, name, args));
+                let span = Span {
+                    start: name_span.start,
+                    end: end_span.end,
+                };
+                return Ok(Ast::ConstructorCall(span, name, args));
             } else {
                 // Normal function call
                 let mut args = Vec::new();
@@ -341,13 +391,18 @@ impl Parser {
                     while matches!(self.peek(), Token::Comma) {
                         self.advance();
                         self.skip_newlines();
-                        if matches!(self.peek(), Token::RParen) { break; }
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
                         args.push(self.parse_expr()?);
                     }
                 }
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                let span = Span { start: name_span.start, end: end_span.end };
+                let span = Span {
+                    start: name_span.start,
+                    end: end_span.end,
+                };
                 let func = Ast::Var(name_span, name);
                 return Ok(Ast::App(span, Box::new(func), args));
             }
@@ -359,7 +414,10 @@ impl Parser {
             let ty = self.parse_type()?;
             self.expect(&Token::Bind)?;
             let rhs = self.parse_expr()?;
-            let span = Span { start: name_span.start, end: rhs.span().end };
+            let span = Span {
+                start: name_span.start,
+                end: rhs.span().end,
+            };
             let pat = AstPattern::Annotated(name_span, name, ty);
             return Ok(Ast::Bind(span, pat, Box::new(rhs)));
         }
@@ -368,7 +426,10 @@ impl Parser {
         if matches!(self.peek(), Token::Bind) {
             self.advance();
             let rhs = self.parse_expr()?;
-            let span = Span { start: name_span.start, end: rhs.span().end };
+            let span = Span {
+                start: name_span.start,
+                end: rhs.span().end,
+            };
             let pat = AstPattern::Var(name_span, name);
             return Ok(Ast::Bind(span, pat, Box::new(rhs)));
         }
@@ -406,7 +467,13 @@ impl Parser {
             self.advance();
             let inner = self.parse_type()?;
             let end = self.expect(&Token::RBrack)?;
-            return Ok(AstTy::ListOf(Span { start: sp.start, end: end.end }, Box::new(inner)));
+            return Ok(AstTy::ListOf(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                Box::new(inner),
+            ));
         }
 
         // Named type, possibly with type args: Result<Int> or Result<Int, Error>
@@ -423,7 +490,10 @@ impl Parser {
                 None
             };
             let end = self.expect(&Token::Gt)?;
-            let span = Span { start: sp.start, end: end.end };
+            let span = Span {
+                start: sp.start,
+                end: end.end,
+            };
 
             if name == "Result" {
                 return Ok(AstTy::ResultOf(span, Box::new(first), second));
@@ -452,7 +522,11 @@ impl Parser {
             let (fname, fspan) = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
-            fields.push(StructField { name: fname, ty: fty, span: fspan });
+            fields.push(StructField {
+                name: fname,
+                ty: fty,
+                span: fspan,
+            });
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
                 self.advance();
@@ -460,7 +534,14 @@ impl Parser {
             }
         }
         let end = self.expect(&Token::RBrace)?;
-        Ok(Ast::StructDef(Span { start: sp.start, end: end.end }, name, fields))
+        Ok(Ast::StructDef(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            name,
+            fields,
+        ))
     }
 
     /// `defrecord Name(field: Type, ...)`
@@ -478,19 +559,32 @@ impl Parser {
                 let (fname, fspan) = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
-                fields.push(RecordField { name: fname, ty: fty, span: fspan });
+                fields.push(RecordField {
+                    name: fname,
+                    ty: fty,
+                    span: fspan,
+                });
                 self.skip_newlines();
                 if matches!(self.peek(), Token::Comma) {
                     self.advance();
                     self.skip_newlines();
-                    if matches!(self.peek(), Token::RParen) { break; }
+                    if matches!(self.peek(), Token::RParen) {
+                        break;
+                    }
                 } else {
                     break;
                 }
             }
         }
         let end = self.expect(&Token::RParen)?;
-        Ok(Ast::RecordDef(Span { start: sp.start, end: end.end }, name, fields))
+        Ok(Ast::RecordDef(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            name,
+            fields,
+        ))
     }
 
     /// `deferror Name { expr }` or `deferror Name(fields) { expr }`
@@ -510,12 +604,18 @@ impl Parser {
                     let (fname, fspan) = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
                     let fty = self.parse_type()?;
-                    fields.push(RecordField { name: fname, ty: fty, span: fspan });
+                    fields.push(RecordField {
+                        name: fname,
+                        ty: fty,
+                        span: fspan,
+                    });
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
                         self.advance();
                         self.skip_newlines();
-                        if matches!(self.peek(), Token::RParen) { break; }
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -533,7 +633,10 @@ impl Parser {
         let end = self.expect(&Token::RBrace)?;
 
         Ok(Ast::DeferrorDef(
-            Span { start: sp.start, end: end.end },
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
             name,
             fields,
             Box::new(show_expr),
@@ -565,7 +668,14 @@ impl Parser {
             }
         }
         let end = self.expect(&Token::RBrace)?;
-        Ok(Ast::Match(Span { start: sp.start, end: end.end }, Box::new(scrutinee), arms))
+        Ok(Ast::Match(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            Box::new(scrutinee),
+            arms,
+        ))
     }
 
     /// Match pattern: `True`, `False`, `Ok(var)`, `Err(var)`
@@ -611,12 +721,21 @@ impl Parser {
 impl Ast {
     pub fn span(&self) -> &Span {
         match self {
-            Ast::Lit(s, _) | Ast::Var(s, _) | Ast::App(s, _, _) | Ast::Block(s, _)
-            | Ast::Bind(s, _, _) | Ast::BinOp(s, _, _, _) | Ast::List(s, _)
-            | Ast::Match(s, _, _) | Ast::FieldAccess(s, _, _)
-            | Ast::StructDef(s, _, _) | Ast::RecordDef(s, _, _)
-            | Ast::StructLit(s, _, _) | Ast::RecordLit(s, _, _)
-            | Ast::DeferrorDef(s, _, _, _) | Ast::Semi(s, _) => s,
+            Ast::Lit(s, _)
+            | Ast::Var(s, _)
+            | Ast::App(s, _, _)
+            | Ast::Block(s, _)
+            | Ast::Bind(s, _, _)
+            | Ast::BinOp(s, _, _, _)
+            | Ast::List(s, _)
+            | Ast::Match(s, _, _)
+            | Ast::FieldAccess(s, _, _)
+            | Ast::StructDef(s, _, _)
+            | Ast::RecordDef(s, _, _)
+            | Ast::StructLit(s, _, _)
+            | Ast::ConstructorCall(s, _, _)
+            | Ast::DeferrorDef(s, _, _, _)
+            | Ast::Semi(s, _) => s,
         }
     }
 }
@@ -678,15 +797,13 @@ mod tests {
         // 1 + 2 * 3 should parse as 1 + (2 * 3)
         let ast = parse("x = 1 + 2 * 3").unwrap();
         match &ast[0] {
-            Ast::Bind(_, _, rhs) => {
-                match rhs.as_ref() {
-                    Ast::BinOp(_, BinOp::Add, left, right) => {
-                        assert!(matches!(left.as_ref(), Ast::Lit(_, Lit::Int(1))));
-                        assert!(matches!(right.as_ref(), Ast::BinOp(_, BinOp::Mul, _, _)));
-                    }
-                    _ => panic!("Expected Add at top"),
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::BinOp(_, BinOp::Add, left, right) => {
+                    assert!(matches!(left.as_ref(), Ast::Lit(_, Lit::Int(1))));
+                    assert!(matches!(right.as_ref(), Ast::BinOp(_, BinOp::Mul, _, _)));
                 }
-            }
+                _ => panic!("Expected Add at top"),
+            },
             _ => panic!("Expected Bind"),
         }
     }
@@ -695,12 +812,10 @@ mod tests {
     fn test_list_literal() {
         let ast = parse("nums = [1, 2, 3]").unwrap();
         match &ast[0] {
-            Ast::Bind(_, _, rhs) => {
-                match rhs.as_ref() {
-                    Ast::List(_, elems) => assert_eq!(elems.len(), 3),
-                    _ => panic!("Expected List"),
-                }
-            }
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::List(_, elems) => assert_eq!(elems.len(), 3),
+                _ => panic!("Expected List"),
+            },
             _ => panic!("Expected Bind"),
         }
     }

@@ -9,7 +9,11 @@ pub struct TypeError {
 
 impl std::fmt::Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TypeError at {}..{}: {}", self.span.start, self.span.end, self.message)?;
+        write!(
+            f,
+            "TypeError at {}..{}: {}",
+            self.span.start, self.span.end, self.message
+        )?;
         if let Some(hint) = &self.hint {
             write!(f, "\n  hint: {}", hint)?;
         }

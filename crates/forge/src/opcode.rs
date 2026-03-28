@@ -4,7 +4,6 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Opcode {
     // ── Constants & locals ──
-
     /// Push a constant from the pool onto the stack.
     LoadConst(u32),
     /// Load a local variable onto the stack.
@@ -58,14 +57,12 @@ pub enum Opcode {
     NotBool,
 
     // ── List ──
-
     /// Construct a list from the top `n` stack values.
     ListNew(u32),
     /// Push an empty list.
     ListEmpty,
 
     // ── Struct / Tagged ──
-
     /// Construct a tagged value from the top `n` stack values.
     StructNew(u32),
     /// Extract field at index from a tagged value on top of the stack.
@@ -74,13 +71,11 @@ pub enum Opcode {
     GetTag,
 
     // ── Built-in function call ──
-
     /// Call a built-in function by id with the given arity.
     /// `builtin_id` indexes into the BUILTINS table.
     CallBuiltin(u16, u8),
 
     // ── Control flow ──
-
     /// Unconditional jump to absolute address.
     Jump(u32),
     /// Pop stack; jump if value is `false`.
@@ -89,7 +84,6 @@ pub enum Opcode {
     JumpIfTrue(u32),
 
     // ── Stack management ──
-
     /// Discard top of stack.
     Pop,
 

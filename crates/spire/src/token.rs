@@ -20,12 +20,12 @@ pub enum Token {
     Ident(String),
 
     // ── Arithmetic operators ──
-    Plus,      // +
-    Minus,     // -
-    Star,      // *
-    Slash,     // /
-    Percent,   // %
-    Concat,    // ++
+    Plus,    // +
+    Minus,   // -
+    Star,    // *
+    Slash,   // /
+    Percent, // %
+    Concat,  // ++
 
     // ── Comparison / equality ──
     EqEq,   // ==
@@ -36,16 +36,16 @@ pub enum Token {
     GtEq,   // >=
 
     // ── Assignment ──
-    Bind,       // =
-    SafeBind,   // =?
+    Bind,     // =
+    SafeBind, // =?
 
     // ── Delimiters ──
-    LParen,   // (
-    RParen,   // )
-    LBrack,   // [
-    RBrack,   // ]
-    LBrace,   // {
-    RBrace,   // }
+    LParen, // (
+    RParen, // )
+    LBrack, // [
+    RBrack, // ]
+    LBrace, // {
+    RBrace, // }
 
     // ── Punctuation ──
     Comma,     // ,

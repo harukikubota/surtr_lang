@@ -64,13 +64,15 @@ impl VM {
 
     /// Execute the loaded bytecode.
     pub fn run(&mut self) -> Result<(), RuntimeError> {
-        use forge::opcode::Opcode;
-        use forge::bytecode::Constant;
         use crate::builtin::BUILTINS;
+        use forge::bytecode::Constant;
+        use forge::opcode::Opcode;
 
         loop {
             if self.pc >= self.bytecode.opcodes.len() {
-                return Err(RuntimeError { message: "PC out of bounds".into() });
+                return Err(RuntimeError {
+                    message: "PC out of bounds".into(),
+                });
             }
             let op = self.bytecode.opcodes[self.pc].clone();
             self.pc += 1;
@@ -113,12 +115,22 @@ impl VM {
                 Opcode::SubInt => self.int_binop(|a, b| Ok(Value::Int(a - b)))?,
                 Opcode::MulInt => self.int_binop(|a, b| Ok(Value::Int(a * b)))?,
                 Opcode::DivInt => self.int_binop(|a, b| {
-                    if b == 0 { Err(RuntimeError { message: "Division by zero".into() }) }
-                    else { Ok(Value::Int(a / b)) }
+                    if b == 0 {
+                        Err(RuntimeError {
+                            message: "Division by zero".into(),
+                        })
+                    } else {
+                        Ok(Value::Int(a / b))
+                    }
                 })?,
                 Opcode::ModInt => self.int_binop(|a, b| {
-                    if b == 0 { Err(RuntimeError { message: "Modulo by zero".into() }) }
-                    else { Ok(Value::Int(a % b)) }
+                    if b == 0 {
+                        Err(RuntimeError {
+                            message: "Modulo by zero".into(),
+                        })
+                    } else {
+                        Ok(Value::Int(a % b))
+                    }
                 })?,
 
                 // ── Arithmetic (Float) ──
@@ -211,7 +223,11 @@ impl VM {
                     let tag_val = self.pop_stack()?;
                     let tag = match tag_val {
                         Value::Int(t) => t as u32,
-                        _ => return Err(RuntimeError { message: "StructNew: expected Int tag".into() }),
+                        _ => {
+                            return Err(RuntimeError {
+                                message: "StructNew: expected Int tag".into(),
+                            })
+                        }
                     };
                     self.stack.push(Value::Tagged { tag, fields });
                 }
@@ -227,7 +243,11 @@ impl VM {
                                 });
                             }
                         }
-                        _ => return Err(RuntimeError { message: "GetField on non-tagged value".into() }),
+                        _ => {
+                            return Err(RuntimeError {
+                                message: "GetField on non-tagged value".into(),
+                            })
+                        }
                     }
                 }
                 Opcode::GetTag => {
@@ -236,7 +256,11 @@ impl VM {
                         Value::Tagged { tag, .. } => {
                             self.stack.push(Value::Int(tag as i64));
                         }
-                        _ => return Err(RuntimeError { message: "GetTag on non-tagged value".into() }),
+                        _ => {
+                            return Err(RuntimeError {
+                                message: "GetTag on non-tagged value".into(),
+                            })
+                        }
                     }
                 }
 
@@ -261,7 +285,11 @@ impl VM {
                     match val {
                         Value::Bool(false) => self.pc = addr as usize,
                         Value::Bool(true) => {} // fall through
-                        _ => return Err(RuntimeError { message: "JumpIfFalse: expected Bool".into() }),
+                        _ => {
+                            return Err(RuntimeError {
+                                message: "JumpIfFalse: expected Bool".into(),
+                            })
+                        }
                     }
                 }
                 Opcode::JumpIfTrue(addr) => {
@@ -269,7 +297,11 @@ impl VM {
                     match val {
                         Value::Bool(true) => self.pc = addr as usize,
                         Value::Bool(false) => {} // fall through
-                        _ => return Err(RuntimeError { message: "JumpIfTrue: expected Bool".into() }),
+                        _ => {
+                            return Err(RuntimeError {
+                                message: "JumpIfTrue: expected Bool".into(),
+                            })
+                        }
                     }
                 }
             }
@@ -279,39 +311,50 @@ impl VM {
     // ── Stack helpers ──
 
     fn pop_stack(&mut self) -> Result<Value, RuntimeError> {
-        self.stack.pop().ok_or_else(|| RuntimeError { message: "Stack underflow".into() })
+        self.stack.pop().ok_or_else(|| RuntimeError {
+            message: "Stack underflow".into(),
+        })
     }
 
     fn pop_int(&mut self) -> Result<i64, RuntimeError> {
         match self.pop_stack()? {
             Value::Int(n) => Ok(n),
-            other => Err(RuntimeError { message: format!("Expected Int, got {:?}", other) }),
+            other => Err(RuntimeError {
+                message: format!("Expected Int, got {:?}", other),
+            }),
         }
     }
 
     fn pop_float(&mut self) -> Result<f64, RuntimeError> {
         match self.pop_stack()? {
             Value::Float(f) => Ok(f),
-            other => Err(RuntimeError { message: format!("Expected Float, got {:?}", other) }),
+            other => Err(RuntimeError {
+                message: format!("Expected Float, got {:?}", other),
+            }),
         }
     }
 
     fn pop_str(&mut self) -> Result<String, RuntimeError> {
         match self.pop_stack()? {
             Value::Str(s) => Ok(s),
-            other => Err(RuntimeError { message: format!("Expected Str, got {:?}", other) }),
+            other => Err(RuntimeError {
+                message: format!("Expected Str, got {:?}", other),
+            }),
         }
     }
 
     fn pop_bool(&mut self) -> Result<bool, RuntimeError> {
         match self.pop_stack()? {
             Value::Bool(b) => Ok(b),
-            other => Err(RuntimeError { message: format!("Expected Bool, got {:?}", other) }),
+            other => Err(RuntimeError {
+                message: format!("Expected Bool, got {:?}", other),
+            }),
         }
     }
 
     fn int_binop<F>(&mut self, f: F) -> Result<(), RuntimeError>
-    where F: FnOnce(i64, i64) -> Result<Value, RuntimeError>
+    where
+        F: FnOnce(i64, i64) -> Result<Value, RuntimeError>,
     {
         let b = self.pop_int()?;
         let a = self.pop_int()?;
@@ -321,7 +364,8 @@ impl VM {
     }
 
     fn float_binop<F>(&mut self, f: F) -> Result<(), RuntimeError>
-    where F: FnOnce(f64, f64) -> Value
+    where
+        F: FnOnce(f64, f64) -> Value,
     {
         let b = self.pop_float()?;
         let a = self.pop_float()?;

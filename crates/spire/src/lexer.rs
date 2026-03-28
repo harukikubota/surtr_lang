@@ -27,7 +27,13 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
 
         // Newline
         if c == '\n' {
-            tokens.push(Spanned { token: Token::Newline, span: Span { start: i, end: i + 1 } });
+            tokens.push(Spanned {
+                token: Token::Newline,
+                span: Span {
+                    start: i,
+                    end: i + 1,
+                },
+            });
             i += 1;
             continue;
         }
@@ -45,7 +51,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                         't' => s.push('\t'),
                         '\\' => s.push('\\'),
                         '"' => s.push('"'),
-                        other => { s.push('\\'); s.push(other); }
+                        other => {
+                            s.push('\\');
+                            s.push(other);
+                        }
                     }
                 } else {
                     s.push(chars[i]);
@@ -53,10 +62,16 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 i += 1;
             }
             if i >= len {
-                return Err(ParseError { message: "Unterminated string".into(), span: Span { start, end: i } });
+                return Err(ParseError {
+                    message: "Unterminated string".into(),
+                    span: Span { start, end: i },
+                });
             }
             i += 1;
-            tokens.push(Spanned { token: Token::Str(s), span: Span { start, end: i } });
+            tokens.push(Spanned {
+                token: Token::Str(s),
+                span: Span { start, end: i },
+            });
             continue;
         }
 
@@ -71,7 +86,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                     match chars[i] {
                         '\\' => s.push('\\'),
                         '\'' => s.push('\''),
-                        other => { s.push('\\'); s.push(other); }
+                        other => {
+                            s.push('\\');
+                            s.push(other);
+                        }
                     }
                 } else {
                     s.push(chars[i]);
@@ -79,10 +97,16 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 i += 1;
             }
             if i >= len {
-                return Err(ParseError { message: "Unterminated string".into(), span: Span { start, end: i } });
+                return Err(ParseError {
+                    message: "Unterminated string".into(),
+                    span: Span { start, end: i },
+                });
             }
             i += 1;
-            tokens.push(Spanned { token: Token::Str(s), span: Span { start, end: i } });
+            tokens.push(Spanned {
+                token: Token::Str(s),
+                span: Span { start, end: i },
+            });
             continue;
         }
 
@@ -102,14 +126,20 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                     message: format!("Invalid float: {}", text),
                     span: Span { start, end: i },
                 })?;
-                tokens.push(Spanned { token: Token::Float(val), span: Span { start, end: i } });
+                tokens.push(Spanned {
+                    token: Token::Float(val),
+                    span: Span { start, end: i },
+                });
             } else {
                 let text: String = chars[start..i].iter().collect();
                 let val: i64 = text.parse().map_err(|_| ParseError {
                     message: format!("Invalid integer: {}", text),
                     span: Span { start, end: i },
                 })?;
-                tokens.push(Spanned { token: Token::Int(val), span: Span { start, end: i } });
+                tokens.push(Spanned {
+                    token: Token::Int(val),
+                    span: Span { start, end: i },
+                });
             }
             continue;
         }
@@ -130,7 +160,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "match" => Token::Match,
                 _ => Token::Ident(text),
             };
-            tokens.push(Spanned { token, span: Span { start, end: i } });
+            tokens.push(Spanned {
+                token,
+                span: Span { start, end: i },
+            });
             continue;
         }
 
@@ -148,7 +181,13 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 _ => None,
             };
             if let Some(t) = tok {
-                tokens.push(Spanned { token: t, span: Span { start: i, end: i + 2 } });
+                tokens.push(Spanned {
+                    token: t,
+                    span: Span {
+                        start: i,
+                        end: i + 2,
+                    },
+                });
                 i += 2;
                 continue;
             }
@@ -168,7 +207,10 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             '(' => {
                 if i + 1 < len && chars[i + 1] == ')' {
                     i += 2;
-                    tokens.push(Spanned { token: Token::Unit, span: Span { start, end: i } });
+                    tokens.push(Spanned {
+                        token: Token::Unit,
+                        span: Span { start, end: i },
+                    });
                     continue;
                 }
                 Token::LParen
@@ -185,15 +227,24 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             _ => {
                 return Err(ParseError {
                     message: format!("Unexpected character: '{}'", c),
-                    span: Span { start: i, end: i + 1 },
+                    span: Span {
+                        start: i,
+                        end: i + 1,
+                    },
                 });
             }
         };
-        tokens.push(Spanned { token, span: Span { start, end: i + 1 } });
+        tokens.push(Spanned {
+            token,
+            span: Span { start, end: i + 1 },
+        });
         i += 1;
     }
 
-    tokens.push(Spanned { token: Token::Eof, span: Span { start: i, end: i } });
+    tokens.push(Spanned {
+        token: Token::Eof,
+        span: Span { start: i, end: i },
+    });
     Ok(tokens)
 }
 

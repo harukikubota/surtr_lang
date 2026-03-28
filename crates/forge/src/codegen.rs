@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use spire::ast::{BinOp, Lit, Span};
 use scar::typed::*;
 use scar::types::Ty;
+use spire::ast::{BinOp, Lit, Span};
 
 use crate::bytecode::*;
 use crate::error::CodegenError;
@@ -200,7 +200,7 @@ impl Codegen {
                 self.emit(Opcode::StructNew(fields.len() as u32));
             }
 
-            TypedInner::RecordLit(tag, fields) => {
+            TypedInner::ConstructorCall(tag, fields) => {
                 let tag_const = self.add_constant(Constant::Int(*tag as i64));
                 self.emit(Opcode::LoadConst(tag_const));
                 for field in fields {
@@ -265,8 +265,6 @@ impl Codegen {
                     "print" => 0u16,
                     "to_string" => 1,
                     "eprint" => 2,
-                    "Ok" => return self.emit_ok_constructor(args),
-                    "Err" => return self.emit_err_constructor(args),
                     _ => {
                         return Err(CodegenError {
                             message: format!("Unknown builtin: {}", name),
@@ -289,27 +287,14 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_ok_constructor(&mut self, args: &[TypedNode]) -> Result<(), CodegenError> {
-        // Ok(val) → Tagged { tag: 0, fields: [val] }
-        let tag_const = self.add_constant(Constant::Int(0));
-        self.emit(Opcode::LoadConst(tag_const));
-        self.emit_node(&args[0])?;
-        self.emit(Opcode::StructNew(1));
-        Ok(())
-    }
-
-    fn emit_err_constructor(&mut self, args: &[TypedNode]) -> Result<(), CodegenError> {
-        // Err(val) → Tagged { tag: 1, fields: [val] }
-        let tag_const = self.add_constant(Constant::Int(1));
-        self.emit(Opcode::LoadConst(tag_const));
-        self.emit_node(&args[0])?;
-        self.emit(Opcode::StructNew(1));
-        Ok(())
-    }
-
     // ── If ──
 
-    fn emit_if(&mut self, cond: &TypedNode, then: &TypedNode, else_opt: &Option<Box<TypedNode>>) -> Result<(), CodegenError> {
+    fn emit_if(
+        &mut self,
+        cond: &TypedNode,
+        then: &TypedNode,
+        else_opt: &Option<Box<TypedNode>>,
+    ) -> Result<(), CodegenError> {
         self.emit_node(cond)?;
 
         match else_opt {
@@ -343,7 +328,11 @@ impl Codegen {
 
     // ── Match ──
 
-    fn emit_match(&mut self, scrutinee: &TypedNode, arms: &[(TypedMatchPattern, TypedNode)]) -> Result<(), CodegenError> {
+    fn emit_match(
+        &mut self,
+        scrutinee: &TypedNode,
+        arms: &[(TypedMatchPattern, TypedNode)],
+    ) -> Result<(), CodegenError> {
         self.emit_node(scrutinee)?;
 
         let scrut_slot = self.next_slot;
@@ -492,4 +481,3 @@ impl Codegen {
         })
     }
 }
-

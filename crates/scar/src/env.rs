@@ -55,12 +55,22 @@ impl TypeEnv {
     }
 
     /// Register a type definition, assigning the next tag.
-    pub fn register_type_def(&mut self, name: Symbol, kind: TypeKind, fields: Vec<(Symbol, Ty)>) -> u32 {
+    pub fn register_type_def(
+        &mut self,
+        name: Symbol,
+        kind: TypeKind,
+        fields: Vec<(Symbol, Ty)>,
+    ) -> u32 {
         let tag = self.next_tag;
         self.next_tag += 1;
         self.type_defs.insert(
             name.clone(),
-            TypeDefInfo { tag, kind, name, fields },
+            TypeDefInfo {
+                tag,
+                kind,
+                name,
+                fields,
+            },
         );
         tag
     }

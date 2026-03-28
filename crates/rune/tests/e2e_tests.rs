@@ -18,8 +18,12 @@ mod e2e {
     fn assert_compile_error(source: &str, expected_substr: &str) {
         let result = run_surtr(source);
         match result {
-            Err(msg) => assert!(msg.contains(expected_substr),
-                "Expected error containing '{}', got: {}", expected_substr, msg),
+            Err(msg) => assert!(
+                msg.contains(expected_substr),
+                "Expected error containing '{}', got: {}",
+                expected_substr,
+                msg
+            ),
             Ok(output) => panic!("Expected compile error, got output: {:?}", output),
         }
     }
@@ -28,18 +32,12 @@ mod e2e {
 
     #[test]
     fn step2_basic_bind_and_print() {
-        assert_output(
-            "num = 10\nnum2 = 5\nprint(to_string(num))",
-            &["10"],
-        );
+        assert_output("num = 10\nnum2 = 5\nprint(to_string(num))", &["10"]);
     }
 
     #[test]
     fn step2_shadowing() {
-        assert_output(
-            "x = 10\nx = 20\nprint(to_string(x))",
-            &["20"],
-        );
+        assert_output("x = 10\nx = 20\nprint(to_string(x))", &["20"]);
     }
 
     // ── Step 3: Type checking ──
@@ -54,10 +52,7 @@ mod e2e {
 
     #[test]
     fn step3_type_mismatch() {
-        assert_compile_error(
-            "bad: Int = \"not an int\"",
-            "expected Int, got String",
-        );
+        assert_compile_error("bad: Int = \"not an int\"", "expected Int, got String");
     }
 
     // ── Step 4: Primitive types ──
@@ -83,10 +78,7 @@ print(to_string(unit_val))"#,
 
     #[test]
     fn step4_negative_int() {
-        assert_output(
-            "x = -5\nprint(to_string(x))",
-            &["-5"],
-        );
+        assert_output("x = -5\nprint(to_string(x))", &["-5"]);
     }
 
     // ── Step 5: Arithmetic & operators ──
@@ -117,53 +109,35 @@ print(to_string(unit_val))"#,
 
     #[test]
     fn step5_string_eq() {
-        assert_output(
-            r#"print(to_string("abc" == "abc"))"#,
-            &["True"],
-        );
+        assert_output(r#"print(to_string("abc" == "abc"))"#, &["True"]);
     }
 
     #[test]
     fn step5_bool_neq() {
-        assert_output(
-            "print(to_string(True != False))",
-            &["True"],
-        );
+        assert_output("print(to_string(True != False))", &["True"]);
     }
 
     #[test]
     fn step5_string_concat() {
-        assert_output(
-            r#"print("hello" ++ " world")"#,
-            &["hello world"],
-        );
+        assert_output(r#"print("hello" ++ " world")"#, &["hello world"]);
     }
 
     #[test]
     fn step5_precedence() {
         // 2 + 3 * 4 = 2 + 12 = 14
-        assert_output(
-            "print(to_string(2 + 3 * 4))",
-            &["14"],
-        );
+        assert_output("print(to_string(2 + 3 * 4))", &["14"]);
     }
 
     #[test]
     fn step5_type_mismatch_eq() {
-        assert_compile_error(
-            "x = 1 == \"one\"",
-            "Cannot compare",
-        );
+        assert_compile_error("x = 1 == \"one\"", "Cannot compare");
     }
 
     // ── Step 6: Lists ──
 
     #[test]
     fn step6_list_literal() {
-        assert_output(
-            "nums = [1, 2, 3]\nprint(to_string(nums))",
-            &["[1, 2, 3]"],
-        );
+        assert_output("nums = [1, 2, 3]\nprint(to_string(nums))", &["[1, 2, 3]"]);
     }
 
     #[test]
@@ -177,18 +151,12 @@ print(to_string(strs))"#,
 
     #[test]
     fn step6_empty_list() {
-        assert_output(
-            "empty: [Int] = []\nprint(to_string(empty))",
-            &["[]"],
-        );
+        assert_output("empty: [Int] = []\nprint(to_string(empty))", &["[]"]);
     }
 
     #[test]
     fn step6_mixed_list_error() {
-        assert_compile_error(
-            r#"mixed = [1, "two"]"#,
-            "expected Int, got String",
-        );
+        assert_compile_error(r#"mixed = [1, "two"]"#, "expected Int, got String");
     }
 
     // ── Step 7: defstruct / defrecord ──
@@ -205,11 +173,7 @@ user = User { name: "alice", age: 30 }
 print(to_string(user))
 print(to_string(user.name))
 print(to_string(user.age))"#,
-            &[
-                "User { name: alice, age: 30 }",
-                "alice",
-                "30",
-            ],
+            &["User { name: alice, age: 30 }", "alice", "30"],
         );
     }
 
@@ -220,10 +184,7 @@ print(to_string(user.age))"#,
 point = Point(1.0, 2.0)
 print(to_string(point))
 print(to_string(point.x))"#,
-            &[
-                "Point(x: 1.0, y: 2.0)",
-                "1.0",
-            ],
+            &["Point(x: 1.0, y: 2.0)", "1.0"],
         );
     }
 

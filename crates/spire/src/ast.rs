@@ -134,8 +134,8 @@ pub enum Ast {
     /// Struct literal: `User { name: "alice", age: 30 }`
     StructLit(Span, Symbol, Vec<(Symbol, Ast)>),
 
-    /// Record literal: `Point(1.0, 2.0)` or `Point(x: 1.0, y: 2.0)`
-    RecordLit(Span, Symbol, Vec<RecordLitArg>),
+    /// Constructor call: `Point(1.0, 2.0)` or `Point(x: 1.0, y: 2.0)`
+    ConstructorCall(Span, Symbol, Vec<RecordLitArg>),
 
     /// Error type definition: `deferror ParseError(term: String) { "..." }`
     DeferrorDef(Span, Symbol, Vec<RecordField>, Box<Ast>),

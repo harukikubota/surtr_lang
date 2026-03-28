@@ -44,8 +44,8 @@ pub enum Resolved {
     /// Struct literal: `User { name: "alice", age: 30 }`
     StructLit(Span, ResolvedId, Vec<(Symbol, Resolved)>),
 
-    /// Record literal: `Point(1.0, 2.0)`
-    RecordLit(Span, ResolvedId, Vec<ResolvedRecordLitArg>),
+    /// Constructor call: `Point(1.0, 2.0)`
+    ConstructorCall(Span, ResolvedId, Vec<ResolvedRecordLitArg>),
 
     /// Struct definition (passed through for Scar)
     StructDef(Span, ResolvedId, Vec<ResolvedField>),

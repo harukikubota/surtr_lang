@@ -8,7 +8,11 @@ pub struct CodegenError {
 
 impl std::fmt::Display for CodegenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CodegenError at {}..{}: {}", self.span.start, self.span.end, self.message)
+        write!(
+            f,
+            "CodegenError at {}..{}: {}",
+            self.span.start, self.span.end, self.message
+        )
     }
 }
 

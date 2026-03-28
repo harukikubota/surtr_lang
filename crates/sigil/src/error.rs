@@ -8,7 +8,11 @@ pub struct ResolveError {
 
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ResolveError at {}..{}: {}", self.span.start, self.span.end, self.message)
+        write!(
+            f,
+            "ResolveError at {}..{}: {}",
+            self.span.start, self.span.end, self.message
+        )
     }
 }
 

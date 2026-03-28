@@ -21,27 +21,50 @@ impl Value {
             Value::Int(n) => n.to_string(),
             Value::Float(f) => {
                 let s = format!("{}", f);
-                if s.contains('.') { s } else { format!("{}.0", s) }
+                if s.contains('.') {
+                    s
+                } else {
+                    format!("{}.0", s)
+                }
             }
             Value::Str(s) => s.clone(),
-            Value::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+            Value::Bool(b) => {
+                if *b {
+                    "True".to_string()
+                } else {
+                    "False".to_string()
+                }
+            }
             Value::Unit => "()".to_string(),
             Value::List(items) => {
-                let inner: Vec<String> = items.iter().map(|v| v.to_display_string(registry)).collect();
+                let inner: Vec<String> = items
+                    .iter()
+                    .map(|v| v.to_display_string(registry))
+                    .collect();
                 format!("[{}]", inner.join(", "))
             }
             Value::Tagged { tag, fields } => {
                 if let Some(entry) = registry.lookup(*tag) {
                     match entry.kind {
                         forge::registry::TypeKind::Struct => {
-                            let pairs: Vec<String> = entry.field_names.iter().zip(fields.iter())
-                                .map(|(name, val)| format!("{}: {}", name, val.to_display_string(registry)))
+                            let pairs: Vec<String> = entry
+                                .field_names
+                                .iter()
+                                .zip(fields.iter())
+                                .map(|(name, val)| {
+                                    format!("{}: {}", name, val.to_display_string(registry))
+                                })
                                 .collect();
                             format!("{} {{ {} }}", entry.name, pairs.join(", "))
                         }
                         forge::registry::TypeKind::Record => {
-                            let pairs: Vec<String> = entry.field_names.iter().zip(fields.iter())
-                                .map(|(name, val)| format!("{}: {}", name, val.to_display_string(registry)))
+                            let pairs: Vec<String> = entry
+                                .field_names
+                                .iter()
+                                .zip(fields.iter())
+                                .map(|(name, val)| {
+                                    format!("{}: {}", name, val.to_display_string(registry))
+                                })
                                 .collect();
                             format!("{}({})", entry.name, pairs.join(", "))
                         }
@@ -49,8 +72,20 @@ impl Value {
                 } else {
                     // Fallback for Ok/Err (tag 0/1) without registry entry
                     match *tag {
-                        0 => format!("Ok({})", fields.first().map(|v| v.to_display_string(registry)).unwrap_or_default()),
-                        1 => format!("Err({})", fields.first().map(|v| v.to_display_string(registry)).unwrap_or_default()),
+                        0 => format!(
+                            "Ok({})",
+                            fields
+                                .first()
+                                .map(|v| v.to_display_string(registry))
+                                .unwrap_or_default()
+                        ),
+                        1 => format!(
+                            "Err({})",
+                            fields
+                                .first()
+                                .map(|v| v.to_display_string(registry))
+                                .unwrap_or_default()
+                        ),
                         _ => format!("Tagged({}, {:?})", tag, fields),
                     }
                 }

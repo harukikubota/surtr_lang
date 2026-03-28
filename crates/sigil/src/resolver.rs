@@ -50,7 +50,14 @@ impl Resolver {
                     message: format!("Undefined variable: {}", name),
                     span: span.clone(),
                 })?;
-                Ok(Resolved::Var(span.clone(), ResolvedId { name, unique_id: uid, span }))
+                Ok(Resolved::Var(
+                    span.clone(),
+                    ResolvedId {
+                        name,
+                        unique_id: uid,
+                        span,
+                    },
+                ))
             }
 
             Ast::App(span, func, args) => {
@@ -62,7 +69,8 @@ impl Resolver {
                 }
 
                 let resolved_func = self.resolve_node(*func)?;
-                let resolved_args = args.into_iter()
+                let resolved_args = args
+                    .into_iter()
                     .map(|a| self.resolve_node(a))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Resolved::App(span, Box::new(resolved_func), resolved_args))
@@ -82,7 +90,8 @@ impl Resolver {
             }
 
             Ast::List(span, elems) => {
-                let resolved = elems.into_iter()
+                let resolved = elems
+                    .into_iter()
                     .map(|e| self.resolve_node(e))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Resolved::List(span, resolved))
@@ -94,7 +103,8 @@ impl Resolver {
             }
 
             Ast::Block(span, stmts) => {
-                let resolved = stmts.into_iter()
+                let resolved = stmts
+                    .into_iter()
                     .map(|s| self.resolve_node(s))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Resolved::Block(span, resolved))
@@ -108,30 +118,62 @@ impl Resolver {
             // Struct/Record/Deferror definitions — register type names
             Ast::StructDef(span, name, fields) => {
                 let uid = self.scope.define(&name, span.clone());
-                let rid = ResolvedId { name, unique_id: uid, span: span.clone() };
-                let rfields = fields.into_iter().map(|f| ResolvedField {
-                    name: f.name, ty: f.ty, span: f.span,
-                }).collect();
+                let rid = ResolvedId {
+                    name,
+                    unique_id: uid,
+                    span: span.clone(),
+                };
+                let rfields = fields
+                    .into_iter()
+                    .map(|f| ResolvedField {
+                        name: f.name,
+                        ty: f.ty,
+                        span: f.span,
+                    })
+                    .collect();
                 Ok(Resolved::StructDef(span, rid, rfields))
             }
 
             Ast::RecordDef(span, name, fields) => {
                 let uid = self.scope.define(&name, span.clone());
-                let rid = ResolvedId { name, unique_id: uid, span: span.clone() };
-                let rfields = fields.into_iter().map(|f| ResolvedField {
-                    name: f.name, ty: f.ty, span: f.span,
-                }).collect();
+                let rid = ResolvedId {
+                    name,
+                    unique_id: uid,
+                    span: span.clone(),
+                };
+                let rfields = fields
+                    .into_iter()
+                    .map(|f| ResolvedField {
+                        name: f.name,
+                        ty: f.ty,
+                        span: f.span,
+                    })
+                    .collect();
                 Ok(Resolved::RecordDef(span, rid, rfields))
             }
 
             Ast::DeferrorDef(span, name, fields, show_expr) => {
                 let uid = self.scope.define(&name, span.clone());
-                let rid = ResolvedId { name, unique_id: uid, span: span.clone() };
-                let rfields = fields.into_iter().map(|f| ResolvedField {
-                    name: f.name, ty: f.ty, span: f.span,
-                }).collect();
+                let rid = ResolvedId {
+                    name,
+                    unique_id: uid,
+                    span: span.clone(),
+                };
+                let rfields = fields
+                    .into_iter()
+                    .map(|f| ResolvedField {
+                        name: f.name,
+                        ty: f.ty,
+                        span: f.span,
+                    })
+                    .collect();
                 let resolved_show = self.resolve_node(*show_expr)?;
-                Ok(Resolved::DeferrorDef(span, rid, rfields, Box::new(resolved_show)))
+                Ok(Resolved::DeferrorDef(
+                    span,
+                    rid,
+                    rfields,
+                    Box::new(resolved_show),
+                ))
             }
 
             Ast::StructLit(span, type_name, field_vals) => {
@@ -139,39 +181,56 @@ impl Resolver {
                     message: format!("Undefined type: {}", type_name),
                     span: span.clone(),
                 })?;
-                let rid = ResolvedId { name: type_name, unique_id: uid, span: span.clone() };
-                let resolved_fields = field_vals.into_iter()
+                let rid = ResolvedId {
+                    name: type_name,
+                    unique_id: uid,
+                    span: span.clone(),
+                };
+                let resolved_fields = field_vals
+                    .into_iter()
                     .map(|(name, expr)| Ok((name, self.resolve_node(expr)?)))
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 Ok(Resolved::StructLit(span, rid, resolved_fields))
             }
 
-            Ast::RecordLit(span, type_name, args) => {
+            Ast::ConstructorCall(span, type_name, args) => {
                 let uid = self.scope.lookup(&type_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined type: {}", type_name),
                     span: span.clone(),
                 })?;
-                let rid = ResolvedId { name: type_name, unique_id: uid, span: span.clone() };
-                let resolved_args = args.into_iter()
+                let rid = ResolvedId {
+                    name: type_name,
+                    unique_id: uid,
+                    span: span.clone(),
+                };
+                let resolved_args = args
+                    .into_iter()
                     .map(|arg| match arg {
-                        spire::ast::RecordLitArg::Positional(e) =>
-                            Ok(ResolvedRecordLitArg::Positional(self.resolve_node(e)?)),
-                        spire::ast::RecordLitArg::Named(name, e) =>
-                            Ok(ResolvedRecordLitArg::Named(name, self.resolve_node(e)?)),
+                        spire::ast::RecordLitArg::Positional(e) => {
+                            Ok(ResolvedRecordLitArg::Positional(self.resolve_node(e)?))
+                        }
+                        spire::ast::RecordLitArg::Named(name, e) => {
+                            Ok(ResolvedRecordLitArg::Named(name, self.resolve_node(e)?))
+                        }
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
-                Ok(Resolved::RecordLit(span, rid, resolved_args))
+                Ok(Resolved::ConstructorCall(span, rid, resolved_args))
             }
 
             Ast::Match(span, scrutinee, arms) => {
                 let resolved_scrut = self.resolve_node(*scrutinee)?;
-                let resolved_arms = arms.into_iter()
+                let resolved_arms = arms
+                    .into_iter()
                     .map(|(pat, body)| {
                         let (rpat, body) = self.resolve_match_arm(pat, body)?;
                         Ok((rpat, body))
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
-                Ok(Resolved::Match(span, Box::new(resolved_scrut), resolved_arms))
+                Ok(Resolved::Match(
+                    span,
+                    Box::new(resolved_scrut),
+                    resolved_arms,
+                ))
             }
         }
     }
@@ -190,22 +249,36 @@ impl Resolver {
             Some(e) => Some(Box::new(self.resolve_node(e)?)),
             None => None,
         };
-        Ok(Resolved::If(span, Box::new(cond), Box::new(then), else_branch))
+        Ok(Resolved::If(
+            span,
+            Box::new(cond),
+            Box::new(then),
+            else_branch,
+        ))
     }
 
     fn resolve_pattern(&mut self, pat: AstPattern) -> Result<ResolvedPattern, ResolveError> {
         match pat {
             AstPattern::Var(span, name) => {
                 let uid = self.scope.define(&name, span.clone());
-                Ok(ResolvedPattern::Var(ResolvedId { name, unique_id: uid, span }))
+                Ok(ResolvedPattern::Var(ResolvedId {
+                    name,
+                    unique_id: uid,
+                    span,
+                }))
             }
             AstPattern::Annotated(span, name, ty) => {
                 let uid = self.scope.define(&name, span.clone());
-                Ok(ResolvedPattern::Annotated(ResolvedId { name, unique_id: uid, span }, ty))
+                Ok(ResolvedPattern::Annotated(
+                    ResolvedId {
+                        name,
+                        unique_id: uid,
+                        span,
+                    },
+                    ty,
+                ))
             }
-            AstPattern::Wildcard(span) => {
-                Ok(ResolvedPattern::Wildcard(span))
-            }
+            AstPattern::Wildcard(span) => Ok(ResolvedPattern::Wildcard(span)),
         }
     }
 
@@ -224,16 +297,27 @@ impl Resolver {
                     message: format!("Undefined constructor: {}", ctor_name),
                     span: span.clone(),
                 })?;
-                let ctor_id = ResolvedId { name: ctor_name, unique_id: ctor_uid, span: span.clone() };
+                let ctor_id = ResolvedId {
+                    name: ctor_name,
+                    unique_id: ctor_uid,
+                    span: span.clone(),
+                };
                 let inner_id = match inner_name {
                     Some(name) => {
                         let uid = self.scope.define(&name, span.clone());
-                        Some(ResolvedId { name, unique_id: uid, span: span.clone() })
+                        Some(ResolvedId {
+                            name,
+                            unique_id: uid,
+                            span: span.clone(),
+                        })
                     }
                     None => None,
                 };
                 let resolved_body = self.resolve_node(body)?;
-                Ok((ResolvedMatchPattern::Constructor(span, ctor_id, inner_id), resolved_body))
+                Ok((
+                    ResolvedMatchPattern::Constructor(span, ctor_id, inner_id),
+                    resolved_body,
+                ))
             }
         }
     }
@@ -264,12 +348,10 @@ mod tests {
     fn test_builtin_ref() {
         let resolved = parse_and_resolve("print(to_string(42))").unwrap();
         match &resolved[0] {
-            Resolved::App(_, func, _) => {
-                match func.as_ref() {
-                    Resolved::Var(_, id) => assert_eq!(id.name, "print"),
-                    _ => panic!("Expected Var for print"),
-                }
-            }
+            Resolved::App(_, func, _) => match func.as_ref() {
+                Resolved::Var(_, id) => assert_eq!(id.name, "print"),
+                _ => panic!("Expected Var for print"),
+            },
             _ => panic!("Expected App"),
         }
     }
@@ -296,8 +378,10 @@ mod tests {
         let resolved = parse_and_resolve("x = 1\nx = x + 1").unwrap();
         // The second x should have a different unique_id
         match (&resolved[0], &resolved[1]) {
-            (Resolved::Bind(_, ResolvedPattern::Var(id1), _),
-             Resolved::Bind(_, ResolvedPattern::Var(id2), _)) => {
+            (
+                Resolved::Bind(_, ResolvedPattern::Var(id1), _),
+                Resolved::Bind(_, ResolvedPattern::Var(id2), _),
+            ) => {
                 assert_ne!(id1.unique_id, id2.unique_id);
             }
             _ => panic!("Expected two Binds"),
