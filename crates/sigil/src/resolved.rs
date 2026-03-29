@@ -26,6 +26,9 @@ pub enum Resolved {
     /// Binding: `x = expr`
     Bind(Span, ResolvedPattern, Box<Resolved>),
 
+    /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
+    SafeBind(Span, ResolvedPattern, Box<Resolved>),
+
     /// Binary operation
     BinOp(Span, BinOp, Box<Resolved>, Box<Resolved>),
 
@@ -60,10 +63,21 @@ pub enum Resolved {
     DeferrorDef(Span, ResolvedId, Vec<ResolvedField>, Box<Resolved>),
 
     /// Function definition
-    Def(Span, ResolvedId, Vec<ResolvedFunParam>, Option<AstTy>, Box<Resolved>),
+    Def(
+        Span,
+        ResolvedId,
+        Vec<ResolvedFunParam>,
+        Option<AstTy>,
+        Box<Resolved>,
+    ),
 
     /// Closure literal
-    Closure(Span, Vec<ResolvedClosureParam>, Vec<ResolvedId>, Box<Resolved>),
+    Closure(
+        Span,
+        Vec<ResolvedClosureParam>,
+        Vec<ResolvedId>,
+        Box<Resolved>,
+    ),
 
     /// Captured function / partial application
     Capture(Span, Box<Resolved>, Vec<Resolved>),

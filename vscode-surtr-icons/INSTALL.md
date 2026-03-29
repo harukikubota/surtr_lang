@@ -33,7 +33,7 @@ VS Code はファイルアイコンテーマを同時に 1 つしか有効化で
 
 ```json
 {
-  "vsicons.customIconFolderPath": "/Users/haruca/work/rust/surtr",
+  "vsicons.customIconFolderPath": "path/to/surtr",
   "vsicons.associations.files": [
     {
       "icon": "surtr",

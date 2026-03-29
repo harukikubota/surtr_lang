@@ -108,7 +108,11 @@ impl Value {
             Value::Callable(callable) => match &callable.target {
                 CallableTarget::Builtin(id) => format!("<builtin:{}>", id),
                 CallableTarget::Function(fun_idx) => {
-                    format!("<function:{}; captured={}>", fun_idx, callable.captured.len())
+                    format!(
+                        "<function:{}; captured={}>",
+                        fun_idx,
+                        callable.captured.len()
+                    )
                 }
             },
             Value::Error(rich) => {

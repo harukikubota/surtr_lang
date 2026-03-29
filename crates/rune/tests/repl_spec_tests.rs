@@ -71,7 +71,11 @@ fn repl_keeps_bindings_between_inputs() {
         "expected bind echo in repl output, got:\n{}",
         stdout
     );
-    assert!(stdout.contains("42"), "expected expression result in repl output, got:\n{}", stdout);
+    assert!(
+        stdout.contains("42"),
+        "expected expression result in repl output, got:\n{}",
+        stdout
+    );
 }
 
 #[test]
@@ -92,7 +96,11 @@ fn repl_compile_error_does_not_break_session_state() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("1"), "expected previous binding to remain accessible after error, got:\n{}", stdout);
+    assert!(
+        stdout.contains("1"),
+        "expected previous binding to remain accessible after error, got:\n{}",
+        stdout
+    );
 }
 
 #[test]
@@ -118,7 +126,11 @@ fn repl_value_recall_by_line_number() {
     );
 
     let fives = stdout.matches("> 5").count();
-    assert!(fives >= 2, "expected original value and :v recall output, got:\n{}", stdout);
+    assert!(
+        fives >= 2,
+        "expected original value and :v recall output, got:\n{}",
+        stdout
+    );
 }
 
 #[test]

@@ -129,7 +129,10 @@ impl VM {
     pub fn push(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
         let code_base = self.bytecode.opcodes.len();
         self.bytecode.constants.extend(chunk.constants);
-        self.bytecode.type_registry.entries.extend(chunk.type_entries);
+        self.bytecode
+            .type_registry
+            .entries
+            .extend(chunk.type_entries);
         self.bytecode.error_templates.extend(chunk.error_templates);
         self.bytecode.opcodes.extend(chunk.opcodes);
         for mut entry in chunk.functions {
@@ -384,7 +387,8 @@ impl VM {
                 let entry = self
                     .bytecode
                     .functions
-                    .get(fun_idx as usize)
+                    .iter()
+                    .find(|entry| entry.fun_idx == fun_idx)
                     .ok_or_else(|| RuntimeError {
                         message: format!("Unknown function index: {}", fun_idx),
                     })?;
@@ -443,11 +447,12 @@ impl VM {
                     span_start,
                     span_end,
                 };
-                self.stack.push(Value::Error(Box::new(crate::value::RichError {
-                    kind: template.kind.clone(),
-                    message,
-                    location,
-                })));
+                self.stack
+                    .push(Value::Error(Box::new(crate::value::RichError {
+                        kind: template.kind.clone(),
+                        message,
+                        location,
+                    })));
             }
 
             Opcode::MakeClosure(num_captured) => {
@@ -512,7 +517,8 @@ impl VM {
                         let entry = self
                             .bytecode
                             .functions
-                            .get(fun_idx as usize)
+                            .iter()
+                            .find(|entry| entry.fun_idx == fun_idx)
                             .ok_or_else(|| RuntimeError {
                                 message: format!("Unknown function index: {}", fun_idx),
                             })?;
@@ -526,17 +532,17 @@ impl VM {
                                 ),
                             });
                         }
-                let stack_base = self.stack.len();
-                self.stack.extend(full_args);
-                let return_pc = *pc;
-                self.frames.push(CallFrame {
-                    return_pc,
-                    stack_base,
-                    call_site: Some((span_start, span_end)),
-                    locals: Vec::new(),
-                });
-                *pc = entry.entry_pc as usize;
-            }
+                        let stack_base = self.stack.len();
+                        self.stack.extend(full_args);
+                        let return_pc = *pc;
+                        self.frames.push(CallFrame {
+                            return_pc,
+                            stack_base,
+                            call_site: Some((span_start, span_end)),
+                            locals: Vec::new(),
+                        });
+                        *pc = entry.entry_pc as usize;
+                    }
                 }
             }
 

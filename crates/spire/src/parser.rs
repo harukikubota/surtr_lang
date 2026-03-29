@@ -369,6 +369,7 @@ impl Parser {
     /// After seeing an identifier, figure out what it is:
     /// - `Name { field: val }` → StructLit (uppercase start + `{`)
     /// - `Name(args)` → ConstructorCall if uppercase, App if lowercase
+    /// - `name()` / `Name()` → zero-arg call
     /// - `name: Type = expr` → Bind (annotated)
     /// - `name = expr` → Bind
     /// - otherwise → Var
@@ -467,34 +468,91 @@ impl Parser {
             }
         }
 
-        // Annotated binding: name: Type = expr
+        // Zero-arg call: name() / Name()
+        // Lexer tokenizes `()` as Token::Unit.
+        if matches!(self.peek(), Token::Unit) {
+            let end_span = self.advance().span.clone();
+            let span = Span {
+                start: name_span.start,
+                end: end_span.end,
+            };
+            if is_uppercase {
+                return Ok(Ast::ConstructorCall(span, name, Vec::new()));
+            }
+            let func = Ast::Var(name_span, name);
+            return Ok(Ast::App(span, Box::new(func), Vec::new()));
+        }
+
+        // Annotated binding: name: Type = expr / name: Type =? expr
         if matches!(self.peek(), Token::Colon) {
             self.advance();
             let ty = self.parse_type()?;
-            self.expect(&Token::Bind)?;
+            let assign_tok = self.peek().clone();
+            match assign_tok {
+                Token::Bind | Token::SafeBind => {
+                    self.advance();
+                }
+                Token::Eof => {
+                    return Err(ParseError::incomplete(
+                        "assignment operator (= or =?)",
+                        self.peek_span(),
+                    ));
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "Expected assignment operator (= or =?), got {:?}",
+                            self.peek()
+                        ),
+                        self.peek_span(),
+                    ));
+                }
+            }
             let rhs = self.parse_expr()?;
+            self.ensure_non_associative_assignment(&rhs)?;
             let span = Span {
                 start: name_span.start,
                 end: rhs.span().end,
             };
             let pat = AstPattern::Annotated(name_span, name, ty);
-            return Ok(Ast::Bind(span, pat, Box::new(rhs)));
+            return Ok(match assign_tok {
+                Token::Bind => Ast::Bind(span, pat, Box::new(rhs)),
+                Token::SafeBind => Ast::SafeBind(span, pat, Box::new(rhs)),
+                _ => unreachable!("validated assignment token"),
+            });
         }
 
-        // Simple binding: name = expr
-        if matches!(self.peek(), Token::Bind) {
+        // Simple binding: name = expr / name =? expr
+        if matches!(self.peek(), Token::Bind | Token::SafeBind) {
+            let assign_tok = self.peek().clone();
             self.advance();
             let rhs = self.parse_expr()?;
+            self.ensure_non_associative_assignment(&rhs)?;
             let span = Span {
                 start: name_span.start,
                 end: rhs.span().end,
             };
             let pat = AstPattern::Var(name_span, name);
-            return Ok(Ast::Bind(span, pat, Box::new(rhs)));
+            return Ok(match assign_tok {
+                Token::Bind => Ast::Bind(span, pat, Box::new(rhs)),
+                Token::SafeBind => Ast::SafeBind(span, pat, Box::new(rhs)),
+                _ => unreachable!("validated assignment token"),
+            });
         }
 
         // Just a variable
         Ok(Ast::Var(name_span, name))
+    }
+
+    /// `=` / `=?` are non-associative in a single statement.
+    fn ensure_non_associative_assignment(&self, rhs: &Ast) -> Result<(), ParseError> {
+        if matches!(rhs, Ast::Bind(_, _, _) | Ast::SafeBind(_, _, _)) {
+            return Err(ParseError::syntax(
+                "`=` and `=?` are non-associative; a statement can contain only one assignment operator",
+                rhs.span().clone(),
+            ));
+        }
+        Ok(())
     }
 
     /// Parse a record literal argument: either positional or named.
@@ -1090,9 +1148,10 @@ fn shift_span(span: Span, delta: usize) -> Span {
 fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
     match ty {
         AstTy::Named(span, name) => AstTy::Named(shift_span(span, delta), name),
-        AstTy::ListOf(span, inner) => {
-            AstTy::ListOf(shift_span(span, delta), Box::new(shift_ast_ty(*inner, delta)))
-        }
+        AstTy::ListOf(span, inner) => AstTy::ListOf(
+            shift_span(span, delta),
+            Box::new(shift_ast_ty(*inner, delta)),
+        ),
         AstTy::ResultOf(span, ok, err) => AstTy::ResultOf(
             shift_span(span, delta),
             Box::new(shift_ast_ty(*ok, delta)),
@@ -1154,9 +1213,17 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         ),
         Ast::Block(span, stmts) => Ast::Block(
             shift_span(span, delta),
-            stmts.into_iter().map(|s| shift_ast_span(s, delta)).collect(),
+            stmts
+                .into_iter()
+                .map(|s| shift_ast_span(s, delta))
+                .collect(),
         ),
         Ast::Bind(span, pat, rhs) => Ast::Bind(
+            shift_span(span, delta),
+            shift_pattern(pat, delta),
+            Box::new(shift_ast_span(*rhs, delta)),
+        ),
+        Ast::SafeBind(span, pat, rhs) => Ast::SafeBind(
             shift_span(span, delta),
             shift_pattern(pat, delta),
             Box::new(shift_ast_span(*rhs, delta)),
@@ -1169,7 +1236,10 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         ),
         Ast::List(span, elems) => Ast::List(
             shift_span(span, delta),
-            elems.into_iter().map(|e| shift_ast_span(e, delta)).collect(),
+            elems
+                .into_iter()
+                .map(|e| shift_ast_span(e, delta))
+                .collect(),
         ),
         Ast::InterpolatedStr(span, parts) => Ast::InterpolatedStr(
             shift_span(span, delta),
@@ -1273,7 +1343,10 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*target, delta)),
             args.into_iter().map(|a| shift_ast_span(a, delta)).collect(),
         ),
-        Ast::Semi(span, inner) => Ast::Semi(shift_span(span, delta), Box::new(shift_ast_span(*inner, delta))),
+        Ast::Semi(span, inner) => Ast::Semi(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*inner, delta)),
+        ),
     }
 }
 
@@ -1287,6 +1360,7 @@ impl Ast {
             | Ast::App(s, _, _)
             | Ast::Block(s, _)
             | Ast::Bind(s, _, _)
+            | Ast::SafeBind(s, _, _)
             | Ast::BinOp(s, _, _, _)
             | Ast::List(s, _)
             | Ast::InterpolatedStr(s, _)
@@ -1335,6 +1409,24 @@ mod tests {
     }
 
     #[test]
+    fn test_safebind() {
+        let ast = parse("num =? gen()").unwrap();
+        match &ast[0] {
+            Ast::SafeBind(_, AstPattern::Var(_, name), rhs) => {
+                assert_eq!(name, "num");
+                assert!(matches!(rhs.as_ref(), Ast::App(_, _, _)));
+            }
+            _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
+    fn test_assignment_operator_is_non_associative() {
+        let err = parse("x = y =? z").expect_err("Expected parse error");
+        assert!(err.message().contains("non-associative"));
+    }
+
+    #[test]
     fn test_function_call() {
         let ast = parse("print(to_string(num))").unwrap();
         match &ast[0] {
@@ -1343,6 +1435,21 @@ mod tests {
                 assert_eq!(args.len(), 1);
             }
             _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_zero_arg_call() {
+        let ast = parse("x = noop()").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::App(_, func, args) => {
+                    assert!(matches!(func.as_ref(), Ast::Var(_, ref n) if n == "noop"));
+                    assert!(args.is_empty());
+                }
+                _ => panic!("Expected zero-arg App"),
+            },
+            _ => panic!("Expected Bind"),
         }
     }
 
@@ -1358,7 +1465,9 @@ def noop() {()}"#,
                 assert_eq!(name, "add");
                 assert_eq!(params.len(), 2);
                 assert!(matches!(ret_ty, Some(AstTy::Named(_, ty)) if ty == "Int"));
-                assert!(matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::BinOp(_, BinOp::Add, _, _)])));
+                assert!(
+                    matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::BinOp(_, BinOp::Add, _, _)]))
+                );
             }
             _ => panic!("Expected Def"),
         }
@@ -1367,7 +1476,9 @@ def noop() {()}"#,
                 assert_eq!(name, "noop");
                 assert_eq!(params.len(), 0);
                 assert!(ret_ty.is_none());
-                assert!(matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::Lit(_, Lit::Unit)])));
+                assert!(
+                    matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::Lit(_, Lit::Unit)]))
+                );
             }
             _ => panic!("Expected Def"),
         }
@@ -1439,15 +1550,13 @@ def noop() {()}"#,
     fn test_function_type_and_closure_literal() {
         let ast = parse("fun: (Int -> Unit) = {|val| do_something(val)}").unwrap();
         match &ast[0] {
-            Ast::Bind(
-                _,
-                AstPattern::Annotated(_, _, AstTy::Func(_, params, ret)),
-                rhs,
-            ) => {
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Func(_, params, ret)), rhs) => {
                 assert_eq!(params.len(), 1);
                 assert!(matches!(params[0], AstTy::Named(_, ref n) if n == "Int"));
                 assert!(matches!(ret.as_ref(), AstTy::Named(_, ref n) if n == "Unit"));
-                assert!(matches!(rhs.as_ref(), Ast::Closure(_, params, body) if params.len() == 1 && matches!(body.as_ref(), Ast::App(_, _, _))));
+                assert!(
+                    matches!(rhs.as_ref(), Ast::Closure(_, params, body) if params.len() == 1 && matches!(body.as_ref(), Ast::App(_, _, _)))
+                );
             }
             _ => panic!("Expected annotated Bind with function type and closure"),
         }
@@ -1458,7 +1567,9 @@ def noop() {()}"#,
         let ast = parse("f = &print\nnoop: (-> Unit) = {|| print(\"x\")}").unwrap();
         match &ast[0] {
             Ast::Bind(_, _, rhs) => {
-                assert!(matches!(rhs.as_ref(), Ast::Capture(_, target, args) if args.is_empty() && matches!(target.as_ref(), Ast::Var(_, ref n) if n == "print")));
+                assert!(
+                    matches!(rhs.as_ref(), Ast::Capture(_, target, args) if args.is_empty() && matches!(target.as_ref(), Ast::Var(_, ref n) if n == "print"))
+                );
             }
             _ => panic!("Expected Capture"),
         }
@@ -1515,10 +1626,8 @@ def noop() {()}"#,
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::InterpolatedStr(_, parts) => {
                     assert!(matches!(parts.first(), Some(InterpolatedPart::Text(s)) if s == "hi "));
-                    assert!(
-                        matches!(parts.get(1), Some(InterpolatedPart::Expr(expr))
-                            if matches!(expr.as_ref(), Ast::Var(_, name) if name == "name"))
-                    );
+                    assert!(matches!(parts.get(1), Some(InterpolatedPart::Expr(expr))
+                            if matches!(expr.as_ref(), Ast::Var(_, name) if name == "name")));
                     assert!(matches!(parts.get(2), Some(InterpolatedPart::Text(s)) if s == "!"));
                 }
                 _ => panic!("Expected InterpolatedStr"),

@@ -95,7 +95,9 @@ fn infer_type_error_template(source: &str, focus: &Span) -> Option<TemplateSpec>
     let focus_line = line_index_for_span(&lines, focus.start)?;
 
     if let Some((decl_line, close_line)) = enclosing_def_lines(source, &lines, focus_line) {
-        let decl_text = slice_chars(source, decl_line.0, decl_line.1).trim().to_string();
+        let decl_text = slice_chars(source, decl_line.0, decl_line.1)
+            .trim()
+            .to_string();
         let mut labels = vec![DiagnosticLabel {
             span: Span {
                 start: decl_line.0,
@@ -119,7 +121,9 @@ fn infer_type_error_template(source: &str, focus: &Span) -> Option<TemplateSpec>
 
     if let Some(call_name) = call_name_at_span(source, &lines, focus) {
         if let Some(sig_line) = find_function_signature_line(source, &lines, &call_name) {
-            let sig_text = slice_chars(source, sig_line.0, sig_line.1).trim().to_string();
+            let sig_text = slice_chars(source, sig_line.0, sig_line.1)
+                .trim()
+                .to_string();
             return Some(TemplateSpec {
                 labels: vec![DiagnosticLabel {
                     span: Span {

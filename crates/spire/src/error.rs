@@ -44,7 +44,13 @@ impl ParseError {
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let span = self.span();
-        write!(f, "ParseError at {}..{}: {}", span.start, span.end, self.message())
+        write!(
+            f,
+            "ParseError at {}..{}: {}",
+            span.start,
+            span.end,
+            self.message()
+        )
     }
 }
 

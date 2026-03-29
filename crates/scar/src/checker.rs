@@ -122,17 +122,22 @@ impl Default for ScarSession {
 
 struct Checker {
     env: TypeEnv,
+    function_return_ty: Option<Ty>,
 }
 
 impl Checker {
     fn new() -> Self {
         Self {
             env: initialize_env(),
+            function_return_ty: None,
         }
     }
 
     fn with_env(env: TypeEnv) -> Self {
-        Self { env }
+        Self {
+            env,
+            function_return_ty: None,
+        }
     }
 
     fn into_env(self) -> TypeEnv {
@@ -240,6 +245,8 @@ impl Checker {
                 })
             }
 
+            Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs),
+
             Resolved::App(span, func, args) => self.check_app(span, func, args),
 
             Resolved::BinOp(span, op, left, right) => self.check_binop(span, op, left, right),
@@ -298,6 +305,69 @@ impl Checker {
             }
             Resolved::Capture(span, target, args) => self.check_capture(span, target, args),
         }
+    }
+
+    fn check_safebind(
+        &mut self,
+        span: &Span,
+        pat: &ResolvedPattern,
+        rhs: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_rhs = self.check_node(rhs)?;
+        let (ok_ty, err_ty) = match &typed_rhs.ty {
+            Ty::Result(ok, err) => (ok.as_ref().clone(), err.as_ref().clone()),
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "`=?` requires Result on the right-hand side, got {}",
+                        self.ty_name(other)
+                    ),
+                    span: typed_rhs.span.clone(),
+                    hint: Some(
+                        "Use `=` for plain values, or return Result<T> from the expression".into(),
+                    ),
+                });
+            }
+        };
+
+        if let Some(ret_ty) = &self.function_return_ty {
+            match ret_ty {
+                Ty::Result(_, fn_err_ty) => {
+                    if !self.types_compatible(fn_err_ty, &err_ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "`=?` error type mismatch: function returns {}, but expression returns {}",
+                                self.ty_name(fn_err_ty),
+                                self.ty_name(&err_ty)
+                            ),
+                            span: typed_rhs.span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+                other => {
+                    return Err(TypeError {
+                        message: format!(
+                            "`=?` can only be used in functions returning Result<...>, got {}",
+                            self.ty_name(other)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+        }
+
+        let (typed_pat, pat_ty) = self.check_pattern(pat, &ok_ty, span)?;
+        if let TypedPattern::Var(_, id) = &typed_pat {
+            self.env.bind_var(id.unique_id, pat_ty);
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::SafeBind(typed_pat, Box::new(typed_rhs)),
+        })
     }
 
     // ── Helpers ──
@@ -404,21 +474,18 @@ impl Checker {
             Ty::Result(ok, _) => format!("Result<{}>", self.ty_name(ok)),
             Ty::Var(n) => format!("${}", n),
             Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
-            Ty::Func(params, ret) => format!(
-                "{}",
-                {
-                    let param_str = params
-                        .iter()
-                        .map(|ty| self.ty_name(ty))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    if param_str.is_empty() {
-                        format!("(-> {})", self.ty_name(ret))
-                    } else {
-                        format!("({} -> {})", param_str, self.ty_name(ret))
-                    }
+            Ty::Func(params, ret) => format!("{}", {
+                let param_str = params
+                    .iter()
+                    .map(|ty| self.ty_name(ty))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if param_str.is_empty() {
+                    format!("(-> {})", self.ty_name(ret))
+                } else {
+                    format!("({} -> {})", param_str, self.ty_name(ret))
                 }
-            ),
+            }),
             Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
             Ty::UserFunc { .. } => "UserFunc".into(),
         }
@@ -439,7 +506,9 @@ impl Checker {
 
     fn find_tail_print_call<'a>(&self, node: &'a TypedNode) -> Option<&'a TypedNode> {
         match &node.node {
-            TypedInner::Block(stmts) => stmts.last().and_then(|last| self.find_tail_print_call(last)),
+            TypedInner::Block(stmts) => stmts
+                .last()
+                .and_then(|last| self.find_tail_print_call(last)),
             TypedInner::Semi(inner) => self.find_tail_print_call(inner),
             TypedInner::App(func, _) => match &func.ty {
                 Ty::BuiltinFunc { name, .. } if name == "print" => Some(node),
@@ -463,14 +532,16 @@ impl Checker {
     }
 
     fn return_mismatch_span(&self, body: &TypedNode) -> Span {
-        self.tail_expr_span(body).unwrap_or_else(|| body.span.clone())
+        self.tail_expr_span(body)
+            .unwrap_or_else(|| body.span.clone())
     }
 
     fn tail_expr_span(&self, node: &TypedNode) -> Option<Span> {
         match &node.node {
-            TypedInner::Block(stmts) => stmts
-                .last()
-                .map(|last| self.tail_expr_span(last).unwrap_or_else(|| last.span.clone())),
+            TypedInner::Block(stmts) => stmts.last().map(|last| {
+                self.tail_expr_span(last)
+                    .unwrap_or_else(|| last.span.clone())
+            }),
             TypedInner::Semi(inner) => Some(
                 self.tail_expr_span(inner)
                     .unwrap_or_else(|| inner.span.clone()),
@@ -685,11 +756,17 @@ impl Checker {
         }
 
         let mut body_checker = Checker::with_env(fun_env);
+        if let Some(Ty::Func(_, expected_ret)) = expected {
+            body_checker.function_return_ty = Some(expected_ret.as_ref().clone());
+        }
         let typed_body = body_checker.check_node(body)?;
         self.env.next_tyvar = self.env.next_tyvar.max(body_checker.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(body_checker.env.next_tag);
 
-        let param_tys = typed_params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>();
+        let param_tys = typed_params
+            .iter()
+            .map(|p| p.ty.clone())
+            .collect::<Vec<_>>();
         Ok(TypedNode {
             ty: Ty::Func(param_tys, Box::new(typed_body.ty.clone())),
             span: span.clone(),
@@ -760,11 +837,15 @@ impl Checker {
         match &node.ty {
             Ty::BuiltinFunc { params, ret, .. }
             | Ty::UserFunc { params, ret, .. }
-            | Ty::Func(params, ret) if params.is_empty() => TypedNode {
-                ty: ret.as_ref().clone(),
-                span: node.span.clone(),
-                node: TypedInner::App(Box::new(node), Vec::new()),
-            },
+            | Ty::Func(params, ret)
+                if params.is_empty() =>
+            {
+                TypedNode {
+                    ty: ret.as_ref().clone(),
+                    span: node.span.clone(),
+                    node: TypedInner::App(Box::new(node), Vec::new()),
+                }
+            }
             _ => node,
         }
     }
@@ -1258,6 +1339,7 @@ impl Checker {
         };
 
         let mut body_checker = Checker::with_env(fun_env);
+        body_checker.function_return_ty = Some(expected_ret.clone());
         let typed_body = body_checker.check_node(body)?;
 
         self.env.next_tyvar = self.env.next_tyvar.max(body_checker.env.next_tyvar);
@@ -1302,7 +1384,13 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::Def(fun_idx, id.clone(), typed_params, expected_ret, Box::new(typed_body)),
+            node: TypedInner::Def(
+                fun_idx,
+                id.clone(),
+                typed_params,
+                expected_ret,
+                Box::new(typed_body),
+            ),
         })
     }
 
@@ -1713,6 +1801,7 @@ impl Checker {
             show_env.bind_var(resolved_id.unique_id, ty.clone());
         }
         let mut show_checker = Checker::with_env(show_env);
+        show_checker.function_return_ty = Some(Ty::Str);
         let typed_show = show_checker.check_node(show_expr)?;
         self.env.next_tyvar = self.env.next_tyvar.max(show_checker.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(show_checker.env.next_tag);

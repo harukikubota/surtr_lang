@@ -121,7 +121,10 @@ match err_result {
 }"#,
     );
     let output = Command::new(&bin)
-        .args(["run", source_path.to_str().expect("source path must be utf-8")])
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
         .output()
         .expect("failed to run source command");
 

@@ -126,10 +126,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             } else {
                 let text: String = chars[start..i].iter().collect();
                 let val: i64 = text.parse().map_err(|_| {
-                    ParseError::syntax(
-                        format!("Invalid integer: {}", text),
-                        Span { start, end: i },
-                    )
+                    ParseError::syntax(format!("Invalid integer: {}", text), Span { start, end: i })
                 })?;
                 tokens.push(Spanned {
                     token: Token::Int(val),

@@ -143,6 +143,9 @@ pub enum Ast {
     /// Binding: `x = 10`, `num: Int = 42`
     Bind(Span, AstPattern, Box<Ast>),
 
+    /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
+    SafeBind(Span, AstPattern, Box<Ast>),
+
     /// Binary operation: `a + b`, `x == y`
     BinOp(Span, BinOp, Box<Ast>, Box<Ast>),
 

@@ -150,6 +150,17 @@ impl Resolver {
                 Ok(Resolved::Bind(span, resolved_pat, Box::new(resolved_rhs)))
             }
 
+            Ast::SafeBind(span, pat, rhs) => {
+                // Resolve RHS first (before defining the new binding for shadowing)
+                let resolved_rhs = self.resolve_node(*rhs)?;
+                let resolved_pat = self.resolve_pattern(pat)?;
+                Ok(Resolved::SafeBind(
+                    span,
+                    resolved_pat,
+                    Box::new(resolved_rhs),
+                ))
+            }
+
             Ast::BinOp(span, op, left, right) => {
                 let l = self.resolve_node(*left)?;
                 let r = self.resolve_node(*right)?;
@@ -262,8 +273,7 @@ impl Resolver {
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);
                 let resolved_show = show_resolver.resolve_node(*show_expr)?;
-                self.scope
-                    .advance_next_id_to(show_resolver.scope.next_id());
+                self.scope.advance_next_id_to(show_resolver.scope.next_id());
                 Ok(Resolved::DeferrorDef(
                     span,
                     rid,
@@ -284,8 +294,7 @@ impl Resolver {
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 let resolved_body = body_resolver.resolve_node(*body)?;
 
-                self.scope
-                    .advance_next_id_to(body_resolver.scope.next_id());
+                self.scope.advance_next_id_to(body_resolver.scope.next_id());
                 self.scope.define_with_id(&name, fun_uid);
                 let rid = ResolvedId {
                     name,
@@ -318,8 +327,7 @@ impl Resolver {
 
                 let mut body_resolver = Resolver::with_scope(closure_scope);
                 let resolved_body = body_resolver.resolve_node(*body)?;
-                self.scope
-                    .advance_next_id_to(body_resolver.scope.next_id());
+                self.scope.advance_next_id_to(body_resolver.scope.next_id());
 
                 let captures = collect_captures(&resolved_body, &resolved_params);
 
@@ -525,15 +533,13 @@ fn collect_captures(body: &Resolved, params: &[ResolvedClosureParam]) -> Vec<Res
     free
 }
 
-fn collect_captures_inner(
-    node: &Resolved,
-    bound: &mut HashSet<u32>,
-    free: &mut Vec<ResolvedId>,
-) {
+fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut Vec<ResolvedId>) {
     match node {
         Resolved::Lit(_, _) => {}
         Resolved::Var(_, id) => {
-            if !bound.contains(&id.unique_id) && !free.iter().any(|seen| seen.unique_id == id.unique_id) {
+            if !bound.contains(&id.unique_id)
+                && !free.iter().any(|seen| seen.unique_id == id.unique_id)
+            {
                 free.push(id.clone());
             }
         }
@@ -549,6 +555,12 @@ fn collect_captures_inner(
                 collect_captures_inner(stmt, &mut local_bound, free);
                 match stmt {
                     Resolved::Bind(_, pat, _) => match pat {
+                        ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
+                            local_bound.insert(id.unique_id);
+                        }
+                        ResolvedPattern::Wildcard(_) => {}
+                    },
+                    Resolved::SafeBind(_, pat, _) => match pat {
                         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
                             local_bound.insert(id.unique_id);
                         }
@@ -570,6 +582,15 @@ fn collect_captures_inner(
             }
         }
         Resolved::Bind(_, pat, rhs) => {
+            collect_captures_inner(rhs, bound, free);
+            match pat {
+                ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
+                    bound.insert(id.unique_id);
+                }
+                ResolvedPattern::Wildcard(_) => {}
+            }
+        }
+        Resolved::SafeBind(_, pat, rhs) => {
             collect_captures_inner(rhs, bound, free);
             match pat {
                 ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
@@ -629,7 +650,9 @@ fn collect_captures_inner(
                 }
             }
         }
-        Resolved::StructDef(_, _, _) | Resolved::RecordDef(_, _, _) | Resolved::DeferrorDef(_, _, _, _) => {}
+        Resolved::StructDef(_, _, _)
+        | Resolved::RecordDef(_, _, _)
+        | Resolved::DeferrorDef(_, _, _, _) => {}
         Resolved::Def(_, id, params, _, body) => {
             let mut fun_bound = bound.clone();
             fun_bound.insert(id.unique_id);
@@ -682,7 +705,7 @@ mod tests {
         match &resolved[0] {
             Resolved::App(_, func, _) => match func.as_ref() {
                 Resolved::Var(_, id) => assert_eq!(id.name, "print"),
-            _ => panic!("Expected Var for print"),
+                _ => panic!("Expected Var for print"),
             },
             _ => panic!("Expected App"),
         }
@@ -700,7 +723,9 @@ print(to_string(1))"#,
                 assert_eq!(id.name, "add");
                 assert_eq!(params.len(), 2);
                 assert!(matches!(ret_ty, Some(spire::ast::AstTy::Named(_, ty)) if ty == "Int"));
-                assert!(matches!(body.as_ref(), Resolved::Block(_, stmts) if matches!(stmts.as_slice(), [Resolved::BinOp(_, _, _, _)])));
+                assert!(
+                    matches!(body.as_ref(), Resolved::Block(_, stmts) if matches!(stmts.as_slice(), [Resolved::BinOp(_, _, _, _)]))
+                );
             }
             _ => panic!("Expected Def"),
         }
@@ -782,7 +807,10 @@ g = &print(1)"#,
                 Resolved::Closure(_, params, captures, body) => {
                     assert_eq!(params.len(), 1);
                     assert_eq!(captures.len(), 1);
-                    assert!(matches!(body.as_ref(), Resolved::BinOp(_, BinOp::Add, _, _)));
+                    assert!(matches!(
+                        body.as_ref(),
+                        Resolved::BinOp(_, BinOp::Add, _, _)
+                    ));
                 }
                 _ => panic!("Expected Closure"),
             },
@@ -797,6 +825,18 @@ g = &print(1)"#,
                 _ => panic!("Expected Capture"),
             },
             _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_safebind_resolution() {
+        let resolved = parse_and_resolve("num =? Ok(1)").unwrap();
+        match &resolved[0] {
+            Resolved::SafeBind(_, ResolvedPattern::Var(id), rhs) => {
+                assert_eq!(id.name, "num");
+                assert!(matches!(rhs.as_ref(), Resolved::ConstructorCall(_, _, _)));
+            }
+            _ => panic!("Expected SafeBind"),
         }
     }
 }

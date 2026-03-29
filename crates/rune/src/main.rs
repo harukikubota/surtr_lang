@@ -1,15 +1,15 @@
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::process;
-use std::collections::BTreeSet;
 
 use eldr::value::Value;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
-use rustyline::hint::{HistoryHinter, Hinter};
+use rustyline::hint::{Hinter, HistoryHinter};
 use rustyline::history::DefaultHistory;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper};
@@ -336,7 +336,11 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                diagnostics::report_error("repl", &self.pending, diagnostics::type_error_spec(&self.pending, &e));
+                diagnostics::report_error(
+                    "repl",
+                    &self.pending,
+                    diagnostics::type_error_spec(&self.pending, &e),
+                );
                 self.pending.clear();
                 self.bump_line(None);
                 return ReplOutcome::Continue;

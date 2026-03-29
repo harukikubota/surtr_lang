@@ -455,6 +455,111 @@ print(to_string(ret))"#,
         );
     }
 
+    #[test]
+    fn phase2_step5_zero_arg_function_call() {
+        assert_output(
+            r#"def sf() -> Result<String> {
+  str = "hoge"
+  str2 =? Ok(str)
+  Ok(str2)
+}
+
+ret: Result<String> = sf()
+match ret {
+  Ok(str) => print("ok"),
+  Err(e) => print("ng"),
+}"#,
+            &["ok"],
+        );
+    }
+
+    // ── Phase 2 Step 7: safe bind (`=?`) ──
+
+    #[test]
+    fn phase2_step7_safebind_ok_top_level() {
+        assert_output(
+            r#"value: Result<Int> = Ok(5)
+num =? value
+print(to_string(num + 1))"#,
+            &["6"],
+        );
+    }
+
+    #[test]
+    fn phase2_step7_safebind_early_return_in_function() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"deferror Oops {
+  "oops"
+}
+
+def gen(flag: Boolean) -> Result<Int> {
+  if(flag, Ok(10), Err(Oops))
+}
+
+def fun(flag: Boolean) -> Result<Int> {
+  num =? gen(flag)
+  Ok(num + 10)
+}
+
+ok: Result<Int> = fun(True)
+match ok {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("bad"),
+}
+
+err: Result<Int> = fun(False)
+match err {
+  Ok(v) => print("bad"),
+  Err(e) => eprint(e),
+}"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, vec!["20"]);
+        assert_eq!(stderr, vec!["Error: Oops: oops"]);
+    }
+
+    #[test]
+    fn phase2_step7_safebind_implicit_eprint_on_script_error() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"deferror Oops {
+  "oops"
+}
+
+value: Result<Int> = Err(Oops)
+num =? value
+print("after")"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(stderr, vec!["Error: Oops: oops"]);
+    }
+
+    #[test]
+    fn phase2_step7_safebind_requires_result_rhs() {
+        assert_compile_error("num =? 10", "`=?` requires Result");
+    }
+
+    #[test]
+    fn phase2_step7_safebind_requires_result_return_in_function() {
+        assert_compile_error(
+            r#"def bad() -> Int {
+  num =? Ok(1)
+  num
+}"#,
+            "can only be used in functions returning Result",
+        );
+    }
+
+    #[test]
+    fn phase2_step7_assignment_operators_are_non_associative() {
+        assert_compile_error("x = y =? z", "non-associative");
+    }
+
+    #[test]
+    fn phase2_step7_plain_bind_does_not_accept_result_test_pattern() {
+        assert_compile_error("Ok(num) = Ok(1)", "Unexpected token: Bind");
+    }
+
     // ── Step 9: deferror / Error ──
 
     #[test]

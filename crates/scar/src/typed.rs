@@ -19,6 +19,7 @@ pub enum TypedInner {
     App(Box<TypedNode>, Vec<TypedNode>),
     Block(Vec<TypedNode>),
     Bind(TypedPattern, Box<TypedNode>),
+    SafeBind(TypedPattern, Box<TypedNode>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
     List(Vec<TypedNode>),
     InterpolatedStr(Vec<TypedInterpolatedPart>),
