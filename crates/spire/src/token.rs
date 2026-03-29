@@ -56,12 +56,14 @@ pub enum Token {
     Semicolon, // ;
     Pipe,      // |
     Amp,       // &
+    Dollar,    // $
 
     // ── Statement separators ──
     Newline,
 
     // ── Keywords ──
     Def,
+    AtBuiltin, // @builtin
     Defstruct,
     Defrecord,
     Deferror,

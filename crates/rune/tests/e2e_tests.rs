@@ -1,7 +1,17 @@
 #[cfg(test)]
 mod e2e {
+    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
+
+    fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, String> {
+        let mut ast =
+            spire::parse(BUILTIN_PRELUDE_SOURCE).map_err(|e| format!("Parse (builtin.srt): {}", e))?;
+        let mut user_ast = spire::parse(source).map_err(|e| format!("Parse: {}", e))?;
+        ast.append(&mut user_ast);
+        Ok(ast)
+    }
+
     fn run_surtr(source: &str) -> Result<Vec<String>, String> {
-        let ast = spire::parse(source).map_err(|e| format!("Parse: {}", e))?;
+        let ast = parse_with_builtin_prelude(source)?;
         let resolved = sigil::resolve(ast).map_err(|e| format!("Resolve: {}", e))?;
         let typed = scar::typecheck(resolved).map_err(|e| format!("Typecheck: {}", e))?;
         let bytecode = forge::codegen(typed).map_err(|e| format!("Codegen: {}", e))?;
@@ -11,7 +21,7 @@ mod e2e {
     }
 
     fn run_surtr_with_stderr(source: &str) -> Result<(Vec<String>, Vec<String>), String> {
-        let ast = spire::parse(source).map_err(|e| format!("Parse: {}", e))?;
+        let ast = parse_with_builtin_prelude(source)?;
         let resolved = sigil::resolve(ast).map_err(|e| format!("Resolve: {}", e))?;
         let typed = scar::typecheck(resolved).map_err(|e| format!("Typecheck: {}", e))?;
         let bytecode = forge::codegen(typed).map_err(|e| format!("Codegen: {}", e))?;

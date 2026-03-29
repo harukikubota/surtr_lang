@@ -14,11 +14,11 @@ const BUILTIN_NAMES: &[&str] = &["print", "to_string", "eprint"];
 fn initialize_scope() -> Scope {
     let mut scope = Scope::new();
     let dummy = Span { start: 0, end: 0 };
-    for name in BUILTIN_NAMES {
-        scope.define(name, dummy.clone());
-    }
     scope.define("Ok", dummy.clone());
     scope.define("Err", dummy);
+    for name in BUILTIN_NAMES {
+        scope.define(name, Span { start: 0, end: 0 });
+    }
     scope
 }
 
@@ -99,11 +99,14 @@ impl Resolver {
 
     fn predeclare_functions(&mut self, stmts: &[Ast]) {
         for stmt in stmts {
-            if let Ast::Def(_, name, _, _, _) = stmt {
-                if self.scope.lookup(name).is_none() {
-                    let uid = self.scope.reserve_id();
-                    self.scope.define_with_id(name, uid);
+            match stmt {
+                Ast::Def(_, name, _, _, _) | Ast::BuiltinDecl(_, name, _, _) => {
+                    if self.scope.lookup(name).is_none() {
+                        let uid = self.scope.reserve_id();
+                        self.scope.define_with_id(name, uid);
+                    }
                 }
+                _ => {}
             }
         }
     }
@@ -316,6 +319,33 @@ impl Resolver {
                     ret_ty,
                     Box::new(resolved_body),
                 ))
+            }
+
+            Ast::BuiltinDecl(span, name, params, ret_ty) => {
+                if !BUILTIN_NAMES.contains(&name.as_str()) {
+                    return Err(ResolveError {
+                        message: format!("Unknown builtin declaration: {}", name),
+                        span,
+                    });
+                }
+
+                let builtin_uid = self
+                    .scope
+                    .lookup(&name)
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                let mut decl_resolver = Resolver::with_scope(self.scope.clone());
+                let resolved_params = params
+                    .into_iter()
+                    .map(|param| decl_resolver.resolve_fun_param(param))
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                self.scope.advance_next_id_to(decl_resolver.scope.next_id());
+                self.scope.define_with_id(&name, builtin_uid);
+                let rid = ResolvedId {
+                    name,
+                    unique_id: builtin_uid,
+                    span: span.clone(),
+                };
+                Ok(Resolved::BuiltinDecl(span, rid, resolved_params, ret_ty))
             }
 
             Ast::Closure(span, params, body) => {
@@ -602,6 +632,12 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                             local_bound.insert(param.id.unique_id);
                         }
                     }
+                    Resolved::BuiltinDecl(_, id, params, _) => {
+                        local_bound.insert(id.unique_id);
+                        for param in params {
+                            local_bound.insert(param.id.unique_id);
+                        }
+                    }
                     Resolved::Closure(_, params, _, _) => {
                         for param in params {
                             local_bound.insert(param.id.unique_id);
@@ -682,7 +718,8 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::StructDef(_, _, _)
         | Resolved::RecordDef(_, _, _)
-        | Resolved::DeferrorDef(_, _, _, _) => {}
+        | Resolved::DeferrorDef(_, _, _, _)
+        | Resolved::BuiltinDecl(_, _, _, _) => {}
         Resolved::Def(_, id, params, _, body) => {
             let mut fun_bound = bound.clone();
             fun_bound.insert(id.unique_id);
@@ -738,6 +775,23 @@ mod tests {
                 _ => panic!("Expected Var for print"),
             },
             _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_decl_resolution() {
+        let resolved = parse_and_resolve("@builtin def print(a: String) -> Unit").unwrap();
+        match &resolved[0] {
+            Resolved::BuiltinDecl(_, id, params, ret_ty) => {
+                assert_eq!(id.name, "print");
+                assert_eq!(id.unique_id, 2); // 0=Ok, 1=Err, 2=print
+                assert_eq!(params.len(), 1);
+                assert!(matches!(
+                    ret_ty,
+                    Some(spire::ast::AstTy::Named(_, ty)) if ty == "Unit"
+                ));
+            }
+            _ => panic!("Expected BuiltinDecl"),
         }
     }
 

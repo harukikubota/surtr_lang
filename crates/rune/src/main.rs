@@ -17,6 +17,9 @@ use rustyline::{Context, Editor, Helper};
 mod diagnostics;
 mod dump;
 
+const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";
+const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -236,7 +239,7 @@ impl ReplEngine {
     fn new() -> Self {
         let forge_session = forge::ForgeSession::new();
         let vm = eldr::VM::new_interactive(forge_session.type_registry());
-        Self {
+        let mut engine = Self {
             sigil_session: sigil::SigilSession::new(),
             scar_session: scar::ScarSession::new(),
             forge_session,
@@ -244,10 +247,75 @@ impl ReplEngine {
             pending: String::new(),
             next_line: 1,
             results: Vec::new(),
-            symbols: ["print", "to_string", "eprint", "Ok", "Err"]
+            symbols: ["Ok", "Err", "print", "to_string", "eprint"]
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
+        };
+        engine.bootstrap_builtins();
+        engine
+    }
+
+    fn bootstrap_builtins(&mut self) {
+        let ast = match spire::parse(BUILTIN_PRELUDE_SOURCE) {
+            Ok(ast) => ast,
+            Err(e) => {
+                diagnostics::report_error(
+                    BUILTIN_PRELUDE_FILE,
+                    BUILTIN_PRELUDE_SOURCE,
+                    diagnostics::simple_error("ParseError", e.message(), e.span().clone(), None),
+                );
+                return;
+            }
+        };
+
+        if ast.is_empty() {
+            return;
+        }
+
+        let resolved = match self.sigil_session.resolve(ast) {
+            Ok(r) => r,
+            Err(e) => {
+                diagnostics::report_error(
+                    BUILTIN_PRELUDE_FILE,
+                    BUILTIN_PRELUDE_SOURCE,
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                );
+                return;
+            }
+        };
+
+        let typed = match self.scar_session.typecheck(resolved) {
+            Ok(t) => t,
+            Err(e) => {
+                diagnostics::report_error(
+                    BUILTIN_PRELUDE_FILE,
+                    BUILTIN_PRELUDE_SOURCE,
+                    diagnostics::type_error_spec(BUILTIN_PRELUDE_SOURCE, &e),
+                );
+                return;
+            }
+        };
+
+        let (chunk, meta) = match self.forge_session.codegen_chunk(typed) {
+            Ok(c) => c,
+            Err(e) => {
+                diagnostics::report_error(
+                    BUILTIN_PRELUDE_FILE,
+                    BUILTIN_PRELUDE_SOURCE,
+                    diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
+                );
+                return;
+            }
+        };
+
+        if let Err(e) = self.vm.push(chunk) {
+            eprintln!("RuntimeError (builtin prelude): {}", e.message);
+            return;
+        }
+
+        for name in &meta.function_defs {
+            self.symbols.insert(name.clone());
         }
     }
 
@@ -526,9 +594,24 @@ fn default_output_path(input_srt: &str) -> String {
     path.with_extension("eldr").to_string_lossy().into_owned()
 }
 
-fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Bytecode, i32> {
-    // Phase 1: Spire — parse
-    let ast = match spire::parse(source) {
+fn parse_program_with_builtin_prelude(
+    source: &str,
+    file_path: &str,
+) -> Result<Vec<spire::ast::Ast>, i32> {
+    let mut ast = match spire::parse(BUILTIN_PRELUDE_SOURCE) {
+        Ok(a) => a,
+        Err(e) => {
+            let message = e.message();
+            diagnostics::report_error(
+                BUILTIN_PRELUDE_FILE,
+                BUILTIN_PRELUDE_SOURCE,
+                diagnostics::simple_error("ParseError", message, e.span().clone(), None),
+            );
+            return Err(1);
+        }
+    };
+
+    let mut user_ast = match spire::parse(source) {
         Ok(a) => a,
         Err(e) => {
             let message = e.message();
@@ -540,6 +623,14 @@ fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Byte
             return Err(1);
         }
     };
+
+    ast.append(&mut user_ast);
+    Ok(ast)
+}
+
+fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Bytecode, i32> {
+    // Phase 1: Spire — parse
+    let ast = parse_program_with_builtin_prelude(source, file_path)?;
 
     // Phase 2: Sigil — resolve names
     let resolved = match sigil::resolve(ast) {

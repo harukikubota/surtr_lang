@@ -123,6 +123,7 @@ impl Parser {
 
         // Data definitions
         match self.peek() {
+            Token::AtBuiltin => return self.parse_builtin_decl(),
             Token::Def => return self.parse_def(),
             Token::Defstruct => return self.parse_struct_def(),
             Token::Defrecord => return self.parse_record_def(),
@@ -628,6 +629,18 @@ impl Parser {
             ));
         }
 
+        if matches!(self.peek(), Token::Dollar) {
+            self.advance();
+            let (name, end) = self.expect_ident()?;
+            return Ok(AstTy::Named(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                format!("${}", name),
+            ));
+        }
+
         // Named type, possibly with type args: Result<Int> or Result<Int, Error>
         let (name, _) = self.expect_ident()?;
 
@@ -870,8 +883,9 @@ impl Parser {
         ))
     }
 
-    /// `def name(arg: Type, ...) -> Type { expr }`
-    fn parse_def(&mut self) -> Result<Ast, ParseError> {
+    fn parse_def_signature(
+        &mut self,
+    ) -> Result<(Span, Symbol, Vec<FunParam>, Option<AstTy>), ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Def)?;
         let (name, _) = self.expect_ident()?;
@@ -911,6 +925,44 @@ impl Parser {
         } else {
             None
         };
+
+        Ok((sp, name, params, ret_ty))
+    }
+
+    fn parse_builtin_decl(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::AtBuiltin)?;
+        self.skip_newlines();
+        let (_def_span, name, params, ret_ty) = self.parse_def_signature()?;
+        self.skip_newlines();
+
+        if matches!(self.peek(), Token::LBrace) {
+            return Err(ParseError::syntax(
+                "@builtin declaration must not have a function body",
+                self.peek_span(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            sp.end
+        };
+
+        Ok(Ast::BuiltinDecl(
+            Span {
+                start: sp.start,
+                end,
+            },
+            name,
+            params,
+            ret_ty,
+        ))
+    }
+
+    /// `def name(arg: Type, ...) -> Type { expr }`
+    fn parse_def(&mut self) -> Result<Ast, ParseError> {
+        let (sp, name, params, ret_ty) = self.parse_def_signature()?;
 
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -1343,6 +1395,15 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
             Box::new(shift_ast_span(*body, delta)),
         ),
+        Ast::BuiltinDecl(span, name, params, ret_ty) => Ast::BuiltinDecl(
+            shift_span(span, delta),
+            name,
+            params
+                .into_iter()
+                .map(|p| shift_fun_param(p, delta))
+                .collect(),
+            ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+        ),
         Ast::Closure(span, params, body) => Ast::Closure(
             shift_span(span, delta),
             params
@@ -1388,6 +1449,7 @@ impl Ast {
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _)
             | Ast::Def(s, _, _, _, _)
+            | Ast::BuiltinDecl(s, _, _, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
             | Ast::Semi(s, _) => s,
@@ -1513,6 +1575,29 @@ def noop() {()}"#,
             }
             _ => panic!("Expected Def"),
         }
+    }
+
+    #[test]
+    fn test_builtin_decl() {
+        let ast = parse("@builtin def to_string(a: $A) -> String").unwrap();
+        match &ast[0] {
+            Ast::BuiltinDecl(_, name, params, ret_ty) => {
+                assert_eq!(name, "to_string");
+                assert_eq!(params.len(), 1);
+                assert!(matches!(
+                    params[0].ty,
+                    AstTy::Named(_, ref name) if name == "$A"
+                ));
+                assert!(matches!(ret_ty, Some(AstTy::Named(_, ty)) if ty == "String"));
+            }
+            _ => panic!("Expected BuiltinDecl"),
+        }
+    }
+
+    #[test]
+    fn test_builtin_decl_with_body_is_error() {
+        let err = parse("@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
+        assert!(err.message().contains("must not have a function body"));
     }
 
     #[test]

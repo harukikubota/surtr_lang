@@ -19,40 +19,8 @@ pub fn typecheck(resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
 fn initialize_env() -> TypeEnv {
     let mut env = TypeEnv::new();
     // Register builtin function types.
-    // These unique_ids must match the order in sigil's BUILTIN_NAMES + Ok/Err.
-    // 0=print, 1=to_string, 2=eprint, 3=Ok, 4=Err
-
-    // print: (String) -> Unit
-    // V8 says print takes String. to_string must be called explicitly.
-    env.bind_var(
-        0,
-        Ty::BuiltinFunc {
-            name: "print".into(),
-            params: vec![Ty::Str],
-            ret: Box::new(Ty::Unit),
-        },
-    );
-
-    // to_string: ($A) -> String — polymorphic
-    let a = env.fresh_tyvar();
-    env.bind_var(
-        1,
-        Ty::BuiltinFunc {
-            name: "to_string".into(),
-            params: vec![a],
-            ret: Box::new(Ty::Str),
-        },
-    );
-
-    // eprint: (Error) -> Unit
-    env.bind_var(
-        2,
-        Ty::BuiltinFunc {
-            name: "eprint".into(),
-            params: vec![Ty::Error],
-            ret: Box::new(Ty::Unit),
-        },
-    );
+    // These unique_ids must match the order in sigil's Ok/Err + BUILTIN_NAMES.
+    // 0=Ok, 1=Err, 2=print, 3=to_string, 4=eprint
 
     // Ok constructor: ($A) -> Result<$A, $E>
     let ok_a = env.fresh_tyvar();
@@ -75,6 +43,38 @@ fn initialize_env() -> TypeEnv {
             name: "Err".into(),
             params: vec![err_e.clone()],
             ret: Box::new(Ty::Result(Box::new(err_a), Box::new(err_e))),
+        },
+    );
+
+    // print: (String) -> Unit
+    // V8 says print takes String. to_string must be called explicitly.
+    env.bind_var(
+        2,
+        Ty::BuiltinFunc {
+            name: "print".into(),
+            params: vec![Ty::Str],
+            ret: Box::new(Ty::Unit),
+        },
+    );
+
+    // to_string: ($A) -> String — polymorphic
+    let a = env.fresh_tyvar();
+    env.bind_var(
+        3,
+        Ty::BuiltinFunc {
+            name: "to_string".into(),
+            params: vec![a],
+            ret: Box::new(Ty::Str),
+        },
+    );
+
+    // eprint: (Error) -> Unit
+    env.bind_var(
+        4,
+        Ty::BuiltinFunc {
+            name: "eprint".into(),
+            params: vec![Ty::Error],
+            ret: Box::new(Ty::Unit),
         },
     );
 
@@ -170,29 +170,51 @@ impl Checker {
         let mut fun_idx = self.env.next_fun_idx;
 
         for stmt in stmts {
-            if let Resolved::Def(_, id, params, ret_ty, _) = stmt {
-                let param_tys = params
-                    .iter()
-                    .map(|param| self.resolve_ast_ty(&param.ty))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let param_names = params
-                    .iter()
-                    .map(|param| param.id.name.clone())
-                    .collect::<Vec<_>>();
-                let ret = match ret_ty {
-                    Some(ty) => self.resolve_ast_ty(ty)?,
-                    None => Ty::Unit,
-                };
-                self.env.bind_var(
-                    id.unique_id,
-                    Ty::UserFunc {
-                        fun_idx,
-                        params: param_tys,
-                        ret: Box::new(ret),
-                    },
-                );
-                self.user_func_params.insert(id.unique_id, param_names);
-                fun_idx += 1;
+            match stmt {
+                Resolved::BuiltinDecl(_, id, params, ret_ty) => {
+                    let mut tyvars = HashMap::new();
+                    let param_tys = params
+                        .iter()
+                        .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let ret = match ret_ty {
+                        Some(ty) => self.resolve_builtin_ast_ty(ty, &mut tyvars)?,
+                        None => Ty::Unit,
+                    };
+                    self.env.bind_var(
+                        id.unique_id,
+                        Ty::BuiltinFunc {
+                            name: id.name.clone(),
+                            params: param_tys,
+                            ret: Box::new(ret),
+                        },
+                    );
+                }
+                Resolved::Def(_, id, params, ret_ty, _) => {
+                    let param_tys = params
+                        .iter()
+                        .map(|param| self.resolve_ast_ty(&param.ty))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let param_names = params
+                        .iter()
+                        .map(|param| param.id.name.clone())
+                        .collect::<Vec<_>>();
+                    let ret = match ret_ty {
+                        Some(ty) => self.resolve_ast_ty(ty)?,
+                        None => Ty::Unit,
+                    };
+                    self.env.bind_var(
+                        id.unique_id,
+                        Ty::UserFunc {
+                            fun_idx,
+                            params: param_tys,
+                            ret: Box::new(ret),
+                        },
+                    );
+                    self.user_func_params.insert(id.unique_id, param_names);
+                    fun_idx += 1;
+                }
+                _ => {}
             }
         }
 
@@ -317,6 +339,9 @@ impl Checker {
             }
             Resolved::Def(span, id, params, ret_ty, body) => {
                 self.check_def(span, id, params, ret_ty, body)
+            }
+            Resolved::BuiltinDecl(span, id, params, ret_ty) => {
+                self.check_builtin_decl(span, id, params, ret_ty)
             }
             Resolved::Closure(span, params, captures, body) => {
                 self.check_closure(span, params, captures, body, None)
@@ -450,6 +475,44 @@ impl Checker {
                 let ret = self.resolve_ast_ty(ret)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
+        }
+    }
+
+    fn resolve_builtin_ast_ty(
+        &mut self,
+        ast_ty: &AstTy,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
+        match ast_ty {
+            AstTy::Named(_, name) if name.starts_with('$') => {
+                if let Some(existing) = tyvars.get(name) {
+                    return Ok(existing.clone());
+                }
+                let fresh = self.env.fresh_tyvar();
+                tyvars.insert(name.clone(), fresh.clone());
+                Ok(fresh)
+            }
+            AstTy::ListOf(_, inner) => {
+                let inner_ty = self.resolve_builtin_ast_ty(inner, tyvars)?;
+                Ok(Ty::List(Box::new(inner_ty)))
+            }
+            AstTy::ResultOf(_, ok_ty, err_ty) => {
+                let ok = self.resolve_builtin_ast_ty(ok_ty, tyvars)?;
+                let err = match err_ty {
+                    Some(e) => self.resolve_builtin_ast_ty(e, tyvars)?,
+                    None => Ty::Error,
+                };
+                Ok(Ty::Result(Box::new(ok), Box::new(err)))
+            }
+            AstTy::Func(_, params, ret) => {
+                let params = params
+                    .iter()
+                    .map(|p| self.resolve_builtin_ast_ty(p, tyvars))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ret = self.resolve_builtin_ast_ty(ret, tyvars)?;
+                Ok(Ty::Func(params, Box::new(ret)))
+            }
+            _ => self.resolve_ast_ty(ast_ty),
         }
     }
 
@@ -1442,6 +1505,39 @@ impl Checker {
             ty: field_ty,
             span: span.clone(),
             node: TypedInner::FieldAccess(Box::new(typed_expr), idx),
+        })
+    }
+
+    fn check_builtin_decl(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        params: &[ResolvedFunParam],
+        ret_ty: &Option<AstTy>,
+    ) -> Result<TypedNode, TypeError> {
+        let mut tyvars = HashMap::new();
+        let param_tys = params
+            .iter()
+            .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret = match ret_ty {
+            Some(ty) => self.resolve_builtin_ast_ty(ty, &mut tyvars)?,
+            None => Ty::Unit,
+        };
+
+        self.env.bind_var(
+            id.unique_id,
+            Ty::BuiltinFunc {
+                name: id.name.clone(),
+                params: param_tys,
+                ret: Box::new(ret),
+            },
+        );
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::Lit(Lit::Unit),
         })
     }
 

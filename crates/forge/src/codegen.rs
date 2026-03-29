@@ -838,7 +838,11 @@ impl Codegen {
         } else {
             // Script path: report and stop immediately.
             self.emit(Opcode::GetField(0));
-            self.emit(Opcode::CallBuiltin(2, 1));
+            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                message: "Unknown builtin: eprint".into(),
+                span: rhs.span.clone(),
+            })?;
+            self.emit(Opcode::CallBuiltin(eprint_id, 1));
             self.emit(Opcode::Halt);
         }
 
@@ -870,17 +874,10 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         match &func.ty {
             Ty::BuiltinFunc { name, .. } => {
-                let builtin_id = match name.as_str() {
-                    "print" => 0u16,
-                    "to_string" => 1,
-                    "eprint" => 2,
-                    _ => {
-                        return Err(CodegenError {
-                            message: format!("Unknown builtin: {}", name),
-                            span: func.span.clone(),
-                        });
-                    }
-                };
+                let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                    message: format!("Unknown builtin: {}", name),
+                    span: func.span.clone(),
+                })?;
                 for arg in args {
                     self.emit_node(arg)?;
                 }
@@ -998,8 +995,11 @@ impl Codegen {
                 }
                 TypedInterpolatedPart::Expr(expr) => {
                     self.emit_node(expr)?;
-                    // Reuse builtin_id=1 (to_string)
-                    self.emit(Opcode::CallBuiltin(1, 1));
+                    let to_string_id = Self::builtin_id("to_string").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: to_string".into(),
+                        span: expr.span.clone(),
+                    })?;
+                    self.emit(Opcode::CallBuiltin(to_string_id, 1));
                 }
             }
 

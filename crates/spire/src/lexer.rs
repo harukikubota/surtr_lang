@@ -38,6 +38,31 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
+        // Attribute keyword (currently only @builtin)
+        if c == '@' {
+            let start = i;
+            i += 1; // skip '@'
+            let name_start = i;
+            while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let name: String = chars[name_start..i].iter().collect();
+            let token = match name.as_str() {
+                "builtin" => Token::AtBuiltin,
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown attribute: @{}", name),
+                        Span { start, end: i },
+                    ));
+                }
+            };
+            tokens.push(Spanned {
+                token,
+                span: Span { start, end: i },
+            });
+            continue;
+        }
+
         // String — double quote
         if c == '"' {
             let start = i;
@@ -220,6 +245,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             ';' => Token::Semicolon,
             '|' => Token::Pipe,
             '&' => Token::Amp,
+            '$' => Token::Dollar,
             _ => {
                 return Err(ParseError::syntax(
                     format!("Unexpected character: '{}'", c),
@@ -291,5 +317,18 @@ mod tests {
     fn test_def_keyword() {
         let tokens = tokenize("def noop() {()}").unwrap();
         assert!(matches!(tokens[0].token, Token::Def));
+    }
+
+    #[test]
+    fn test_at_builtin_keyword() {
+        let tokens = tokenize("@builtin def print(a: String) -> Unit").unwrap();
+        assert!(matches!(tokens[0].token, Token::AtBuiltin));
+    }
+
+    #[test]
+    fn test_dollar_token() {
+        let tokens = tokenize("$A").unwrap();
+        assert!(matches!(tokens[0].token, Token::Dollar));
+        assert!(matches!(tokens[1].token, Token::Ident(ref s) if s == "A"));
     }
 }

@@ -71,6 +71,9 @@ pub enum Resolved {
         Box<Resolved>,
     ),
 
+    /// Builtin declaration
+    BuiltinDecl(Span, ResolvedId, Vec<ResolvedFunParam>, Option<AstTy>),
+
     /// Closure literal
     Closure(
         Span,
