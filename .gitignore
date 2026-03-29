@@ -5,6 +5,7 @@
 
 /.claude
 /.vscode
+/.venv_icon
 
 # VS Code extension build artifacts
 vscode-surtr-icons/node_modules/
