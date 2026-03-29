@@ -316,6 +316,28 @@ print(match n {
         );
     }
 
+    // ── Phase 2 Step 3: string interpolation ──
+
+    #[test]
+    fn phase2_step3_string_interpolation() {
+        assert_output(
+            r#"name = "alice"
+score = 10
+print("hello #{name}")
+print("score=#{score + 2}")"#,
+            &["hello alice", "score=12"],
+        );
+    }
+
+    #[test]
+    fn phase2_step3_interpolation_result_error() {
+        assert_compile_error(
+            r#"r: Result<Int> = Ok(1)
+print("r=#{r}")"#,
+            "Interpolation does not allow Result type",
+        );
+    }
+
     // ── Step 9: deferror / Error ──
 
     #[test]

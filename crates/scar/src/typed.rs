@@ -21,6 +21,7 @@ pub enum TypedInner {
     Bind(TypedPattern, Box<TypedNode>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
     List(Vec<TypedNode>),
+    InterpolatedStr(Vec<TypedInterpolatedPart>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Match(Box<TypedNode>, Vec<(TypedMatchPattern, TypedNode)>),
 
@@ -44,6 +45,13 @@ pub enum TypedInner {
 
     /// Semicolon — explicit Unit coercion
     Semi(Box<TypedNode>),
+}
+
+/// Interpolated string fragment (typed).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypedInterpolatedPart {
+    Text(String),
+    Expr(Box<TypedNode>),
 }
 
 /// Pattern in a binding (typed).

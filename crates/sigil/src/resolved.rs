@@ -32,6 +32,9 @@ pub enum Resolved {
     /// List literal
     List(Span, Vec<Resolved>),
 
+    /// Interpolated string
+    InterpolatedStr(Span, Vec<ResolvedInterpolatedPart>),
+
     /// `if(cond, then, else?)` — converted from App("if", args) by Sigil
     If(Span, Box<Resolved>, Box<Resolved>, Option<Box<Resolved>>),
 
@@ -58,6 +61,13 @@ pub enum Resolved {
 
     /// Semicolon — explicit Unit coercion
     Semi(Span, Box<Resolved>),
+}
+
+/// Interpolated string fragment (resolved).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedInterpolatedPart {
+    Text(String),
+    Expr(Box<Resolved>),
 }
 
 /// Pattern in a binding (resolved).

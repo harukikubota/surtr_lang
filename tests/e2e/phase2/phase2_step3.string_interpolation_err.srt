@@ -1,0 +1,2 @@
+r: Result<Int> = Ok(1)
+print("r=#{r}")

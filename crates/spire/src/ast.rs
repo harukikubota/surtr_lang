@@ -100,6 +100,13 @@ pub enum RecordLitArg {
     Named(Symbol, Ast),
 }
 
+/// Interpolated string fragment.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpolatedPart {
+    Text(String),
+    Expr(Box<Ast>),
+}
+
 // ── AST ──
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +131,9 @@ pub enum Ast {
 
     /// List literal: `[1, 2, 3]`, `[]`
     List(Span, Vec<Ast>),
+
+    /// Interpolated string: `"hi #{name}"`
+    InterpolatedStr(Span, Vec<InterpolatedPart>),
 
     /// Match expression
     Match(Span, Box<Ast>, Vec<(AstMatchPattern, Ast)>),

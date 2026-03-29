@@ -378,6 +378,10 @@ impl Codegen {
                 }
             }
 
+            TypedInner::InterpolatedStr(parts) => {
+                self.emit_interpolated_str(parts)?;
+            }
+
             TypedInner::If(cond, then, else_opt) => {
                 self.emit_if(cond, then, else_opt)?;
             }
@@ -527,6 +531,39 @@ impl Codegen {
                 // Push Unit
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_interpolated_str(
+        &mut self,
+        parts: &[TypedInterpolatedPart],
+    ) -> Result<(), CodegenError> {
+        if parts.is_empty() {
+            let empty = self.add_constant(Constant::Str(String::new()));
+            self.emit(Opcode::LoadConst(empty));
+            return Ok(());
+        }
+
+        let mut first = true;
+        for part in parts {
+            match part {
+                TypedInterpolatedPart::Text(s) => {
+                    let idx = self.add_constant(Constant::Str(s.clone()));
+                    self.emit(Opcode::LoadConst(idx));
+                }
+                TypedInterpolatedPart::Expr(expr) => {
+                    self.emit_node(expr)?;
+                    // Reuse builtin_id=1 (to_string)
+                    self.emit(Opcode::CallBuiltin(1, 1));
+                }
+            }
+
+            if first {
+                first = false;
+            } else {
+                self.emit(Opcode::ConcatStr);
             }
         }
         Ok(())

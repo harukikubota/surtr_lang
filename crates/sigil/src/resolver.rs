@@ -150,6 +150,23 @@ impl Resolver {
                 Ok(Resolved::List(span, resolved))
             }
 
+            Ast::InterpolatedStr(span, parts) => {
+                let mut resolved_parts = Vec::new();
+                for part in parts {
+                    match part {
+                        spire::ast::InterpolatedPart::Text(s) => {
+                            resolved_parts.push(ResolvedInterpolatedPart::Text(s));
+                        }
+                        spire::ast::InterpolatedPart::Expr(expr) => {
+                            let resolved_expr = self.resolve_node(*expr)?;
+                            resolved_parts
+                                .push(ResolvedInterpolatedPart::Expr(Box::new(resolved_expr)));
+                        }
+                    }
+                }
+                Ok(Resolved::InterpolatedStr(span, resolved_parts))
+            }
+
             Ast::FieldAccess(span, expr, field) => {
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))

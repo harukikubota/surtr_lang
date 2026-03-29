@@ -200,6 +200,8 @@ impl Checker {
 
             Resolved::List(span, elems) => self.check_list(span, elems),
 
+            Resolved::InterpolatedStr(span, parts) => self.check_interpolated_str(span, parts),
+
             Resolved::If(span, cond, then, else_opt) => self.check_if(span, cond, then, else_opt),
 
             Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms),
@@ -560,6 +562,41 @@ impl Checker {
             ty: Ty::List(Box::new(elem_ty)),
             span: span.clone(),
             node: TypedInner::List(typed_elems),
+        })
+    }
+
+    fn check_interpolated_str(
+        &mut self,
+        span: &Span,
+        parts: &[ResolvedInterpolatedPart],
+    ) -> Result<TypedNode, TypeError> {
+        let mut typed_parts = Vec::new();
+        for part in parts {
+            match part {
+                ResolvedInterpolatedPart::Text(s) => {
+                    typed_parts.push(TypedInterpolatedPart::Text(s.clone()));
+                }
+                ResolvedInterpolatedPart::Expr(expr) => {
+                    let typed_expr = self.check_node(expr)?;
+                    if matches!(typed_expr.ty, Ty::Result(_, _)) {
+                        return Err(TypeError {
+                            message: "Interpolation does not allow Result type".into(),
+                            span: typed_expr.span.clone(),
+                            hint: Some(
+                                "Unwrap/match the Result first, or convert it to a printable value"
+                                    .into(),
+                            ),
+                        });
+                    }
+                    typed_parts.push(TypedInterpolatedPart::Expr(Box::new(typed_expr)));
+                }
+            }
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Str,
+            span: span.clone(),
+            node: TypedInner::InterpolatedStr(typed_parts),
         })
     }
 

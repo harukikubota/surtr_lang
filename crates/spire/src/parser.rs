@@ -223,7 +223,7 @@ impl Parser {
             }
             Token::Str(s) => {
                 self.advance();
-                Ok(Ast::Lit(sp, Lit::Str(s)))
+                self.parse_string_or_interpolated(sp, s)
             }
             Token::True => {
                 self.advance();
@@ -777,6 +777,264 @@ impl Parser {
             )),
         }
     }
+
+    fn parse_string_or_interpolated(&mut self, span: Span, raw: String) -> Result<Ast, ParseError> {
+        let parts = self.parse_interpolated_parts(&raw, &span)?;
+        if parts.is_empty() {
+            Ok(Ast::Lit(span, Lit::Str(raw)))
+        } else {
+            Ok(Ast::InterpolatedStr(span, parts))
+        }
+    }
+
+    fn parse_interpolated_parts(
+        &mut self,
+        raw: &str,
+        base_span: &Span,
+    ) -> Result<Vec<InterpolatedPart>, ParseError> {
+        let chars: Vec<char> = raw.chars().collect();
+        let mut parts = Vec::new();
+        let mut text = String::new();
+        let mut i = 0;
+        let mut has_interpolation = false;
+
+        while i < chars.len() {
+            let ch = chars[i];
+            let is_interp_start = ch == '#'
+                && i + 1 < chars.len()
+                && chars[i + 1] == '{'
+                && (i == 0 || chars[i - 1] != '\\');
+            if !is_interp_start {
+                text.push(ch);
+                i += 1;
+                continue;
+            }
+
+            has_interpolation = true;
+            if !text.is_empty() {
+                parts.push(InterpolatedPart::Text(std::mem::take(&mut text)));
+            }
+
+            i += 2; // skip #{
+            let expr_start = i;
+            let mut depth = 1usize;
+            let mut expr_src = String::new();
+            while i < chars.len() {
+                let c = chars[i];
+                if c == '{' {
+                    depth += 1;
+                    expr_src.push(c);
+                    i += 1;
+                    continue;
+                }
+                if c == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        i += 1; // consume closing }
+                        break;
+                    }
+                    expr_src.push(c);
+                    i += 1;
+                    continue;
+                }
+                expr_src.push(c);
+                i += 1;
+            }
+
+            if depth != 0 {
+                return Err(ParseError::incomplete("}", base_span.clone()));
+            }
+
+            let parsed = parse(&expr_src).map_err(|e| {
+                let expr_offset = base_span.start + 1 + expr_start;
+                let mapped = Span {
+                    start: expr_offset + e.span().start,
+                    end: expr_offset + e.span().end,
+                };
+                ParseError::syntax(
+                    format!("Invalid interpolation expression: {}", e.message()),
+                    mapped,
+                )
+            })?;
+            if parsed.len() != 1 {
+                return Err(ParseError::syntax(
+                    "Interpolation expression must contain exactly one expression",
+                    base_span.clone(),
+                ));
+            }
+            let expr_offset = base_span.start + 1 + expr_start;
+            let expr = shift_ast_span(parsed.into_iter().next().unwrap(), expr_offset);
+            parts.push(InterpolatedPart::Expr(Box::new(expr)));
+        }
+
+        if !text.is_empty() {
+            parts.push(InterpolatedPart::Text(text));
+        }
+
+        if has_interpolation {
+            Ok(parts)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+}
+
+fn shift_span(span: Span, delta: usize) -> Span {
+    Span {
+        start: span.start + delta,
+        end: span.end + delta,
+    }
+}
+
+fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
+    match ty {
+        AstTy::Named(span, name) => AstTy::Named(shift_span(span, delta), name),
+        AstTy::ListOf(span, inner) => {
+            AstTy::ListOf(shift_span(span, delta), Box::new(shift_ast_ty(*inner, delta)))
+        }
+        AstTy::ResultOf(span, ok, err) => AstTy::ResultOf(
+            shift_span(span, delta),
+            Box::new(shift_ast_ty(*ok, delta)),
+            err.map(|e| Box::new(shift_ast_ty(*e, delta))),
+        ),
+    }
+}
+
+fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
+    match pat {
+        AstPattern::Var(span, name) => AstPattern::Var(shift_span(span, delta), name),
+        AstPattern::Annotated(span, name, ty) => {
+            AstPattern::Annotated(shift_span(span, delta), name, shift_ast_ty(ty, delta))
+        }
+        AstPattern::Wildcard(span) => AstPattern::Wildcard(shift_span(span, delta)),
+    }
+}
+
+fn shift_match_pattern(pat: AstMatchPattern, delta: usize) -> AstMatchPattern {
+    match pat {
+        AstMatchPattern::Wildcard(span) => AstMatchPattern::Wildcard(shift_span(span, delta)),
+        AstMatchPattern::BoolLit(span, b) => AstMatchPattern::BoolLit(shift_span(span, delta), b),
+        AstMatchPattern::IntLit(span, n) => AstMatchPattern::IntLit(shift_span(span, delta), n),
+        AstMatchPattern::StrLit(span, s) => AstMatchPattern::StrLit(shift_span(span, delta), s),
+        AstMatchPattern::Constructor(span, ctor, inner) => {
+            AstMatchPattern::Constructor(shift_span(span, delta), ctor, inner)
+        }
+    }
+}
+
+fn shift_record_lit_arg(arg: RecordLitArg, delta: usize) -> RecordLitArg {
+    match arg {
+        RecordLitArg::Positional(expr) => RecordLitArg::Positional(shift_ast_span(expr, delta)),
+        RecordLitArg::Named(name, expr) => RecordLitArg::Named(name, shift_ast_span(expr, delta)),
+    }
+}
+
+fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
+    match ast {
+        Ast::Lit(span, lit) => Ast::Lit(shift_span(span, delta), lit),
+        Ast::Var(span, name) => Ast::Var(shift_span(span, delta), name),
+        Ast::App(span, func, args) => Ast::App(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*func, delta)),
+            args.into_iter().map(|a| shift_ast_span(a, delta)).collect(),
+        ),
+        Ast::Block(span, stmts) => Ast::Block(
+            shift_span(span, delta),
+            stmts.into_iter().map(|s| shift_ast_span(s, delta)).collect(),
+        ),
+        Ast::Bind(span, pat, rhs) => Ast::Bind(
+            shift_span(span, delta),
+            shift_pattern(pat, delta),
+            Box::new(shift_ast_span(*rhs, delta)),
+        ),
+        Ast::BinOp(span, op, left, right) => Ast::BinOp(
+            shift_span(span, delta),
+            op,
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::List(span, elems) => Ast::List(
+            shift_span(span, delta),
+            elems.into_iter().map(|e| shift_ast_span(e, delta)).collect(),
+        ),
+        Ast::InterpolatedStr(span, parts) => Ast::InterpolatedStr(
+            shift_span(span, delta),
+            parts
+                .into_iter()
+                .map(|p| match p {
+                    InterpolatedPart::Text(s) => InterpolatedPart::Text(s),
+                    InterpolatedPart::Expr(expr) => {
+                        InterpolatedPart::Expr(Box::new(shift_ast_span(*expr, delta)))
+                    }
+                })
+                .collect(),
+        ),
+        Ast::Match(span, expr, arms) => Ast::Match(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*expr, delta)),
+            arms.into_iter()
+                .map(|(pat, body)| (shift_match_pattern(pat, delta), shift_ast_span(body, delta)))
+                .collect(),
+        ),
+        Ast::FieldAccess(span, expr, field) => Ast::FieldAccess(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*expr, delta)),
+            field,
+        ),
+        Ast::StructDef(span, name, fields) => Ast::StructDef(
+            shift_span(span, delta),
+            name,
+            fields
+                .into_iter()
+                .map(|f| StructField {
+                    name: f.name,
+                    ty: shift_ast_ty(f.ty, delta),
+                    span: shift_span(f.span, delta),
+                })
+                .collect(),
+        ),
+        Ast::RecordDef(span, name, fields) => Ast::RecordDef(
+            shift_span(span, delta),
+            name,
+            fields
+                .into_iter()
+                .map(|f| RecordField {
+                    name: f.name,
+                    ty: shift_ast_ty(f.ty, delta),
+                    span: shift_span(f.span, delta),
+                })
+                .collect(),
+        ),
+        Ast::StructLit(span, name, fields) => Ast::StructLit(
+            shift_span(span, delta),
+            name,
+            fields
+                .into_iter()
+                .map(|(name, expr)| (name, shift_ast_span(expr, delta)))
+                .collect(),
+        ),
+        Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(
+            shift_span(span, delta),
+            name,
+            args.into_iter()
+                .map(|a| shift_record_lit_arg(a, delta))
+                .collect(),
+        ),
+        Ast::DeferrorDef(span, name, fields, show_expr) => Ast::DeferrorDef(
+            shift_span(span, delta),
+            name,
+            fields
+                .into_iter()
+                .map(|f| RecordField {
+                    name: f.name,
+                    ty: shift_ast_ty(f.ty, delta),
+                    span: shift_span(f.span, delta),
+                })
+                .collect(),
+            Box::new(shift_ast_span(*show_expr, delta)),
+        ),
+        Ast::Semi(span, inner) => Ast::Semi(shift_span(span, delta), Box::new(shift_ast_span(*inner, delta))),
+    }
 }
 
 // ── Ast span accessor ──
@@ -791,6 +1049,7 @@ impl Ast {
             | Ast::Bind(s, _, _)
             | Ast::BinOp(s, _, _, _)
             | Ast::List(s, _)
+            | Ast::InterpolatedStr(s, _)
             | Ast::Match(s, _, _)
             | Ast::FieldAccess(s, _, _)
             | Ast::StructDef(s, _, _)
@@ -920,6 +1179,45 @@ mod tests {
                 assert!(matches!(rhs.as_ref(), Ast::BinOp(_, BinOp::Concat, _, _)));
             }
             _ => panic!("Expected Bind with Concat"),
+        }
+    }
+
+    #[test]
+    fn test_string_concat_is_left_associative() {
+        let ast = parse(r#"msg = a ++ b ++ c"#).unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::BinOp(_, BinOp::Concat, left, right) => {
+                    assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "c"));
+                    assert!(matches!(
+                        left.as_ref(),
+                        Ast::BinOp(_, BinOp::Concat, ll, lr)
+                            if matches!(ll.as_ref(), Ast::Var(_, name) if name == "a")
+                                && matches!(lr.as_ref(), Ast::Var(_, name) if name == "b")
+                    ));
+                }
+                _ => panic!("Expected nested left-associative concat"),
+            },
+            _ => panic!("Expected Bind with chained Concat"),
+        }
+    }
+
+    #[test]
+    fn test_interpolated_string_ast() {
+        let ast = parse(r#"msg = "hi #{name}!""#).unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::InterpolatedStr(_, parts) => {
+                    assert!(matches!(parts.first(), Some(InterpolatedPart::Text(s)) if s == "hi "));
+                    assert!(
+                        matches!(parts.get(1), Some(InterpolatedPart::Expr(expr))
+                            if matches!(expr.as_ref(), Ast::Var(_, name) if name == "name"))
+                    );
+                    assert!(matches!(parts.get(2), Some(InterpolatedPart::Text(s)) if s == "!"));
+                }
+                _ => panic!("Expected InterpolatedStr"),
+            },
+            _ => panic!("Expected Bind"),
         }
     }
 
