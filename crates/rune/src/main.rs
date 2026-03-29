@@ -440,7 +440,7 @@ fn repl_command() -> Result<(), i32> {
                     }
                 }
                 Err(ReadlineError::Interrupted) => {
-                    continue;
+                    return Err(130);
                 }
                 Err(ReadlineError::Eof) => {
                     break;
