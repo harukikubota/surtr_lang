@@ -1,5 +1,7 @@
 #![allow(unused_variables)]
 
+use std::collections::HashMap;
+
 use sigil::resolved::*;
 use spire::ast::{AstTy, BinOp, Lit, Span};
 
@@ -82,35 +84,43 @@ fn initialize_env() -> TypeEnv {
 #[derive(Debug, Clone)]
 pub struct ScarCheckpoint {
     env: TypeEnv,
+    user_func_params: HashMap<u32, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ScarSession {
     env: TypeEnv,
+    user_func_params: HashMap<u32, Vec<String>>,
 }
 
 impl ScarSession {
     pub fn new() -> Self {
         Self {
             env: initialize_env(),
+            user_func_params: HashMap::new(),
         }
     }
 
     pub fn typecheck(&mut self, resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
-        let mut checker = Checker::with_env(self.env.clone());
+        let mut checker =
+            Checker::with_env_and_params(self.env.clone(), self.user_func_params.clone());
         let typed = checker.check_program(resolved)?;
-        self.env = checker.into_env();
+        let (env, user_func_params) = checker.into_parts();
+        self.env = env;
+        self.user_func_params = user_func_params;
         Ok(typed)
     }
 
     pub fn checkpoint(&self) -> ScarCheckpoint {
         ScarCheckpoint {
             env: self.env.clone(),
+            user_func_params: self.user_func_params.clone(),
         }
     }
 
     pub fn rollback(&mut self, checkpoint: ScarCheckpoint) {
         self.env = checkpoint.env;
+        self.user_func_params = checkpoint.user_func_params;
     }
 }
 
@@ -123,6 +133,7 @@ impl Default for ScarSession {
 struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
+    user_func_params: HashMap<u32, Vec<String>>,
 }
 
 impl Checker {
@@ -130,18 +141,20 @@ impl Checker {
         Self {
             env: initialize_env(),
             function_return_ty: None,
+            user_func_params: HashMap::new(),
         }
     }
 
-    fn with_env(env: TypeEnv) -> Self {
+    fn with_env_and_params(env: TypeEnv, user_func_params: HashMap<u32, Vec<String>>) -> Self {
         Self {
             env,
             function_return_ty: None,
+            user_func_params,
         }
     }
 
-    fn into_env(self) -> TypeEnv {
-        self.env
+    fn into_parts(self) -> (TypeEnv, HashMap<u32, Vec<String>>) {
+        (self.env, self.user_func_params)
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
@@ -162,6 +175,10 @@ impl Checker {
                     .iter()
                     .map(|param| self.resolve_ast_ty(&param.ty))
                     .collect::<Result<Vec<_>, _>>()?;
+                let param_names = params
+                    .iter()
+                    .map(|param| param.id.name.clone())
+                    .collect::<Vec<_>>();
                 let ret = match ret_ty {
                     Some(ty) => self.resolve_ast_ty(ty)?,
                     None => Ty::Unit,
@@ -174,6 +191,7 @@ impl Checker {
                         ret: Box::new(ret),
                     },
                 );
+                self.user_func_params.insert(id.unique_id, param_names);
                 fun_idx += 1;
             }
         }
@@ -590,16 +608,31 @@ impl Checker {
         &mut self,
         span: &Span,
         func: &Resolved,
-        args: &[Resolved],
+        args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
         let typed_func = self.check_node(func)?;
-        let typed_args: Vec<TypedNode> = args
-            .iter()
-            .map(|a| self.check_node(a))
-            .collect::<Result<Vec<_>, _>>()?;
 
         match &typed_func.ty {
             Ty::BuiltinFunc { name, params, ret } => {
+                if args
+                    .iter()
+                    .any(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)))
+                {
+                    return Err(TypeError {
+                        message: format!("{} does not accept named arguments", name),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+
+                let typed_args: Vec<TypedNode> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        ResolvedRecordLitArg::Positional(expr) => self.check_node(expr),
+                        ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 // Check arity
                 if typed_args.len() != params.len() {
                     return Err(TypeError {
@@ -635,18 +668,96 @@ impl Checker {
                 })
             }
             Ty::UserFunc { params, ret, .. } => {
-                if typed_args.len() != params.len() {
+                let param_names = match func {
+                    Resolved::Var(_, id) => self.user_func_params.get(&id.unique_id).cloned(),
+                    _ => None,
+                };
+
+                let mut reordered = vec![None; params.len()];
+                let mut positional_idx = 0usize;
+                let mut seen_named = false;
+
+                for arg in args {
+                    match arg {
+                        ResolvedRecordLitArg::Positional(expr) => {
+                            if seen_named {
+                                return Err(TypeError {
+                                    message: "Positional arguments must come before named arguments"
+                                        .into(),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
+                            }
+                            if positional_idx >= params.len() {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "function expects {} argument(s), got {}",
+                                        params.len(),
+                                        args.len()
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
+                            }
+                            reordered[positional_idx] = Some(expr);
+                            positional_idx += 1;
+                        }
+                        ResolvedRecordLitArg::Named(name, expr) => {
+                            seen_named = true;
+                            let names = param_names.as_ref().ok_or_else(|| TypeError {
+                                message: "This function value does not accept named arguments"
+                                    .into(),
+                                span: span.clone(),
+                                hint: None,
+                            })?;
+                            let idx =
+                                names
+                                    .iter()
+                                    .position(|n| n == name)
+                                    .ok_or_else(|| TypeError {
+                                        message: format!(
+                                            "Unknown argument name '{}' for function",
+                                            name
+                                        ),
+                                        span: span.clone(),
+                                        hint: None,
+                                    })?;
+                            if reordered[idx].is_some() {
+                                return Err(TypeError {
+                                    message: format!("Duplicate argument '{}'", name),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
+                            }
+                            reordered[idx] = Some(expr);
+                        }
+                    }
+                }
+
+                if args.len() != params.len() {
                     return Err(TypeError {
                         message: format!(
                             "function expects {} argument(s), got {}",
                             params.len(),
-                            typed_args.len()
+                            args.len()
                         ),
                         span: span.clone(),
                         hint: None,
                     });
                 }
-                for (param, arg) in params.iter().zip(&typed_args) {
+
+                let mut typed_args = Vec::with_capacity(params.len());
+                for (idx, param) in params.iter().enumerate() {
+                    let expr = reordered[idx].ok_or_else(|| TypeError {
+                        message: if let Some(names) = param_names.as_ref() {
+                            format!("Missing argument '{}'", names[idx])
+                        } else {
+                            format!("Missing argument #{}", idx + 1)
+                        },
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                    let arg = self.check_node(expr)?;
                     if !self.types_compatible(param, &arg.ty) {
                         return Err(TypeError {
                             message: format!(
@@ -658,6 +769,7 @@ impl Checker {
                             hint: None,
                         });
                     }
+                    typed_args.push(arg);
                 }
 
                 Ok(TypedNode {
@@ -667,6 +779,25 @@ impl Checker {
                 })
             }
             Ty::Func(params, ret) => {
+                if args
+                    .iter()
+                    .any(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)))
+                {
+                    return Err(TypeError {
+                        message: "Function values do not accept named arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+
+                let typed_args: Vec<TypedNode> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        ResolvedRecordLitArg::Positional(expr) => self.check_node(expr),
+                        ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
                 if typed_args.len() != params.len() {
                     return Err(TypeError {
                         message: format!(
@@ -755,7 +886,8 @@ impl Checker {
             }
         }
 
-        let mut body_checker = Checker::with_env(fun_env);
+        let mut body_checker =
+            Checker::with_env_and_params(fun_env, self.user_func_params.clone());
         if let Some(Ty::Func(_, expected_ret)) = expected {
             body_checker.function_return_ty = Some(expected_ret.as_ref().clone());
         }
@@ -1338,7 +1470,8 @@ impl Checker {
             None => Ty::Unit,
         };
 
-        let mut body_checker = Checker::with_env(fun_env);
+        let mut body_checker =
+            Checker::with_env_and_params(fun_env, self.user_func_params.clone());
         body_checker.function_return_ty = Some(expected_ret.clone());
         let typed_body = body_checker.check_node(body)?;
 
@@ -1800,7 +1933,8 @@ impl Checker {
         for (ty, resolved_id) in &ty_fields {
             show_env.bind_var(resolved_id.unique_id, ty.clone());
         }
-        let mut show_checker = Checker::with_env(show_env);
+        let mut show_checker =
+            Checker::with_env_and_params(show_env, self.user_func_params.clone());
         show_checker.function_return_ty = Some(Ty::Str);
         let typed_show = show_checker.check_node(show_expr)?;
         self.env.next_tyvar = self.env.next_tyvar.max(show_checker.env.next_tyvar);

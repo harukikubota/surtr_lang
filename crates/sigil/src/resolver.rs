@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use spire::ast::{Ast, AstPattern, BinOp, ClosureParam, FunParam, Lit, Span};
+use spire::ast::{Ast, AstPattern, BinOp, ClosureParam, FunParam, Lit, RecordLitArg, Span};
 
 use crate::error::ResolveError;
 use crate::resolved::*;
@@ -138,7 +138,14 @@ impl Resolver {
                 let resolved_func = self.resolve_node(*func)?;
                 let resolved_args = args
                     .into_iter()
-                    .map(|a| self.resolve_node(a))
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(expr) => {
+                            Ok(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?))
+                        }
+                        RecordLitArg::Named(name, expr) => {
+                            Ok(ResolvedRecordLitArg::Named(name, self.resolve_node(expr)?))
+                        }
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Resolved::App(span, Box::new(resolved_func), resolved_args))
             }
@@ -423,16 +430,34 @@ impl Resolver {
         })
     }
 
-    fn resolve_if(&mut self, span: Span, args: Vec<Ast>) -> Result<Resolved, ResolveError> {
+    fn resolve_if(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
         if args.len() < 2 || args.len() > 3 {
             return Err(ResolveError {
                 message: format!("if expects 2 or 3 arguments, got {}", args.len()),
                 span,
             });
         }
-        let mut iter = args.into_iter();
-        let cond = self.resolve_node(iter.next().unwrap())?;
-        let then = self.resolve_node(iter.next().unwrap())?;
+
+        let mut positional = Vec::with_capacity(args.len());
+        for arg in args {
+            match arg {
+                RecordLitArg::Positional(expr) => positional.push(expr),
+                RecordLitArg::Named(name, _) => {
+                    return Err(ResolveError {
+                        message: format!("if does not accept named argument '{}'", name),
+                        span,
+                    });
+                }
+            }
+        }
+
+        let mut iter = positional.into_iter();
+        let cond = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let then = self.resolve_node(iter.next().expect("checked arg length"))?;
         let else_branch = match iter.next() {
             Some(e) => Some(Box::new(self.resolve_node(e)?)),
             None => None,
@@ -546,7 +571,12 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         Resolved::App(_, func, args) => {
             collect_captures_inner(func, bound, free);
             for arg in args {
-                collect_captures_inner(arg, bound, free);
+                match arg {
+                    ResolvedRecordLitArg::Positional(expr)
+                    | ResolvedRecordLitArg::Named(_, expr) => {
+                        collect_captures_inner(expr, bound, free);
+                    }
+                }
             }
         }
         Resolved::Block(_, stmts) => {
@@ -708,6 +738,25 @@ mod tests {
                 _ => panic!("Expected Var for print"),
             },
             _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_named_args_resolution() {
+        let resolved = parse_and_resolve(
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+result = add(y: 2, x: 1)"#,
+        )
+        .unwrap();
+        match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::App(_, _, args) => {
+                    assert!(matches!(&args[0], ResolvedRecordLitArg::Named(n, _) if n == "y"));
+                    assert!(matches!(&args[1], ResolvedRecordLitArg::Named(n, _) if n == "x"));
+                }
+                _ => panic!("Expected App"),
+            },
+            _ => panic!("Expected Bind"),
         }
     }
 

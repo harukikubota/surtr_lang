@@ -447,14 +447,14 @@ impl Parser {
                 // Normal function call
                 let mut args = Vec::new();
                 if !matches!(self.peek(), Token::RParen) {
-                    args.push(self.parse_expr()?);
+                    args.push(self.parse_record_lit_arg()?);
                     while matches!(self.peek(), Token::Comma) {
                         self.advance();
                         self.skip_newlines();
                         if matches!(self.peek(), Token::RParen) {
                             break;
                         }
-                        args.push(self.parse_expr()?);
+                        args.push(self.parse_record_lit_arg()?);
                     }
                 }
                 self.skip_newlines();
@@ -696,7 +696,21 @@ impl Parser {
         let target = self.parse_primary()?;
         let target_end = target.span().end;
         let (func, args) = match target {
-            Ast::App(_, func, args) => (func, args),
+            Ast::App(span, func, args) => {
+                let mut positional = Vec::new();
+                for arg in args {
+                    match arg {
+                        RecordLitArg::Positional(expr) => positional.push(expr),
+                        RecordLitArg::Named(name, _) => {
+                            return Err(ParseError::syntax(
+                                format!("capture does not accept named argument '{}'", name),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                (func, positional)
+            }
             other => (Box::new(other), Vec::new()),
         };
         Ok(Ast::Capture(
@@ -1209,7 +1223,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::App(span, func, args) => Ast::App(
             shift_span(span, delta),
             Box::new(shift_ast_span(*func, delta)),
-            args.into_iter().map(|a| shift_ast_span(a, delta)).collect(),
+            args.into_iter()
+                .map(|a| shift_record_lit_arg(a, delta))
+                .collect(),
         ),
         Ast::Block(span, stmts) => Ast::Block(
             shift_span(span, delta),
@@ -1433,6 +1449,21 @@ mod tests {
             Ast::App(_, func, args) => {
                 assert!(matches!(func.as_ref(), Ast::Var(_, ref n) if n == "print"));
                 assert_eq!(args.len(), 1);
+                assert!(matches!(args[0], RecordLitArg::Positional(_)));
+            }
+            _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_function_call_named_args() {
+        let ast = parse("add(y: 2, x: 1)").unwrap();
+        match &ast[0] {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, ref n) if n == "add"));
+                assert_eq!(args.len(), 2);
+                assert!(matches!(&args[0], RecordLitArg::Named(n, _) if n == "y"));
+                assert!(matches!(&args[1], RecordLitArg::Named(n, _) if n == "x"));
             }
             _ => panic!("Expected App"),
         }

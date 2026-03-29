@@ -18,7 +18,7 @@ pub enum Resolved {
     Var(Span, ResolvedId),
 
     /// Function application
-    App(Span, Box<Resolved>, Vec<Resolved>),
+    App(Span, Box<Resolved>, Vec<ResolvedRecordLitArg>),
 
     /// Block of statements
     Block(Span, Vec<Resolved>),

@@ -261,6 +261,53 @@ print(to_string(point2.x))"#,
         );
     }
 
+    // ── Phase 2 Step 8: named args for function calls ──
+
+    #[test]
+    fn phase2_step8_function_named_args_reordered() {
+        assert_output(
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+print(to_string(add(y: 2, x: 1)))"#,
+            &["3"],
+        );
+    }
+
+    #[test]
+    fn phase2_step8_function_named_args_mixed_positional_first() {
+        assert_output(
+            r#"def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
+print(to_string(add3(1, z: 3, y: 2)))"#,
+            &["6"],
+        );
+    }
+
+    #[test]
+    fn phase2_step8_function_named_args_unknown_name_error() {
+        assert_compile_error(
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+print(to_string(add(z: 1, y: 2)))"#,
+            "Unknown argument name 'z'",
+        );
+    }
+
+    #[test]
+    fn phase2_step8_function_named_args_duplicate_error() {
+        assert_compile_error(
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+print(to_string(add(1, x: 2)))"#,
+            "Duplicate argument 'x'",
+        );
+    }
+
+    #[test]
+    fn phase2_step8_function_named_args_order_error() {
+        assert_compile_error(
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+print(to_string(add(y: 2, 1)))"#,
+            "Positional arguments must come before named arguments",
+        );
+    }
+
     // ── Step 8: if / match ──
 
     #[test]

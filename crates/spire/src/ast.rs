@@ -134,8 +134,8 @@ pub enum Ast {
     /// Variable reference: `x`, `print`
     Var(Span, Symbol),
 
-    /// Function application: `print("hello")`, `to_string(42)`
-    App(Span, Box<Ast>, Vec<Ast>),
+    /// Function application: `print("hello")`, `to_string(42)`, `add(y: 2, x: 1)`
+    App(Span, Box<Ast>, Vec<RecordLitArg>),
 
     /// Block of statements (implicit in top-level, explicit in `{}`)
     Block(Span, Vec<Ast>),
