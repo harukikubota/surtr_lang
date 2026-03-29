@@ -1,12 +1,14 @@
+use serde::{Deserialize, Serialize};
+
 /// Kind of user-defined type at runtime.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeKind {
     Struct,
     Record,
 }
 
 /// Runtime metadata for a tagged type — used by Eldr for display.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypeEntry {
     pub tag: u32,
     pub name: String,
@@ -16,7 +18,7 @@ pub struct TypeEntry {
 
 /// Registry of all user-defined types in a compiled program.
 /// Forge builds this; Eldr reads it for `to_display_string`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TypeRegistry {
     pub entries: Vec<TypeEntry>,
 }

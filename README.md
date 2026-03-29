@@ -22,7 +22,7 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 | `scar` | Type checker (`Vec<Resolved> -> Vec<TypedNode>`) |
 | `forge` | Codegen (`Vec<TypedNode> -> Bytecode`) |
 | `eldr` | VM (`Bytecode -> execution`) |
-| `rune` | CLI entrypoint (`surtr run <file.srt|file.eldr>`, `surtr build <file.srt> [output.eldr]`) |
+| `rune` | CLI entrypoint (`surtr run`, `surtr build`, `surtr dump`) |
 
 ## Quick Start
 
@@ -33,6 +33,7 @@ cargo run -p rune -- run lib/hello.srt
 ```bash
 cargo run -p rune -- build lib/hello.srt lib/hello.eldr
 cargo run -p rune -- run lib/hello.eldr
+cargo run -p rune -- dump lib/hello.eldr --format json | jq .
 ```
 
 ## Docs

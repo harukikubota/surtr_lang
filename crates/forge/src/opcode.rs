@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 /// Surtr bytecode instructions.
 ///
 /// Phase 1 opcodes only. MakeFrame / PopFrame / Return are phase 2.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Opcode {
     // ── Constants & locals ──
     /// Push a constant from the pool onto the stack.

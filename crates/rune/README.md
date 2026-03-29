@@ -17,15 +17,18 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 ## Command
 
 ```bash
-surtr run <file.srt>
+surtr run <file.srt|file.eldr>
+surtr build <file.srt> [output.eldr]
+surtr dump <file.eldr> [--format json]
 ```
-
-Current implementation supports `run` only.
 
 ## Responsibilities
 
 - Read source file input
-- Execute the full pipeline (`parse -> resolve -> typecheck -> codegen -> execute`)
+- Execute the full pipeline (`parse -> resolve -> typecheck -> codegen -> execute`) for `.srt` input
+- Build `.eldr` bytecode files
+- Run compiled `.eldr` bytecode files
+- Dump `.eldr` metadata/bytecode as JSON (`jq` friendly)
 - Convert phase errors into human-readable diagnostics
 - Exit with non-zero status on failure
 
@@ -37,4 +40,7 @@ Rune does not implement parser/resolver/typechecker/vm logic itself.
 
 ```bash
 cargo run -p rune -- run lib/hello.srt
+cargo run -p rune -- build lib/hello.srt lib/hello.eldr
+cargo run -p rune -- run lib/hello.eldr
+cargo run -p rune -- dump lib/hello.eldr --format json | jq .
 ```
