@@ -36,16 +36,32 @@ impl Parser {
         t
     }
 
+    fn expected_token_name(expected: &Token) -> &'static str {
+        match expected {
+            Token::RParen => ")",
+            Token::RBrace => "}",
+            Token::RBrack => "]",
+            _ => "token",
+        }
+    }
+
     fn expect(&mut self, expected: &Token) -> Result<Span, ParseError> {
         let sp = self.peek_span();
         if self.peek() == expected {
             self.advance();
             Ok(sp)
+        } else if matches!(self.peek(), Token::Eof)
+            && matches!(expected, Token::RParen | Token::RBrace | Token::RBrack)
+        {
+            Err(ParseError::incomplete(
+                Self::expected_token_name(expected),
+                sp,
+            ))
         } else {
-            Err(ParseError {
-                message: format!("Expected {:?}, got {:?}", expected, self.peek()),
-                span: sp,
-            })
+            Err(ParseError::syntax(
+                format!("Expected {:?}, got {:?}", expected, self.peek()),
+                sp,
+            ))
         }
     }
 
@@ -56,10 +72,11 @@ impl Parser {
                 self.advance();
                 Ok((name, sp))
             }
-            _ => Err(ParseError {
-                message: format!("Expected identifier, got {:?}", self.peek()),
-                span: sp,
-            }),
+            Token::Eof => Err(ParseError::incomplete("identifier", sp)),
+            _ => Err(ParseError::syntax(
+                format!("Expected identifier, got {:?}", self.peek()),
+                sp,
+            )),
         }
     }
 
@@ -245,13 +262,13 @@ impl Parser {
                     _ => {
                         // General unary minus: desugar to 0 - expr (for Int)
                         // For now, only support literal negation
-                        Err(ParseError {
-                            message: "Unary minus is only supported on numeric literals".into(),
-                            span: Span {
+                        Err(ParseError::syntax(
+                            "Unary minus is only supported on numeric literals",
+                            Span {
                                 start: sp.start,
                                 end,
                             },
-                        })
+                        ))
                     }
                 }
             }
@@ -300,10 +317,11 @@ impl Parser {
                 self.parse_ident_continuation(name, sp)
             }
 
-            _ => Err(ParseError {
-                message: format!("Unexpected token: {:?}", self.peek()),
-                span: sp,
-            }),
+            Token::Eof => Err(ParseError::incomplete("expression", sp)),
+            _ => Err(ParseError::syntax(
+                format!("Unexpected token: {:?}", self.peek()),
+                sp,
+            )),
         }
     }
 
@@ -518,6 +536,9 @@ impl Parser {
 
         let mut fields = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
             self.skip_newlines();
             let (fname, fspan) = self.expect_ident()?;
             self.expect(&Token::Colon)?;
@@ -555,6 +576,9 @@ impl Parser {
         let mut fields = Vec::new();
         if !matches!(self.peek(), Token::RParen) {
             loop {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete(")", self.peek_span()));
+                }
                 self.skip_newlines();
                 let (fname, fspan) = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
@@ -600,6 +624,9 @@ impl Parser {
             self.skip_newlines();
             if !matches!(self.peek(), Token::RParen) {
                 loop {
+                    if matches!(self.peek(), Token::Eof) {
+                        return Err(ParseError::incomplete(")", self.peek_span()));
+                    }
                     self.skip_newlines();
                     let (fname, fspan) = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
@@ -656,6 +683,9 @@ impl Parser {
 
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
             self.skip_newlines();
             let pat = self.parse_match_pattern()?;
             self.expect(&Token::FatArrow)?;
@@ -712,10 +742,10 @@ impl Parser {
                             -n,
                         ))
                     }
-                    _ => Err(ParseError {
-                        message: "Expected integer after '-' in match pattern".into(),
-                        span: sp,
-                    }),
+                    _ => Err(ParseError::syntax(
+                        "Expected integer after '-' in match pattern",
+                        sp,
+                    )),
                 }
             }
             Token::Str(s) => {
@@ -740,10 +770,11 @@ impl Parser {
                     Ok(AstMatchPattern::Constructor(sp, name, None))
                 }
             }
-            _ => Err(ParseError {
-                message: format!("Expected match pattern, got {:?}", self.peek()),
-                span: sp,
-            }),
+            Token::Eof => Err(ParseError::incomplete("match pattern", sp)),
+            _ => Err(ParseError::syntax(
+                format!("Expected match pattern, got {:?}", self.peek()),
+                sp,
+            )),
         }
     }
 }

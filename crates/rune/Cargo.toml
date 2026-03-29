@@ -16,3 +16,4 @@ forge = { path = "../forge" }
 eldr  = { path = "../eldr" }
 ariadne = "0.6.0"
 serde_json = "1.0"
+rustyline = "13"

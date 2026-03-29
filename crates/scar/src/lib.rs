@@ -4,4 +4,4 @@ pub mod error;
 pub mod typed;
 pub mod types;
 
-pub use checker::typecheck;
+pub use checker::{typecheck, ScarCheckpoint, ScarSession};

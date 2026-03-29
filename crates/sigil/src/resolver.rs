@@ -9,10 +9,62 @@ use crate::scope::Scope;
 /// Built-in function names that Sigil pre-registers.
 const BUILTIN_NAMES: &[&str] = &["print", "to_string", "eprint"];
 
+fn initialize_scope() -> Scope {
+    let mut scope = Scope::new();
+    let dummy = Span { start: 0, end: 0 };
+    for name in BUILTIN_NAMES {
+        scope.define(name, dummy.clone());
+    }
+    scope.define("Ok", dummy.clone());
+    scope.define("Err", dummy);
+    scope
+}
+
 /// Resolve all identifiers in the AST to unique references.
 pub fn resolve(ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
     let mut resolver = Resolver::new();
     resolver.resolve_program(ast)
+}
+
+#[derive(Debug, Clone)]
+pub struct SigilCheckpoint {
+    scope: Scope,
+}
+
+#[derive(Debug, Clone)]
+pub struct SigilSession {
+    scope: Scope,
+}
+
+impl SigilSession {
+    pub fn new() -> Self {
+        Self {
+            scope: initialize_scope(),
+        }
+    }
+
+    pub fn resolve(&mut self, ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
+        let mut resolver = Resolver::with_scope(self.scope.clone());
+        let resolved = resolver.resolve_program(ast)?;
+        self.scope = resolver.into_scope();
+        Ok(resolved)
+    }
+
+    pub fn checkpoint(&self) -> SigilCheckpoint {
+        SigilCheckpoint {
+            scope: self.scope.clone(),
+        }
+    }
+
+    pub fn rollback(&mut self, checkpoint: SigilCheckpoint) {
+        self.scope = checkpoint.scope;
+    }
+}
+
+impl Default for SigilSession {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 struct Resolver {
@@ -21,16 +73,17 @@ struct Resolver {
 
 impl Resolver {
     fn new() -> Self {
-        let mut scope = Scope::new();
-        // Register builtins
-        let dummy = Span { start: 0, end: 0 };
-        for name in BUILTIN_NAMES {
-            scope.define(name, dummy.clone());
+        Self {
+            scope: initialize_scope(),
         }
-        // Register Ok / Err constructors
-        scope.define("Ok", dummy.clone());
-        scope.define("Err", dummy.clone());
+    }
+
+    fn with_scope(scope: Scope) -> Self {
         Self { scope }
+    }
+
+    fn into_scope(self) -> Scope {
+        self.scope
     }
 
     fn resolve_program(&mut self, stmts: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {

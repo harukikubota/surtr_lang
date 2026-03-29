@@ -4,4 +4,6 @@ pub mod error;
 pub mod opcode;
 pub mod registry;
 
-pub use codegen::codegen;
+pub use codegen::{
+    codegen, BindingInfo, ChunkMeta, ForgeCheckpoint, ForgeSession, ReplTypeKind, TypeDefDisplay,
+};

@@ -22,7 +22,7 @@ pub struct TypeDefInfo {
 }
 
 /// Type environment — tracks variable types and type definitions.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeEnv {
     /// unique_id → type
     pub vars: HashMap<u32, Ty>,

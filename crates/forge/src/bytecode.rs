@@ -1,5 +1,5 @@
 use crate::opcode::Opcode;
-use crate::registry::TypeRegistry;
+use crate::registry::{TypeEntry, TypeRegistry};
 use serde::{Deserialize, Serialize};
 
 /// A compiled Surtr program, ready for Eldr to execute.
@@ -10,6 +10,15 @@ pub struct Bytecode {
     pub num_locals: usize,
     pub type_registry: TypeRegistry,
     pub error_templates: Vec<ErrTemplate>,
+}
+
+/// Incremental bytecode payload for REPL execution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BytecodeChunk {
+    pub opcodes: Vec<Opcode>,
+    pub constants: Vec<Constant>,
+    pub new_locals: usize,
+    pub type_entries: Vec<TypeEntry>,
 }
 
 /// Constant pool entry.

@@ -40,7 +40,7 @@ cargo run -p rune -- dump lib/hello.eldr --format json | jq .
 
 - [Phase 1 Flow](./doc/phase1-flow.md)
 - [Open Issues](./doc/open-issues.md)
-- [Ideas (Draft)](./doc/Idea7-10.md)
+- [Idea11 (Draft)](./doc/idea11.md)
 - [Requirements (V8, Japanese)](./doc/要件定義v8.md)
 
 ## Status

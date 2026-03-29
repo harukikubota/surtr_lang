@@ -14,74 +14,129 @@ pub fn typecheck(resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
     checker.check_program(resolved)
 }
 
+fn initialize_env() -> TypeEnv {
+    let mut env = TypeEnv::new();
+    // Register builtin function types.
+    // These unique_ids must match the order in sigil's BUILTIN_NAMES + Ok/Err.
+    // 0=print, 1=to_string, 2=eprint, 3=Ok, 4=Err
+
+    // print: (String) -> Unit
+    // V8 says print takes String. to_string must be called explicitly.
+    env.bind_var(
+        0,
+        Ty::BuiltinFunc {
+            name: "print".into(),
+            params: vec![Ty::Str],
+            ret: Box::new(Ty::Unit),
+        },
+    );
+
+    // to_string: ($A) -> String — polymorphic
+    let a = env.fresh_tyvar();
+    env.bind_var(
+        1,
+        Ty::BuiltinFunc {
+            name: "to_string".into(),
+            params: vec![a],
+            ret: Box::new(Ty::Str),
+        },
+    );
+
+    // eprint: (Error) -> Unit
+    env.bind_var(
+        2,
+        Ty::BuiltinFunc {
+            name: "eprint".into(),
+            params: vec![Ty::Error],
+            ret: Box::new(Ty::Unit),
+        },
+    );
+
+    // Ok constructor: ($A) -> Result<$A, $E>
+    let ok_a = env.fresh_tyvar();
+    let ok_e = env.fresh_tyvar();
+    env.bind_var(
+        3,
+        Ty::BuiltinFunc {
+            name: "Ok".into(),
+            params: vec![ok_a.clone()],
+            ret: Box::new(Ty::Result(Box::new(ok_a), Box::new(ok_e))),
+        },
+    );
+
+    // Err constructor: ($E) -> Result<$A, $E>
+    let err_a = env.fresh_tyvar();
+    let err_e = env.fresh_tyvar();
+    env.bind_var(
+        4,
+        Ty::BuiltinFunc {
+            name: "Err".into(),
+            params: vec![err_e.clone()],
+            ret: Box::new(Ty::Result(Box::new(err_a), Box::new(err_e))),
+        },
+    );
+
+    env
+}
+
+#[derive(Debug, Clone)]
+pub struct ScarCheckpoint {
+    env: TypeEnv,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScarSession {
+    env: TypeEnv,
+}
+
+impl ScarSession {
+    pub fn new() -> Self {
+        Self {
+            env: initialize_env(),
+        }
+    }
+
+    pub fn typecheck(&mut self, resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
+        let mut checker = Checker::with_env(self.env.clone());
+        let typed = checker.check_program(resolved)?;
+        self.env = checker.into_env();
+        Ok(typed)
+    }
+
+    pub fn checkpoint(&self) -> ScarCheckpoint {
+        ScarCheckpoint {
+            env: self.env.clone(),
+        }
+    }
+
+    pub fn rollback(&mut self, checkpoint: ScarCheckpoint) {
+        self.env = checkpoint.env;
+    }
+}
+
+impl Default for ScarSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct Checker {
     env: TypeEnv,
 }
 
 impl Checker {
     fn new() -> Self {
-        let mut env = TypeEnv::new();
-        // Register builtin function types.
-        // These unique_ids must match the order in sigil's BUILTIN_NAMES + Ok/Err.
-        // 0=print, 1=to_string, 2=eprint, 3=Ok, 4=Err
+        Self {
+            env: initialize_env(),
+        }
+    }
 
-        // print: (String) -> Unit
-        // V8 says print takes String. to_string must be called explicitly.
-        env.bind_var(
-            0,
-            Ty::BuiltinFunc {
-                name: "print".into(),
-                params: vec![Ty::Str],
-                ret: Box::new(Ty::Unit),
-            },
-        );
-
-        // to_string: ($A) -> String — polymorphic
-        let a = env.fresh_tyvar();
-        env.bind_var(
-            1,
-            Ty::BuiltinFunc {
-                name: "to_string".into(),
-                params: vec![a],
-                ret: Box::new(Ty::Str),
-            },
-        );
-
-        // eprint: (Error) -> Unit
-        env.bind_var(
-            2,
-            Ty::BuiltinFunc {
-                name: "eprint".into(),
-                params: vec![Ty::Error],
-                ret: Box::new(Ty::Unit),
-            },
-        );
-
-        // Ok constructor: ($A) -> Result<$A, $E>
-        let ok_a = env.fresh_tyvar();
-        let ok_e = env.fresh_tyvar();
-        env.bind_var(
-            3,
-            Ty::BuiltinFunc {
-                name: "Ok".into(),
-                params: vec![ok_a.clone()],
-                ret: Box::new(Ty::Result(Box::new(ok_a), Box::new(ok_e))),
-            },
-        );
-
-        // Err constructor: ($E) -> Result<$A, $E>
-        let err_a = env.fresh_tyvar();
-        let err_e = env.fresh_tyvar();
-        env.bind_var(
-            4,
-            Ty::BuiltinFunc {
-                name: "Err".into(),
-                params: vec![err_e.clone()],
-                ret: Box::new(Ty::Result(Box::new(err_a), Box::new(err_e))),
-            },
-        );
-
+    fn with_env(env: TypeEnv) -> Self {
         Self { env }
+    }
+
+    fn into_env(self) -> TypeEnv {
+        self.env
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {

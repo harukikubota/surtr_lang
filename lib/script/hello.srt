@@ -6,5 +6,5 @@ err_result: Result<Int> = Ok(1)
 num = 9
 match num {
   10 => print(to_string(num)),
-  #_  => print("not 10")
+  _  => print("not 10")
 }

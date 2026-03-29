@@ -15,7 +15,207 @@ use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     let mut gene = Codegen::new();
     gene.emit_program(typed)?;
-    gene.finish()
+    let (opcodes, state) = gene.finalize();
+    Ok(Bytecode {
+        opcodes,
+        constants: state.constants,
+        num_locals: state.next_slot as usize,
+        type_registry: state.type_registry,
+        error_templates: state.error_templates,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplTypeKind {
+    Struct,
+    Record,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindingInfo {
+    pub name: String,
+    pub ty: String,
+    pub slot_id: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeDefDisplay {
+    pub name: String,
+    pub kind: ReplTypeKind,
+    pub fields: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChunkMeta {
+    pub bindings: Vec<BindingInfo>,
+    pub type_defs: Vec<TypeDefDisplay>,
+}
+
+#[derive(Debug, Clone)]
+struct CodegenState {
+    constants: Vec<Constant>,
+    slot_map: HashMap<u32, u32>, // unique_id → local slot
+    next_slot: u32,
+    type_registry: TypeRegistry,
+    error_templates: Vec<ErrTemplate>,
+}
+
+impl CodegenState {
+    fn new() -> Self {
+        Self {
+            constants: Vec::new(),
+            slot_map: HashMap::new(),
+            next_slot: 0,
+            type_registry: TypeRegistry::new(),
+            error_templates: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ForgeCheckpoint {
+    state: CodegenState,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForgeSession {
+    state: CodegenState,
+}
+
+impl ForgeSession {
+    pub fn new() -> Self {
+        Self {
+            state: CodegenState::new(),
+        }
+    }
+
+    pub fn checkpoint(&self) -> ForgeCheckpoint {
+        ForgeCheckpoint {
+            state: self.state.clone(),
+        }
+    }
+
+    pub fn rollback(&mut self, checkpoint: ForgeCheckpoint) {
+        self.state = checkpoint.state;
+    }
+
+    pub fn type_registry(&self) -> TypeRegistry {
+        self.state.type_registry.clone()
+    }
+
+    pub fn codegen_chunk(
+        &mut self,
+        typed: Vec<TypedNode>,
+    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+        let before = self.state.clone();
+        let typed_for_meta = typed.clone();
+
+        let mut gene = Codegen::from_state(before.clone());
+        gene.emit_program_chunk(typed)?;
+        let (opcodes, after) = gene.finalize();
+
+        let new_constants = after.constants[before.constants.len()..].to_vec();
+        let new_locals = after.next_slot.saturating_sub(before.next_slot) as usize;
+        let type_entries = after.type_registry.entries[before.type_registry.entries.len()..].to_vec();
+        let meta = collect_chunk_meta(&typed_for_meta, &after.slot_map);
+
+        self.state = after;
+
+        Ok((
+            BytecodeChunk {
+                opcodes,
+                constants: new_constants,
+                new_locals,
+                type_entries,
+            },
+            meta,
+        ))
+    }
+}
+
+impl Default for ForgeSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> ChunkMeta {
+    let mut bindings = Vec::new();
+    let mut type_defs = Vec::new();
+
+    for stmt in typed {
+        match &stmt.node {
+            TypedInner::Bind(TypedPattern::Var(ty, id), _) => {
+                if let Some(slot_id) = slot_map.get(&id.unique_id) {
+                    bindings.push(BindingInfo {
+                        name: id.name.clone(),
+                        ty: ty_to_string(ty),
+                        slot_id: *slot_id,
+                    });
+                }
+            }
+            TypedInner::StructDef(_, name, field_names) => {
+                type_defs.push(TypeDefDisplay {
+                    name: name.clone(),
+                    kind: ReplTypeKind::Struct,
+                    fields: field_names
+                        .iter()
+                        .map(|field| (field.clone(), String::new()))
+                        .collect(),
+                });
+            }
+            TypedInner::RecordDef(_, name, field_names) => {
+                type_defs.push(TypeDefDisplay {
+                    name: name.clone(),
+                    kind: ReplTypeKind::Record,
+                    fields: field_names
+                        .iter()
+                        .map(|field| (field.clone(), String::new()))
+                        .collect(),
+                });
+            }
+            TypedInner::DeferrorDef(_, id, _) => {
+                type_defs.push(TypeDefDisplay {
+                    name: id.name.clone(),
+                    kind: ReplTypeKind::Error,
+                    fields: Vec::new(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    ChunkMeta {
+        bindings,
+        type_defs,
+    }
+}
+
+fn ty_to_string(ty: &Ty) -> String {
+    match ty {
+        Ty::Int => "Int".into(),
+        Ty::Float => "Float".into(),
+        Ty::Str => "String".into(),
+        Ty::Bool => "Boolean".into(),
+        Ty::Unit => "Unit".into(),
+        Ty::List(inner) => format!("[{}]", ty_to_string(inner)),
+        Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
+        Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+        Ty::Error => "Error".into(),
+        Ty::Var(id) => format!("${}", id),
+        Ty::Func(params, ret) => format!(
+            "({}) -> {}",
+            params
+                .iter()
+                .map(ty_to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+            ty_to_string(ret)
+        ),
+        Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
+        Ty::UserFunc { .. } => "UserFunc".into(),
+    }
 }
 
 // ── IR with labels (resolved to absolute addresses at the end) ──
@@ -37,24 +237,20 @@ struct Label(u32);
 
 struct Codegen {
     ir: Vec<IrOp>,
-    constants: Vec<Constant>,
-    slot_map: HashMap<u32, u32>, // unique_id → local slot
-    next_slot: u32,
-    type_registry: TypeRegistry,
-    error_templates: Vec<ErrTemplate>,
+    state: CodegenState,
     next_label: u32,
     label_positions: HashMap<Label, usize>, // label → IR index it points to
 }
 
 impl Codegen {
     fn new() -> Self {
+        Self::from_state(CodegenState::new())
+    }
+
+    fn from_state(state: CodegenState) -> Self {
         Self {
             ir: Vec::new(),
-            constants: Vec::new(),
-            slot_map: HashMap::new(),
-            next_slot: 0,
-            type_registry: TypeRegistry::new(),
-            error_templates: Vec::new(),
+            state,
             next_label: 0,
             label_positions: HashMap::new(),
         }
@@ -67,24 +263,24 @@ impl Codegen {
     }
 
     fn alloc_slot(&mut self, unique_id: u32) -> u32 {
-        if let Some(&slot) = self.slot_map.get(&unique_id) {
+        if let Some(&slot) = self.state.slot_map.get(&unique_id) {
             return slot;
         }
-        let slot = self.next_slot;
-        self.next_slot += 1;
-        self.slot_map.insert(unique_id, slot);
+        let slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.state.slot_map.insert(unique_id, slot);
         slot
     }
 
     fn add_constant(&mut self, c: Constant) -> u32 {
         // Check for existing identical constant
-        for (i, existing) in self.constants.iter().enumerate() {
+        for (i, existing) in self.state.constants.iter().enumerate() {
             if existing == &c {
                 return i as u32;
             }
         }
-        let idx = self.constants.len() as u32;
-        self.constants.push(c);
+        let idx = self.state.constants.len() as u32;
+        self.state.constants.push(c);
         idx
     }
 
@@ -113,15 +309,21 @@ impl Codegen {
     // ── Program ──
 
     fn emit_program(&mut self, stmts: Vec<TypedNode>) -> Result<(), CodegenError> {
-        for (i, stmt) in stmts.iter().enumerate() {
+        for stmt in &stmts {
             self.emit_node(stmt)?;
-            // Top-level expressions that aren't the last: pop unused values
-            // Binds already produce Unit on stack, so pop it too
-            let is_last = i == stmts.len() - 1;
-            // Always pop top-level statement results
             self.emit(Opcode::Pop);
         }
         self.emit(Opcode::Halt);
+        Ok(())
+    }
+
+    fn emit_program_chunk(&mut self, stmts: Vec<TypedNode>) -> Result<(), CodegenError> {
+        for (i, stmt) in stmts.iter().enumerate() {
+            self.emit_node(stmt)?;
+            if i + 1 < stmts.len() {
+                self.emit(Opcode::Pop);
+            }
+        }
         Ok(())
     }
 
@@ -236,7 +438,7 @@ impl Codegen {
             }
 
             TypedInner::StructDef(tag, name, field_names) => {
-                self.type_registry.register(TypeEntry {
+                self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Struct,
@@ -247,7 +449,7 @@ impl Codegen {
             }
 
             TypedInner::RecordDef(tag, name, field_names) => {
-                self.type_registry.register(TypeEntry {
+                self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Record,
@@ -339,8 +541,8 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         self.emit_node(scrutinee)?;
 
-        let scrut_slot = self.next_slot;
-        self.next_slot += 1;
+        let scrut_slot = self.state.next_slot;
+        self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(scrut_slot));
 
         let end_label = self.fresh_label();
@@ -469,7 +671,7 @@ impl Codegen {
 
     // ── Finish: resolve labels → absolute addresses ──
 
-    fn finish(self) -> Result<Bytecode, CodegenError> {
+    fn finalize(self) -> (Vec<Opcode>, CodegenState) {
         // Resolve labels to absolute IR indices → opcode positions.
         // IR ops map 1:1 to opcodes, so IR index == opcode index.
         let mut opcodes = Vec::new();
@@ -490,13 +692,6 @@ impl Codegen {
                 }
             }
         }
-
-        Ok(Bytecode {
-            opcodes,
-            constants: self.constants,
-            num_locals: self.next_slot as usize,
-            type_registry: self.type_registry,
-            error_templates: self.error_templates,
-        })
+        (opcodes, self.state)
     }
 }

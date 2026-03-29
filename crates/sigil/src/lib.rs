@@ -3,4 +3,4 @@ pub mod resolved;
 pub mod resolver;
 pub mod scope;
 
-pub use resolver::resolve;
+pub use resolver::{resolve, SigilCheckpoint, SigilSession};

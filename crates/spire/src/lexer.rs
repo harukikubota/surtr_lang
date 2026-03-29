@@ -62,10 +62,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 i += 1;
             }
             if i >= len {
-                return Err(ParseError {
-                    message: "Unterminated string".into(),
-                    span: Span { start, end: i },
-                });
+                return Err(ParseError::incomplete("\"", Span { start, end: i }));
             }
             i += 1;
             tokens.push(Spanned {
@@ -97,10 +94,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 i += 1;
             }
             if i >= len {
-                return Err(ParseError {
-                    message: "Unterminated string".into(),
-                    span: Span { start, end: i },
-                });
+                return Err(ParseError::incomplete("'", Span { start, end: i }));
             }
             i += 1;
             tokens.push(Spanned {
@@ -122,9 +116,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                     i += 1;
                 }
                 let text: String = chars[start..i].iter().collect();
-                let val: f64 = text.parse().map_err(|_| ParseError {
-                    message: format!("Invalid float: {}", text),
-                    span: Span { start, end: i },
+                let val: f64 = text.parse().map_err(|_| {
+                    ParseError::syntax(format!("Invalid float: {}", text), Span { start, end: i })
                 })?;
                 tokens.push(Spanned {
                     token: Token::Float(val),
@@ -132,9 +125,11 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 });
             } else {
                 let text: String = chars[start..i].iter().collect();
-                let val: i64 = text.parse().map_err(|_| ParseError {
-                    message: format!("Invalid integer: {}", text),
-                    span: Span { start, end: i },
+                let val: i64 = text.parse().map_err(|_| {
+                    ParseError::syntax(
+                        format!("Invalid integer: {}", text),
+                        Span { start, end: i },
+                    )
                 })?;
                 tokens.push(Spanned {
                     token: Token::Int(val),
@@ -225,13 +220,13 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             '.' => Token::Dot,
             ';' => Token::Semicolon,
             _ => {
-                return Err(ParseError {
-                    message: format!("Unexpected character: '{}'", c),
-                    span: Span {
+                return Err(ParseError::syntax(
+                    format!("Unexpected character: '{}'", c),
+                    Span {
                         start: i,
                         end: i + 1,
                     },
-                });
+                ));
             }
         };
         tokens.push(Spanned {
