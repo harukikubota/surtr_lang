@@ -4,6 +4,9 @@ Surtr は静的型付き関数型言語のコンパイラ実装（Rust）。
 パイプライン: **Spire → Sigil → Scar → Forge → Eldr**
 CLI エントリーポイント: **Rune**
 
+この言語はHobbyプログラミング言語です。
+** コンパイラ、ランタイム、コードをシンプルに保ちつつ、構文の表現力で言語機能を強力にする。**
+
 ---
 
 ## Workspace
@@ -18,21 +21,22 @@ surtr/
 │   ├── forge/             # Codegen       : Vec<TypedNode> → Bytecode
 │   ├── eldr/              # VM            : Bytecode → execution
 │   └── rune/              # CLI           : entrypoint
-├── proj/doc/              # 仕様ドキュメント（読み取り専用）
+├── doc/                   # 仕様ドキュメント（読み取り専用）
 └── tests/e2e/             # E2E テスト (.srt + .expected)
 ```
 
 ---
 
-## References（読み取り専用・変更禁止）
+## References（読み取り専用・明示的な指示があれば変更可能）
 
 実装の正とするドキュメント。型定義・AST・Opcode を変更する前に必ず確認すること。
 
 | ファイル | 内容 |
 |---|---|
-| `proj/doc/surtr_v8.md` | 言語仕様・コンパイラ設計の全体定義 |
-| `proj/doc/surtr_builtin_guide.md` | 組込み関数設計・フェーズ間グルー詳細 |
-| `proj/doc/surtr_phase1_steps.md` | フェーズ1の実装ステップと E2E テスト目標コード |
+| `doc/surtr_v8.md`            | 言語仕様・コンパイラ設計の全体定義 |
+| `doc/surtr_builtin_guide.md` | 組込み関数設計・フェーズ間グルー詳細 |
+| `doc/surtr_phase1_steps.md`  | フェーズ1の実装ステップと E2E テスト目標コード |
+| `doc/EldrVM_spec.md`         | VM仕様書 |
 
 ---
 
