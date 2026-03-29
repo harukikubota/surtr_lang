@@ -52,12 +52,14 @@ pub enum Token {
     Colon,     // :
     Dot,       // .
     FatArrow,  // =>
+    Arrow,     // ->
     Semicolon, // ;
 
     // ── Statement separators ──
     Newline,
 
     // ── Keywords ──
+    Def,
     Defstruct,
     Defrecord,
     Deferror,

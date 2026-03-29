@@ -5,13 +5,20 @@ use forge::registry::TypeRegistry;
 use crate::error::RuntimeError;
 use crate::value::Value;
 
+#[derive(Debug, Clone)]
+struct CallFrame {
+    return_pc: usize,
+    stack_base: usize,
+    locals: Vec<Value>,
+}
+
 /// The Surtr virtual machine — executes bytecode produced by Forge.
 pub struct VM {
     bytecode: Bytecode,
     /// Operand stack
     stack: Vec<Value>,
-    /// Local variable slots
-    locals: Vec<Value>,
+    /// Call stack / locals frames
+    frames: Vec<CallFrame>,
     /// Program counter (used by full-program `run`)
     pc: usize,
     /// Source code (for eprint / ariadne)
@@ -30,7 +37,11 @@ impl VM {
         Self {
             bytecode,
             stack: Vec::new(),
-            locals: vec![Value::Unit; num_locals],
+            frames: vec![CallFrame {
+                return_pc: 0,
+                stack_base: 0,
+                locals: vec![Value::Unit; num_locals],
+            }],
             pc: 0,
             source: None,
             source_file: None,
@@ -47,6 +58,7 @@ impl VM {
             num_locals: 0,
             type_registry,
             error_templates: Vec::new(),
+            functions: Vec::new(),
         })
     }
 
@@ -86,7 +98,9 @@ impl VM {
 
     /// Read a local slot value (used by REPL display logic).
     pub fn get_local(&self, slot: u32) -> Option<Value> {
-        self.locals.get(slot as usize).cloned()
+        self.frames
+            .last()
+            .and_then(|frame| frame.locals.get(slot as usize).cloned())
     }
 
     /// Execute the loaded bytecode (`run` mode expects `Halt`).
@@ -111,14 +125,23 @@ impl VM {
     /// Execute an incremental bytecode chunk and return the final stack top.
     /// If the stack is empty at the end, returns `Unit`.
     pub fn push(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
+        let code_base = self.bytecode.opcodes.len();
         self.bytecode.constants.extend(chunk.constants);
         self.bytecode.type_registry.entries.extend(chunk.type_entries);
-        self.locals
-            .extend(std::iter::repeat_n(Value::Unit, chunk.new_locals));
+        self.bytecode.opcodes.extend(chunk.opcodes);
+        for mut entry in chunk.functions {
+            entry.entry_pc += code_base as u32;
+            self.bytecode.functions.push(entry);
+        }
+        if let Some(frame) = self.frames.first_mut() {
+            frame
+                .locals
+                .extend(std::iter::repeat_n(Value::Unit, chunk.new_locals));
+        }
 
-        let mut pc = 0usize;
-        while pc < chunk.opcodes.len() {
-            let op = chunk.opcodes[pc].clone();
+        let mut pc = code_base;
+        while pc < self.bytecode.opcodes.len() {
+            let op = self.bytecode.opcodes[pc].clone();
             pc += 1;
             let halted = self.execute_opcode(op, &mut pc)?;
             if halted {
@@ -151,17 +174,23 @@ impl VM {
             }
 
             Opcode::LoadLocal(slot) => {
-                let val = self.locals[slot as usize].clone();
+                let val = self
+                    .current_frame()
+                    .locals
+                    .get(slot as usize)
+                    .cloned()
+                    .unwrap_or(Value::Unit);
                 self.stack.push(val);
             }
 
             Opcode::StoreLocal(slot) => {
                 let val = self.pop_stack()?;
                 // Grow locals if needed
-                while self.locals.len() <= slot as usize {
-                    self.locals.push(Value::Unit);
+                let frame = self.current_frame_mut();
+                while frame.locals.len() <= slot as usize {
+                    frame.locals.push(Value::Unit);
                 }
-                self.locals[slot as usize] = val;
+                frame.locals[slot as usize] = val;
             }
 
             Opcode::Pop => {
@@ -334,6 +363,37 @@ impl VM {
                 self.stack.push(result);
             }
 
+            Opcode::Call(fun_idx, arity) => {
+                let entry = self
+                    .bytecode
+                    .functions
+                    .get(fun_idx as usize)
+                    .ok_or_else(|| RuntimeError {
+                        message: format!("Unknown function index: {}", fun_idx),
+                    })?;
+                if entry.arity != arity {
+                    return Err(RuntimeError {
+                        message: format!(
+                            "Call arity mismatch for function {}: expected {}, got {}",
+                            fun_idx, entry.arity, arity
+                        ),
+                    });
+                }
+                if self.stack.len() < arity as usize {
+                    return Err(RuntimeError {
+                        message: "Stack underflow".into(),
+                    });
+                }
+                let stack_base = self.stack.len() - arity as usize;
+                let return_pc = *pc;
+                self.frames.push(CallFrame {
+                    return_pc,
+                    stack_base,
+                    locals: Vec::new(),
+                });
+                *pc = entry.entry_pc as usize;
+            }
+
             // ── Control flow ──
             Opcode::Jump(addr) => {
                 *pc = addr as usize;
@@ -362,6 +422,25 @@ impl VM {
                     }
                 }
             }
+
+            // ── Frame management ──
+            Opcode::MakeFrame(num_locals) => {
+                self.current_frame_mut().locals = vec![Value::Unit; num_locals as usize];
+            }
+            Opcode::PopFrame => {
+                self.current_frame_mut().locals.clear();
+            }
+
+            // ── Return ──
+            Opcode::Return => {
+                let ret = self.stack.pop().unwrap_or(Value::Unit);
+                let frame = self.frames.pop().ok_or_else(|| RuntimeError {
+                    message: "Return with empty frame stack".into(),
+                })?;
+                self.stack.truncate(frame.stack_base);
+                self.stack.push(ret);
+                *pc = frame.return_pc;
+            }
         }
 
         Ok(false)
@@ -373,6 +452,18 @@ impl VM {
         self.stack.pop().ok_or_else(|| RuntimeError {
             message: "Stack underflow".into(),
         })
+    }
+
+    fn current_frame(&self) -> &CallFrame {
+        self.frames
+            .last()
+            .expect("VM always has at least one frame")
+    }
+
+    fn current_frame_mut(&mut self) -> &mut CallFrame {
+        self.frames
+            .last_mut()
+            .expect("VM always has at least one frame")
     }
 
     fn pop_int(&mut self) -> Result<i64, RuntimeError> {

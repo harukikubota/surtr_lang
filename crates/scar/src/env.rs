@@ -30,6 +30,8 @@ pub struct TypeEnv {
     pub type_defs: HashMap<Symbol, TypeDefInfo>,
     /// Next tag to assign (0 = Ok, 1 = Err are reserved)
     pub next_tag: u32,
+    /// Next function index for `def`.
+    pub next_fun_idx: u32,
     /// Next fresh type variable id
     pub next_tyvar: u32,
 }
@@ -40,6 +42,7 @@ impl TypeEnv {
             vars: HashMap::new(),
             type_defs: HashMap::new(),
             next_tag: 2, // 0 = Ok, 1 = Err
+            next_fun_idx: 0,
             next_tyvar: 0,
         }
     }

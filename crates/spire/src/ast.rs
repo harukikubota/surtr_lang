@@ -93,6 +93,14 @@ pub struct RecordField {
     pub span: Span,
 }
 
+/// Function parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunParam {
+    pub name: Symbol,
+    pub ty: AstTy,
+    pub span: Span,
+}
+
 /// Record literal argument — positional or named.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecordLitArg {
@@ -155,6 +163,9 @@ pub enum Ast {
 
     /// Error type definition: `deferror ParseError(term: String) { "..." }`
     DeferrorDef(Span, Symbol, Vec<RecordField>, Box<Ast>),
+
+    /// Function definition: `def add(x: Int, y: Int) -> Int { x + y }`
+    Def(Span, Symbol, Vec<FunParam>, Option<AstTy>, Box<Ast>),
 
     /// Semicolon — explicit Unit coercion marker (wraps the discarded expr)
     Semi(Span, Box<Ast>),

@@ -22,6 +22,7 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         num_locals: state.next_slot as usize,
         type_registry: state.type_registry,
         error_templates: state.error_templates,
+        functions: state.functions,
     })
 }
 
@@ -50,6 +51,7 @@ pub struct TypeDefDisplay {
 pub struct ChunkMeta {
     pub bindings: Vec<BindingInfo>,
     pub type_defs: Vec<TypeDefDisplay>,
+    pub function_defs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +61,7 @@ struct CodegenState {
     next_slot: u32,
     type_registry: TypeRegistry,
     error_templates: Vec<ErrTemplate>,
+    functions: Vec<FunctionEntry>,
 }
 
 impl CodegenState {
@@ -69,6 +72,7 @@ impl CodegenState {
             next_slot: 0,
             type_registry: TypeRegistry::new(),
             error_templates: Vec::new(),
+            functions: Vec::new(),
         }
     }
 }
@@ -119,6 +123,7 @@ impl ForgeSession {
         let new_locals = after.next_slot.saturating_sub(before.next_slot) as usize;
         let type_entries = after.type_registry.entries[before.type_registry.entries.len()..].to_vec();
         let meta = collect_chunk_meta(&typed_for_meta, &after.slot_map);
+        let functions = after.functions[before.functions.len()..].to_vec();
 
         self.state = after;
 
@@ -128,6 +133,7 @@ impl ForgeSession {
                 constants: new_constants,
                 new_locals,
                 type_entries,
+                functions,
             },
             meta,
         ))
@@ -143,6 +149,7 @@ impl Default for ForgeSession {
 fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> ChunkMeta {
     let mut bindings = Vec::new();
     let mut type_defs = Vec::new();
+    let mut function_defs = Vec::new();
 
     for stmt in typed {
         match &stmt.node {
@@ -182,6 +189,9 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
                     fields: Vec::new(),
                 });
             }
+            TypedInner::Def(_, id, _, _, _) => {
+                function_defs.push(id.name.clone());
+            }
             _ => {}
         }
     }
@@ -189,6 +199,7 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
     ChunkMeta {
         bindings,
         type_defs,
+        function_defs,
     }
 }
 
@@ -309,21 +320,87 @@ impl Codegen {
     // ── Program ──
 
     fn emit_program(&mut self, stmts: Vec<TypedNode>) -> Result<(), CodegenError> {
-        for stmt in &stmts {
-            self.emit_node(stmt)?;
-            self.emit(Opcode::Pop);
-        }
-        self.emit(Opcode::Halt);
-        Ok(())
+        self.emit_program_with_functions(stmts, true)
     }
 
     fn emit_program_chunk(&mut self, stmts: Vec<TypedNode>) -> Result<(), CodegenError> {
-        for (i, stmt) in stmts.iter().enumerate() {
+        self.emit_program_with_functions(stmts, false)
+    }
+
+    fn emit_program_with_functions(
+        &mut self,
+        stmts: Vec<TypedNode>,
+        pop_last: bool,
+    ) -> Result<(), CodegenError> {
+        let mut defs = Vec::new();
+        let mut main_stmts = Vec::new();
+
+        for stmt in &stmts {
+            match &stmt.node {
+                TypedInner::Def(..) => defs.push(stmt),
+                _ => main_stmts.push(stmt),
+            }
+        }
+
+        for (i, stmt) in main_stmts.iter().enumerate() {
             self.emit_node(stmt)?;
-            if i + 1 < stmts.len() {
+            if pop_last || i + 1 < main_stmts.len() {
                 self.emit(Opcode::Pop);
             }
         }
+
+        self.emit(Opcode::Halt);
+
+        for def in defs {
+            self.emit_function_def(def)?;
+        }
+
+        Ok(())
+    }
+
+    fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
+        let (fun_idx, id, params, _ret_ty, body) = match &node.node {
+            TypedInner::Def(fun_idx, id, params, ret_ty, body) => (fun_idx, id, params, ret_ty, body),
+            _ => {
+                return Err(CodegenError {
+                    message: "expected function definition".into(),
+                    span: node.span.clone(),
+                });
+            }
+        };
+
+        let saved_slot_map = self.state.slot_map.clone();
+        let saved_next_slot = self.state.next_slot;
+
+        self.state.slot_map = HashMap::new();
+        self.state.next_slot = 0;
+
+        for (slot, param) in params.iter().enumerate() {
+            self.state.slot_map.insert(param.id.unique_id, slot as u32);
+        }
+        self.state.next_slot = params.len() as u32;
+
+        let entry_pc = self.current_pos() as u32;
+        self.emit(Opcode::MakeFrame(params.len() as u32));
+        for slot in (0..params.len()).rev() {
+            self.emit(Opcode::StoreLocal(slot as u32));
+        }
+        self.emit_node(body)?;
+        self.emit(Opcode::PopFrame);
+        self.emit(Opcode::Return);
+
+        let num_locals = self.state.next_slot;
+        self.state.functions.push(FunctionEntry {
+            fun_idx: *fun_idx,
+            entry_pc,
+            num_locals,
+            arity: params.len() as u8,
+        });
+
+        self.state.slot_map = saved_slot_map;
+        self.state.next_slot = saved_next_slot;
+
+        let _ = id;
         Ok(())
     }
 
@@ -336,6 +413,12 @@ impl Codegen {
             }
 
             TypedInner::Var(id) => {
+                if matches!(node.ty, Ty::UserFunc { .. }) {
+                    return Err(CodegenError {
+                        message: "User-defined functions are not first-class values in phase 2 step 4".into(),
+                        span: node.span.clone(),
+                    });
+                }
                 let slot = self.alloc_slot(id.unique_id);
                 self.emit(Opcode::LoadLocal(slot));
             }
@@ -441,6 +524,11 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
+            TypedInner::Def(_fun_idx, _id, _params, _ret_ty, _body) => {
+                let unit_idx = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit_idx));
+            }
+
             TypedInner::StructDef(tag, name, field_names) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
@@ -487,9 +575,25 @@ impl Codegen {
                 }
                 self.emit(Opcode::CallBuiltin(builtin_id, args.len() as u8));
             }
+            Ty::UserFunc { fun_idx, params, .. } => {
+                if args.len() != params.len() {
+                    return Err(CodegenError {
+                        message: format!(
+                            "function expects {} argument(s), got {}",
+                            params.len(),
+                            args.len()
+                        ),
+                        span: func.span.clone(),
+                    });
+                }
+                for arg in args {
+                    self.emit_node(arg)?;
+                }
+                self.emit(Opcode::Call(*fun_idx, args.len() as u8));
+            }
             _ => {
                 return Err(CodegenError {
-                    message: "Non-builtin function calls not supported in phase 1".into(),
+                    message: "Non-function value in call position".into(),
                     span: func.span.clone(),
                 });
             }

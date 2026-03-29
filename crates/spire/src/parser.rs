@@ -123,6 +123,7 @@ impl Parser {
 
         // Data definitions
         match self.peek() {
+            Token::Def => return self.parse_def(),
             Token::Defstruct => return self.parse_struct_def(),
             Token::Defrecord => return self.parse_record_def(),
             Token::Deferror => return self.parse_deferror_def(),
@@ -131,6 +132,24 @@ impl Parser {
 
         let expr = self.parse_expr()?;
         Ok(expr)
+    }
+
+    fn parse_block_stmts(&mut self) -> Result<Vec<Ast>, ParseError> {
+        let mut stmts = Vec::new();
+        self.skip_newlines();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let stmt = self.parse_stmt()?;
+            stmts.push(stmt);
+            while matches!(self.peek(), Token::Newline | Token::Semicolon) {
+                self.advance();
+            }
+        }
+
+        Ok(stmts)
     }
 
     // ── Expression (entry point — handles binding at top level) ──
@@ -306,6 +325,20 @@ impl Parser {
                 let inner = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 Ok(inner)
+            }
+
+            // Block expression: { stmt; stmt; expr }
+            Token::LBrace => {
+                self.advance();
+                let stmts = self.parse_block_stmts()?;
+                let end = self.expect(&Token::RBrace)?;
+                Ok(Ast::Block(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    stmts,
+                ))
             }
 
             // Match expression
@@ -670,6 +703,79 @@ impl Parser {
         ))
     }
 
+    /// `def name(arg: Type, ...) -> Type { expr }`
+    fn parse_def(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Def)?;
+        let (name, _) = self.expect_ident()?;
+        let mut params = Vec::new();
+        if matches!(self.peek(), Token::Unit) {
+            self.advance();
+        } else {
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+
+            if !matches!(self.peek(), Token::RParen) {
+                loop {
+                    if matches!(self.peek(), Token::Eof) {
+                        return Err(ParseError::incomplete(")", self.peek_span()));
+                    }
+                    self.skip_newlines();
+                    params.push(self.parse_fun_param()?);
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect(&Token::RParen)?;
+        }
+
+        let ret_ty = if matches!(self.peek(), Token::Arrow) {
+            self.advance();
+            self.skip_newlines();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        let body_stmts = self.parse_block_stmts()?;
+        let end = self.expect(&Token::RBrace)?;
+        let body = Ast::Block(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            body_stmts,
+        );
+
+        Ok(Ast::Def(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            name,
+            params,
+            ret_ty,
+            Box::new(body),
+        ))
+    }
+
+    fn parse_fun_param(&mut self) -> Result<FunParam, ParseError> {
+        let (name, span) = self.expect_ident()?;
+        self.expect(&Token::Colon)?;
+        let ty = self.parse_type()?;
+        Ok(FunParam { name, ty, span })
+    }
+
     // ── Match expression (step 8) ──
 
     /// `match expr { pat => body, ... }`
@@ -910,6 +1016,14 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
     }
 }
 
+fn shift_fun_param(param: FunParam, delta: usize) -> FunParam {
+    FunParam {
+        name: param.name,
+        ty: shift_ast_ty(param.ty, delta),
+        span: shift_span(param.span, delta),
+    }
+}
+
 fn shift_match_pattern(pat: AstMatchPattern, delta: usize) -> AstMatchPattern {
     match pat {
         AstMatchPattern::Wildcard(span) => AstMatchPattern::Wildcard(shift_span(span, delta)),
@@ -1033,6 +1147,16 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             Box::new(shift_ast_span(*show_expr, delta)),
         ),
+        Ast::Def(span, name, params, ret_ty, body) => Ast::Def(
+            shift_span(span, delta),
+            name,
+            params
+                .into_iter()
+                .map(|p| shift_fun_param(p, delta))
+                .collect(),
+            ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+            Box::new(shift_ast_span(*body, delta)),
+        ),
         Ast::Semi(span, inner) => Ast::Semi(shift_span(span, delta), Box::new(shift_ast_span(*inner, delta))),
     }
 }
@@ -1057,6 +1181,7 @@ impl Ast {
             | Ast::StructLit(s, _, _)
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _)
+            | Ast::Def(s, _, _, _, _)
             | Ast::Semi(s, _) => s,
         }
     }
@@ -1100,6 +1225,33 @@ mod tests {
                 assert_eq!(args.len(), 1);
             }
             _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_function_def() {
+        let ast = parse(
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+def noop() {()}"#,
+        )
+        .unwrap();
+        match &ast[0] {
+            Ast::Def(_, name, params, ret_ty, body) => {
+                assert_eq!(name, "add");
+                assert_eq!(params.len(), 2);
+                assert!(matches!(ret_ty, Some(AstTy::Named(_, ty)) if ty == "Int"));
+                assert!(matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::BinOp(_, BinOp::Add, _, _)])));
+            }
+            _ => panic!("Expected Def"),
+        }
+        match &ast[1] {
+            Ast::Def(_, name, params, ret_ty, body) => {
+                assert_eq!(name, "noop");
+                assert_eq!(params.len(), 0);
+                assert!(ret_ty.is_none());
+                assert!(matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::Lit(_, Lit::Unit)])));
+            }
+            _ => panic!("Expected Def"),
         }
     }
 

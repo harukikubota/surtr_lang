@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use spire::ast::{Ast, AstPattern, BinOp, Lit, Span};
+use spire::ast::{Ast, AstPattern, BinOp, FunParam, Lit, Span};
 
 use crate::error::ResolveError;
 use crate::resolved::*;
@@ -87,11 +87,23 @@ impl Resolver {
     }
 
     fn resolve_program(&mut self, stmts: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
+        self.predeclare_functions(&stmts);
         let mut resolved = Vec::new();
         for stmt in stmts {
             resolved.push(self.resolve_node(stmt)?);
         }
         Ok(resolved)
+    }
+
+    fn predeclare_functions(&mut self, stmts: &[Ast]) {
+        for stmt in stmts {
+            if let Ast::Def(_, name, _, _, _) = stmt {
+                if self.scope.lookup(name).is_none() {
+                    let uid = self.scope.reserve_id();
+                    self.scope.define_with_id(name, uid);
+                }
+            }
+        }
     }
 
     fn resolve_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
@@ -246,6 +258,36 @@ impl Resolver {
                 ))
             }
 
+            Ast::Def(span, name, params, ret_ty, body) => {
+                let fun_uid = self
+                    .scope
+                    .lookup(&name)
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                let mut body_resolver = Resolver::with_scope(self.scope.clone());
+                let resolved_params = params
+                    .into_iter()
+                    .map(|param| body_resolver.resolve_fun_param(param))
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                let resolved_body = body_resolver.resolve_node(*body)?;
+
+                self.scope
+                    .advance_next_id_to(body_resolver.scope.next_id());
+                self.scope.define_with_id(&name, fun_uid);
+                let rid = ResolvedId {
+                    name,
+                    unique_id: fun_uid,
+                    span: span.clone(),
+                };
+
+                Ok(Resolved::Def(
+                    span,
+                    rid,
+                    resolved_params,
+                    ret_ty,
+                    Box::new(resolved_body),
+                ))
+            }
+
             Ast::StructLit(span, type_name, field_vals) => {
                 let uid = self.scope.lookup(&type_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined type: {}", type_name),
@@ -303,6 +345,18 @@ impl Resolver {
                 ))
             }
         }
+    }
+
+    fn resolve_fun_param(&mut self, param: FunParam) -> Result<ResolvedFunParam, ResolveError> {
+        let uid = self.scope.define(&param.name, param.span.clone());
+        Ok(ResolvedFunParam {
+            id: ResolvedId {
+                name: param.name,
+                unique_id: uid,
+                span: param.span,
+            },
+            ty: param.ty,
+        })
     }
 
     fn resolve_if(&mut self, span: Span, args: Vec<Ast>) -> Result<Resolved, ResolveError> {
@@ -432,7 +486,32 @@ mod tests {
         match &resolved[0] {
             Resolved::App(_, func, _) => match func.as_ref() {
                 Resolved::Var(_, id) => assert_eq!(id.name, "print"),
-                _ => panic!("Expected Var for print"),
+            _ => panic!("Expected Var for print"),
+            },
+            _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_function_def_resolution() {
+        let resolved = parse_and_resolve(
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+print(to_string(1))"#,
+        )
+        .unwrap();
+        match &resolved[0] {
+            Resolved::Def(_, id, params, ret_ty, body) => {
+                assert_eq!(id.name, "add");
+                assert_eq!(params.len(), 2);
+                assert!(matches!(ret_ty, Some(spire::ast::AstTy::Named(_, ty)) if ty == "Int"));
+                assert!(matches!(body.as_ref(), Resolved::Block(_, stmts) if matches!(stmts.as_slice(), [Resolved::BinOp(_, _, _, _)])));
+            }
+            _ => panic!("Expected Def"),
+        }
+        match &resolved[1] {
+            Resolved::App(_, func, _) => match func.as_ref() {
+                Resolved::Var(_, id) => assert_eq!(id.name, "print"),
+                _ => panic!("Expected Var"),
             },
             _ => panic!("Expected App"),
         }

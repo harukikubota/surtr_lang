@@ -59,6 +59,9 @@ pub enum Resolved {
     /// Error type definition
     DeferrorDef(Span, ResolvedId, Vec<ResolvedField>, Box<Resolved>),
 
+    /// Function definition
+    Def(Span, ResolvedId, Vec<ResolvedFunParam>, Option<AstTy>, Box<Resolved>),
+
     /// Semicolon — explicit Unit coercion
     Semi(Span, Box<Resolved>),
 }
@@ -106,4 +109,11 @@ pub struct ResolvedField {
     pub name: Symbol,
     pub ty: AstTy,
     pub span: Span,
+}
+
+/// Function parameter (resolved).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedFunParam {
+    pub id: ResolvedId,
+    pub ty: AstTy,
 }

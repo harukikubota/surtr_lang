@@ -293,7 +293,11 @@ impl ReplEngine {
             }
             Err(e) => {
                 let message = e.message();
-                diagnostics::report_error("repl", &self.pending, "ParseError", &message, e.span(), None);
+                diagnostics::report_error(
+                    "repl",
+                    &self.pending,
+                    diagnostics::simple_error("ParseError", message, e.span().clone(), None),
+                );
                 self.pending.clear();
                 self.bump_line(None);
                 return ReplOutcome::Continue;
@@ -315,7 +319,11 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                diagnostics::report_error("repl", &self.pending, "ResolveError", &e.message, &e.span, None);
+                diagnostics::report_error(
+                    "repl",
+                    &self.pending,
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                );
                 self.pending.clear();
                 self.bump_line(None);
                 return ReplOutcome::Continue;
@@ -328,14 +336,7 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                diagnostics::report_error(
-                    "repl",
-                    &self.pending,
-                    "TypeError",
-                    &e.message,
-                    &e.span,
-                    e.hint.as_deref(),
-                );
+                diagnostics::report_error("repl", &self.pending, diagnostics::type_error_spec(&self.pending, &e));
                 self.pending.clear();
                 self.bump_line(None);
                 return ReplOutcome::Continue;
@@ -348,7 +349,11 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                diagnostics::report_error("repl", &self.pending, "CodegenError", &e.message, &e.span, None);
+                diagnostics::report_error(
+                    "repl",
+                    &self.pending,
+                    diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
+                );
                 self.pending.clear();
                 self.bump_line(None);
                 return ReplOutcome::Continue;
@@ -360,6 +365,9 @@ impl ReplEngine {
                 display_repl_result(&self.vm, value.clone(), &meta);
                 for b in &meta.bindings {
                     self.symbols.insert(b.name.clone());
+                }
+                for name in &meta.function_defs {
+                    self.symbols.insert(name.clone());
                 }
                 self.bump_line(Some(value));
             }
@@ -520,7 +528,11 @@ fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Byte
         Ok(a) => a,
         Err(e) => {
             let message = e.message();
-            diagnostics::report_error(file_path, source, "ParseError", &message, e.span(), None);
+            diagnostics::report_error(
+                file_path,
+                source,
+                diagnostics::simple_error("ParseError", message, e.span().clone(), None),
+            );
             return Err(1);
         }
     };
@@ -529,7 +541,11 @@ fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Byte
     let resolved = match sigil::resolve(ast) {
         Ok(r) => r,
         Err(e) => {
-            diagnostics::report_error(file_path, source, "ResolveError", &e.message, &e.span, None);
+            diagnostics::report_error(
+                file_path,
+                source,
+                diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+            );
             return Err(1);
         }
     };
@@ -538,14 +554,7 @@ fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Byte
     let typed = match scar::typecheck(resolved) {
         Ok(t) => t,
         Err(e) => {
-            diagnostics::report_error(
-                file_path,
-                source,
-                "TypeError",
-                &e.message,
-                &e.span,
-                e.hint.as_deref(),
-            );
+            diagnostics::report_error(file_path, source, diagnostics::type_error_spec(source, &e));
             return Err(1);
         }
     };
@@ -554,7 +563,11 @@ fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Byte
     let bytecode = match forge::codegen(typed) {
         Ok(b) => b,
         Err(e) => {
-            diagnostics::report_error(file_path, source, "CodegenError", &e.message, &e.span, None);
+            diagnostics::report_error(
+                file_path,
+                source,
+                diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
+            );
             return Err(1);
         }
     };

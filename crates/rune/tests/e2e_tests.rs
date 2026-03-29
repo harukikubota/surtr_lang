@@ -338,6 +338,60 @@ print("r=#{r}")"#,
         );
     }
 
+    // ── Phase 2 Step 4: def minimal ──
+
+    #[test]
+    fn phase2_step4_def_minimal() {
+        assert_output(
+            r#"def noop() {()}
+def const() -> Int { 1 }
+def do_something(num: Int) -> Unit { () }
+def add_two(num: Int) -> Int { num + 2 }
+def add(x: Int, y: Int) -> Int { x + y }"#,
+            &[],
+        );
+    }
+
+    #[test]
+    fn phase2_step5_function_calls_isolate_locals() {
+        assert_output(
+            r#"def outer(x: Int, y: Int) -> Int {
+    x = x + 10
+    y = y + 100
+    ret = inner(x, y)
+    print(to_string(x))
+    ret
+}
+
+def inner(x: Int, y: Int) -> Int {
+    x + y
+}
+
+print(to_string(outer(1, 2)))"#,
+            &["11", "113"],
+        );
+    }
+
+    #[test]
+    fn phase2_step5_function_calls_unit_hint() {
+        assert_compile_error(
+            r#"def outer(x: Int, y: Int) -> Int {
+    x = x + 10
+    y = y + 100
+    ret = inner(x, y)
+    print(to_string(x))
+}
+
+def inner(x: Int, y: Int) -> Int {
+    x + y
+}
+
+ret = outer(2, 4)
+print(to_string(ret))"#,
+            "print: (String) -> Unit",
+        );
+    }
+
     // ── Step 9: deferror / Error ──
 
     #[test]

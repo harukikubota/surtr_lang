@@ -140,11 +140,41 @@ impl Checker {
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
+        self.predeclare_functions(&stmts)?;
         let mut typed = Vec::new();
         for stmt in stmts {
             typed.push(self.check_node(&stmt)?);
         }
         Ok(typed)
+    }
+
+    fn predeclare_functions(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
+        let mut fun_idx = self.env.next_fun_idx;
+
+        for stmt in stmts {
+            if let Resolved::Def(_, id, params, ret_ty, _) = stmt {
+                let param_tys = params
+                    .iter()
+                    .map(|param| self.resolve_ast_ty(&param.ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ret = match ret_ty {
+                    Some(ty) => self.resolve_ast_ty(ty)?,
+                    None => Ty::Unit,
+                };
+                self.env.bind_var(
+                    id.unique_id,
+                    Ty::UserFunc {
+                        fun_idx,
+                        params: param_tys,
+                        ret: Box::new(ret),
+                    },
+                );
+                fun_idx += 1;
+            }
+        }
+
+        self.env.next_fun_idx = fun_idx;
+        Ok(())
     }
 
     fn check_node(&mut self, node: &Resolved) -> Result<TypedNode, TypeError> {
@@ -244,6 +274,9 @@ impl Checker {
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
             }
+            Resolved::Def(span, id, params, ret_ty, body) => {
+                self.check_def(span, id, params, ret_ty, body)
+            }
         }
     }
 
@@ -341,6 +374,61 @@ impl Checker {
         }
     }
 
+    fn format_signature(&self, name: &str, params: &[Ty], ret: &Ty) -> String {
+        format!(
+            "{}: ({}) -> {}",
+            name,
+            params
+                .iter()
+                .map(|ty| self.ty_name(ty))
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.ty_name(ret)
+        )
+    }
+
+    fn find_tail_print_call<'a>(&self, node: &'a TypedNode) -> Option<&'a TypedNode> {
+        match &node.node {
+            TypedInner::Block(stmts) => stmts.last().and_then(|last| self.find_tail_print_call(last)),
+            TypedInner::Semi(inner) => self.find_tail_print_call(inner),
+            TypedInner::App(func, _) => match &func.ty {
+                Ty::BuiltinFunc { name, .. } if name == "print" => Some(node),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn describe_unit_return_hint(&self, body: &TypedNode) -> Option<String> {
+        let call = self.find_tail_print_call(body)?;
+        if let TypedInner::App(func, _) = &call.node {
+            if let Ty::BuiltinFunc { name, params, ret } = &func.ty {
+                return Some(format!(
+                    "The function body ends with `print(...)`, which returns Unit.\n{}\nUse `print(...)` as a statement and end the function with an Int expression.",
+                    self.format_signature(name, params, ret)
+                ));
+            }
+        }
+        None
+    }
+
+    fn return_mismatch_span(&self, body: &TypedNode) -> Span {
+        self.tail_expr_span(body).unwrap_or_else(|| body.span.clone())
+    }
+
+    fn tail_expr_span(&self, node: &TypedNode) -> Option<Span> {
+        match &node.node {
+            TypedInner::Block(stmts) => stmts
+                .last()
+                .map(|last| self.tail_expr_span(last).unwrap_or_else(|| last.span.clone())),
+            TypedInner::Semi(inner) => Some(
+                self.tail_expr_span(inner)
+                    .unwrap_or_else(|| inner.span.clone()),
+            ),
+            _ => Some(node.span.clone()),
+        }
+    }
+
     // ── Pattern checking ──
 
     fn check_pattern(
@@ -405,6 +493,38 @@ impl Checker {
                     });
                 }
                 // Check arg types (Var = polymorphic, accepts anything)
+                for (param, arg) in params.iter().zip(&typed_args) {
+                    if !self.types_compatible(param, &arg.ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "Argument type mismatch: expected {}, got {}",
+                                self.ty_name(param),
+                                self.ty_name(&arg.ty)
+                            ),
+                            span: arg.span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+
+                Ok(TypedNode {
+                    ty: ret.as_ref().clone(),
+                    span: span.clone(),
+                    node: TypedInner::App(Box::new(typed_func), typed_args),
+                })
+            }
+            Ty::UserFunc { params, ret, .. } => {
+                if typed_args.len() != params.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "function expects {} argument(s), got {}",
+                            params.len(),
+                            typed_args.len()
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
                 for (param, arg) in params.iter().zip(&typed_args) {
                     if !self.types_compatible(param, &arg.ty) {
                         return Err(TypeError {
@@ -893,6 +1013,80 @@ impl Checker {
             ty: field_ty,
             span: span.clone(),
             node: TypedInner::FieldAccess(Box::new(typed_expr), idx),
+        })
+    }
+
+    fn check_def(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        params: &[ResolvedFunParam],
+        ret_ty: &Option<AstTy>,
+        body: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let mut fun_env = self.env.clone();
+        let mut typed_params = Vec::new();
+
+        for param in params {
+            let param_ty = self.resolve_ast_ty(&param.ty)?;
+            fun_env.bind_var(param.id.unique_id, param_ty.clone());
+            typed_params.push(TypedFunParam {
+                id: param.id.clone(),
+                ty: param_ty.clone(),
+            });
+        }
+
+        let expected_ret = match ret_ty {
+            Some(ty) => self.resolve_ast_ty(ty)?,
+            None => Ty::Unit,
+        };
+
+        let mut body_checker = Checker::with_env(fun_env);
+        let typed_body = body_checker.check_node(body)?;
+
+        self.env.next_tyvar = self.env.next_tyvar.max(body_checker.env.next_tyvar);
+        self.env.next_tag = self.env.next_tag.max(body_checker.env.next_tag);
+
+        if !self.types_compatible(&expected_ret, &typed_body.ty) {
+            let hint = if matches!(typed_body.ty, Ty::Unit) {
+                body_checker.describe_unit_return_hint(&typed_body)
+            } else {
+                None
+            };
+            return Err(TypeError {
+                message: if ret_ty.is_some() {
+                    format!(
+                        "expected {}, got {}",
+                        self.ty_name(&expected_ret),
+                        self.ty_name(&typed_body.ty)
+                    )
+                } else {
+                    format!(
+                        "def {} without an explicit return type must return Unit, got {}",
+                        id.name,
+                        self.ty_name(&typed_body.ty)
+                    )
+                },
+                span: body_checker.return_mismatch_span(&typed_body),
+                hint,
+            });
+        }
+
+        let fun_idx = match self.env.lookup_var(id.unique_id) {
+            Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
+            _ => {
+                return Err(TypeError {
+                    message: format!("Undefined function: {}", id.name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        };
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::Def(fun_idx, id.clone(), typed_params, expected_ret, Box::new(typed_body)),
         })
     }
 

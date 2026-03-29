@@ -77,6 +77,10 @@ pub enum Opcode {
     /// `builtin_id` indexes into the BUILTINS table.
     CallBuiltin(u16, u8),
 
+    // ── User-defined function call ──
+    /// Call a user-defined function by function table index with the given arity.
+    Call(u32, u8),
+
     // ── Control flow ──
     /// Unconditional jump to absolute address.
     Jump(u32),
@@ -88,6 +92,16 @@ pub enum Opcode {
     // ── Stack management ──
     /// Discard top of stack.
     Pop,
+
+    // ── Frame management ──
+    /// Allocate a new locals frame for the current function.
+    MakeFrame(u32),
+    /// Tear down the current locals frame.
+    PopFrame,
+
+    // ── Function return ──
+    /// Return from the current function.
+    Return,
 
     // ── Program termination ──
     Halt,

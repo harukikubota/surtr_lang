@@ -149,6 +149,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             let token = match text.as_str() {
                 "True" => Token::True,
                 "False" => Token::False,
+                "def" => Token::Def,
                 "defstruct" => Token::Defstruct,
                 "defrecord" => Token::Defrecord,
                 "deferror" => Token::Deferror,
@@ -173,6 +174,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "<=" => Some(Token::LtEq),
                 ">=" => Some(Token::GtEq),
                 "=>" => Some(Token::FatArrow),
+                "->" => Some(Token::Arrow),
                 _ => None,
             };
             if let Some(t) = tok {
@@ -275,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_two_char_ops() {
-        let tokens = tokenize("++ =? == != <= >= =>").unwrap();
+        let tokens = tokenize("++ =? == != <= >= => ->").unwrap();
         assert!(matches!(tokens[0].token, Token::Concat));
         assert!(matches!(tokens[1].token, Token::SafeBind));
         assert!(matches!(tokens[2].token, Token::EqEq));
@@ -283,5 +285,12 @@ mod tests {
         assert!(matches!(tokens[4].token, Token::LtEq));
         assert!(matches!(tokens[5].token, Token::GtEq));
         assert!(matches!(tokens[6].token, Token::FatArrow));
+        assert!(matches!(tokens[7].token, Token::Arrow));
+    }
+
+    #[test]
+    fn test_def_keyword() {
+        let tokens = tokenize("def noop() {()}").unwrap();
+        assert!(matches!(tokens[0].token, Token::Def));
     }
 }

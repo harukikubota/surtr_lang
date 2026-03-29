@@ -10,6 +10,7 @@ pub struct Bytecode {
     pub num_locals: usize,
     pub type_registry: TypeRegistry,
     pub error_templates: Vec<ErrTemplate>,
+    pub functions: Vec<FunctionEntry>,
 }
 
 /// Incremental bytecode payload for REPL execution.
@@ -19,6 +20,16 @@ pub struct BytecodeChunk {
     pub constants: Vec<Constant>,
     pub new_locals: usize,
     pub type_entries: Vec<TypeEntry>,
+    pub functions: Vec<FunctionEntry>,
+}
+
+/// Function table entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FunctionEntry {
+    pub fun_idx: u32,
+    pub entry_pc: u32,
+    pub num_locals: u32,
+    pub arity: u8,
 }
 
 /// Constant pool entry.
@@ -236,7 +247,7 @@ fn align4(len: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{Bytecode, BytecodeFormatError, Constant, ErrTemplate};
+    use super::{Bytecode, BytecodeFormatError, Constant, ErrTemplate, FunctionEntry};
     use crate::opcode::Opcode;
     use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 
@@ -264,6 +275,12 @@ mod tests {
                 column: 4,
                 format: "bad".to_string(),
                 num_params: 0,
+            }],
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 1,
+                num_locals: 0,
+                arity: 0,
             }],
         };
 

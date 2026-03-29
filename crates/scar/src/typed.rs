@@ -37,6 +37,9 @@ pub enum TypedInner {
     /// Error type definition — tag + binding id + show expression
     DeferrorDef(u32, ResolvedId, Box<TypedNode>),
 
+    /// Function definition — tag + name + params + return type + body
+    Def(u32, ResolvedId, Vec<TypedFunParam>, Ty, Box<TypedNode>),
+
     /// Struct definition — tag + name + field names (for TypeRegistry)
     StructDef(u32, String, Vec<String>),
 
@@ -74,4 +77,11 @@ pub enum TypedMatchPattern {
     StrLit(String),
     /// Constructor tag + optional inner binding
     Constructor(u32, Option<ResolvedId>),
+}
+
+/// Function parameter (typed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedFunParam {
+    pub id: ResolvedId,
+    pub ty: Ty,
 }
