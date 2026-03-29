@@ -1,4 +1,0 @@
-# Surtr hello world — step 2 target
-num = 10
-num2 = 5
-print(to_string(num2))

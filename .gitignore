@@ -1,6 +1,8 @@
 /target
 /doc
 
+/lib//script
+
 # VS Code extension build artifacts
 vscode-surtr-icons/node_modules/
 vscode-surtr-icons/*.vsix
