@@ -14,3 +14,4 @@ sigil = { path = "../sigil" }
 scar  = { path = "../scar" }
 forge = { path = "../forge" }
 eldr  = { path = "../eldr" }
+ariadne = "0.6.0"

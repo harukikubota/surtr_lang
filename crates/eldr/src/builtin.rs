@@ -67,17 +67,26 @@ fn builtin_to_string(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
 fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match &args[0] {
         Value::Error(rich) => {
-            let msg = format!(
-                "Error: {}\n  --> {}:{}:{}\n  {}\n",
-                rich.kind,
-                rich.location.file,
-                rich.location.line,
-                rich.location.column,
-                rich.message,
-            );
-            match &mut vm.error_output {
-                Some(buf) => buf.push(msg),
-                None => eprint!("{}", msg),
+            if vm.error_output.is_some() {
+                let msg = format!("Error: {}: {}", rich.kind, rich.message);
+                vm.error_output.as_mut().unwrap().push(msg);
+            } else if let (Some(source), Some(file)) = (vm.source(), vm.source_file()) {
+                use ariadne::{Color, Label, Report, ReportKind, Source};
+
+                let start = rich.location.span_start as usize;
+                let end = rich.location.span_end as usize;
+                Report::build(ReportKind::Error, (file, start..end))
+                    .with_message(rich.kind.clone())
+                    .with_label(
+                        Label::new((file, start..end))
+                            .with_message(rich.message.clone())
+                            .with_color(Color::Red),
+                    )
+                    .finish()
+                    .eprint((file, Source::from(source)))
+                    .unwrap();
+            } else {
+                eprintln!("Error: {}: {}", rich.kind, rich.message);
             }
         }
         other => {

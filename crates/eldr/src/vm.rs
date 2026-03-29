@@ -45,6 +45,16 @@ impl VM {
         self
     }
 
+    /// Access source text if attached.
+    pub fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
+    /// Access source file name if attached.
+    pub fn source_file(&self) -> Option<&str> {
+        self.source_file.as_deref()
+    }
+
     /// Enable stdout capture (for testing).
     pub fn with_output_capture(mut self) -> Self {
         self.output = Some(Vec::new());

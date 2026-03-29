@@ -6,3 +6,4 @@ description = "Old Norse for fire — the Surtr virtual machine"
 
 [dependencies]
 forge = { path = "../forge" }
+ariadne = "0.6.0"
