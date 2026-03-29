@@ -62,6 +62,12 @@ pub enum Resolved {
     /// Function definition
     Def(Span, ResolvedId, Vec<ResolvedFunParam>, Option<AstTy>, Box<Resolved>),
 
+    /// Closure literal
+    Closure(Span, Vec<ResolvedClosureParam>, Vec<ResolvedId>, Box<Resolved>),
+
+    /// Captured function / partial application
+    Capture(Span, Box<Resolved>, Vec<Resolved>),
+
     /// Semicolon — explicit Unit coercion
     Semi(Span, Box<Resolved>),
 }
@@ -106,6 +112,7 @@ pub enum ResolvedRecordLitArg {
 /// Field definition (resolved) — used in StructDef / RecordDef / DeferrorDef.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedField {
+    pub id: Option<ResolvedId>,
     pub name: Symbol,
     pub ty: AstTy,
     pub span: Span,
@@ -116,4 +123,10 @@ pub struct ResolvedField {
 pub struct ResolvedFunParam {
     pub id: ResolvedId,
     pub ty: AstTy,
+}
+
+/// Closure parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedClosureParam {
+    pub id: ResolvedId,
 }

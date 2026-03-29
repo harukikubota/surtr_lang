@@ -120,3 +120,23 @@ fn repl_value_recall_by_line_number() {
     let fives = stdout.matches("> 5").count();
     assert!(fives >= 2, "expected original value and :v recall output, got:\n{}", stdout);
 }
+
+#[test]
+fn repl_deferror_builder_survives_incremental_execution() {
+    let output = run_repl_session(
+        "deferror PageNotFound(html: String) {\n  \"Page Not Found. #{html}\"\n}\nerr_result: Result<Int> = Err(PageNotFound(\"404\"))\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("err_result: Result<Int, Error> = Err(Page Not Found. 404)"),
+        "expected incremental err_result binding, got:\n{}",
+        stdout
+    );
+}

@@ -47,6 +47,8 @@ pub enum AstTy {
     ListOf(Span, Box<AstTy>),
     /// `Result<Int>` or `Result<Int, ParseError>`
     ResultOf(Span, Box<AstTy>, Option<Box<AstTy>>),
+    /// `(-> T)`, `(A -> B)`, `(A, B -> C)`
+    Func(Span, Vec<AstTy>, Box<AstTy>),
 }
 
 // ── Patterns ──
@@ -98,6 +100,13 @@ pub struct RecordField {
 pub struct FunParam {
     pub name: Symbol,
     pub ty: AstTy,
+    pub span: Span,
+}
+
+/// Closure parameter — type is inferred from the expected function signature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosureParam {
+    pub name: Symbol,
     pub span: Span,
 }
 
@@ -166,6 +175,12 @@ pub enum Ast {
 
     /// Function definition: `def add(x: Int, y: Int) -> Int { x + y }`
     Def(Span, Symbol, Vec<FunParam>, Option<AstTy>, Box<Ast>),
+
+    /// Closure literal: `{|x, y| expr}` / `{|| expr}`
+    Closure(Span, Vec<ClosureParam>, Box<Ast>),
+
+    /// Captured function / partial application: `&print` / `&print(x)`
+    Capture(Span, Box<Ast>, Vec<Ast>),
 
     /// Semicolon — explicit Unit coercion marker (wraps the discarded expr)
     Semi(Span, Box<Ast>),

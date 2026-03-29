@@ -20,6 +20,7 @@ pub struct BytecodeChunk {
     pub constants: Vec<Constant>,
     pub new_locals: usize,
     pub type_entries: Vec<TypeEntry>,
+    pub error_templates: Vec<ErrTemplate>,
     pub functions: Vec<FunctionEntry>,
 }
 

@@ -3,12 +3,13 @@ use forge::opcode::Opcode;
 use forge::registry::TypeRegistry;
 
 use crate::error::RuntimeError;
-use crate::value::Value;
+use crate::value::{Callable, CallableTarget, Value};
 
 #[derive(Debug, Clone)]
 struct CallFrame {
     return_pc: usize,
     stack_base: usize,
+    call_site: Option<(u32, u32)>,
     locals: Vec<Value>,
 }
 
@@ -40,6 +41,7 @@ impl VM {
             frames: vec![CallFrame {
                 return_pc: 0,
                 stack_base: 0,
+                call_site: None,
                 locals: vec![Value::Unit; num_locals],
             }],
             pc: 0,
@@ -128,6 +130,7 @@ impl VM {
         let code_base = self.bytecode.opcodes.len();
         self.bytecode.constants.extend(chunk.constants);
         self.bytecode.type_registry.entries.extend(chunk.type_entries);
+        self.bytecode.error_templates.extend(chunk.error_templates);
         self.bytecode.opcodes.extend(chunk.opcodes);
         for mut entry in chunk.functions {
             entry.entry_pc += code_base as u32;
@@ -171,6 +174,20 @@ impl VM {
                     Constant::Unit => Value::Unit,
                 };
                 self.stack.push(val);
+            }
+
+            Opcode::LoadBuiltinRef(builtin_id) => {
+                self.stack.push(Value::Callable(Callable {
+                    target: CallableTarget::Builtin(builtin_id),
+                    captured: Vec::new(),
+                }));
+            }
+
+            Opcode::LoadFunctionRef(fun_idx) => {
+                self.stack.push(Value::Callable(Callable {
+                    target: CallableTarget::Function(fun_idx),
+                    captured: Vec::new(),
+                }));
             }
 
             Opcode::LoadLocal(slot) => {
@@ -363,7 +380,7 @@ impl VM {
                 self.stack.push(result);
             }
 
-            Opcode::Call(fun_idx, arity) => {
+            Opcode::Call(fun_idx, arity, span_start, span_end) => {
                 let entry = self
                     .bytecode
                     .functions
@@ -389,9 +406,138 @@ impl VM {
                 self.frames.push(CallFrame {
                     return_pc,
                     stack_base,
+                    call_site: Some((span_start, span_end)),
                     locals: Vec::new(),
                 });
                 *pc = entry.entry_pc as usize;
+            }
+
+            Opcode::MakeError(template_id) => {
+                let message = match self.pop_stack()? {
+                    Value::Str(s) => s,
+                    other => {
+                        return Err(RuntimeError {
+                            message: format!("MakeError expects String, got {:?}", other),
+                        });
+                    }
+                };
+                let template = self
+                    .bytecode
+                    .error_templates
+                    .get(template_id as usize)
+                    .ok_or_else(|| RuntimeError {
+                        message: format!("Unknown error template: {}", template_id),
+                    })?;
+                let call_site = self.current_frame().call_site.clone();
+                let (span_start, span_end) = call_site
+                    .map(|(start, end)| (start, end))
+                    .unwrap_or((template.span_start, template.span_end));
+                let location = crate::value::Location {
+                    file: self
+                        .source_file()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "<repl>".to_string()),
+                    func: template.kind.clone(),
+                    line: template.line,
+                    column: template.column,
+                    span_start,
+                    span_end,
+                };
+                self.stack.push(Value::Error(Box::new(crate::value::RichError {
+                    kind: template.kind.clone(),
+                    message,
+                    location,
+                })));
+            }
+
+            Opcode::MakeClosure(num_captured) => {
+                let mut captured = Vec::with_capacity(num_captured as usize);
+                for _ in 0..num_captured {
+                    captured.push(self.pop_stack()?);
+                }
+                captured.reverse();
+                let target = self.pop_stack()?;
+                let callable = match target {
+                    Value::Callable(mut callable) => {
+                        let mut merged = callable.captured;
+                        merged.extend(captured);
+                        callable.captured = merged;
+                        callable
+                    }
+                    _ => {
+                        return Err(RuntimeError {
+                            message: "MakeClosure expects a callable target".into(),
+                        });
+                    }
+                };
+                self.stack.push(Value::Callable(callable));
+            }
+
+            Opcode::CallClosure(arity, span_start, span_end) => {
+                let mut args = Vec::with_capacity(arity as usize);
+                for _ in 0..arity {
+                    args.push(self.pop_stack()?);
+                }
+                args.reverse();
+                let callable = match self.pop_stack()? {
+                    Value::Callable(callable) => callable,
+                    _ => {
+                        return Err(RuntimeError {
+                            message: "CallClosure expects a callable value".into(),
+                        });
+                    }
+                };
+
+                let mut full_args = callable.captured.clone();
+                full_args.extend(args);
+
+                match callable.target {
+                    CallableTarget::Builtin(builtin_id) => {
+                        use crate::builtin::BUILTINS;
+                        let builtin = &BUILTINS[builtin_id as usize];
+                        if usize::from(builtin.arity) != full_args.len() {
+                            return Err(RuntimeError {
+                                message: format!(
+                                    "builtin {} arity mismatch: expected {}, got {}",
+                                    builtin.name,
+                                    builtin.arity,
+                                    full_args.len()
+                                ),
+                            });
+                        }
+                        let result = (builtin.func)(self, full_args)?;
+                        self.stack.push(result);
+                    }
+                    CallableTarget::Function(fun_idx) => {
+                        let entry = self
+                            .bytecode
+                            .functions
+                            .get(fun_idx as usize)
+                            .ok_or_else(|| RuntimeError {
+                                message: format!("Unknown function index: {}", fun_idx),
+                            })?;
+                        if entry.arity as usize != full_args.len() {
+                            return Err(RuntimeError {
+                                message: format!(
+                                    "Call arity mismatch for function {}: expected {}, got {}",
+                                    fun_idx,
+                                    entry.arity,
+                                    full_args.len()
+                                ),
+                            });
+                        }
+                let stack_base = self.stack.len();
+                self.stack.extend(full_args);
+                let return_pc = *pc;
+                self.frames.push(CallFrame {
+                    return_pc,
+                    stack_base,
+                    call_site: Some((span_start, span_end)),
+                    locals: Vec::new(),
+                });
+                *pc = entry.entry_pc as usize;
+            }
+                }
             }
 
             // ── Control flow ──

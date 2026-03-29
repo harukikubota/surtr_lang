@@ -10,6 +10,21 @@ mod e2e {
         Ok(vm.output.unwrap_or_default())
     }
 
+    fn run_surtr_with_stderr(source: &str) -> Result<(Vec<String>, Vec<String>), String> {
+        let ast = spire::parse(source).map_err(|e| format!("Parse: {}", e))?;
+        let resolved = sigil::resolve(ast).map_err(|e| format!("Resolve: {}", e))?;
+        let typed = scar::typecheck(resolved).map_err(|e| format!("Typecheck: {}", e))?;
+        let bytecode = forge::codegen(typed).map_err(|e| format!("Codegen: {}", e))?;
+        let mut vm = eldr::VM::new(bytecode)
+            .with_output_capture()
+            .with_error_capture();
+        vm.run().map_err(|e| format!("Runtime: {}", e))?;
+        Ok((
+            vm.output.unwrap_or_default(),
+            vm.error_output.unwrap_or_default(),
+        ))
+    }
+
     fn assert_output(source: &str, expected: &[&str]) {
         let output = run_surtr(source).expect("Pipeline failed");
         assert_eq!(output, expected, "\nSource:\n{}\n", source);
@@ -157,6 +172,54 @@ print(to_string(strs))"#,
     #[test]
     fn step6_mixed_list_error() {
         assert_compile_error(r#"mixed = [1, "two"]"#, "expected Int, got String");
+    }
+
+    // ── Step 6: Closure / partial application ──
+
+    #[test]
+    fn step6_closure_literal() {
+        assert_output(
+            r#"add1: (Int -> Int) = {|x| x + 1}
+print(to_string(add1(2)))"#,
+            &["3"],
+        );
+    }
+
+    #[test]
+    fn step6_builtin_capture() {
+        assert_output(
+            r#"printer = &print
+printer("hello")"#,
+            &["hello"],
+        );
+    }
+
+    #[test]
+    fn step6_higher_order_partial_application() {
+        assert_output(
+            r#"def inc(x: Int) -> Int { x + 1 }
+def times2(x: Int) -> Int { x * 2 }
+def compose(f: (Int -> Int), g: (Int -> Int), x: Int) -> Int {
+  g(f(x))
+}
+
+apply_inc = &compose(&inc)
+print(to_string(apply_inc(&times2, 10)))"#,
+            &["22"],
+        );
+    }
+
+    #[test]
+    fn step6_higher_order_partial_application_type_error() {
+        assert_compile_error(
+            r#"def inc(x: Int) -> Int { x + 1 }
+def compose(f: (Int -> Int), g: (Int -> Int), x: Int) -> Int {
+  g(f(x))
+}
+
+bad = &compose(inc(1))"#,
+            "expected (Int -> Int), got Int",
+        );
     }
 
     // ── Step 7: defstruct / defrecord ──
@@ -408,6 +471,36 @@ match err1 {
   Err(e)   => print("got error"),
 }"#;
         assert_output(source, &["got error"]);
+    }
+
+    #[test]
+    fn step9_deferror_interpolated_show() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"deferror PageNotFound(html: String) {
+  "Page Not Found. #{html}"
+}
+
+err_result: Result<Int> = Err(PageNotFound("404"))
+match err_result {
+  Ok(num) => print(to_string(num)),
+  Err(e)  => eprint(e),
+}"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(stderr, vec!["Error: PageNotFound: Page Not Found. 404"]);
+    }
+
+    #[test]
+    fn step9_deferror_cannot_bind_raw_error() {
+        assert_compile_error(
+            r#"deferror PageNotFound(html: String) {
+  "Page Not Found. #{html}"
+}
+
+bad = PageNotFound("404")"#,
+            "Error values must be wrapped with Err(...)",
+        );
     }
 
     #[test]

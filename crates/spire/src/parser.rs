@@ -330,16 +330,24 @@ impl Parser {
             // Block expression: { stmt; stmt; expr }
             Token::LBrace => {
                 self.advance();
-                let stmts = self.parse_block_stmts()?;
-                let end = self.expect(&Token::RBrace)?;
-                Ok(Ast::Block(
-                    Span {
-                        start: sp.start,
-                        end: end.end,
-                    },
-                    stmts,
-                ))
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Pipe) {
+                    self.parse_closure_literal(sp)
+                } else {
+                    let stmts = self.parse_block_stmts()?;
+                    let end = self.expect(&Token::RBrace)?;
+                    Ok(Ast::Block(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        stmts,
+                    ))
+                }
             }
+
+            // Capture / partial application: &foo, &foo(1)
+            Token::Amp => self.parse_capture_expr(sp),
 
             // Match expression
             Token::Match => self.parse_match_expr(),
@@ -513,6 +521,41 @@ impl Parser {
     fn parse_type(&mut self) -> Result<AstTy, ParseError> {
         let sp = self.peek_span();
 
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+            if matches!(self.peek(), Token::Arrow) {
+                self.advance();
+                let ret = self.parse_type()?;
+                let end = self.expect(&Token::RParen)?;
+                return Ok(AstTy::Func(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    Vec::new(),
+                    Box::new(ret),
+                ));
+            }
+
+            let mut params = Vec::new();
+            params.push(self.parse_type()?);
+            while matches!(self.peek(), Token::Comma) {
+                self.advance();
+                params.push(self.parse_type()?);
+            }
+            self.expect(&Token::Arrow)?;
+            let ret = self.parse_type()?;
+            let end = self.expect(&Token::RParen)?;
+            return Ok(AstTy::Func(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                params,
+                Box::new(ret),
+            ));
+        }
+
         // [Type] — list type
         if matches!(self.peek(), Token::LBrack) {
             self.advance();
@@ -554,6 +597,58 @@ impl Parser {
         }
 
         Ok(AstTy::Named(sp, name))
+    }
+
+    fn parse_closure_literal(&mut self, sp: Span) -> Result<Ast, ParseError> {
+        self.expect(&Token::Pipe)?;
+        self.skip_newlines();
+
+        let mut params = Vec::new();
+        if !matches!(self.peek(), Token::Pipe) {
+            loop {
+                let (name, pspan) = self.expect_ident()?;
+                params.push(ClosureParam { name, span: pspan });
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                break;
+            }
+        }
+
+        self.expect(&Token::Pipe)?;
+        self.skip_newlines();
+        let body = self.parse_expr()?;
+        self.skip_newlines();
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::Closure(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            params,
+            Box::new(body),
+        ))
+    }
+
+    fn parse_capture_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
+        self.expect(&Token::Amp)?;
+        let target = self.parse_primary()?;
+        let target_end = target.span().end;
+        let (func, args) = match target {
+            Ast::App(_, func, args) => (func, args),
+            other => (Box::new(other), Vec::new()),
+        };
+        Ok(Ast::Capture(
+            Span {
+                start: sp.start,
+                end: target_end,
+            },
+            func,
+            args,
+        ))
     }
 
     // ── Data definitions (step 7, 9) ──
@@ -1003,6 +1098,11 @@ fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
             Box::new(shift_ast_ty(*ok, delta)),
             err.map(|e| Box::new(shift_ast_ty(*e, delta))),
         ),
+        AstTy::Func(span, params, ret) => AstTy::Func(
+            shift_span(span, delta),
+            params.into_iter().map(|p| shift_ast_ty(p, delta)).collect(),
+            Box::new(shift_ast_ty(*ret, delta)),
+        ),
     }
 }
 
@@ -1157,6 +1257,22 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
             Box::new(shift_ast_span(*body, delta)),
         ),
+        Ast::Closure(span, params, body) => Ast::Closure(
+            shift_span(span, delta),
+            params
+                .into_iter()
+                .map(|p| ClosureParam {
+                    name: p.name,
+                    span: shift_span(p.span, delta),
+                })
+                .collect(),
+            Box::new(shift_ast_span(*body, delta)),
+        ),
+        Ast::Capture(span, target, args) => Ast::Capture(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*target, delta)),
+            args.into_iter().map(|a| shift_ast_span(a, delta)).collect(),
+        ),
         Ast::Semi(span, inner) => Ast::Semi(shift_span(span, delta), Box::new(shift_ast_span(*inner, delta))),
     }
 }
@@ -1182,6 +1298,8 @@ impl Ast {
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _)
             | Ast::Def(s, _, _, _, _)
+            | Ast::Closure(s, _, _)
+            | Ast::Capture(s, _, _)
             | Ast::Semi(s, _) => s,
         }
     }
@@ -1314,6 +1432,42 @@ def noop() {()}"#,
                 assert!(matches!(ok_ty.as_ref(), AstTy::Named(_, ref n) if n == "Int"));
             }
             _ => panic!("Expected annotated Bind with Result type"),
+        }
+    }
+
+    #[test]
+    fn test_function_type_and_closure_literal() {
+        let ast = parse("fun: (Int -> Unit) = {|val| do_something(val)}").unwrap();
+        match &ast[0] {
+            Ast::Bind(
+                _,
+                AstPattern::Annotated(_, _, AstTy::Func(_, params, ret)),
+                rhs,
+            ) => {
+                assert_eq!(params.len(), 1);
+                assert!(matches!(params[0], AstTy::Named(_, ref n) if n == "Int"));
+                assert!(matches!(ret.as_ref(), AstTy::Named(_, ref n) if n == "Unit"));
+                assert!(matches!(rhs.as_ref(), Ast::Closure(_, params, body) if params.len() == 1 && matches!(body.as_ref(), Ast::App(_, _, _))));
+            }
+            _ => panic!("Expected annotated Bind with function type and closure"),
+        }
+    }
+
+    #[test]
+    fn test_capture_and_zero_arg_closure() {
+        let ast = parse("f = &print\nnoop: (-> Unit) = {|| print(\"x\")}").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Ast::Capture(_, target, args) if args.is_empty() && matches!(target.as_ref(), Ast::Var(_, ref n) if n == "print")));
+            }
+            _ => panic!("Expected Capture"),
+        }
+        match &ast[1] {
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Func(_, params, _)), rhs) => {
+                assert!(params.is_empty());
+                assert!(matches!(rhs.as_ref(), Ast::Closure(_, params, _) if params.is_empty()));
+            }
+            _ => panic!("Expected zero-arg closure"),
         }
     }
 

@@ -8,6 +8,10 @@ pub enum Opcode {
     // ── Constants & locals ──
     /// Push a constant from the pool onto the stack.
     LoadConst(u32),
+    /// Push a builtin function reference onto the stack.
+    LoadBuiltinRef(u16),
+    /// Push a user-defined function reference onto the stack.
+    LoadFunctionRef(u32),
     /// Load a local variable onto the stack.
     LoadLocal(u32),
     /// Pop the stack and store into a local variable slot.
@@ -79,7 +83,15 @@ pub enum Opcode {
 
     // ── User-defined function call ──
     /// Call a user-defined function by function table index with the given arity.
-    Call(u32, u8),
+    /// The trailing span is the call-site span in source offsets.
+    Call(u32, u8, u32, u32),
+    /// Create a closure from a function reference and captured values.
+    MakeClosure(u8),
+    /// Create an error value from a rendered message string.
+    MakeError(u32),
+    /// Call a callable value on the stack with the given arity.
+    /// The trailing span is the call-site span in source offsets.
+    CallClosure(u8, u32, u32),
 
     // ── Control flow ──
     /// Unconditional jump to absolute address.

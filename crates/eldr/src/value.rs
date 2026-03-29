@@ -10,7 +10,22 @@ pub enum Value {
     Unit,
     List(Vec<Value>),
     Tagged { tag: u32, fields: Vec<Value> },
+    Callable(Callable),
     Error(Box<RichError>),
+}
+
+/// Callable runtime value.
+#[derive(Debug, Clone)]
+pub struct Callable {
+    pub target: CallableTarget,
+    pub captured: Vec<Value>,
+}
+
+/// Callable target reference.
+#[derive(Debug, Clone)]
+pub enum CallableTarget {
+    Builtin(u16),
+    Function(u32),
 }
 
 impl Value {
@@ -90,6 +105,12 @@ impl Value {
                     }
                 }
             }
+            Value::Callable(callable) => match &callable.target {
+                CallableTarget::Builtin(id) => format!("<builtin:{}>", id),
+                CallableTarget::Function(fun_idx) => {
+                    format!("<function:{}; captured={}>", fun_idx, callable.captured.len())
+                }
+            },
             Value::Error(rich) => {
                 format!("{}", rich.message)
             }

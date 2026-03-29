@@ -104,6 +104,50 @@ fn run_eldr_matches_run_srt_output() {
 }
 
 #[test]
+fn run_source_error_points_to_generation_site() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_deferror_location");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"deferror PageNotFound(html: String) {
+  "Page Not Found. #{html}"
+}
+
+err_result: Result<Int> = Err(PageNotFound("404"))
+match err_result {
+  Ok(num) => print(to_string(num)),
+  Err(e)  => eprint(e)
+}"#,
+    );
+    let output = Command::new(&bin)
+        .args(["run", source_path.to_str().expect("source path must be utf-8")])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("sample.srt:5:"),
+        "expected error to point at generation site on line 5, got:\n{}",
+        stderr
+    );
+    assert!(
+        !stderr.contains("deferror PageNotFound"),
+        "did not expect the definition site to be the primary focus, got:\n{}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn build_uses_default_eldr_output_path() {
     let temp = unique_temp_dir("surtr_step1_default_path");
     let source_path = temp.join("default_out.srt");

@@ -1,10 +1,8 @@
-deferror MyError {
-  "something went wrong"
-}
+deferror MyError {"something went wrong"}
+deferror PageNotFound(html: String) {"Page Not Found. #{html}"}
 
-err_result: Result<Int> = Ok(1)
-num = 9
-match num {
-  10 => print(to_string(num)),
-  _  => print("not 10")
+err_result: Result<Int> = Err(PageNotFound("index.html"))
+match err_result {
+  Ok(num) => print(to_string(num)),
+  Err(e)  => eprint(e)
 }

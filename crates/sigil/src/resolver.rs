@@ -1,6 +1,8 @@
 #![allow(unused_imports)]
 
-use spire::ast::{Ast, AstPattern, BinOp, FunParam, Lit, Span};
+use std::collections::HashSet;
+
+use spire::ast::{Ast, AstPattern, BinOp, ClosureParam, FunParam, Lit, Span};
 
 use crate::error::ResolveError;
 use crate::resolved::*;
@@ -208,6 +210,7 @@ impl Resolver {
                 let rfields = fields
                     .into_iter()
                     .map(|f| ResolvedField {
+                        id: None,
                         name: f.name,
                         ty: f.ty,
                         span: f.span,
@@ -226,6 +229,7 @@ impl Resolver {
                 let rfields = fields
                     .into_iter()
                     .map(|f| ResolvedField {
+                        id: None,
                         name: f.name,
                         ty: f.ty,
                         span: f.span,
@@ -241,15 +245,25 @@ impl Resolver {
                     unique_id: uid,
                     span: span.clone(),
                 };
-                let rfields = fields
-                    .into_iter()
-                    .map(|f| ResolvedField {
+                let mut error_scope = self.scope.clone();
+                let mut rfields = Vec::new();
+                for f in fields {
+                    let uid = error_scope.define(&f.name, f.span.clone());
+                    rfields.push(ResolvedField {
+                        id: Some(ResolvedId {
+                            name: f.name.clone(),
+                            unique_id: uid,
+                            span: f.span.clone(),
+                        }),
                         name: f.name,
                         ty: f.ty,
                         span: f.span,
-                    })
-                    .collect();
-                let resolved_show = self.resolve_node(*show_expr)?;
+                    });
+                }
+                let mut show_resolver = Resolver::with_scope(error_scope);
+                let resolved_show = show_resolver.resolve_node(*show_expr)?;
+                self.scope
+                    .advance_next_id_to(show_resolver.scope.next_id());
                 Ok(Resolved::DeferrorDef(
                     span,
                     rid,
@@ -285,6 +299,48 @@ impl Resolver {
                     resolved_params,
                     ret_ty,
                     Box::new(resolved_body),
+                ))
+            }
+
+            Ast::Closure(span, params, body) => {
+                let mut closure_scope = self.scope.clone();
+                let mut resolved_params = Vec::new();
+                for param in params {
+                    let uid = closure_scope.define(&param.name, param.span.clone());
+                    resolved_params.push(ResolvedClosureParam {
+                        id: ResolvedId {
+                            name: param.name,
+                            unique_id: uid,
+                            span: param.span,
+                        },
+                    });
+                }
+
+                let mut body_resolver = Resolver::with_scope(closure_scope);
+                let resolved_body = body_resolver.resolve_node(*body)?;
+                self.scope
+                    .advance_next_id_to(body_resolver.scope.next_id());
+
+                let captures = collect_captures(&resolved_body, &resolved_params);
+
+                Ok(Resolved::Closure(
+                    span,
+                    resolved_params,
+                    captures,
+                    Box::new(resolved_body),
+                ))
+            }
+
+            Ast::Capture(span, target, args) => {
+                let resolved_target = self.resolve_node(*target)?;
+                let resolved_args = args
+                    .into_iter()
+                    .map(|arg| self.resolve_node(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Resolved::Capture(
+                    span,
+                    Box::new(resolved_target),
+                    resolved_args,
                 ))
             }
 
@@ -459,6 +515,146 @@ impl Resolver {
     }
 }
 
+fn collect_captures(body: &Resolved, params: &[ResolvedClosureParam]) -> Vec<ResolvedId> {
+    let mut bound = HashSet::new();
+    for param in params {
+        bound.insert(param.id.unique_id);
+    }
+    let mut free = Vec::new();
+    collect_captures_inner(body, &mut bound, &mut free);
+    free
+}
+
+fn collect_captures_inner(
+    node: &Resolved,
+    bound: &mut HashSet<u32>,
+    free: &mut Vec<ResolvedId>,
+) {
+    match node {
+        Resolved::Lit(_, _) => {}
+        Resolved::Var(_, id) => {
+            if !bound.contains(&id.unique_id) && !free.iter().any(|seen| seen.unique_id == id.unique_id) {
+                free.push(id.clone());
+            }
+        }
+        Resolved::App(_, func, args) => {
+            collect_captures_inner(func, bound, free);
+            for arg in args {
+                collect_captures_inner(arg, bound, free);
+            }
+        }
+        Resolved::Block(_, stmts) => {
+            let mut local_bound = bound.clone();
+            for stmt in stmts {
+                collect_captures_inner(stmt, &mut local_bound, free);
+                match stmt {
+                    Resolved::Bind(_, pat, _) => match pat {
+                        ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
+                            local_bound.insert(id.unique_id);
+                        }
+                        ResolvedPattern::Wildcard(_) => {}
+                    },
+                    Resolved::Def(_, id, params, _, _) => {
+                        local_bound.insert(id.unique_id);
+                        for param in params {
+                            local_bound.insert(param.id.unique_id);
+                        }
+                    }
+                    Resolved::Closure(_, params, _, _) => {
+                        for param in params {
+                            local_bound.insert(param.id.unique_id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Resolved::Bind(_, pat, rhs) => {
+            collect_captures_inner(rhs, bound, free);
+            match pat {
+                ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
+                    bound.insert(id.unique_id);
+                }
+                ResolvedPattern::Wildcard(_) => {}
+            }
+        }
+        Resolved::BinOp(_, _, left, right) => {
+            collect_captures_inner(left, bound, free);
+            collect_captures_inner(right, bound, free);
+        }
+        Resolved::List(_, elems) => {
+            for elem in elems {
+                collect_captures_inner(elem, bound, free);
+            }
+        }
+        Resolved::InterpolatedStr(_, parts) => {
+            for part in parts {
+                if let ResolvedInterpolatedPart::Expr(expr) = part {
+                    collect_captures_inner(expr, bound, free);
+                }
+            }
+        }
+        Resolved::If(_, cond, then, else_opt) => {
+            collect_captures_inner(cond, bound, free);
+            collect_captures_inner(then, bound, free);
+            if let Some(else_branch) = else_opt {
+                collect_captures_inner(else_branch, bound, free);
+            }
+        }
+        Resolved::Match(_, scrutinee, arms) => {
+            collect_captures_inner(scrutinee, bound, free);
+            for (pat, body) in arms {
+                let mut arm_bound = bound.clone();
+                if let ResolvedMatchPattern::Constructor(_, _, Some(inner)) = pat {
+                    arm_bound.insert(inner.unique_id);
+                }
+                collect_captures_inner(body, &mut arm_bound, free);
+            }
+        }
+        Resolved::FieldAccess(_, expr, _) => collect_captures_inner(expr, bound, free),
+        Resolved::StructLit(_, _, fields) => {
+            for (_, expr) in fields {
+                collect_captures_inner(expr, bound, free);
+            }
+        }
+        Resolved::ConstructorCall(_, _, args) => {
+            for arg in args {
+                match arg {
+                    ResolvedRecordLitArg::Positional(expr) => {
+                        collect_captures_inner(expr, bound, free)
+                    }
+                    ResolvedRecordLitArg::Named(_, expr) => {
+                        collect_captures_inner(expr, bound, free)
+                    }
+                }
+            }
+        }
+        Resolved::StructDef(_, _, _) | Resolved::RecordDef(_, _, _) | Resolved::DeferrorDef(_, _, _, _) => {}
+        Resolved::Def(_, id, params, _, body) => {
+            let mut fun_bound = bound.clone();
+            fun_bound.insert(id.unique_id);
+            for param in params {
+                fun_bound.insert(param.id.unique_id);
+            }
+            collect_captures_inner(body, &mut fun_bound, free);
+        }
+        Resolved::Closure(_, _, captures, _) => {
+            for cap in captures {
+                if !free.iter().any(|seen| seen.unique_id == cap.unique_id) {
+                    free.push(cap.clone());
+                }
+            }
+        }
+        Resolved::Capture(_, target, args) => {
+            collect_captures_inner(target, bound, free);
+            for arg in args {
+                collect_captures_inner(arg, bound, free);
+            }
+        }
+        Resolved::Semi(_, inner) => collect_captures_inner(inner, bound, free),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,6 +766,37 @@ x = match s {
                 _ => panic!("Expected Match"),
             },
             _ => panic!("Expected Bind with Match"),
+        }
+    }
+
+    #[test]
+    fn test_closure_and_capture_resolution() {
+        let resolved = parse_and_resolve(
+            r#"x = 1
+f = {|y| x + y}
+g = &print(1)"#,
+        )
+        .unwrap();
+        match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Closure(_, params, captures, body) => {
+                    assert_eq!(params.len(), 1);
+                    assert_eq!(captures.len(), 1);
+                    assert!(matches!(body.as_ref(), Resolved::BinOp(_, BinOp::Add, _, _)));
+                }
+                _ => panic!("Expected Closure"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+        match &resolved[2] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Capture(_, target, args) => {
+                    assert_eq!(args.len(), 1);
+                    assert!(matches!(target.as_ref(), Resolved::Var(_, id) if id.name == "print"));
+                }
+                _ => panic!("Expected Capture"),
+            },
+            _ => panic!("Expected Bind"),
         }
     }
 }

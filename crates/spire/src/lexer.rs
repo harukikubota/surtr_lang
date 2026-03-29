@@ -221,6 +221,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             ':' => Token::Colon,
             '.' => Token::Dot,
             ';' => Token::Semicolon,
+            '|' => Token::Pipe,
+            '&' => Token::Amp,
             _ => {
                 return Err(ParseError::syntax(
                     format!("Unexpected character: '{}'", c),

@@ -206,7 +206,23 @@ impl Checker {
             }
 
             Resolved::Bind(span, pat, rhs) => {
-                let typed_rhs = self.check_node(rhs)?;
+                let typed_rhs = if let (
+                    ResolvedPattern::Annotated(_, ast_ty),
+                    Resolved::Closure(cspan, params, captures, body),
+                ) = (pat, rhs.as_ref())
+                {
+                    let expected = self.resolve_ast_ty(ast_ty)?;
+                    self.check_closure(cspan, params, captures, body, Some(&expected))?
+                } else {
+                    self.check_node(rhs)?
+                };
+                if matches!(typed_rhs.ty, Ty::Error) {
+                    return Err(TypeError {
+                        message: "Error values must be wrapped with Err(...)".into(),
+                        span: typed_rhs.span.clone(),
+                        hint: None,
+                    });
+                }
                 let (typed_pat, pat_ty) = self.check_pattern(pat, &typed_rhs.ty, span)?;
 
                 // Store the binding type in env
@@ -277,6 +293,10 @@ impl Checker {
             Resolved::Def(span, id, params, ret_ty, body) => {
                 self.check_def(span, id, params, ret_ty, body)
             }
+            Resolved::Closure(span, params, captures, body) => {
+                self.check_closure(span, params, captures, body, None)
+            }
+            Resolved::Capture(span, target, args) => self.check_capture(span, target, args),
         }
     }
 
@@ -334,6 +354,14 @@ impl Checker {
                 };
                 Ok(Ty::Result(Box::new(ok), Box::new(err)))
             }
+            AstTy::Func(_, params, ret) => {
+                let params = params
+                    .iter()
+                    .map(|p| self.resolve_ast_ty(p))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ret = self.resolve_ast_ty(ret)?;
+                Ok(Ty::Func(params, Box::new(ret)))
+            }
         }
     }
 
@@ -347,6 +375,14 @@ impl Checker {
             | (Ty::Unit, Ty::Unit)
             | (Ty::Error, Ty::Error) => true,
             (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
+            (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
+                a_params.len() == b_params.len()
+                    && a_params
+                        .iter()
+                        .zip(b_params.iter())
+                        .all(|(a, b)| self.types_compatible(a, b))
+                    && self.types_compatible(a_ret, b_ret)
+            }
             (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
                 self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
             }
@@ -368,7 +404,21 @@ impl Checker {
             Ty::Result(ok, _) => format!("Result<{}>", self.ty_name(ok)),
             Ty::Var(n) => format!("${}", n),
             Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
-            Ty::Func(_, ret) => format!("Func -> {}", self.ty_name(ret)),
+            Ty::Func(params, ret) => format!(
+                "{}",
+                {
+                    let param_str = params
+                        .iter()
+                        .map(|ty| self.ty_name(ty))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    if param_str.is_empty() {
+                        format!("(-> {})", self.ty_name(ret))
+                    } else {
+                        format!("({} -> {})", param_str, self.ty_name(ret))
+                    }
+                }
+            ),
             Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
             Ty::UserFunc { .. } => "UserFunc".into(),
         }
@@ -545,11 +595,177 @@ impl Checker {
                     node: TypedInner::App(Box::new(typed_func), typed_args),
                 })
             }
+            Ty::Func(params, ret) => {
+                if typed_args.len() != params.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "function expects {} argument(s), got {}",
+                            params.len(),
+                            typed_args.len()
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                for (param, arg) in params.iter().zip(&typed_args) {
+                    if !self.types_compatible(param, &arg.ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "Argument type mismatch: expected {}, got {}",
+                                self.ty_name(param),
+                                self.ty_name(&arg.ty)
+                            ),
+                            span: arg.span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+
+                Ok(TypedNode {
+                    ty: ret.as_ref().clone(),
+                    span: span.clone(),
+                    node: TypedInner::App(Box::new(typed_func), typed_args),
+                })
+            }
             _ => Err(TypeError {
                 message: format!("Not a function: {}", self.ty_name(&typed_func.ty)),
                 span: span.clone(),
                 hint: None,
             }),
+        }
+    }
+
+    fn check_closure(
+        &mut self,
+        span: &Span,
+        params: &[ResolvedClosureParam],
+        captures: &[ResolvedId],
+        body: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let mut fun_env = self.env.clone();
+        let mut typed_params = Vec::new();
+        let param_tys = match expected {
+            Some(Ty::Func(expected_params, _)) => {
+                if expected_params.len() != params.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "closure expects {} parameter(s), got {}",
+                            expected_params.len(),
+                            params.len()
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                expected_params.clone()
+            }
+            Some(other) => {
+                return Err(TypeError {
+                    message: format!("Expected function type, got {}", self.ty_name(other)),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            None => params.iter().map(|_| self.env.fresh_tyvar()).collect(),
+        };
+
+        for (param, param_ty) in params.iter().zip(param_tys.iter()) {
+            fun_env.bind_var(param.id.unique_id, param_ty.clone());
+            typed_params.push(TypedClosureParam {
+                id: param.id.clone(),
+                ty: param_ty.clone(),
+            });
+        }
+
+        for capture in captures {
+            if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
+                fun_env.bind_var(capture.unique_id, ty);
+            }
+        }
+
+        let mut body_checker = Checker::with_env(fun_env);
+        let typed_body = body_checker.check_node(body)?;
+        self.env.next_tyvar = self.env.next_tyvar.max(body_checker.env.next_tyvar);
+        self.env.next_tag = self.env.next_tag.max(body_checker.env.next_tag);
+
+        let param_tys = typed_params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>();
+        Ok(TypedNode {
+            ty: Ty::Func(param_tys, Box::new(typed_body.ty.clone())),
+            span: span.clone(),
+            node: TypedInner::Closure(typed_params, captures.to_vec(), Box::new(typed_body)),
+        })
+    }
+
+    fn check_capture(
+        &mut self,
+        span: &Span,
+        target: &Resolved,
+        args: &[Resolved],
+    ) -> Result<TypedNode, TypeError> {
+        let typed_target = self.check_node(target)?;
+        let typed_args: Vec<TypedNode> = args
+            .iter()
+            .map(|a| self.check_node(a))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let (params, ret) = match &typed_target.ty {
+            Ty::BuiltinFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
+            Ty::UserFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
+            Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
+            other => {
+                return Err(TypeError {
+                    message: format!("Not a function: {}", self.ty_name(other)),
+                    span: typed_target.span.clone(),
+                    hint: None,
+                });
+            }
+        };
+
+        if typed_args.len() > params.len() {
+            return Err(TypeError {
+                message: format!(
+                    "partial application expects at most {} argument(s), got {}",
+                    params.len(),
+                    typed_args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        for (param, arg) in params.iter().zip(&typed_args) {
+            if !self.types_compatible(param, &arg.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "Argument type mismatch: expected {}, got {}",
+                        self.ty_name(param),
+                        self.ty_name(&arg.ty)
+                    ),
+                    span: arg.span.clone(),
+                    hint: None,
+                });
+            }
+        }
+
+        let remaining = params[typed_args.len()..].to_vec();
+        Ok(TypedNode {
+            ty: Ty::Func(remaining, Box::new(ret)),
+            span: span.clone(),
+            node: TypedInner::Capture(Box::new(typed_target), typed_args),
+        })
+    }
+
+    fn maybe_call_zero_arg_function(&self, node: TypedNode, _call_span: Span) -> TypedNode {
+        match &node.ty {
+            Ty::BuiltinFunc { params, ret, .. }
+            | Ty::UserFunc { params, ret, .. }
+            | Ty::Func(params, ret) if params.is_empty() => TypedNode {
+                ty: ret.as_ref().clone(),
+                span: node.span.clone(),
+                node: TypedInner::App(Box::new(node), Vec::new()),
+            },
+            _ => node,
         }
     }
 
@@ -1211,6 +1427,67 @@ impl Checker {
         id: &ResolvedId,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
+        if let Some(ty) = self.env.lookup_var(id.unique_id).cloned() {
+            match &ty {
+                Ty::BuiltinFunc { name, .. } if name == "Ok" || name == "Err" => {}
+                Ty::BuiltinFunc { params, ret, .. }
+                | Ty::UserFunc { params, ret, .. }
+                | Ty::Func(params, ret) => {
+                    if args.len() != params.len() {
+                        return Err(TypeError {
+                            message: format!(
+                                "function expects {} argument(s), got {}",
+                                params.len(),
+                                args.len()
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+
+                    let mut typed_args = Vec::new();
+                    for (param_ty, arg) in params.iter().zip(args) {
+                        let typed_val = match arg {
+                            ResolvedRecordLitArg::Positional(expr) => self.check_node(expr)?,
+                            ResolvedRecordLitArg::Named(_, _) => {
+                                return Err(TypeError {
+                                    message: "Function calls do not accept named arguments".into(),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
+                            }
+                        };
+                        if !self.types_compatible(param_ty, &typed_val.ty) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "Argument type mismatch: expected {}, got {}",
+                                    self.ty_name(param_ty),
+                                    self.ty_name(&typed_val.ty)
+                                ),
+                                span: typed_val.span.clone(),
+                                hint: None,
+                            });
+                        }
+                        typed_args.push(typed_val);
+                    }
+
+                    return Ok(TypedNode {
+                        ty: ret.as_ref().clone(),
+                        span: span.clone(),
+                        node: TypedInner::App(
+                            Box::new(TypedNode {
+                                ty: ty.clone(),
+                                span: id.span.clone(),
+                                node: TypedInner::Var(id.clone()),
+                            }),
+                            typed_args,
+                        ),
+                    });
+                }
+                _ => {}
+            }
+        }
+
         if id.name == "Ok" || id.name == "Err" {
             if args.len() != 1 {
                 return Err(TypeError {
@@ -1220,7 +1497,10 @@ impl Checker {
                 });
             }
             let inner = match &args[0] {
-                ResolvedRecordLitArg::Positional(expr) => self.check_node(expr)?,
+                ResolvedRecordLitArg::Positional(expr) => {
+                    let typed = self.check_node(expr)?;
+                    self.maybe_call_zero_arg_function(typed, span.clone())
+                }
                 ResolvedRecordLitArg::Named(_, _) => {
                     return Err(TypeError {
                         message: format!("{} does not accept named arguments", id.name),
@@ -1382,20 +1662,60 @@ impl Checker {
         fields: &[ResolvedField],
         show_expr: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let ty_fields: Vec<(String, Ty)> = fields
+        let ty_fields: Vec<(Ty, ResolvedId)> = fields
             .iter()
-            .map(|f| Ok((f.name.clone(), self.resolve_ast_ty(&f.ty)?)))
+            .map(|f| {
+                let ty = self.resolve_ast_ty(&f.ty)?;
+                let id = f.id.clone().ok_or_else(|| TypeError {
+                    message: format!("Missing resolved field id for {}", f.name),
+                    span: f.span.clone(),
+                    hint: None,
+                })?;
+                Ok((ty, id))
+            })
             .collect::<Result<Vec<_>, TypeError>>()?;
 
-        let tag =
-            self.env
-                .register_type_def(id.name.clone(), crate::env::TypeKind::Error, ty_fields);
+        let tag = self.env.register_type_def(
+            id.name.clone(),
+            crate::env::TypeKind::Error,
+            ty_fields
+                .iter()
+                .map(|(ty, rid)| (rid.name.clone(), ty.clone()))
+                .collect(),
+        );
 
-        // The error type name itself acts as a value (for no-arg errors) or constructor
-        self.env.bind_var(id.unique_id, Ty::Error);
+        let fun_idx = self.env.next_fun_idx;
+        self.env.next_fun_idx += 1;
 
-        // Check show expression type is String
-        let typed_show = self.check_node(show_expr)?;
+        let mut show_env = self.env.clone();
+        let typed_params: Vec<TypedFunParam> = ty_fields
+            .iter()
+            .map(|(ty, resolved_id)| {
+                show_env.bind_var(resolved_id.unique_id, ty.clone());
+                TypedFunParam {
+                    id: resolved_id.clone(),
+                    ty: ty.clone(),
+                }
+            })
+            .collect();
+
+        // The error builder behaves like a function returning Error.
+        self.env.bind_var(
+            id.unique_id,
+            Ty::UserFunc {
+                fun_idx,
+                params: typed_params.iter().map(|p| p.ty.clone()).collect(),
+                ret: Box::new(Ty::Error),
+            },
+        );
+
+        for (ty, resolved_id) in &ty_fields {
+            show_env.bind_var(resolved_id.unique_id, ty.clone());
+        }
+        let mut show_checker = Checker::with_env(show_env);
+        let typed_show = show_checker.check_node(show_expr)?;
+        self.env.next_tyvar = self.env.next_tyvar.max(show_checker.env.next_tyvar);
+        self.env.next_tag = self.env.next_tag.max(show_checker.env.next_tag);
         if !self.types_compatible(&Ty::Str, &typed_show.ty) {
             return Err(TypeError {
                 message: format!(
@@ -1410,7 +1730,13 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::DeferrorDef(tag, id.clone(), Box::new(typed_show)),
+            node: TypedInner::DeferrorDef(
+                tag,
+                fun_idx,
+                id.clone(),
+                typed_params,
+                Box::new(typed_show),
+            ),
         })
     }
 }

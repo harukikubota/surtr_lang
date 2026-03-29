@@ -34,11 +34,17 @@ pub enum TypedInner {
     /// Constructor call — tag + field values (in definition order)
     ConstructorCall(u32, Vec<TypedNode>),
 
-    /// Error type definition — tag + binding id + show expression
-    DeferrorDef(u32, ResolvedId, Box<TypedNode>),
+    /// Error type definition — tag + binding id + params + show expression
+    DeferrorDef(u32, u32, ResolvedId, Vec<TypedFunParam>, Box<TypedNode>),
 
     /// Function definition — tag + name + params + return type + body
     Def(u32, ResolvedId, Vec<TypedFunParam>, Ty, Box<TypedNode>),
+
+    /// Closure literal — params + captures + body
+    Closure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
+
+    /// Captured function / partial application
+    Capture(Box<TypedNode>, Vec<TypedNode>),
 
     /// Struct definition — tag + name + field names (for TypeRegistry)
     StructDef(u32, String, Vec<String>),
@@ -82,6 +88,13 @@ pub enum TypedMatchPattern {
 /// Function parameter (typed).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedFunParam {
+    pub id: ResolvedId,
+    pub ty: Ty,
+}
+
+/// Typed closure parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedClosureParam {
     pub id: ResolvedId,
     pub ty: Ty,
 }

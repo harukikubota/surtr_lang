@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use scar::typed::*;
 use scar::types::Ty;
+use sigil::resolved::ResolvedId;
 use spire::ast::{BinOp, Lit, Span};
 
 use crate::bytecode::*;
@@ -59,6 +60,7 @@ struct CodegenState {
     constants: Vec<Constant>,
     slot_map: HashMap<u32, u32>, // unique_id → local slot
     next_slot: u32,
+    next_fun_idx: u32,
     type_registry: TypeRegistry,
     error_templates: Vec<ErrTemplate>,
     functions: Vec<FunctionEntry>,
@@ -70,6 +72,7 @@ impl CodegenState {
             constants: Vec::new(),
             slot_map: HashMap::new(),
             next_slot: 0,
+            next_fun_idx: 0,
             type_registry: TypeRegistry::new(),
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -122,6 +125,7 @@ impl ForgeSession {
         let new_constants = after.constants[before.constants.len()..].to_vec();
         let new_locals = after.next_slot.saturating_sub(before.next_slot) as usize;
         let type_entries = after.type_registry.entries[before.type_registry.entries.len()..].to_vec();
+        let error_templates = after.error_templates[before.error_templates.len()..].to_vec();
         let meta = collect_chunk_meta(&typed_for_meta, &after.slot_map);
         let functions = after.functions[before.functions.len()..].to_vec();
 
@@ -133,6 +137,7 @@ impl ForgeSession {
                 constants: new_constants,
                 new_locals,
                 type_entries,
+                error_templates,
                 functions,
             },
             meta,
@@ -182,12 +187,13 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
                         .collect(),
                 });
             }
-            TypedInner::DeferrorDef(_, id, _) => {
+            TypedInner::DeferrorDef(_, _, id, _, _) => {
                 type_defs.push(TypeDefDisplay {
                     name: id.name.clone(),
                     kind: ReplTypeKind::Error,
                     fields: Vec::new(),
                 });
+                function_defs.push(id.name.clone());
             }
             TypedInner::Def(_, id, _, _, _) => {
                 function_defs.push(id.name.clone());
@@ -215,15 +221,18 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
         Ty::Error => "Error".into(),
         Ty::Var(id) => format!("${}", id),
-        Ty::Func(params, ret) => format!(
-            "({}) -> {}",
-            params
+        Ty::Func(params, ret) => {
+            let param_str = params
                 .iter()
                 .map(ty_to_string)
                 .collect::<Vec<_>>()
-                .join(", "),
-            ty_to_string(ret)
-        ),
+                .join(", ");
+            if param_str.is_empty() {
+                format!("(-> {})", ty_to_string(ret))
+            } else {
+                format!("({} -> {})", param_str, ty_to_string(ret))
+            }
+        }
         Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
         Ty::UserFunc { .. } => "UserFunc".into(),
     }
@@ -246,11 +255,20 @@ enum IrOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Label(u32);
 
+#[derive(Debug, Clone)]
+struct PendingClosure {
+    fun_idx: u32,
+    captures: Vec<ResolvedId>,
+    params: Vec<TypedClosureParam>,
+    body: Box<TypedNode>,
+}
+
 struct Codegen {
     ir: Vec<IrOp>,
     state: CodegenState,
     next_label: u32,
     label_positions: HashMap<Label, usize>, // label → IR index it points to
+    pending_closures: Vec<PendingClosure>,
 }
 
 impl Codegen {
@@ -264,6 +282,7 @@ impl Codegen {
             state,
             next_label: 0,
             label_positions: HashMap::new(),
+            pending_closures: Vec::new(),
         }
     }
 
@@ -281,6 +300,113 @@ impl Codegen {
         self.state.next_slot += 1;
         self.state.slot_map.insert(unique_id, slot);
         slot
+    }
+
+    fn reserve_fun_idx(&mut self) -> u32 {
+        let fun_idx = self.state.next_fun_idx;
+        self.state.next_fun_idx += 1;
+        fun_idx
+    }
+
+    fn builtin_id(name: &str) -> Option<u16> {
+        match name {
+            "print" => Some(0),
+            "to_string" => Some(1),
+            "eprint" => Some(2),
+            _ => None,
+        }
+    }
+
+    fn emit_callable_ref(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
+        match &node.node {
+            TypedInner::Var(id) => match &node.ty {
+                Ty::BuiltinFunc { name, .. } => {
+                    let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                        message: format!("Unknown builtin: {}", name),
+                        span: node.span.clone(),
+                    })?;
+                    self.emit(Opcode::LoadBuiltinRef(builtin_id));
+                }
+                Ty::UserFunc { fun_idx, .. } => {
+                    self.emit(Opcode::LoadFunctionRef(*fun_idx));
+                }
+                Ty::Func(_, _) => {
+                    let slot = self.alloc_slot(id.unique_id);
+                    self.emit(Opcode::LoadLocal(slot));
+                }
+                _ => {
+                    return Err(CodegenError {
+                        message: "Not a callable value".into(),
+                        span: node.span.clone(),
+                    });
+                }
+            },
+            _ => {
+                self.emit_node(node)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_closure_function(
+        &mut self,
+        fun_idx: u32,
+        params: &[TypedClosureParam],
+        captures: &[ResolvedId],
+        body: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        let saved_slot_map = self.state.slot_map.clone();
+        let saved_next_slot = self.state.next_slot;
+
+        self.state.slot_map = HashMap::new();
+        self.state.next_slot = 0;
+
+        let mut slot = 0u32;
+        for capture in captures {
+            self.state.slot_map.insert(capture.unique_id, slot);
+            slot += 1;
+        }
+        for param in params {
+            self.state.slot_map.insert(param.id.unique_id, slot);
+            slot += 1;
+        }
+        self.state.next_slot = slot;
+
+        let entry_pc = self.current_pos() as u32;
+        let total_arity = captures.len() + params.len();
+        self.emit(Opcode::MakeFrame(total_arity as u32));
+        for slot in (0..total_arity).rev() {
+            self.emit(Opcode::StoreLocal(slot as u32));
+        }
+        self.emit_node(body)?;
+        self.emit(Opcode::PopFrame);
+        self.emit(Opcode::Return);
+
+        self.state.functions.push(FunctionEntry {
+            fun_idx,
+            entry_pc,
+            num_locals: self.state.next_slot,
+            arity: total_arity as u8,
+        });
+
+        self.state.slot_map = saved_slot_map;
+        self.state.next_slot = saved_next_slot;
+        Ok(())
+    }
+
+    fn emit_pending_closures(&mut self) -> Result<(), CodegenError> {
+        while !self.pending_closures.is_empty() {
+            let pending = std::mem::take(&mut self.pending_closures);
+            for closure in pending {
+                self.emit_closure_function(
+                    closure.fun_idx,
+                    &closure.params,
+                    &closure.captures,
+                    &closure.body,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     fn add_constant(&mut self, c: Constant) -> u32 {
@@ -334,10 +460,33 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         let mut defs = Vec::new();
         let mut main_stmts = Vec::new();
+        let max_def_fun_idx = stmts
+            .iter()
+            .filter_map(|stmt| match &stmt.node {
+                TypedInner::Def(fun_idx, _, _, _, _) => Some(*fun_idx),
+                TypedInner::DeferrorDef(_, fun_idx, _, _, _) => Some(*fun_idx),
+                _ => None,
+            })
+            .max()
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        let existing_fun_idx = self
+            .state
+            .functions
+            .iter()
+            .map(|entry| entry.fun_idx)
+            .max()
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        self.state.next_fun_idx = self
+            .state
+            .next_fun_idx
+            .max(max_def_fun_idx)
+            .max(existing_fun_idx);
 
         for stmt in &stmts {
             match &stmt.node {
-                TypedInner::Def(..) => defs.push(stmt),
+                TypedInner::Def(..) | TypedInner::DeferrorDef(..) => defs.push(stmt),
                 _ => main_stmts.push(stmt),
             }
         }
@@ -352,8 +501,14 @@ impl Codegen {
         self.emit(Opcode::Halt);
 
         for def in defs {
-            self.emit_function_def(def)?;
+            match &def.node {
+                TypedInner::Def(..) => self.emit_function_def(def)?,
+                TypedInner::DeferrorDef(..) => self.emit_error_def(def)?,
+                _ => unreachable!(),
+            }
         }
+
+        self.emit_pending_closures()?;
 
         Ok(())
     }
@@ -396,11 +551,71 @@ impl Codegen {
             num_locals,
             arity: params.len() as u8,
         });
+        self.state.next_fun_idx = self.state.next_fun_idx.max(*fun_idx + 1);
 
         self.state.slot_map = saved_slot_map;
         self.state.next_slot = saved_next_slot;
 
         let _ = id;
+        Ok(())
+    }
+
+    fn emit_error_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
+        let (_tag, fun_idx, id, params, body) = match &node.node {
+            TypedInner::DeferrorDef(tag, fun_idx, id, params, body) => {
+                (tag, fun_idx, id, params, body)
+            }
+            _ => {
+                return Err(CodegenError {
+                    message: "expected error definition".into(),
+                    span: node.span.clone(),
+                });
+            }
+        };
+
+        let template_id = self.state.error_templates.len() as u32;
+        self.state.error_templates.push(ErrTemplate {
+            id: template_id,
+            kind: id.name.clone(),
+            span_start: id.span.start as u32,
+            span_end: id.span.end as u32,
+            line: 0,
+            column: 0,
+            format: String::new(),
+            num_params: params.len() as u8,
+        });
+
+        let saved_slot_map = self.state.slot_map.clone();
+        let saved_next_slot = self.state.next_slot;
+
+        self.state.slot_map = HashMap::new();
+        self.state.next_slot = 0;
+
+        for (slot, param) in params.iter().enumerate() {
+            self.state.slot_map.insert(param.id.unique_id, slot as u32);
+        }
+        self.state.next_slot = params.len() as u32;
+
+        let entry_pc = self.current_pos() as u32;
+        self.emit(Opcode::MakeFrame(params.len() as u32));
+        for slot in (0..params.len()).rev() {
+            self.emit(Opcode::StoreLocal(slot as u32));
+        }
+        self.emit_node(body)?;
+        self.emit(Opcode::MakeError(template_id));
+        self.emit(Opcode::PopFrame);
+        self.emit(Opcode::Return);
+
+        let num_locals = self.state.next_slot;
+        self.state.functions.push(FunctionEntry {
+            fun_idx: *fun_idx,
+            entry_pc,
+            num_locals,
+            arity: params.len() as u8,
+        });
+
+        self.state.slot_map = saved_slot_map;
+        self.state.next_slot = saved_next_slot;
         Ok(())
     }
 
@@ -413,9 +628,9 @@ impl Codegen {
             }
 
             TypedInner::Var(id) => {
-                if matches!(node.ty, Ty::UserFunc { .. }) {
+                if matches!(node.ty, Ty::BuiltinFunc { .. } | Ty::UserFunc { .. }) {
                     return Err(CodegenError {
-                        message: "User-defined functions are not first-class values in phase 2 step 4".into(),
+                        message: "Function values must be captured explicitly".into(),
                         span: node.span.clone(),
                     });
                 }
@@ -440,7 +655,7 @@ impl Codegen {
             }
 
             TypedInner::App(func, args) => {
-                self.emit_app(func, args)?;
+                self.emit_app(node.span.clone(), func, args)?;
             }
 
             TypedInner::BinOp(op, left, right) => {
@@ -514,12 +729,7 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::DeferrorDef(_tag, id, show_expr) => {
-                // Initialize no-arg deferror value from its show expression.
-                // This keeps `Err(MyError)` from becoming Unit at runtime.
-                self.emit_node(show_expr)?;
-                let slot = self.alloc_slot(id.unique_id);
-                self.emit(Opcode::StoreLocal(slot));
+            TypedInner::DeferrorDef(_, _, _, _, _) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
@@ -527,6 +737,37 @@ impl Codegen {
             TypedInner::Def(_fun_idx, _id, _params, _ret_ty, _body) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
+            }
+
+            TypedInner::Closure(params, captures, body) => {
+                let filtered_captures: Vec<ResolvedId> = captures
+                    .iter()
+                    .filter(|id| self.state.slot_map.contains_key(&id.unique_id))
+                    .cloned()
+                    .collect();
+                let fun_idx = self.reserve_fun_idx();
+                self.pending_closures.push(PendingClosure {
+                    fun_idx,
+                    captures: filtered_captures.clone(),
+                    params: params.clone(),
+                    body: body.clone(),
+                });
+                self.emit(Opcode::LoadFunctionRef(fun_idx));
+                for capture in &filtered_captures {
+                    let slot = self.alloc_slot(capture.unique_id);
+                    self.emit(Opcode::LoadLocal(slot));
+                }
+                self.emit(Opcode::MakeClosure(filtered_captures.len() as u8));
+            }
+
+            TypedInner::Capture(target, args) => {
+                self.emit_callable_ref(target)?;
+                for arg in args {
+                    self.emit_node(arg)?;
+                }
+                if !args.is_empty() {
+                    self.emit(Opcode::MakeClosure(args.len() as u8));
+                }
             }
 
             TypedInner::StructDef(tag, name, field_names) => {
@@ -556,7 +797,12 @@ impl Codegen {
 
     // ── Function application ──
 
-    fn emit_app(&mut self, func: &TypedNode, args: &[TypedNode]) -> Result<(), CodegenError> {
+    fn emit_app(
+        &mut self,
+        call_span: Span,
+        func: &TypedNode,
+        args: &[TypedNode],
+    ) -> Result<(), CodegenError> {
         match &func.ty {
             Ty::BuiltinFunc { name, .. } => {
                 let builtin_id = match name.as_str() {
@@ -589,7 +835,33 @@ impl Codegen {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::Call(*fun_idx, args.len() as u8));
+                self.emit(Opcode::Call(
+                    *fun_idx,
+                    args.len() as u8,
+                    call_span.start as u32,
+                    call_span.end as u32,
+                ));
+            }
+            Ty::Func(params, _) => {
+                if args.len() != params.len() {
+                    return Err(CodegenError {
+                        message: format!(
+                            "function expects {} argument(s), got {}",
+                            params.len(),
+                            args.len()
+                        ),
+                        span: func.span.clone(),
+                    });
+                }
+                self.emit_node(func)?;
+                for arg in args {
+                    self.emit_node(arg)?;
+                }
+                self.emit(Opcode::CallClosure(
+                    args.len() as u8,
+                    call_span.start as u32,
+                    call_span.end as u32,
+                ));
             }
             _ => {
                 return Err(CodegenError {

@@ -1,19 +1,6 @@
-[package]
-name = "surtr"
-version = "0.1.0"
-edition = "2024"
-license = "MIT"
-readme = "README.md"
-
-[dependencies]
-spire = { path = "crates//spire" }
-sigil = { path = "crates//sigil" }
-scar  = { path = "crates//scar" }
-forge = { path = "crates//forge" }
-eldr  = { path = "crates//eldr" }
-
 [workspace]
 resolver = "2"
+default-members = ["crates/rune"]
 members = [
     "crates/spire",
     "crates/sigil",

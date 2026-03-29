@@ -54,6 +54,8 @@ pub enum Token {
     FatArrow,  // =>
     Arrow,     // ->
     Semicolon, // ;
+    Pipe,      // |
+    Amp,       // &
 
     // ── Statement separators ──
     Newline,
