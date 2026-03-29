@@ -1,0 +1,25 @@
+{
+  "name": "surtr-file-icons",
+  "displayName": "Surtr File Icons",
+  "description": "File icons for Surtr (.srt/.eldr)",
+  "version": "0.0.1",
+  "publisher": "haruca-local",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Themes"
+  ],
+  "contributes": {
+    "iconThemes": [
+      {
+        "id": "surtr-icons",
+        "label": "Surtr Icons",
+        "path": "./icon-theme.json"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.7.1"
+  }
+}

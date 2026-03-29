@@ -1,3 +1,14 @@
 {
-    "chatgpt.openOnStartup": true
+    "chatgpt.openOnStartup": true,
+    "vsicons.customIconFolderPath": "/Users/haruca/work/rust/surtr",
+    "vsicons.associations.files": [
+        {
+            "icon": "surtr",
+            "extensions": [
+                "srt",
+                "eldr"
+            ],
+            "format": "png"
+        }
+    ]
 }

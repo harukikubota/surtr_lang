@@ -1,0 +1,11 @@
+{
+  "iconDefinitions": {
+    "_surtr_file": {
+      "iconPath": "./icons/surtr.png"
+    }
+  },
+  "fileExtensions": {
+    "srt": "_surtr_file",
+    "eldr": "_surtr_file"
+  }
+}
