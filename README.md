@@ -1,6 +1,6 @@
 # Surtr
 
-<img src="./vscode-surtr-icons/icons/surtr.png" alt="Surtr Icon" width="96" />
+<img src="./vscode-surtr-icons/vsicons-custom-icons/surtr.png" alt="Surtr Icon" width="96" />
 
 
 Surtr is a statically typed functional language compiler implemented in Rust.

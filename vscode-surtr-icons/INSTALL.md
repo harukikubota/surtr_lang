@@ -24,16 +24,23 @@ code --install-extension surtr-file-icons-0.0.1.vsix --force
 
 ## 3. vscode-icons と併用したい場合
 
-VS Code はファイルアイコンテーマを同時に 1 つしか有効化できないため、  
-「`Surtr Icons` と `vscode-icons` の同時適用」はできません。
+VS Code の「File Icon Theme」は同時に 1 つしか有効化できません。  
+そのため、`Surtr Icons` を選んだまま `vscode-icons` を重ねることはできません。
 
-`vscode-icons` を使い続ける場合は、ワークスペース設定でカスタム関連付けを使います。
+`vscode-icons` を使い続けたい場合は、`vscode-icons` 側のカスタムアイコン機能に Surtr のアイコンを登録します。
+
+ポイント:
+
+- `Surtr Icons` は選ばない
+- `vscode-icons` を File Icon Theme にする
+- `vsicons.customIconFolderPath` は `vsicons-custom-icons/` を含む親フォルダを指す
+- アイコンファイル名は `file_type_surtr.png` か `file_type_surtr.svg` にする
 
 `.vscode/settings.json` 例:
 
 ```json
 {
-  "vsicons.customIconFolderPath": "path/to/surtr",
+  "vsicons.customIconFolderPath": "/absolute/path/to/custom-icons",
   "vsicons.associations.files": [
     {
       "icon": "surtr",
@@ -46,7 +53,7 @@ VS Code はファイルアイコンテーマを同時に 1 つしか有効化で
 
 必要ファイル:
 
-- `vsicons-custom-icons/file_type_surtr.png`
+- `/absolute/path/to/custom-icons/vsicons-custom-icons/file_type_surtr.png`
 
 設定後に `Icons: Apply Icons Customization` を実行してください。
 

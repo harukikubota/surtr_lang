@@ -1,7 +1,7 @@
 {
   "iconDefinitions": {
     "_surtr_file": {
-      "iconPath": "./icons/surtr.png"
+      "iconPath": "./vsicons-custom-icons/surtr.png"
     }
   },
   "fileExtensions": {
