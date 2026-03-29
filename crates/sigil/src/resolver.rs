@@ -288,9 +288,21 @@ impl Resolver {
         body: Ast,
     ) -> Result<(ResolvedMatchPattern, Resolved), ResolveError> {
         match pat {
+            spire::ast::AstMatchPattern::Wildcard(span) => {
+                let resolved_body = self.resolve_node(body)?;
+                Ok((ResolvedMatchPattern::Wildcard(span), resolved_body))
+            }
             spire::ast::AstMatchPattern::BoolLit(span, b) => {
                 let resolved_body = self.resolve_node(body)?;
                 Ok((ResolvedMatchPattern::BoolLit(span, b), resolved_body))
+            }
+            spire::ast::AstMatchPattern::IntLit(span, n) => {
+                let resolved_body = self.resolve_node(body)?;
+                Ok((ResolvedMatchPattern::IntLit(span, n), resolved_body))
+            }
+            spire::ast::AstMatchPattern::StrLit(span, s) => {
+                let resolved_body = self.resolve_node(body)?;
+                Ok((ResolvedMatchPattern::StrLit(span, s), resolved_body))
             }
             spire::ast::AstMatchPattern::Constructor(span, ctor_name, inner_name) => {
                 let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
@@ -385,6 +397,30 @@ mod tests {
                 assert_ne!(id1.unique_id, id2.unique_id);
             }
             _ => panic!("Expected two Binds"),
+        }
+    }
+
+    #[test]
+    fn test_match_wildcard_and_literals() {
+        let resolved = parse_and_resolve(
+            r#"s = "a"
+x = match s {
+  "a" => 1,
+  2 => 2,
+  _ => 0,
+}"#,
+        )
+        .unwrap();
+        match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Match(_, _, arms) => {
+                    assert!(matches!(&arms[0].0, ResolvedMatchPattern::StrLit(_, s) if s == "a"));
+                    assert!(matches!(&arms[1].0, ResolvedMatchPattern::IntLit(_, 2)));
+                    assert!(matches!(&arms[2].0, ResolvedMatchPattern::Wildcard(_)));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
         }
     }
 }

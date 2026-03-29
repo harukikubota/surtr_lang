@@ -33,10 +33,6 @@ fn run_pipeline(source: &str, file_path: &str) -> Result<(), Box<dyn std::error:
     // Phase 4: Forge — generate bytecode
     let bytecode = forge::codegen(typed)?;
 
-    println!("-----------------------------------");
-    println!("{:?}", bytecode.clone());
-    println!("-----------------------------------");
-
     // Phase 5: Eldr — execute
     let mut vm = eldr::VM::new(bytecode).with_source(source.to_string(), file_path.to_string());
     vm.run()?;

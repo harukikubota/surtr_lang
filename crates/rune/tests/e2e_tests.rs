@@ -243,6 +243,79 @@ match result {
         );
     }
 
+    // ── Phase 2 Step 2: match extension ──
+
+    #[test]
+    fn phase2_step2_match_wildcard_bool() {
+        assert_output(
+            r#"flag = True
+print(match flag {
+  True => "hit",
+  _ => "miss",
+})"#,
+            &["hit"],
+        );
+    }
+
+    #[test]
+    fn phase2_step2_match_int_literal() {
+        assert_output(
+            r#"n = 2
+print(match n {
+  1 => "one",
+  2 => "two",
+  _ => "other",
+})"#,
+            &["two"],
+        );
+    }
+
+    #[test]
+    fn phase2_step2_match_string_literal() {
+        assert_output(
+            r#"s = "b"
+print(match s {
+  "a" => "A",
+  "b" => "B",
+  _ => "?",
+})"#,
+            &["B"],
+        );
+    }
+
+    #[test]
+    fn phase2_step2_match_non_exhaustive_bool_error() {
+        assert_compile_error(
+            r#"flag = True
+print(match flag {
+  True => "yes",
+})"#,
+            "Non-exhaustive match. Missing: False",
+        );
+    }
+
+    #[test]
+    fn phase2_step2_match_non_exhaustive_result_error() {
+        assert_compile_error(
+            r#"r: Result<Int> = Ok(1)
+print(match r {
+  Ok(v) => to_string(v),
+})"#,
+            "Non-exhaustive match. Missing: Err",
+        );
+    }
+
+    #[test]
+    fn phase2_step2_match_non_exhaustive_int_error() {
+        assert_compile_error(
+            r#"n = 1
+print(match n {
+  1 => "one",
+})"#,
+            "Non-exhaustive match. Missing: _",
+        );
+    }
+
     // ── Step 9: deferror / Error ──
 
     #[test]

@@ -599,6 +599,8 @@ impl Checker {
             typed_arms.push((typed_pat, body_node));
         }
 
+        self.check_match_exhaustive(span, &typed_scrut.ty, &typed_arms)?;
+
         let ty = result_ty.unwrap_or(Ty::Unit);
         Ok(TypedNode {
             ty,
@@ -607,15 +609,91 @@ impl Checker {
         })
     }
 
+    fn check_match_exhaustive(
+        &self,
+        span: &Span,
+        scrut_ty: &Ty,
+        arms: &[(TypedMatchPattern, TypedNode)],
+    ) -> Result<(), TypeError> {
+        if arms
+            .iter()
+            .any(|(pat, _)| matches!(pat, TypedMatchPattern::Wildcard))
+        {
+            return Ok(());
+        }
+
+        match scrut_ty {
+            Ty::Bool => {
+                let has_true = arms
+                    .iter()
+                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::BoolLit(true)));
+                let has_false = arms
+                    .iter()
+                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::BoolLit(false)));
+
+                if has_true && has_false {
+                    Ok(())
+                } else {
+                    let mut missing = Vec::new();
+                    if !has_true {
+                        missing.push("True");
+                    }
+                    if !has_false {
+                        missing.push("False");
+                    }
+                    Err(TypeError {
+                        message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
+                        span: span.clone(),
+                        hint: None,
+                    })
+                }
+            }
+            Ty::Result(_, _) => {
+                let has_ok = arms
+                    .iter()
+                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor(0, _)));
+                let has_err = arms
+                    .iter()
+                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor(1, _)));
+
+                if has_ok && has_err {
+                    Ok(())
+                } else {
+                    let mut missing = Vec::new();
+                    if !has_ok {
+                        missing.push("Ok");
+                    }
+                    if !has_err {
+                        missing.push("Err");
+                    }
+                    Err(TypeError {
+                        message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
+                        span: span.clone(),
+                        hint: None,
+                    })
+                }
+            }
+            _ => Err(TypeError {
+                message: "Non-exhaustive match. Missing: _".into(),
+                span: span.clone(),
+                hint: None,
+            }),
+        }
+    }
+
     fn check_match_arm(
         &mut self,
         pat: &ResolvedMatchPattern,
         body: &Resolved,
         scrut_ty: &Ty,
-        span: &Span,
+        _span: &Span,
     ) -> Result<(TypedMatchPattern, TypedNode), TypeError> {
         match pat {
-            ResolvedMatchPattern::BoolLit(_, b) => {
+            ResolvedMatchPattern::Wildcard(_) => {
+                let typed_body = self.check_node(body)?;
+                Ok((TypedMatchPattern::Wildcard, typed_body))
+            }
+            ResolvedMatchPattern::BoolLit(span, b) => {
                 if !self.types_compatible(&Ty::Bool, scrut_ty) {
                     return Err(TypeError {
                         message: "Boolean pattern on non-Boolean scrutinee".into(),
@@ -626,7 +704,37 @@ impl Checker {
                 let typed_body = self.check_node(body)?;
                 Ok((TypedMatchPattern::BoolLit(*b), typed_body))
             }
+            ResolvedMatchPattern::IntLit(span, n) => {
+                if !self.types_compatible(&Ty::Int, scrut_ty) {
+                    return Err(TypeError {
+                        message: "Int pattern on non-Int scrutinee".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let typed_body = self.check_node(body)?;
+                Ok((TypedMatchPattern::IntLit(*n), typed_body))
+            }
+            ResolvedMatchPattern::StrLit(span, s) => {
+                if !self.types_compatible(&Ty::Str, scrut_ty) {
+                    return Err(TypeError {
+                        message: "String pattern on non-String scrutinee".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let typed_body = self.check_node(body)?;
+                Ok((TypedMatchPattern::StrLit(s.clone()), typed_body))
+            }
             ResolvedMatchPattern::Constructor(_, ctor_id, inner_id) => {
+                if !matches!(scrut_ty, Ty::Result(_, _)) {
+                    return Err(TypeError {
+                        message: "Result constructor pattern on non-Result scrutinee".into(),
+                        span: ctor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+
                 // Ok => tag 0, Err => tag 1
                 let tag = match ctor_id.name.as_str() {
                     "Ok" => 0u32,
@@ -634,7 +742,7 @@ impl Checker {
                     _ => {
                         return Err(TypeError {
                             message: format!("Unknown constructor: {}", ctor_id.name),
-                            span: span.clone(),
+                            span: ctor_id.span.clone(),
                             hint: None,
                         });
                     }
@@ -645,10 +753,7 @@ impl Checker {
                     let inner_ty = match (tag, scrut_ty) {
                         (0, Ty::Result(ok, _)) => ok.as_ref().clone(),
                         (1, Ty::Result(_, err)) => err.as_ref().clone(),
-                        _ => {
-                            let tv = self.env.fresh_tyvar();
-                            tv
-                        }
+                        _ => unreachable!("scrutinee type checked as Result above"),
                     };
                     self.env.bind_var(inner.unique_id, inner_ty.clone());
                 }
@@ -1019,7 +1124,7 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::DeferrorDef(tag, Box::new(typed_show)),
+            node: TypedInner::DeferrorDef(tag, id.clone(), Box::new(typed_show)),
         })
     }
 }

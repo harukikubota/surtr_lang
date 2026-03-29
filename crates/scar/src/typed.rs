@@ -33,8 +33,8 @@ pub enum TypedInner {
     /// Constructor call — tag + field values (in definition order)
     ConstructorCall(u32, Vec<TypedNode>),
 
-    /// Error type definition — tag + show expression
-    DeferrorDef(u32, Box<TypedNode>),
+    /// Error type definition — tag + binding id + show expression
+    DeferrorDef(u32, ResolvedId, Box<TypedNode>),
 
     /// Struct definition — tag + name + field names (for TypeRegistry)
     StructDef(u32, String, Vec<String>),
@@ -56,8 +56,14 @@ pub enum TypedPattern {
 /// Match pattern (typed).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedMatchPattern {
+    /// `_`
+    Wildcard,
     /// `True` / `False`
     BoolLit(bool),
+    /// Integer literal
+    IntLit(i64),
+    /// String literal
+    StrLit(String),
     /// Constructor tag + optional inner binding
     Constructor(u32, Option<ResolvedId>),
 }

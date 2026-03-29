@@ -71,8 +71,14 @@ pub enum ResolvedPattern {
 /// Match pattern (resolved).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedMatchPattern {
+    /// `_`
+    Wildcard(Span),
     /// `True` / `False`
     BoolLit(Span, bool),
+    /// Integer literal
+    IntLit(Span, i64),
+    /// String literal
+    StrLit(Span, String),
     /// `Ok(var)` / `Err(var)` — constructor tag resolved
     Constructor(Span, ResolvedId, Option<ResolvedId>),
 }

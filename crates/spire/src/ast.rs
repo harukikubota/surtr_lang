@@ -65,8 +65,14 @@ pub enum AstPattern {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AstMatchPattern {
+    /// `_`
+    Wildcard(Span),
     /// `True` / `False`
     BoolLit(Span, bool),
+    /// Integer literal
+    IntLit(Span, i64),
+    /// String literal
+    StrLit(Span, String),
     /// `Ok(val)` / `Err(e)` — constructor with optional inner binding
     Constructor(Span, Symbol, Option<Symbol>),
 }

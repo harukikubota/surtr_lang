@@ -678,10 +678,14 @@ impl Parser {
         ))
     }
 
-    /// Match pattern: `True`, `False`, `Ok(var)`, `Err(var)`
+    /// Match pattern: `_`, literals, `Ok(var)`, `Err(var)`
     fn parse_match_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
+            Token::Ident(name) if name == "_" => {
+                self.advance();
+                Ok(AstMatchPattern::Wildcard(sp))
+            }
             Token::True => {
                 self.advance();
                 Ok(AstMatchPattern::BoolLit(sp, true))
@@ -689,6 +693,34 @@ impl Parser {
             Token::False => {
                 self.advance();
                 Ok(AstMatchPattern::BoolLit(sp, false))
+            }
+            Token::Int(n) => {
+                self.advance();
+                Ok(AstMatchPattern::IntLit(sp, n))
+            }
+            Token::Minus => {
+                self.advance();
+                match self.peek().clone() {
+                    Token::Int(n) => {
+                        let int_span = self.peek_span();
+                        self.advance();
+                        Ok(AstMatchPattern::IntLit(
+                            Span {
+                                start: sp.start,
+                                end: int_span.end,
+                            },
+                            -n,
+                        ))
+                    }
+                    _ => Err(ParseError {
+                        message: "Expected integer after '-' in match pattern".into(),
+                        span: sp,
+                    }),
+                }
+            }
+            Token::Str(s) => {
+                self.advance();
+                Ok(AstMatchPattern::StrLit(sp, s))
             }
             Token::Ident(name) => {
                 self.advance();
@@ -875,5 +907,46 @@ mod tests {
     fn test_field_access() {
         let ast = parse("user.name").unwrap();
         assert!(matches!(&ast[0], Ast::FieldAccess(_, _, ref f) if f == "name"));
+    }
+
+    #[test]
+    fn test_match_wildcard_and_int_pattern() {
+        let ast = parse(
+            r#"x = match n {
+  1 => "one",
+  _ => "other",
+}"#,
+        )
+        .unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Match(_, _, arms) => {
+                    assert!(matches!(&arms[0].0, AstMatchPattern::IntLit(_, 1)));
+                    assert!(matches!(&arms[1].0, AstMatchPattern::Wildcard(_)));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
+        }
+    }
+
+    #[test]
+    fn test_match_string_pattern() {
+        let ast = parse(
+            r#"x = match s {
+  "a" => 1,
+  _ => 0,
+}"#,
+        )
+        .unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Match(_, _, arms) => {
+                    assert!(matches!(&arms[0].0, AstMatchPattern::StrLit(_, s) if s == "a"));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
+        }
     }
 }

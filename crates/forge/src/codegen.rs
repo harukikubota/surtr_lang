@@ -225,8 +225,12 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::DeferrorDef(_tag, _show_expr) => {
-                // Error type definitions don't produce runtime code in phase 1
+            TypedInner::DeferrorDef(_tag, id, show_expr) => {
+                // Initialize no-arg deferror value from its show expression.
+                // This keeps `Err(MyError)` from becoming Unit at runtime.
+                self.emit_node(show_expr)?;
+                let slot = self.alloc_slot(id.unique_id);
+                self.emit(Opcode::StoreLocal(slot));
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
@@ -354,11 +358,26 @@ impl Codegen {
             };
 
             match pat {
+                TypedMatchPattern::Wildcard => {}
                 TypedMatchPattern::BoolLit(b) => {
                     self.emit(Opcode::LoadLocal(scrut_slot));
                     let bool_const = self.add_constant(Constant::Bool(*b));
                     self.emit(Opcode::LoadConst(bool_const));
                     self.emit(Opcode::EqBool);
+                    self.emit_jump_if_false(next_arm);
+                }
+                TypedMatchPattern::IntLit(n) => {
+                    self.emit(Opcode::LoadLocal(scrut_slot));
+                    let int_const = self.add_constant(Constant::Int(*n));
+                    self.emit(Opcode::LoadConst(int_const));
+                    self.emit(Opcode::EqInt);
+                    self.emit_jump_if_false(next_arm);
+                }
+                TypedMatchPattern::StrLit(s) => {
+                    self.emit(Opcode::LoadLocal(scrut_slot));
+                    let str_const = self.add_constant(Constant::Str(s.clone()));
+                    self.emit(Opcode::LoadConst(str_const));
+                    self.emit(Opcode::EqStr);
                     self.emit_jump_if_false(next_arm);
                 }
                 TypedMatchPattern::Constructor(tag, inner_id) => {
