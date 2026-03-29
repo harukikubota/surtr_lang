@@ -1,5 +1,8 @@
 # Surtr
 
+<img src="./vscode-surtr-icons/icons/surtr.png" alt="Surtr Icon" width="96" />
+
+
 Surtr is a statically typed functional language compiler implemented in Rust.
 
 Pipeline:
@@ -19,12 +22,17 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 | `scar` | Type checker (`Vec<Resolved> -> Vec<TypedNode>`) |
 | `forge` | Codegen (`Vec<TypedNode> -> Bytecode`) |
 | `eldr` | VM (`Bytecode -> execution`) |
-| `rune` | CLI entrypoint (`surtr run <file.srt>`) |
+| `rune` | CLI entrypoint (`surtr run <file.srt|file.eldr>`, `surtr build <file.srt> [output.eldr]`) |
 
 ## Quick Start
 
 ```bash
 cargo run -p rune -- run lib/hello.srt
+```
+
+```bash
+cargo run -p rune -- build lib/hello.srt lib/hello.eldr
+cargo run -p rune -- run lib/hello.eldr
 ```
 
 ## Docs
