@@ -211,7 +211,7 @@ impl VM {
 
             Opcode::LoadLocal(slot) => {
                 let val = self
-                    .current_frame()
+                    .current_frame()?
                     .locals
                     .get(slot as usize)
                     .cloned()
@@ -224,7 +224,7 @@ impl VM {
             Opcode::StoreLocal(slot) => {
                 let val = self.pop_stack()?;
                 let target = self
-                    .current_frame_mut()
+                    .current_frame_mut()?
                     .locals
                     .get_mut(slot as usize)
                     .ok_or_else(|| RuntimeError {
@@ -459,7 +459,7 @@ impl VM {
                     .ok_or_else(|| RuntimeError {
                         message: format!("Unknown error template: {}", template_id),
                     })?;
-                let call_site = self.current_frame().call_site;
+                let call_site = self.current_frame()?.call_site;
                 let (span_start, span_end) = call_site
                     .map(|(start, end)| (start, end))
                     .unwrap_or((template.span_start, template.span_end));
@@ -683,16 +683,16 @@ impl VM {
         })
     }
 
-    fn current_frame(&self) -> &CallFrame {
-        self.frames
-            .last()
-            .expect("VM always has at least one frame")
+    fn current_frame(&self) -> Result<&CallFrame, RuntimeError> {
+        self.frames.last().ok_or_else(|| RuntimeError {
+            message: "Frame stack underflow".into(),
+        })
     }
 
-    fn current_frame_mut(&mut self) -> &mut CallFrame {
-        self.frames
-            .last_mut()
-            .expect("VM always has at least one frame")
+    fn current_frame_mut(&mut self) -> Result<&mut CallFrame, RuntimeError> {
+        self.frames.last_mut().ok_or_else(|| RuntimeError {
+            message: "Frame stack underflow".into(),
+        })
     }
 
     fn pop_int(&mut self) -> Result<i64, RuntimeError> {
@@ -817,5 +817,28 @@ mod tests {
         }];
 
         VM::new(bytecode).run().expect("run should succeed");
+    }
+
+    #[test]
+    fn frame_stack_underflow_is_runtime_error() {
+        let bytecode = base_bytecode(vec![Opcode::LoadLocal(0), Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        vm.frames.clear();
+        let err = vm.run().expect_err("must fail");
+        assert!(err.message.contains("Frame stack underflow"));
+    }
+
+    #[test]
+    fn function_table_mismatch_is_runtime_error() {
+        let mut bytecode = base_bytecode(vec![Opcode::Call(0, 0, 0, 0), Opcode::Halt]);
+        bytecode.functions = vec![FunctionEntry {
+            fun_idx: 1,
+            entry_pc: 1,
+            num_locals: 0,
+            arity: 0,
+        }];
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("Function table invariant violated"));
     }
 }

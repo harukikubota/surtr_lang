@@ -80,15 +80,15 @@ fn builtin_to_string(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
 fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match &args[0] {
         Value::Error(rich) => {
-            if vm.error_output.is_some() {
+            if let Some(buf) = vm.error_output.as_mut() {
                 let msg = format!("Error: {}: {}", rich.kind, rich.message);
-                vm.error_output.as_mut().expect("checked is_some").push(msg);
+                buf.push(msg);
             } else if let (Some(source), Some(file)) = (vm.source(), vm.source_file()) {
                 use ariadne::{Color, Label, Report, ReportKind, Source};
 
                 let start = rich.location.span_start as usize;
                 let end = rich.location.span_end as usize;
-                Report::build(ReportKind::Error, (file, start..end))
+                if let Err(err) = Report::build(ReportKind::Error, (file, start..end))
                     .with_message(rich.kind.clone())
                     .with_label(
                         Label::new((file, start..end))
@@ -97,7 +97,11 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
                     )
                     .finish()
                     .eprint((file, Source::from(source)))
-                    .unwrap();
+                {
+                    return Err(RuntimeError {
+                        message: format!("Failed to render rich error report: {}", err),
+                    });
+                }
             } else {
                 eprintln!("Error: {}: {}", rich.kind, rich.message);
             }
@@ -118,35 +122,57 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
 mod tests {
     use sindr::builtin::BUILTIN_METAS;
 
+    fn parse_builtin_decl(line: &str) -> (&str, u8, String) {
+        let rest = line
+            .strip_prefix("@builtin def ")
+            .expect("builtin line must start with @builtin def");
+        let (name, after_name) = rest
+            .split_once('(')
+            .expect("builtin declaration must include params");
+
+        let (params, after_params) = after_name
+            .split_once(')')
+            .expect("builtin declaration must close params");
+        let ret_ty = after_params
+            .trim()
+            .strip_prefix("->")
+            .expect("builtin declaration must include return type")
+            .trim();
+
+        let param_tys = if params.trim().is_empty() {
+            Vec::new()
+        } else {
+            params
+                .split(',')
+                .map(|param| {
+                    let (_, ty) = param
+                        .split_once(':')
+                        .expect("builtin params must have `name: Type` form");
+                    ty.trim().to_string()
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let sig = format!("({}) -> {}", param_tys.join(", "), ret_ty);
+        (name.trim(), param_tys.len() as u8, sig)
+    }
+
     #[test]
     fn builtin_srt_and_builtin_meta_are_aligned() {
         let source = include_str!("../../../lib/builtin.srt");
         let lines = source
             .lines()
             .map(str::trim)
-            .filter(|line| !line.is_empty())
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
             .collect::<Vec<_>>();
 
         assert_eq!(lines.len(), BUILTIN_METAS.len());
 
         for (line, meta) in lines.iter().zip(BUILTIN_METAS.iter()) {
-            let rest = line
-                .strip_prefix("@builtin def ")
-                .expect("builtin line must start with @builtin def");
-            let (name, after_name) = rest
-                .split_once('(')
-                .expect("builtin declaration must include params");
-            assert_eq!(name.trim(), meta.name);
-
-            let (params, _) = after_name
-                .split_once(')')
-                .expect("builtin declaration must close params");
-            let arity = if params.trim().is_empty() {
-                0
-            } else {
-                params.split(',').count()
-            };
-            assert_eq!(arity as u8, meta.arity);
+            let (name, arity, sig_str) = parse_builtin_decl(line);
+            assert_eq!(name, meta.name);
+            assert_eq!(arity, meta.arity);
+            assert_eq!(sig_str, meta.sig_str);
         }
     }
 }
