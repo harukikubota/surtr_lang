@@ -18,3 +18,23 @@ sindr = { path = "../sindr" }
 ariadne = "0.6.0"
 serde_json = "1.0"
 rustyline = "13"
+
+[[test]]
+name = "run_srt"
+path = "../../tests/integration/run_srt.rs"
+
+[[test]]
+name = "run_eldr"
+path = "../../tests/integration/run_eldr.rs"
+
+[[test]]
+name = "build_roundtrip"
+path = "../../tests/integration/build_roundtrip.rs"
+
+[[test]]
+name = "repl"
+path = "../../tests/integration/repl.rs"
+
+[[test]]
+name = "language_features"
+path = "../../tests/integration/language_features.rs"

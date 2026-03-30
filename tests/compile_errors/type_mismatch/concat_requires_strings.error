@@ -1,0 +1,2 @@
+phase: typecheck
+contains: ++ requires (String, String), got (Int, String)

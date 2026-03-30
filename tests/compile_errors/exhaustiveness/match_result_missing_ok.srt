@@ -1,0 +1,4 @@
+r: Result<Int> = Ok(1)
+print(match r {
+  Err(e) => "err",
+})

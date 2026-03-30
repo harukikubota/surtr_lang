@@ -1,0 +1,5 @@
+flag = True
+print(to_string(match flag {
+  True => 1,
+  False => "x",
+}))

@@ -1,0 +1,4 @@
+r: Result<Int> = Ok(1)
+print(match r {
+  Ok(v) => to_string(v),
+})

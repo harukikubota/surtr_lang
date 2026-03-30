@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Int pattern on non-Int scrutinee

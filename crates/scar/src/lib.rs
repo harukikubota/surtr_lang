@@ -5,3 +5,76 @@ pub mod typed;
 pub mod types;
 
 pub use checker::{typecheck, ScarCheckpoint, ScarSession};
+
+#[cfg(test)]
+mod tests {
+    use super::typecheck;
+    use crate::typed::TypedInner;
+
+    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
+
+    fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
+        let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE).expect("builtin prelude should parse");
+        let mut user_ast = spire::parse(source).expect("source should parse");
+        ast.append(&mut user_ast);
+        sigil::resolve(ast).expect("source should resolve")
+    }
+
+    #[test]
+    fn field_access_is_resolved_to_numeric_index() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+user: User = User { name: "alice", age: 30 }
+age = user.age"#,
+        );
+
+        let typed = typecheck(resolved).expect("typecheck should succeed");
+        let field_index = typed.iter().find_map(|node| {
+            if let TypedInner::Bind(_, rhs) = &node.node {
+                if let TypedInner::FieldAccess(_, idx) = &rhs.node {
+                    return Some(*idx);
+                }
+            }
+            None
+        });
+
+        assert_eq!(field_index, Some(1));
+    }
+
+    #[test]
+    fn match_bool_requires_exhaustive_arms() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"flag = True
+print(match flag {
+  True => "yes",
+})"#,
+        );
+
+        let err = typecheck(resolved).expect_err("typecheck should fail");
+        assert!(err.message.contains("Non-exhaustive match. Missing: False"));
+    }
+
+    #[test]
+    fn safebind_rhs_must_be_result() {
+        let resolved = resolve_with_builtin_prelude("num =? 10");
+        let err = typecheck(resolved).expect_err("typecheck should fail");
+        assert!(err.message.contains("`=?` requires Result"));
+    }
+
+    #[test]
+    fn safebind_function_requires_result_return_type() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"def bad() -> Int {
+  num =? Ok(1)
+  num
+}"#,
+        );
+
+        let err = typecheck(resolved).expect_err("typecheck should fail");
+        assert!(err.message.contains("can only be used in functions returning Result"));
+    }
+}

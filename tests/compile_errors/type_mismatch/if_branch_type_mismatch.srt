@@ -1,0 +1,1 @@
+print(to_string(if(True, 1, "x")))

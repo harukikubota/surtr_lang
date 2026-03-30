@@ -1,4 +1,3 @@
-# step6.srt
 nums = [1, 2, 3]
 print(to_string(nums))
 

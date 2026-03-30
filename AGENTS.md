@@ -22,7 +22,9 @@ surtr/
 │   ├── eldr/              # VM            : Bytecode → execution
 │   └── rune/              # CLI           : entrypoint
 ├── doc/                   # 仕様ドキュメント（読み取り専用）
-└── tests/e2e/             # E2E テスト (.srt + .expected)
+└── tests/
+    ├── spec/              # 仕様ベース成功系テスト (.srt + .expected)
+    └── compile_errors/    # 仕様ベース失敗系テスト (.srt + .error)
 ```
 
 ---
@@ -155,28 +157,33 @@ Forge は `GetField(idx)` を emit するだけでよい。
 
 各クレートに `#[test]` を書く。`cargo test` ですべて通ること。
 
-### E2E テスト
+### 仕様ベーステスト
 
 ```
-tests/e2e/
-  step2.srt / step2.expected
-  step3_ok.srt / step3_ok.expected
+tests/spec/
+  control/*.srt + *.expected
+  types/*.srt + *.expected
   ...
-  surtr_phase1_goal.srt / surtr_phase1_goal.expected
+
+tests/compile_errors/
+  type_mismatch/*.srt + *.error
+  exhaustiveness/*.srt + *.error
+  ...
 ```
 
 実行方法:
 
 ```bash
-cargo run -p rune -- run tests/e2e/<file>.srt
+cargo test -p rune --test spec_fixture_tests
 ```
 
-stdout を `.expected` と比較して一致すれば合格。
+`spec` は `stdout` を `.expected` と比較して一致すれば合格。
+`compile_errors` は `.error` の `phase` / `contains` を満たせば合格。
 
 ### エラーケース
 
-コンパイルエラーになるべきファイルは `_err.srt` サフィックスで配置し、
-stderr に正しいエラーメッセージが出力されることを確認する。
+コンパイルエラーになるべきファイルは `tests/compile_errors/**.srt` に配置し、
+対応する `.error` で `phase` / `contains` を検証すること。
 
 ---
 

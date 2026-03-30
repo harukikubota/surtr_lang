@@ -1,4 +1,3 @@
-# step7.srt
 defstruct User {
   name: String,
   age: Int,

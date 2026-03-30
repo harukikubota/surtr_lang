@@ -1,0 +1,6 @@
+r: Result<Int> = Ok(1)
+print(match r {
+  Maybe(v) => "maybe",
+  Ok(v) => "ok",
+  Err(e) => "err",
+})

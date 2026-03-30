@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Error values must be wrapped with Err(...)

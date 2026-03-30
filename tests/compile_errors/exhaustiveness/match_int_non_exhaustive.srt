@@ -1,0 +1,4 @@
+n = 1
+print(match n {
+  1 => "one",
+})

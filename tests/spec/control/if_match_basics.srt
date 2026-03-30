@@ -1,4 +1,3 @@
-# step8.srt
 flag = True
 greeting = if(flag, "hello", "goodbye")
 print(greeting)

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: String pattern on non-String scrutinee

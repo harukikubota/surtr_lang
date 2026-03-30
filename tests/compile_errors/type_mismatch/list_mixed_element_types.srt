@@ -1,0 +1,2 @@
+bad = [1, "x"]
+print(to_string(bad))
