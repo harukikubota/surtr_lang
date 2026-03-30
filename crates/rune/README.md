@@ -18,6 +18,7 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 
 ```bash
 surtr run <file.srt|file.eldr>
+surtr repl
 surtr build <file.srt> [output.eldr]
 surtr dump <file.eldr> [--format json]
 ```
@@ -28,6 +29,7 @@ surtr dump <file.eldr> [--format json]
 - Execute the full pipeline (`parse -> resolve -> typecheck -> codegen -> execute`) for `.srt` input
 - Build `.eldr` bytecode files
 - Run compiled `.eldr` bytecode files
+- Dispatch `surtr repl` to `xldr`
 - Dump `.eldr` metadata/bytecode as JSON (`jq` friendly)
 - Convert phase errors into human-readable diagnostics
 - Exit with non-zero status on failure
@@ -35,11 +37,13 @@ surtr dump <file.eldr> [--format json]
 ## Non-responsibilities
 
 Rune does not implement parser/resolver/typechecker/vm logic itself.
+Rune does not own REPL session internals (`xldr` owns REPL state/loop/commands).
 
 ## Usage
 
 ```bash
 cargo run -p rune -- run lib/hello.srt
+cargo run -p rune -- repl
 cargo run -p rune -- build lib/hello.srt lib/hello.eldr
 cargo run -p rune -- run lib/hello.eldr
 cargo run -p rune -- dump lib/hello.eldr --format json | jq .
