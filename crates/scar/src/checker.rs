@@ -1854,11 +1854,7 @@ impl Checker {
                 }
             };
             let (tag, result_ty) = if id.name == "Ok" {
-                let err_var = self.env.fresh_tyvar();
-                (
-                    0u32,
-                    Ty::Result(Box::new(inner.ty.clone()), Box::new(err_var)),
-                )
+                (0u32, Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error)))
             } else {
                 let ok_var = self.env.fresh_tyvar();
                 (

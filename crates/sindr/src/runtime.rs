@@ -123,7 +123,10 @@ impl Value {
                             "Err({})",
                             fields
                                 .first()
-                                .map(|v| v.to_display_string(registry))
+                                .map(|v| match v {
+                                    Value::Error(rich) => rich.kind.clone(),
+                                    _ => v.to_display_string(registry),
+                                })
                                 .unwrap_or_default()
                         ),
                         _ => format!("Tagged({}, {:?})", tag, fields),
@@ -231,5 +234,26 @@ mod tests {
             },
         }));
         assert_eq!(value.to_display_string(&registry), "boom");
+    }
+
+    #[test]
+    fn display_result_err_with_rich_error_uses_error_kind() {
+        let registry = TypeRegistry::new();
+        let value = Value::Tagged {
+            tag: 1,
+            fields: vec![Value::Error(Box::new(RichError {
+                kind: "NoneError".into(),
+                message: "null".into(),
+                location: Location {
+                    file: "<repl>".into(),
+                    func: "f".into(),
+                    line: 1,
+                    column: 1,
+                    span_start: 0,
+                    span_end: 1,
+                },
+            }))],
+        };
+        assert_eq!(value.to_display_string(&registry), "Err(NoneError)");
     }
 }

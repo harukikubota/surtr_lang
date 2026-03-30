@@ -128,13 +128,15 @@ impl VM {
     /// If the stack is empty at the end, returns `Unit`.
     pub fn push(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
         let code_base = self.bytecode.opcodes.len();
+        let mut chunk_opcodes = chunk.opcodes;
+        Self::relocate_chunk_jumps(&mut chunk_opcodes, code_base)?;
         self.bytecode.constants.extend(chunk.constants);
         self.bytecode
             .type_registry
             .entries
             .extend(chunk.type_entries);
         self.bytecode.error_templates.extend(chunk.error_templates);
-        self.bytecode.opcodes.extend(chunk.opcodes);
+        self.bytecode.opcodes.extend(chunk_opcodes);
         for mut entry in chunk.functions {
             entry.entry_pc += code_base as u32;
             let idx = entry.fun_idx as usize;
@@ -171,6 +173,30 @@ impl VM {
         let result = self.stack.pop().unwrap_or(Value::Unit);
         self.stack.clear();
         Ok(result)
+    }
+
+    fn relocate_chunk_jumps(
+        opcodes: &mut [Opcode],
+        code_base: usize,
+    ) -> Result<(), RuntimeError> {
+        let base = u32::try_from(code_base).map_err(|_| RuntimeError {
+            message: format!("Code base too large for jump relocation: {}", code_base),
+        })?;
+
+        for op in opcodes.iter_mut() {
+            match op {
+                Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
+                    *addr = addr.checked_add(base).ok_or_else(|| RuntimeError {
+                        message: format!(
+                            "Jump relocation overflow: target {} + base {}",
+                            *addr, base
+                        ),
+                    })?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn execute_opcode(&mut self, op: Opcode, pc: &mut usize) -> Result<bool, RuntimeError> {
@@ -756,8 +782,8 @@ impl VM {
 #[cfg(test)]
 mod tests {
     use super::VM;
-    use sindr::ir::{Bytecode, Constant, FunctionEntry, Opcode};
-    use sindr::runtime::TypeRegistry;
+    use sindr::ir::{Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode};
+    use sindr::runtime::{TypeRegistry, Value};
 
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
@@ -840,5 +866,24 @@ mod tests {
 
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("Function table invariant violated"));
+    }
+
+    #[test]
+    fn push_relocates_jump_targets() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            // `Jump(2)` must be relocated to absolute pc=3 because code_base=1.
+            opcodes: vec![Opcode::Jump(2), Opcode::LoadConst(0), Opcode::LoadConst(1)],
+            constants: vec![Constant::Int(99), Constant::Int(7)],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let result = vm.push(chunk).expect("push should succeed");
+        assert_eq!(result, Value::Int(7));
     }
 }

@@ -224,7 +224,8 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
         Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
         Ty::Error => "Error".into(),
-        Ty::Var(id) => format!("${}", id),
+        // Hide internal type-variable IDs from REPL output.
+        Ty::Var(_id) => "_".into(),
         Ty::Func(params, ret) => {
             let param_str = params
                 .iter()

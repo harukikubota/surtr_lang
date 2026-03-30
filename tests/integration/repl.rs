@@ -147,8 +147,46 @@ fn repl_deferror_builder_survives_incremental_execution() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("err_result: Result<Int, Error> = Err(Page Not Found. 404)"),
+        stdout.contains("err_result: Result<Int, Error> = Err(PageNotFound)"),
         "expected incremental err_result binding, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_ok_defaults_result_error_type_to_error() {
+    let output = run_repl_session("ret = Ok(10)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ret: Result<Int, Error> = Ok(10)"),
+        "expected Ok binding to default err side to Error, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_hides_internal_type_var_ids_in_result_display() {
+    let output = run_repl_session(
+        "deferror NoneError {\"null\"}\nret_e = Err(NoneError)\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ret_e: Result<_, Error> = Err(NoneError)"),
+        "expected Result type vars to be hidden in repl output, got:\n{}",
         stdout
     );
 }
