@@ -1,0 +1,4 @@
+flag = True
+print(match flag {
+  True => "yes",
+})

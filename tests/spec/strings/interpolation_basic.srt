@@ -1,0 +1,4 @@
+name = "alice"
+score = 10
+print("hello #{name}")
+print("score=#{score + 2}")

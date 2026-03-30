@@ -1,0 +1,17 @@
+# step5.srt
+print(to_string(10 + 5))
+print(to_string(10 - 3))
+print(to_string(4 * 3))
+print(to_string(10 / 3))
+print(to_string(10 % 3))
+
+print(to_string(1.5 + 2.5))
+print(to_string(10.0 / 3.0))
+
+print(to_string(10 > 5))
+print(to_string(10 < 5))
+print(to_string(10 == 10))
+print(to_string("abc" == "abc"))
+print(to_string(True != False))
+
+print("hello" ++ " world")

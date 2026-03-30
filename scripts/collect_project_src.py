@@ -18,12 +18,12 @@ def iter_source_files(crate_root: Path) -> list[Path]:
 def iter_test_files(repo_root: Path) -> list[Path]:
     files: list[Path] = []
     rune_tests = repo_root / "crates" / "rune" / "tests"
-    e2e_tests = repo_root / "tests" / "e2e"
+    tests_root = repo_root / "tests"
 
     if rune_tests.is_dir():
         files.extend(p for p in rune_tests.glob("*.rs") if p.is_file())
-    if e2e_tests.is_dir():
-        files.extend(p for p in e2e_tests.rglob("*") if p.is_file())
+    if tests_root.is_dir():
+        files.extend(p for p in tests_root.rglob("*") if p.is_file())
 
     return sorted(files, key=lambda path: path.relative_to(repo_root))
 

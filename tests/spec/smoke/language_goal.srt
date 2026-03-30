@@ -1,0 +1,70 @@
+# surtr_phase1_goal.srt — Full phase 1 goal code
+
+# ── Step 2: Script level ──
+num = 10
+num2 = 5
+
+# ── Step 3: Type checking ──
+typed_num: Int = 42
+
+# ── Step 4: Primitive types ──
+float_val = 3.14
+str_val = "hello"
+flag = True
+unit_val = ()
+
+# ── Step 5: Arithmetic & operators ──
+print(to_string(num + num2))
+print(to_string(10 > 5))
+print(to_string("abc" == "abc"))
+print("hello" ++ " world")
+
+# ── Step 6: Lists ──
+nums: [Int] = [1, 2, 3]
+print(to_string(nums))
+empty: [Int] = []
+print(to_string(empty))
+
+# ── Step 7: defstruct / defrecord ──
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+user = User { name: "alice", age: 30 }
+print(to_string(user))
+print(to_string(user.name))
+
+defrecord Pair(first: Int, second: String)
+pair = Pair(1, "hello")
+print(to_string(pair))
+print(to_string(pair.first))
+
+# ── Step 8: if / match ──
+greeting = if(flag, "hello", "goodbye")
+print(greeting)
+
+match flag {
+  True  => print("flag is true"),
+  False => print("flag is false"),
+}
+
+result: Result<Int> = Ok(42)
+match result {
+  Ok(val)  => print(to_string(val)),
+  Err(e)   => print("error"),
+}
+
+# ── Step 9: deferror / Error ──
+deferror MyError {
+  "something went wrong"
+}
+
+err_result: Result<Int> = Err(MyError)
+match err_result {
+  Ok(val)  => print(to_string(val)),
+  Err(e)   => print("got error"),
+}
+
+msg = "hello" ++ " world"
+print(msg)
