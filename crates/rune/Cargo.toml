@@ -15,9 +15,9 @@ scar  = { path = "../scar" }
 forge = { path = "../forge" }
 eldr  = { path = "../eldr" }
 sindr = { path = "../sindr" }
+xldr  = { path = "../xldr" }
 ariadne = "0.6.0"
 serde_json = "1.0"
-rustyline = "13"
 
 [[test]]
 name = "run_srt"

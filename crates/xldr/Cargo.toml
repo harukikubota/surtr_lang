@@ -1,0 +1,15 @@
+[package]
+name = "xldr"
+version = "0.1.0"
+edition = "2021"
+description = "Interactive and eXtensible surtr and eLDR runtime tools"
+
+[dependencies]
+spire = { path = "../spire" }
+sigil = { path = "../sigil" }
+scar = { path = "../scar" }
+forge = { path = "../forge" }
+eldr = { path = "../eldr" }
+sindr = { path = "../sindr" }
+ariadne = "0.6.0"
+rustyline = "13"

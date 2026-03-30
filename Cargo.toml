@@ -8,5 +8,6 @@ members = [
     "crates/scar",
     "crates/forge",
     "crates/eldr",
+    "crates/xldr",
     "crates/rune",
 ]
