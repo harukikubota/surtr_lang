@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use sigil::resolved::*;
+use sindr::builtin::{builtin_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS};
 use spire::ast::{AstTy, BinOp, Lit, Span};
 
 use crate::env::TypeEnv;
@@ -18,15 +19,11 @@ pub fn typecheck(resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
 
 fn initialize_env() -> TypeEnv {
     let mut env = TypeEnv::new();
-    // Register builtin function types.
-    // These unique_ids must match the order in sigil's Ok/Err + BUILTIN_NAMES.
-    // 0=Ok, 1=Err, 2=print, 3=to_string, 4=eprint
-
     // Ok constructor: ($A) -> Result<$A, $E>
     let ok_a = env.fresh_tyvar();
     let ok_e = env.fresh_tyvar();
     env.bind_var(
-        3,
+        0,
         Ty::BuiltinFunc {
             name: "Ok".into(),
             params: vec![ok_a.clone()],
@@ -38,7 +35,7 @@ fn initialize_env() -> TypeEnv {
     let err_a = env.fresh_tyvar();
     let err_e = env.fresh_tyvar();
     env.bind_var(
-        4,
+        1,
         Ty::BuiltinFunc {
             name: "Err".into(),
             params: vec![err_e.clone()],
@@ -46,39 +43,41 @@ fn initialize_env() -> TypeEnv {
         },
     );
 
-    // print: (String) -> Unit
-    // V8 says print takes String. to_string must be called explicitly.
-    env.bind_var(
-        2,
-        Ty::BuiltinFunc {
-            name: "print".into(),
+    for meta in BUILTIN_METAS {
+        let uid = builtin_uid(meta.builtin_id);
+        let ty = builtin_ty_from_meta(meta, &mut env);
+        env.bind_var(uid, ty);
+    }
+
+    env
+}
+
+fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
+    match meta.name {
+        "print" => Ty::BuiltinFunc {
+            name: meta.name.into(),
             params: vec![Ty::Str],
             ret: Box::new(Ty::Unit),
         },
-    );
-
-    // to_string: ($A) -> String — polymorphic
-    let a = env.fresh_tyvar();
-    env.bind_var(
-        3,
-        Ty::BuiltinFunc {
-            name: "to_string".into(),
-            params: vec![a],
-            ret: Box::new(Ty::Str),
-        },
-    );
-
-    // eprint: (Error) -> Unit
-    env.bind_var(
-        4,
-        Ty::BuiltinFunc {
-            name: "eprint".into(),
+        "to_string" => {
+            let a = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![a],
+                ret: Box::new(Ty::Str),
+            }
+        }
+        "eprint" => Ty::BuiltinFunc {
+            name: meta.name.into(),
             params: vec![Ty::Error],
             ret: Box::new(Ty::Unit),
         },
-    );
-
-    env
+        _ => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Unit; meta.arity as usize],
+            ret: Box::new(Ty::Unit),
+        },
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -745,8 +744,9 @@ impl Checker {
                         ResolvedRecordLitArg::Positional(expr) => {
                             if seen_named {
                                 return Err(TypeError {
-                                    message: "Positional arguments must come before named arguments"
-                                        .into(),
+                                    message:
+                                        "Positional arguments must come before named arguments"
+                                            .into(),
                                     span: span.clone(),
                                     hint: None,
                                 });
@@ -949,8 +949,7 @@ impl Checker {
             }
         }
 
-        let mut body_checker =
-            Checker::with_env_and_params(fun_env, self.user_func_params.clone());
+        let mut body_checker = Checker::with_env_and_params(fun_env, self.user_func_params.clone());
         if let Some(Ty::Func(_, expected_ret)) = expected {
             body_checker.function_return_ty = Some(expected_ret.as_ref().clone());
         }
@@ -1515,6 +1514,35 @@ impl Checker {
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
+        let meta = builtin_meta_by_name(&id.name).ok_or_else(|| TypeError {
+            message: format!("Unknown builtin declaration: {}", id.name),
+            span: span.clone(),
+            hint: None,
+        })?;
+        let expected_uid = builtin_uid(meta.builtin_id);
+        if id.unique_id != expected_uid {
+            return Err(TypeError {
+                message: format!(
+                    "Builtin {} has inconsistent unique_id: expected {}, got {}",
+                    id.name, expected_uid, id.unique_id
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if params.len() != usize::from(meta.arity) {
+            return Err(TypeError {
+                message: format!(
+                    "Builtin {} arity mismatch: expected {}, got {}",
+                    id.name,
+                    meta.arity,
+                    params.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
         let mut tyvars = HashMap::new();
         let param_tys = params
             .iter()
@@ -1566,8 +1594,7 @@ impl Checker {
             None => Ty::Unit,
         };
 
-        let mut body_checker =
-            Checker::with_env_and_params(fun_env, self.user_func_params.clone());
+        let mut body_checker = Checker::with_env_and_params(fun_env, self.user_func_params.clone());
         body_checker.function_return_ty = Some(expected_ret.clone());
         let typed_body = body_checker.check_node(body)?;
 

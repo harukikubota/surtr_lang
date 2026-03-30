@@ -2,22 +2,20 @@
 
 use std::collections::HashSet;
 
+use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{Ast, AstPattern, BinOp, ClosureParam, FunParam, Lit, RecordLitArg, Span};
 
 use crate::error::ResolveError;
 use crate::resolved::*;
 use crate::scope::Scope;
 
-/// Built-in function names that Sigil pre-registers.
-const BUILTIN_NAMES: &[&str] = &["print", "to_string", "eprint"];
-
 fn initialize_scope() -> Scope {
     let mut scope = Scope::new();
     let dummy = Span { start: 0, end: 0 };
     scope.define("Ok", dummy.clone());
     scope.define("Err", dummy);
-    for name in BUILTIN_NAMES {
-        scope.define(name, Span { start: 0, end: 0 });
+    for meta in BUILTIN_METAS {
+        scope.define_with_id(meta.name, builtin_uid(meta.builtin_id));
     }
     scope
 }
@@ -322,7 +320,7 @@ impl Resolver {
             }
 
             Ast::BuiltinDecl(span, name, params, ret_ty) => {
-                if !BUILTIN_NAMES.contains(&name.as_str()) {
+                if !BUILTIN_METAS.iter().any(|meta| meta.name == name) {
                     return Err(ResolveError {
                         message: format!("Unknown builtin declaration: {}", name),
                         span,

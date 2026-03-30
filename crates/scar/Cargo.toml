@@ -7,3 +7,4 @@ description = "Surtr's Checker And type Reasoner"
 [dependencies]
 spire = { path = "../spire" }
 sigil = { path = "../sigil" }
+sindr = { path = "../sindr" }

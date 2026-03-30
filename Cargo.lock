@@ -47,7 +47,7 @@ name = "eldr"
 version = "0.1.0"
 dependencies = [
  "ariadne",
- "forge",
+ "sindr",
 ]
 
 [[package]]
@@ -87,10 +87,9 @@ dependencies = [
 name = "forge"
 version = "0.1.0"
 dependencies = [
- "bincode",
  "scar",
- "serde",
  "sigil",
+ "sindr",
  "spire",
 ]
 
@@ -192,6 +191,7 @@ dependencies = [
  "scar",
  "serde_json",
  "sigil",
+ "sindr",
  "spire",
 ]
 
@@ -235,6 +235,7 @@ name = "scar"
 version = "0.1.0"
 dependencies = [
  "sigil",
+ "sindr",
  "spire",
 ]
 
@@ -285,7 +286,16 @@ dependencies = [
 name = "sigil"
 version = "0.1.0"
 dependencies = [
+ "sindr",
  "spire",
+]
+
+[[package]]
+name = "sindr"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "serde",
 ]
 
 [[package]]

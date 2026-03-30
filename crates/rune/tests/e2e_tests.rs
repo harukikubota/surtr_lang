@@ -3,8 +3,8 @@ mod e2e {
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
 
     fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, String> {
-        let mut ast =
-            spire::parse(BUILTIN_PRELUDE_SOURCE).map_err(|e| format!("Parse (builtin.srt): {}", e))?;
+        let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE)
+            .map_err(|e| format!("Parse (builtin.srt): {}", e))?;
         let mut user_ast = spire::parse(source).map_err(|e| format!("Parse: {}", e))?;
         ast.append(&mut user_ast);
         Ok(ast)
@@ -651,6 +651,24 @@ match err_result {
         .expect("Pipeline failed");
         assert_eq!(stdout, Vec::<String>::new());
         assert_eq!(stderr, vec!["Error: PageNotFound: Page Not Found. 404"]);
+    }
+
+    #[test]
+    fn step9_match_err_eprint_with_wildcard_arm() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"deferror MyE {
+  "hoge"
+}
+
+ret: Result<Int> = Err(MyE)
+match ret {
+  Err(e) => eprint(e),
+  _ => print("")
+}"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(stderr, vec!["Error: MyE: hoge"]);
     }
 
     #[test]

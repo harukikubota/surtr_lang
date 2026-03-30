@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
+use sindr::builtin::builtin_meta_by_name;
 use spire::ast::{BinOp, Lit, Span};
 
 use crate::bytecode::*;
@@ -24,6 +25,7 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         type_registry: state.type_registry,
         error_templates: state.error_templates,
         functions: state.functions,
+        source_map: None,
     })
 }
 
@@ -313,12 +315,7 @@ impl Codegen {
     }
 
     fn builtin_id(name: &str) -> Option<u16> {
-        match name {
-            "print" => Some(0),
-            "to_string" => Some(1),
-            "eprint" => Some(2),
-            _ => None,
-        }
+        builtin_meta_by_name(name).map(|meta| meta.builtin_id)
     }
 
     fn emit_callable_ref(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
@@ -378,15 +375,10 @@ impl Codegen {
 
         let entry_pc = self.current_pos() as u32;
         let total_arity = captures.len() + params.len();
-        self.emit(Opcode::MakeFrame(total_arity as u32));
-        for slot in (0..total_arity).rev() {
-            self.emit(Opcode::StoreLocal(slot as u32));
-        }
         let prev_in_function = self.in_function;
         self.in_function = true;
         self.emit_node(body)?;
         self.in_function = prev_in_function;
-        self.emit(Opcode::PopFrame);
         self.emit(Opcode::Return);
 
         self.state.functions.push(FunctionEntry {
@@ -497,6 +489,11 @@ impl Codegen {
                 _ => main_stmts.push(stmt),
             }
         }
+        defs.sort_by_key(|stmt| match &stmt.node {
+            TypedInner::Def(fun_idx, _, _, _, _) => *fun_idx,
+            TypedInner::DeferrorDef(_, fun_idx, _, _, _) => *fun_idx,
+            _ => u32::MAX,
+        });
 
         for (i, stmt) in main_stmts.iter().enumerate() {
             self.emit_node(stmt)?;
@@ -516,6 +513,7 @@ impl Codegen {
         }
 
         self.emit_pending_closures()?;
+        self.normalize_function_table()?;
 
         Ok(())
     }
@@ -545,15 +543,10 @@ impl Codegen {
         self.state.next_slot = params.len() as u32;
 
         let entry_pc = self.current_pos() as u32;
-        self.emit(Opcode::MakeFrame(params.len() as u32));
-        for slot in (0..params.len()).rev() {
-            self.emit(Opcode::StoreLocal(slot as u32));
-        }
         let prev_in_function = self.in_function;
         self.in_function = true;
         self.emit_node(body)?;
         self.in_function = prev_in_function;
-        self.emit(Opcode::PopFrame);
         self.emit(Opcode::Return);
 
         let num_locals = self.state.next_slot;
@@ -609,16 +602,11 @@ impl Codegen {
         self.state.next_slot = params.len() as u32;
 
         let entry_pc = self.current_pos() as u32;
-        self.emit(Opcode::MakeFrame(params.len() as u32));
-        for slot in (0..params.len()).rev() {
-            self.emit(Opcode::StoreLocal(slot as u32));
-        }
         let prev_in_function = self.in_function;
         self.in_function = true;
         self.emit_node(body)?;
         self.in_function = prev_in_function;
         self.emit(Opcode::MakeError(template_id));
-        self.emit(Opcode::PopFrame);
         self.emit(Opcode::Return);
 
         let num_locals = self.state.next_slot;
@@ -833,7 +821,6 @@ impl Codegen {
 
         self.emit(Opcode::LoadLocal(result_slot));
         if self.in_function {
-            self.emit(Opcode::PopFrame);
             self.emit(Opcode::Return);
         } else {
             // Script path: report and stop immediately.
@@ -861,6 +848,22 @@ impl Codegen {
         }
         let unit_idx = self.add_constant(Constant::Unit);
         self.emit(Opcode::LoadConst(unit_idx));
+        Ok(())
+    }
+
+    fn normalize_function_table(&mut self) -> Result<(), CodegenError> {
+        self.state.functions.sort_by_key(|entry| entry.fun_idx);
+        for (idx, entry) in self.state.functions.iter().enumerate() {
+            if entry.fun_idx as usize != idx {
+                return Err(CodegenError {
+                    message: format!(
+                        "Function table invariant violated: functions[{}].fun_idx = {}",
+                        idx, entry.fun_idx
+                    ),
+                    span: Span { start: 0, end: 0 },
+                });
+            }
+        }
         Ok(())
     }
 
@@ -995,10 +998,11 @@ impl Codegen {
                 }
                 TypedInterpolatedPart::Expr(expr) => {
                     self.emit_node(expr)?;
-                    let to_string_id = Self::builtin_id("to_string").ok_or_else(|| CodegenError {
-                        message: "Unknown builtin: to_string".into(),
-                        span: expr.span.clone(),
-                    })?;
+                    let to_string_id =
+                        Self::builtin_id("to_string").ok_or_else(|| CodegenError {
+                            message: "Unknown builtin: to_string".into(),
+                            span: expr.span.clone(),
+                        })?;
                     self.emit(Opcode::CallBuiltin(to_string_id, 1));
                 }
             }

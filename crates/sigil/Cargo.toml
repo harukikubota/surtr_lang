@@ -6,3 +6,4 @@ description = "Name resolver — binds identifiers to unique definitions"
 
 [dependencies]
 spire = { path = "../spire" }
+sindr = { path = "../sindr" }

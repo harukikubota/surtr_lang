@@ -1,9 +1,8 @@
-use forge::bytecode::{Bytecode, BytecodeChunk};
-use forge::opcode::Opcode;
-use forge::registry::TypeRegistry;
+use sindr::ir::{Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode};
+use sindr::runtime::{Callable, CallableTarget, Location, RichError, TypeRegistry, Value};
 
+use crate::builtin::call_builtin;
 use crate::error::RuntimeError;
-use crate::value::{Callable, CallableTarget, Value};
 
 #[derive(Debug, Clone)]
 struct CallFrame {
@@ -61,6 +60,7 @@ impl VM {
             type_registry,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            source_map: None,
         })
     }
 
@@ -93,7 +93,7 @@ impl VM {
         self
     }
 
-    /// Access the type registry (used by builtins). Returns a clone to avoid borrow issues.
+    /// Access the type registry (used by builtins).
     pub fn type_registry(&self) -> TypeRegistry {
         self.bytecode.type_registry.clone()
     }
@@ -137,7 +137,20 @@ impl VM {
         self.bytecode.opcodes.extend(chunk.opcodes);
         for mut entry in chunk.functions {
             entry.entry_pc += code_base as u32;
-            self.bytecode.functions.push(entry);
+            let idx = entry.fun_idx as usize;
+            if idx == self.bytecode.functions.len() {
+                self.bytecode.functions.push(entry);
+            } else if idx < self.bytecode.functions.len() {
+                self.bytecode.functions[idx] = entry;
+            } else {
+                return Err(RuntimeError {
+                    message: format!(
+                        "Function table invariant violated in chunk: fun_idx {} > len {}",
+                        idx,
+                        self.bytecode.functions.len()
+                    ),
+                });
+            }
         }
         if let Some(frame) = self.frames.first_mut() {
             frame
@@ -161,14 +174,17 @@ impl VM {
     }
 
     fn execute_opcode(&mut self, op: Opcode, pc: &mut usize) -> Result<bool, RuntimeError> {
-        use crate::builtin::BUILTINS;
-        use forge::bytecode::Constant;
-
         match op {
             Opcode::Halt => return Ok(true),
 
             Opcode::LoadConst(idx) => {
-                let c = &self.bytecode.constants[idx as usize];
+                let c = self
+                    .bytecode
+                    .constants
+                    .get(idx as usize)
+                    .ok_or_else(|| RuntimeError {
+                        message: format!("LoadConst index out of bounds: {}", idx),
+                    })?;
                 let val = match c {
                     Constant::Int(n) => Value::Int(*n),
                     Constant::Float(f) => Value::Float(*f),
@@ -199,25 +215,29 @@ impl VM {
                     .locals
                     .get(slot as usize)
                     .cloned()
-                    .unwrap_or(Value::Unit);
+                    .ok_or_else(|| RuntimeError {
+                        message: format!("LoadLocal out of bounds: {}", slot),
+                    })?;
                 self.stack.push(val);
             }
 
             Opcode::StoreLocal(slot) => {
                 let val = self.pop_stack()?;
-                // Grow locals if needed
-                let frame = self.current_frame_mut();
-                while frame.locals.len() <= slot as usize {
-                    frame.locals.push(Value::Unit);
-                }
-                frame.locals[slot as usize] = val;
+                let target = self
+                    .current_frame_mut()
+                    .locals
+                    .get_mut(slot as usize)
+                    .ok_or_else(|| RuntimeError {
+                        message: format!("StoreLocal out of bounds: {}", slot),
+                    })?;
+                *target = val;
             }
 
             Opcode::Pop => {
                 self.pop_stack()?;
             }
 
-            // ── Arithmetic (Int) ──
+            // Arithmetic (Int)
             Opcode::AddInt => self.int_binop(|a, b| Ok(Value::Int(a + b)))?,
             Opcode::SubInt => self.int_binop(|a, b| Ok(Value::Int(a - b)))?,
             Opcode::MulInt => self.int_binop(|a, b| Ok(Value::Int(a * b)))?,
@@ -240,13 +260,13 @@ impl VM {
                 }
             })?,
 
-            // ── Arithmetic (Float) ──
+            // Arithmetic (Float)
             Opcode::AddFloat => self.float_binop(|a, b| Value::Float(a + b))?,
             Opcode::SubFloat => self.float_binop(|a, b| Value::Float(a - b))?,
             Opcode::MulFloat => self.float_binop(|a, b| Value::Float(a * b))?,
             Opcode::DivFloat => self.float_binop(|a, b| Value::Float(a / b))?,
 
-            // ── Comparison (Int) ──
+            // Comparison (Int)
             Opcode::EqInt => self.int_binop(|a, b| Ok(Value::Bool(a == b)))?,
             Opcode::NeqInt => self.int_binop(|a, b| Ok(Value::Bool(a != b)))?,
             Opcode::LtInt => self.int_binop(|a, b| Ok(Value::Bool(a < b)))?,
@@ -254,7 +274,7 @@ impl VM {
             Opcode::LteInt => self.int_binop(|a, b| Ok(Value::Bool(a <= b)))?,
             Opcode::GteInt => self.int_binop(|a, b| Ok(Value::Bool(a >= b)))?,
 
-            // ── Comparison (Float) ──
+            // Comparison (Float)
             Opcode::EqFloat => self.float_binop(|a, b| Value::Bool(a == b))?,
             Opcode::NeqFloat => self.float_binop(|a, b| Value::Bool(a != b))?,
             Opcode::LtFloat => self.float_binop(|a, b| Value::Bool(a < b))?,
@@ -262,7 +282,7 @@ impl VM {
             Opcode::LteFloat => self.float_binop(|a, b| Value::Bool(a <= b))?,
             Opcode::GteFloat => self.float_binop(|a, b| Value::Bool(a >= b))?,
 
-            // ── Comparison (String) ──
+            // Comparison (String)
             Opcode::EqStr => {
                 let b = self.pop_str()?;
                 let a = self.pop_str()?;
@@ -274,7 +294,7 @@ impl VM {
                 self.stack.push(Value::Bool(a != b));
             }
 
-            // ── Comparison (Bool) ──
+            // Comparison (Bool)
             Opcode::EqBool => {
                 let b = self.pop_bool()?;
                 let a = self.pop_bool()?;
@@ -286,14 +306,14 @@ impl VM {
                 self.stack.push(Value::Bool(a != b));
             }
 
-            // ── String ──
+            // String
             Opcode::ConcatStr => {
                 let b = self.pop_str()?;
                 let a = self.pop_str()?;
                 self.stack.push(Value::Str(a + &b));
             }
 
-            // ── Unary ──
+            // Unary
             Opcode::NegInt => {
                 let a = self.pop_int()?;
                 self.stack.push(Value::Int(-a));
@@ -307,7 +327,7 @@ impl VM {
                 self.stack.push(Value::Bool(!a));
             }
 
-            // ── List ──
+            // List
             Opcode::ListNew(n) => {
                 let mut elems = Vec::with_capacity(n as usize);
                 for _ in 0..n {
@@ -320,7 +340,7 @@ impl VM {
                 self.stack.push(Value::List(Vec::new()));
             }
 
-            // ── Struct / Tagged ──
+            // Struct / Tagged
             Opcode::StructNew(num_fields) => {
                 let mut fields = Vec::with_capacity(num_fields as usize);
                 for _ in 0..num_fields {
@@ -329,10 +349,12 @@ impl VM {
                 fields.reverse();
                 let tag_val = self.pop_stack()?;
                 let tag = match tag_val {
-                    Value::Int(t) => t as u32,
-                    _ => {
+                    Value::Int(tag) => u32::try_from(tag).map_err(|_| RuntimeError {
+                        message: format!("StructNew: invalid tag value {}", tag),
+                    })?,
+                    other => {
                         return Err(RuntimeError {
-                            message: "StructNew: expected Int tag".into(),
+                            message: format!("StructNew: expected Int tag, got {:?}", other),
                         });
                     }
                 };
@@ -342,13 +364,14 @@ impl VM {
                 let val = self.pop_stack()?;
                 match val {
                     Value::Tagged { fields, .. } => {
-                        if (idx as usize) < fields.len() {
-                            self.stack.push(fields[idx as usize].clone());
-                        } else {
-                            return Err(RuntimeError {
-                                message: format!("Field index {} out of bounds", idx),
-                            });
-                        }
+                        let field =
+                            fields
+                                .get(idx as usize)
+                                .cloned()
+                                .ok_or_else(|| RuntimeError {
+                                    message: format!("Field index {} out of bounds", idx),
+                                })?;
+                        self.stack.push(field);
                     }
                     _ => {
                         return Err(RuntimeError {
@@ -371,27 +394,19 @@ impl VM {
                 }
             }
 
-            // ── Built-in function call ──
+            // Built-in function call
             Opcode::CallBuiltin(builtin_id, arity) => {
                 let mut args = Vec::with_capacity(arity as usize);
                 for _ in 0..arity {
                     args.push(self.pop_stack()?);
                 }
                 args.reverse();
-                let builtin = &BUILTINS[builtin_id as usize];
-                let result = (builtin.func)(self, args)?;
+                let result = call_builtin(self, builtin_id, args)?;
                 self.stack.push(result);
             }
 
             Opcode::Call(fun_idx, arity, span_start, span_end) => {
-                let entry = self
-                    .bytecode
-                    .functions
-                    .iter()
-                    .find(|entry| entry.fun_idx == fun_idx)
-                    .ok_or_else(|| RuntimeError {
-                        message: format!("Unknown function index: {}", fun_idx),
-                    })?;
+                let entry = self.function_entry(fun_idx)?.clone();
                 if entry.arity != arity {
                     return Err(RuntimeError {
                         message: format!(
@@ -400,18 +415,30 @@ impl VM {
                         ),
                     });
                 }
-                if self.stack.len() < arity as usize {
+
+                let mut args = Vec::with_capacity(arity as usize);
+                for _ in 0..arity {
+                    args.push(self.pop_stack()?);
+                }
+                args.reverse();
+
+                if entry.entry_pc as usize >= self.bytecode.opcodes.len() {
                     return Err(RuntimeError {
-                        message: "Stack underflow".into(),
+                        message: format!(
+                            "Function {} entry_pc out of bounds: {}",
+                            fun_idx, entry.entry_pc
+                        ),
                     });
                 }
-                let stack_base = self.stack.len() - arity as usize;
+
+                let locals = Self::build_locals_for_call(&entry, args)?;
                 let return_pc = *pc;
+                let stack_base = self.stack.len();
                 self.frames.push(CallFrame {
                     return_pc,
                     stack_base,
                     call_site: Some((span_start, span_end)),
-                    locals: Vec::new(),
+                    locals,
                 });
                 *pc = entry.entry_pc as usize;
             }
@@ -432,11 +459,11 @@ impl VM {
                     .ok_or_else(|| RuntimeError {
                         message: format!("Unknown error template: {}", template_id),
                     })?;
-                let call_site = self.current_frame().call_site.clone();
+                let call_site = self.current_frame().call_site;
                 let (span_start, span_end) = call_site
                     .map(|(start, end)| (start, end))
                     .unwrap_or((template.span_start, template.span_end));
-                let location = crate::value::Location {
+                let location = Location {
                     file: self
                         .source_file()
                         .map(|s| s.to_string())
@@ -447,12 +474,11 @@ impl VM {
                     span_start,
                     span_end,
                 };
-                self.stack
-                    .push(Value::Error(Box::new(crate::value::RichError {
-                        kind: template.kind.clone(),
-                        message,
-                        location,
-                    })));
+                self.stack.push(Value::Error(Box::new(RichError {
+                    kind: template.kind.clone(),
+                    message,
+                    location,
+                })));
             }
 
             Opcode::MakeClosure(num_captured) => {
@@ -484,6 +510,7 @@ impl VM {
                     args.push(self.pop_stack()?);
                 }
                 args.reverse();
+
                 let callable = match self.pop_stack()? {
                     Value::Callable(callable) => callable,
                     _ => {
@@ -493,35 +520,16 @@ impl VM {
                     }
                 };
 
-                let mut full_args = callable.captured.clone();
+                let mut full_args = callable.captured;
                 full_args.extend(args);
 
                 match callable.target {
                     CallableTarget::Builtin(builtin_id) => {
-                        use crate::builtin::BUILTINS;
-                        let builtin = &BUILTINS[builtin_id as usize];
-                        if usize::from(builtin.arity) != full_args.len() {
-                            return Err(RuntimeError {
-                                message: format!(
-                                    "builtin {} arity mismatch: expected {}, got {}",
-                                    builtin.name,
-                                    builtin.arity,
-                                    full_args.len()
-                                ),
-                            });
-                        }
-                        let result = (builtin.func)(self, full_args)?;
+                        let result = call_builtin(self, builtin_id, full_args)?;
                         self.stack.push(result);
                     }
                     CallableTarget::Function(fun_idx) => {
-                        let entry = self
-                            .bytecode
-                            .functions
-                            .iter()
-                            .find(|entry| entry.fun_idx == fun_idx)
-                            .ok_or_else(|| RuntimeError {
-                                message: format!("Unknown function index: {}", fun_idx),
-                            })?;
+                        let entry = self.function_entry(fun_idx)?.clone();
                         if entry.arity as usize != full_args.len() {
                             return Err(RuntimeError {
                                 message: format!(
@@ -532,29 +540,40 @@ impl VM {
                                 ),
                             });
                         }
-                        let stack_base = self.stack.len();
-                        self.stack.extend(full_args);
+                        if entry.entry_pc as usize >= self.bytecode.opcodes.len() {
+                            return Err(RuntimeError {
+                                message: format!(
+                                    "Function {} entry_pc out of bounds: {}",
+                                    fun_idx, entry.entry_pc
+                                ),
+                            });
+                        }
+
+                        let locals = Self::build_locals_for_call(&entry, full_args)?;
                         let return_pc = *pc;
+                        let stack_base = self.stack.len();
                         self.frames.push(CallFrame {
                             return_pc,
                             stack_base,
                             call_site: Some((span_start, span_end)),
-                            locals: Vec::new(),
+                            locals,
                         });
                         *pc = entry.entry_pc as usize;
                     }
                 }
             }
 
-            // ── Control flow ──
+            // Control flow
             Opcode::Jump(addr) => {
-                *pc = addr as usize;
+                *pc = self.validate_jump_target(addr)?;
             }
             Opcode::JumpIfFalse(addr) => {
                 let val = self.pop_stack()?;
                 match val {
-                    Value::Bool(false) => *pc = addr as usize,
-                    Value::Bool(true) => {} // fall through
+                    Value::Bool(false) => {
+                        *pc = self.validate_jump_target(addr)?;
+                    }
+                    Value::Bool(true) => {}
                     _ => {
                         return Err(RuntimeError {
                             message: "JumpIfFalse: expected Bool".into(),
@@ -565,8 +584,10 @@ impl VM {
             Opcode::JumpIfTrue(addr) => {
                 let val = self.pop_stack()?;
                 match val {
-                    Value::Bool(true) => *pc = addr as usize,
-                    Value::Bool(false) => {} // fall through
+                    Value::Bool(true) => {
+                        *pc = self.validate_jump_target(addr)?;
+                    }
+                    Value::Bool(false) => {}
                     _ => {
                         return Err(RuntimeError {
                             message: "JumpIfTrue: expected Bool".into(),
@@ -575,17 +596,18 @@ impl VM {
                 }
             }
 
-            // ── Frame management ──
-            Opcode::MakeFrame(num_locals) => {
-                self.current_frame_mut().locals = vec![Value::Unit; num_locals as usize];
-            }
-            Opcode::PopFrame => {
-                self.current_frame_mut().locals.clear();
-            }
+            // Deprecated frame management opcodes are no-ops under the new calling convention.
+            Opcode::MakeFrame(_) | Opcode::PopFrame => {}
 
-            // ── Return ──
+            // Return
             Opcode::Return => {
-                let ret = self.stack.pop().unwrap_or(Value::Unit);
+                if self.frames.len() == 1 {
+                    return Err(RuntimeError {
+                        message: "Return at top-level".into(),
+                    });
+                }
+
+                let ret = self.pop_stack()?;
                 let frame = self.frames.pop().ok_or_else(|| RuntimeError {
                     message: "Return with empty frame stack".into(),
                 })?;
@@ -598,7 +620,62 @@ impl VM {
         Ok(false)
     }
 
-    // ── Stack helpers ──
+    fn build_locals_for_call(
+        entry: &FunctionEntry,
+        args: Vec<Value>,
+    ) -> Result<Vec<Value>, RuntimeError> {
+        let num_locals = entry.num_locals as usize;
+        if num_locals < args.len() {
+            return Err(RuntimeError {
+                message: format!(
+                    "Function {} requires at least {} local slots, got {}",
+                    entry.fun_idx,
+                    args.len(),
+                    num_locals
+                ),
+            });
+        }
+
+        let mut locals = vec![Value::Unit; num_locals];
+        for (idx, arg) in args.into_iter().enumerate() {
+            locals[idx] = arg;
+        }
+        Ok(locals)
+    }
+
+    fn function_entry(&self, fun_idx: u32) -> Result<&FunctionEntry, RuntimeError> {
+        let idx = fun_idx as usize;
+        let entry = self
+            .bytecode
+            .functions
+            .get(idx)
+            .ok_or_else(|| RuntimeError {
+                message: format!("Unknown function index: {}", fun_idx),
+            })?;
+
+        if entry.fun_idx != fun_idx {
+            return Err(RuntimeError {
+                message: format!(
+                    "Function table invariant violated: functions[{}].fun_idx = {}",
+                    idx, entry.fun_idx
+                ),
+            });
+        }
+
+        Ok(entry)
+    }
+
+    fn validate_jump_target(&self, addr: u32) -> Result<usize, RuntimeError> {
+        let target = addr as usize;
+        if target >= self.bytecode.opcodes.len() {
+            return Err(RuntimeError {
+                message: format!("Invalid jump target: {}", addr),
+            });
+        }
+        Ok(target)
+    }
+
+    // Stack helpers
 
     fn pop_stack(&mut self) -> Result<Value, RuntimeError> {
         self.stack.pop().ok_or_else(|| RuntimeError {
@@ -673,5 +750,72 @@ impl VM {
         let a = self.pop_float()?;
         self.stack.push(f(a, b));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VM;
+    use sindr::ir::{Bytecode, Constant, FunctionEntry, Opcode};
+    use sindr::runtime::TypeRegistry;
+
+    fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
+        Bytecode {
+            opcodes,
+            constants: Vec::new(),
+            num_locals: 0,
+            type_registry: TypeRegistry::new(),
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+            source_map: None,
+        }
+    }
+
+    #[test]
+    fn top_level_return_is_runtime_error() {
+        let bytecode = base_bytecode(vec![Opcode::Return]);
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("top-level"));
+    }
+
+    #[test]
+    fn load_local_out_of_bounds_is_runtime_error() {
+        let bytecode = base_bytecode(vec![Opcode::LoadLocal(0), Opcode::Halt]);
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("LoadLocal out of bounds"));
+    }
+
+    #[test]
+    fn invalid_jump_is_runtime_error() {
+        let bytecode = base_bytecode(vec![Opcode::Jump(42), Opcode::Halt]);
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("Invalid jump target"));
+    }
+
+    #[test]
+    fn unknown_function_index_is_runtime_error() {
+        let bytecode = base_bytecode(vec![Opcode::Call(1, 0, 0, 0), Opcode::Halt]);
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("Unknown function index"));
+    }
+
+    #[test]
+    fn call_initializes_locals_without_makeframe() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::Call(0, 1, 0, 0),
+            Opcode::Halt,
+            Opcode::LoadLocal(0),
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![Constant::Int(5)];
+        bytecode.functions = vec![FunctionEntry {
+            fun_idx: 0,
+            entry_pc: 3,
+            num_locals: 1,
+            arity: 1,
+        }];
+
+        VM::new(bytecode).run().expect("run should succeed");
     }
 }

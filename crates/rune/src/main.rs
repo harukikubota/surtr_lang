@@ -13,6 +13,7 @@ use rustyline::hint::{Hinter, HistoryHinter};
 use rustyline::history::DefaultHistory;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper};
+use sindr::builtin::BUILTIN_METAS;
 
 mod diagnostics;
 mod dump;
@@ -247,9 +248,10 @@ impl ReplEngine {
             pending: String::new(),
             next_line: 1,
             results: Vec::new(),
-            symbols: ["Ok", "Err", "print", "to_string", "eprint"]
+            symbols: ["Ok", "Err"]
                 .into_iter()
                 .map(str::to_string)
+                .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
         };
         engine.bootstrap_builtins();

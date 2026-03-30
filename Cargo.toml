@@ -2,6 +2,7 @@
 resolver = "2"
 default-members = ["crates/rune"]
 members = [
+    "crates/sindr",
     "crates/spire",
     "crates/sigil",
     "crates/scar",
