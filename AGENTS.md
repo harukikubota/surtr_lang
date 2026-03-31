@@ -35,10 +35,9 @@ surtr/
 
 | ファイル | 内容 |
 |---|---|
-| `doc/surtr_v8.md`            | 言語仕様・コンパイラ設計の全体定義 |
-| `doc/surtr_builtin_guide.md` | 組込み関数設計・フェーズ間グルー詳細 |
-| `doc/surtr_phase1_steps.md`  | フェーズ1の実装ステップと E2E テスト目標コード |
+| `doc/要件定義.md`             | 言語仕様・コンパイラ設計の全体定義 |
 | `doc/EldrVM_spec.md`         | VM仕様書 |
+| `doc/テスト方針.md`            | テストの分離方法・レイヤー | 
 
 ---
 
