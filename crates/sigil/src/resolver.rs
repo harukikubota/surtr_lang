@@ -104,6 +104,9 @@ impl Resolver {
 
     fn predeclare_functions(&mut self, stmts: &[Ast]) -> Result<(), ResolveError> {
         self.predeclared_ids.clear();
+        // Language rule:
+        // Top-level names must be unique per module / REPL session.
+        // We intentionally enforce the same rule for file execution and REPL.
         let mut declared_in_batch = HashSet::new();
         for stmt in stmts {
             match stmt {

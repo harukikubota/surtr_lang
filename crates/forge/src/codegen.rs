@@ -528,6 +528,7 @@ impl Codegen {
         // - Main/top-level statements are emitted first.
         // - A single Halt terminates top-level execution.
         // - Function bodies are emitted strictly after Halt and are entered only via Call/CallClosure.
+        // - Top-level duplicate function names are rejected earlier in Sigil.
         let mut defs = Vec::new();
         let mut main_stmts = Vec::new();
         let max_def_fun_idx = stmts
