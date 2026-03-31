@@ -691,8 +691,21 @@ impl Parser {
 
         self.expect(&Token::Pipe)?;
         self.skip_newlines();
-        let body = self.parse_expr()?;
-        self.skip_newlines();
+        let body_stmts = self.parse_block_stmts()?;
+        if body_stmts.is_empty() {
+            return Err(ParseError::incomplete("expression", self.peek_span()));
+        }
+        let body = if body_stmts.len() == 1 {
+            body_stmts.into_iter().next().expect("checked non-empty")
+        } else {
+            Ast::Block(
+                Span {
+                    start: body_stmts[0].span().start,
+                    end: body_stmts[body_stmts.len() - 1].span().end,
+                },
+                body_stmts,
+            )
+        };
         let end = self.expect(&Token::RBrace)?;
         Ok(Ast::Closure(
             Span {
@@ -1695,6 +1708,22 @@ def noop() {()}"#,
                 assert!(matches!(rhs.as_ref(), Ast::Closure(_, params, _) if params.is_empty()));
             }
             _ => panic!("Expected zero-arg closure"),
+        }
+    }
+
+    #[test]
+    fn test_closure_body_accepts_semicolon_separated_statements() {
+        let ast = parse("fun = {|num| x = x + 5;x+num}").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Closure(_, params, body) => {
+                    assert_eq!(params.len(), 1);
+                    assert!(matches!(params[0].name.as_str(), "num"));
+                    assert!(matches!(body.as_ref(), Ast::Block(_, stmts) if stmts.len() == 2));
+                }
+                _ => panic!("Expected Closure"),
+            },
+            _ => panic!("Expected Bind"),
         }
     }
 
