@@ -119,10 +119,14 @@ impl ForgeSession {
     ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
         let before = self.state.clone();
         let typed_for_meta = typed.clone();
+        let const_base = before.constants.len();
+        let error_template_base = before.error_templates.len();
 
         let mut gene = Codegen::from_state(before.clone());
+        gene.set_chunk_constant_dedup_start(const_base);
         gene.emit_program_chunk(typed)?;
-        let (opcodes, after) = gene.finalize();
+        let (mut opcodes, after) = gene.finalize();
+        localize_chunk_indices(&mut opcodes, const_base, error_template_base)?;
 
         let new_constants = after.constants[before.constants.len()..].to_vec();
         let new_locals = after.next_slot.saturating_sub(before.next_slot) as usize;
@@ -134,18 +138,68 @@ impl ForgeSession {
 
         self.state = after;
 
+        let const_base = u32::try_from(const_base).map_err(|_| CodegenError {
+            message: "constant base exceeds u32".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
+        let error_template_base = u32::try_from(error_template_base).map_err(|_| CodegenError {
+            message: "error template base exceeds u32".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
+
         Ok((
             BytecodeChunk {
                 opcodes,
+                const_base,
                 constants: new_constants,
                 new_locals,
                 type_entries,
+                error_template_base,
                 error_templates,
                 functions,
             },
             meta,
         ))
     }
+}
+
+fn localize_chunk_indices(
+    opcodes: &mut [Opcode],
+    const_base: usize,
+    error_template_base: usize,
+) -> Result<(), CodegenError> {
+    for op in opcodes.iter_mut() {
+        match op {
+            Opcode::LoadConst(idx) => {
+                let idx_usize = *idx as usize;
+                if idx_usize < const_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk constant index {} is below base {}",
+                            idx_usize, const_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                *idx = (idx_usize - const_base) as u32;
+            }
+            Opcode::MakeError(template_id) => {
+                let id_usize = *template_id as usize;
+                if id_usize < error_template_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk error template index {} is below base {}",
+                            id_usize, error_template_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                *template_id = (id_usize - error_template_base) as u32;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 impl Default for ForgeSession {
@@ -275,6 +329,7 @@ struct Codegen {
     label_positions: HashMap<Label, usize>, // label → IR index it points to
     pending_closures: Vec<PendingClosure>,
     in_function: bool,
+    constant_dedup_start: usize,
 }
 
 impl Codegen {
@@ -290,7 +345,12 @@ impl Codegen {
             label_positions: HashMap::new(),
             pending_closures: Vec::new(),
             in_function: false,
+            constant_dedup_start: 0,
         }
+    }
+
+    fn set_chunk_constant_dedup_start(&mut self, start: usize) {
+        self.constant_dedup_start = start;
     }
 
     fn fresh_label(&mut self) -> Label {
@@ -411,7 +471,13 @@ impl Codegen {
 
     fn add_constant(&mut self, c: Constant) -> u32 {
         // Check for existing identical constant
-        for (i, existing) in self.state.constants.iter().enumerate() {
+        for (i, existing) in self
+            .state
+            .constants
+            .iter()
+            .enumerate()
+            .skip(self.constant_dedup_start)
+        {
             if existing == &c {
                 return i as u32;
             }
@@ -458,6 +524,10 @@ impl Codegen {
         stmts: Vec<TypedNode>,
         pop_last: bool,
     ) -> Result<(), CodegenError> {
+        // Contract with VM::push():
+        // - Main/top-level statements are emitted first.
+        // - A single Halt terminates top-level execution.
+        // - Function bodies are emitted strictly after Halt and are entered only via Call/CallClosure.
         let mut defs = Vec::new();
         let mut main_stmts = Vec::new();
         let max_def_fun_idx = stmts
@@ -853,6 +923,8 @@ impl Codegen {
     }
 
     fn normalize_function_table(&mut self) -> Result<(), CodegenError> {
+        // Invariant: functions[idx].fun_idx == idx.
+        // VM relies on O(1) array lookup by fun_idx and fails fast if this invariant is broken.
         self.state.functions.sort_by_key(|entry| entry.fun_idx);
         for (idx, entry) in self.state.functions.iter().enumerate() {
             if entry.fun_idx as usize != idx {
@@ -970,7 +1042,7 @@ impl Codegen {
                 let end_label = self.fresh_label();
                 self.emit_jump_if_false(end_label);
                 self.emit_node(then)?;
-                self.emit(Opcode::Pop); // discard then result for 2-arg if
+                self.emit(Opcode::Pop); // discard then result for if_then/2
                 self.patch_label(end_label);
                 // Push Unit
                 let unit_idx = self.add_constant(Constant::Unit);

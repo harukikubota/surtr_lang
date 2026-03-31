@@ -1,1 +1,1 @@
-x: Int = if(True, 1)
+x: Int = if_then(True, 1)

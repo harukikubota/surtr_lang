@@ -38,7 +38,7 @@ pub enum Resolved {
     /// Interpolated string
     InterpolatedStr(Span, Vec<ResolvedInterpolatedPart>),
 
-    /// `if(cond, then, else?)` — converted from App("if", args) by Sigil
+    /// `if(cond, then, else)` / `if_then(cond, then)` special form
     If(Span, Box<Resolved>, Box<Resolved>, Option<Box<Resolved>>),
 
     /// Match expression

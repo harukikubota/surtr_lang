@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{Ast, AstPattern, BinOp, ClosureParam, FunParam, Lit, RecordLitArg, Span};
@@ -69,17 +69,23 @@ impl Default for SigilSession {
 
 struct Resolver {
     scope: Scope,
+    /// Fresh IDs reserved in predeclaration order for each function-like name.
+    predeclared_ids: HashMap<String, VecDeque<u32>>,
 }
 
 impl Resolver {
     fn new() -> Self {
         Self {
             scope: initialize_scope(),
+            predeclared_ids: HashMap::new(),
         }
     }
 
     fn with_scope(scope: Scope) -> Self {
-        Self { scope }
+        Self {
+            scope,
+            predeclared_ids: HashMap::new(),
+        }
     }
 
     fn into_scope(self) -> Scope {
@@ -87,26 +93,77 @@ impl Resolver {
     }
 
     fn resolve_program(&mut self, stmts: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
-        self.predeclare_functions(&stmts);
+        self.predeclare_functions(&stmts)?;
         let mut resolved = Vec::new();
         for stmt in stmts {
             resolved.push(self.resolve_node(stmt)?);
         }
+        self.predeclared_ids.clear();
         Ok(resolved)
     }
 
-    fn predeclare_functions(&mut self, stmts: &[Ast]) {
+    fn predeclare_functions(&mut self, stmts: &[Ast]) -> Result<(), ResolveError> {
+        self.predeclared_ids.clear();
+        let mut declared_in_batch = HashSet::new();
         for stmt in stmts {
             match stmt {
-                Ast::Def(_, name, _, _, _) | Ast::BuiltinDecl(_, name, _, _) => {
-                    if self.scope.lookup(name).is_none() {
-                        let uid = self.scope.reserve_id();
-                        self.scope.define_with_id(name, uid);
+                Ast::Def(span, name, _, _, _) => {
+                    if self.scope.lookup(name).is_some() || !declared_in_batch.insert(name.clone())
+                    {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                    let uid = self.scope.reserve_id();
+                    self.predeclared_ids
+                        .entry(name.clone())
+                        .or_default()
+                        .push_back(uid);
+                    // Keep the outer scope at the most recent declaration,
+                    // so forward references resolve to the latest top-level definition.
+                    self.scope.define_with_id(name, uid);
+                }
+                Ast::BuiltinDecl(_, name, _, _) => {
+                    if !declared_in_batch.insert(name.clone()) {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: stmt.span().clone(),
+                        });
+                    }
+                    // Builtins are keyed by fixed IDs from builtin metadata.
+                    // Re-declarations should keep that identity stable.
+                    let uid = self
+                        .scope
+                        .lookup(name)
+                        .unwrap_or_else(|| self.scope.reserve_id());
+                    self.predeclared_ids
+                        .entry(name.clone())
+                        .or_default()
+                        .push_back(uid);
+                    self.scope.define_with_id(name, uid);
+                }
+                Ast::StructDef(span, name, _)
+                | Ast::RecordDef(span, name, _)
+                | Ast::DeferrorDef(span, name, _, _) => {
+                    if self.scope.lookup(name).is_some() || !declared_in_batch.insert(name.clone())
+                    {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
                     }
                 }
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    fn take_predeclared_id(&mut self, name: &str) -> Option<u32> {
+        self.predeclared_ids
+            .get_mut(name)
+            .and_then(|ids| ids.pop_front())
     }
 
     fn resolve_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
@@ -132,7 +189,10 @@ impl Resolver {
                 // Check for `if` special form
                 if let Ast::Var(_, ref name) = *func {
                     if name == "if" {
-                        return self.resolve_if(span, args);
+                        return self.resolve_if(span, args, IfKind::If3);
+                    }
+                    if name == "if_then" {
+                        return self.resolve_if(span, args, IfKind::IfThen2);
                     }
                 }
 
@@ -220,6 +280,12 @@ impl Resolver {
 
             // Struct/Record/Deferror definitions — register type names
             Ast::StructDef(span, name, fields) => {
+                if self.scope.lookup(&name).is_some() {
+                    return Err(ResolveError {
+                        message: format!("Duplicate top-level definition: {}", name),
+                        span: span.clone(),
+                    });
+                }
                 let uid = self.scope.define(&name, span.clone());
                 let rid = ResolvedId {
                     name,
@@ -239,6 +305,12 @@ impl Resolver {
             }
 
             Ast::RecordDef(span, name, fields) => {
+                if self.scope.lookup(&name).is_some() {
+                    return Err(ResolveError {
+                        message: format!("Duplicate top-level definition: {}", name),
+                        span: span.clone(),
+                    });
+                }
                 let uid = self.scope.define(&name, span.clone());
                 let rid = ResolvedId {
                     name,
@@ -258,6 +330,12 @@ impl Resolver {
             }
 
             Ast::DeferrorDef(span, name, fields, show_expr) => {
+                if self.scope.lookup(&name).is_some() {
+                    return Err(ResolveError {
+                        message: format!("Duplicate top-level definition: {}", name),
+                        span: span.clone(),
+                    });
+                }
                 let uid = self.scope.define(&name, span.clone());
                 let rid = ResolvedId {
                     name,
@@ -292,10 +370,14 @@ impl Resolver {
 
             Ast::Def(span, name, params, ret_ty, body) => {
                 let fun_uid = self
-                    .scope
-                    .lookup(&name)
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
-                let mut body_resolver = Resolver::with_scope(self.scope.clone());
+                let mut body_scope = self.scope.clone();
+                // Ensure self-recursion inside this definition binds to this declaration,
+                // not to a newer same-name declaration predeclared later in the chunk.
+                body_scope.define_with_id(&name, fun_uid);
+                let mut body_resolver = Resolver::with_scope(body_scope);
                 let resolved_params = params
                     .into_iter()
                     .map(|param| body_resolver.resolve_fun_param(param))
@@ -328,8 +410,8 @@ impl Resolver {
                 }
 
                 let builtin_uid = self
-                    .scope
-                    .lookup(&name)
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 let mut decl_resolver = Resolver::with_scope(self.scope.clone());
                 let resolved_params = params
@@ -462,10 +544,20 @@ impl Resolver {
         &mut self,
         span: Span,
         args: Vec<RecordLitArg>,
+        kind: IfKind,
     ) -> Result<Resolved, ResolveError> {
-        if args.len() < 2 || args.len() > 3 {
+        let (expected_arity, callee_name) = match kind {
+            IfKind::If3 => (3usize, "if"),
+            IfKind::IfThen2 => (2usize, "if_then"),
+        };
+        if args.len() != expected_arity {
             return Err(ResolveError {
-                message: format!("if expects 2 or 3 arguments, got {}", args.len()),
+                message: format!(
+                    "{} expects {} arguments, got {}",
+                    callee_name,
+                    expected_arity,
+                    args.len()
+                ),
                 span,
             });
         }
@@ -476,7 +568,10 @@ impl Resolver {
                 RecordLitArg::Positional(expr) => positional.push(expr),
                 RecordLitArg::Named(name, _) => {
                     return Err(ResolveError {
-                        message: format!("if does not accept named argument '{}'", name),
+                        message: format!(
+                            "{} does not accept named argument '{}'",
+                            callee_name, name
+                        ),
                         span,
                     });
                 }
@@ -486,9 +581,11 @@ impl Resolver {
         let mut iter = positional.into_iter();
         let cond = self.resolve_node(iter.next().expect("checked arg length"))?;
         let then = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let else_branch = match iter.next() {
-            Some(e) => Some(Box::new(self.resolve_node(e)?)),
-            None => None,
+        let else_branch = match kind {
+            IfKind::If3 => Some(Box::new(
+                self.resolve_node(iter.next().expect("checked arg length"))?,
+            )),
+            IfKind::IfThen2 => None,
         };
         Ok(Resolved::If(
             span,
@@ -574,6 +671,12 @@ impl Resolver {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IfKind {
+    If3,
+    IfThen2,
 }
 
 fn collect_captures(body: &Resolved, params: &[ResolvedClosureParam]) -> Vec<ResolvedId> {
@@ -854,6 +957,24 @@ print(to_string(1))"#,
             }
             _ => panic!("Expected Bind with If"),
         }
+    }
+
+    #[test]
+    fn test_if_then_conversion() {
+        let resolved = parse_and_resolve("x = if_then(True, 1)").unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Resolved::If(_, _, _, None)));
+            }
+            _ => panic!("Expected Bind with If"),
+        }
+    }
+
+    #[test]
+    fn test_duplicate_top_level_def_is_error() {
+        let result = parse_and_resolve("def f() -> Int { 1 }\ndef f() -> Int { 2 }");
+        let err = result.expect_err("duplicate def must fail");
+        assert!(err.message.contains("Duplicate top-level definition: f"));
     }
 
     #[test]

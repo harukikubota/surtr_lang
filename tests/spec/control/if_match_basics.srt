@@ -2,7 +2,7 @@ flag = True
 greeting = if(flag, "hello", "goodbye")
 print(greeting)
 
-if(flag, print("flag is true"))
+if_then(flag, print("flag is true"))
 
 print(to_string(match flag {
   True  => "yes",

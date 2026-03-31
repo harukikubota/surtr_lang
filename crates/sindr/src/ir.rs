@@ -83,7 +83,8 @@ pub enum Opcode {
     // Stack management
     Pop,
 
-    // Deprecated frame opcodes (kept for bytecode compatibility)
+    // Deprecated frame opcodes (kept for bytecode compatibility only).
+    // New Forge codegen should not emit these.
     MakeFrame(u32),
     PopFrame,
 
@@ -126,9 +127,13 @@ pub struct Bytecode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeChunk {
     pub opcodes: Vec<Opcode>,
+    /// Base offset of constants in the VM-wide pool when this chunk is produced.
+    pub const_base: u32,
     pub constants: Vec<Constant>,
     pub new_locals: usize,
     pub type_entries: Vec<TypeEntry>,
+    /// Base offset of error templates in the VM-wide pool when this chunk is produced.
+    pub error_template_base: u32,
     pub error_templates: Vec<ErrTemplate>,
     pub functions: Vec<FunctionEntry>,
 }

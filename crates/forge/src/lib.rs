@@ -37,12 +37,10 @@ if(True, print("ok"), print("ng"))
 print(to_string(x + 2))"#,
         );
 
-        assert!(
-            !bytecode
-                .opcodes
-                .iter()
-                .any(|op| matches!(op, Opcode::MakeFrame(_) | Opcode::PopFrame))
-        );
+        assert!(!bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::MakeFrame(_) | Opcode::PopFrame)));
     }
 
     #[test]

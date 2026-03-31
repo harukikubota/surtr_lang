@@ -1260,7 +1260,7 @@ impl Checker {
                 })
             }
             None => {
-                // 2-arg if — returns Unit
+                // if_then/2 — returns Unit
                 Ok(TypedNode {
                     ty: Ty::Unit,
                     span: span.clone(),
@@ -1854,7 +1854,10 @@ impl Checker {
                 }
             };
             let (tag, result_ty) = if id.name == "Ok" {
-                (0u32, Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error)))
+                (
+                    0u32,
+                    Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error)),
+                )
             } else {
                 let ok_var = self.env.fresh_tyvar();
                 (

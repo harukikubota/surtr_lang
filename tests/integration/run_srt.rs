@@ -54,7 +54,8 @@ fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
 fn run_surtr(source: &str) -> Result<Vec<String>, String> {
     let bytecode = compile_surtr(source)?;
     let mut vm = eldr::VM::new(bytecode).with_output_capture();
-    vm.run().map_err(|e| format!("phase=runtime; message={}", e))?;
+    vm.run()
+        .map_err(|e| format!("phase=runtime; message={}", e))?;
     Ok(vm.output.unwrap_or_default())
 }
 

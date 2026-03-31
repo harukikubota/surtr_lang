@@ -126,10 +126,38 @@ impl VM {
 
     /// Execute an incremental bytecode chunk and return the final stack top.
     /// If the stack is empty at the end, returns `Unit`.
+    ///
+    /// Contract with Forge `codegen_chunk`:
+    /// - chunk opcode indices are chunk-local (`LoadConst` / `MakeError`)
+    /// - this method relocates them using `const_base` / `error_template_base`
+    /// - top-level execution starts at appended `code_base` and stops at first `Halt`
     pub fn push(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
         let code_base = self.bytecode.opcodes.len();
+        let const_base = self.bytecode.constants.len();
+        let error_template_base = self.bytecode.error_templates.len();
+        if chunk.const_base as usize != const_base {
+            return Err(RuntimeError {
+                message: format!(
+                    "Chunk constant base mismatch: chunk={}, vm={}",
+                    chunk.const_base, const_base
+                ),
+            });
+        }
+        if chunk.error_template_base as usize != error_template_base {
+            return Err(RuntimeError {
+                message: format!(
+                    "Chunk error template base mismatch: chunk={}, vm={}",
+                    chunk.error_template_base, error_template_base
+                ),
+            });
+        }
         let mut chunk_opcodes = chunk.opcodes;
-        Self::relocate_chunk_jumps(&mut chunk_opcodes, code_base)?;
+        Self::relocate_chunk_indices(
+            &mut chunk_opcodes,
+            code_base,
+            const_base,
+            error_template_base,
+        )?;
         self.bytecode.constants.extend(chunk.constants);
         self.bytecode
             .type_registry
@@ -137,6 +165,8 @@ impl VM {
             .extend(chunk.type_entries);
         self.bytecode.error_templates.extend(chunk.error_templates);
         self.bytecode.opcodes.extend(chunk_opcodes);
+        // Invariant: runtime uses O(1) lookup `functions[fun_idx as usize]`.
+        // push() may append a new slot or replace an existing slot, but never create holes.
         for mut entry in chunk.functions {
             entry.entry_pc += code_base as u32;
             let idx = entry.fun_idx as usize;
@@ -175,23 +205,53 @@ impl VM {
         Ok(result)
     }
 
-    fn relocate_chunk_jumps(
+    fn relocate_chunk_indices(
         opcodes: &mut [Opcode],
         code_base: usize,
+        const_base: usize,
+        error_template_base: usize,
     ) -> Result<(), RuntimeError> {
-        let base = u32::try_from(code_base).map_err(|_| RuntimeError {
+        let code_base = u32::try_from(code_base).map_err(|_| RuntimeError {
             message: format!("Code base too large for jump relocation: {}", code_base),
+        })?;
+        let const_base = u32::try_from(const_base).map_err(|_| RuntimeError {
+            message: format!("Constant base too large for relocation: {}", const_base),
+        })?;
+        let error_template_base = u32::try_from(error_template_base).map_err(|_| RuntimeError {
+            message: format!(
+                "Error template base too large for relocation: {}",
+                error_template_base
+            ),
         })?;
 
         for op in opcodes.iter_mut() {
             match op {
                 Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
-                    *addr = addr.checked_add(base).ok_or_else(|| RuntimeError {
+                    *addr = addr.checked_add(code_base).ok_or_else(|| RuntimeError {
                         message: format!(
                             "Jump relocation overflow: target {} + base {}",
-                            *addr, base
+                            *addr, code_base
                         ),
                     })?;
+                }
+                Opcode::LoadConst(idx) => {
+                    *idx = idx.checked_add(const_base).ok_or_else(|| RuntimeError {
+                        message: format!(
+                            "Const relocation overflow: index {} + base {}",
+                            *idx, const_base
+                        ),
+                    })?;
+                }
+                Opcode::MakeError(template_id) => {
+                    *template_id =
+                        template_id
+                            .checked_add(error_template_base)
+                            .ok_or_else(|| RuntimeError {
+                                message: format!(
+                                    "Error template relocation overflow: id {} + base {}",
+                                    *template_id, error_template_base
+                                ),
+                            })?;
                 }
                 _ => {}
             }
@@ -513,6 +573,8 @@ impl VM {
                     captured.push(self.pop_stack()?);
                 }
                 captured.reverse();
+                // NOTE: `captured` currently co-locates lexical captures and partial-application args.
+                // CallClosure prepends them to runtime args before `build_locals_for_call`.
                 let target = self.pop_stack()?;
                 let callable = match target {
                     Value::Callable(mut callable) => {
@@ -782,7 +844,7 @@ impl VM {
 #[cfg(test)]
 mod tests {
     use super::VM;
-    use sindr::ir::{Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode};
+    use sindr::ir::{Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode};
     use sindr::runtime::{TypeRegistry, Value};
 
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
@@ -876,14 +938,103 @@ mod tests {
         let chunk = BytecodeChunk {
             // `Jump(2)` must be relocated to absolute pc=3 because code_base=1.
             opcodes: vec![Opcode::Jump(2), Opcode::LoadConst(0), Opcode::LoadConst(1)],
+            const_base: 0,
             constants: vec![Constant::Int(99), Constant::Int(7)],
             new_locals: 0,
             type_entries: Vec::new(),
+            error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
         };
 
         let result = vm.push(chunk).expect("push should succeed");
         assert_eq!(result, Value::Int(7));
+    }
+
+    #[test]
+    fn push_relocates_const_indices() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.constants = vec![Constant::Int(10)];
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
+            const_base: 1,
+            constants: vec![Constant::Int(42)],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let result = vm.push(chunk).expect("push should succeed");
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn push_relocates_make_error_template_indices() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.error_templates = vec![ErrTemplate {
+            id: 0,
+            kind: "Old".into(),
+            span_start: 0,
+            span_end: 0,
+            line: 1,
+            column: 1,
+            format: "{}".into(),
+            num_params: 1,
+        }];
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::LoadConst(0), Opcode::MakeError(0), Opcode::Halt],
+            const_base: 0,
+            constants: vec![Constant::Str("new message".into())],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 1,
+            error_templates: vec![ErrTemplate {
+                id: 0,
+                kind: "NewKind".into(),
+                span_start: 10,
+                span_end: 20,
+                line: 2,
+                column: 3,
+                format: "{}".into(),
+                num_params: 1,
+            }],
+            functions: Vec::new(),
+        };
+
+        let result = vm.push(chunk).expect("push should succeed");
+        match result {
+            Value::Error(rich) => {
+                assert_eq!(rich.kind, "NewKind");
+                assert_eq!(rich.message, "new message");
+                assert_eq!(rich.location.line, 2);
+                assert_eq!(rich.location.column, 3);
+            }
+            other => panic!("expected Value::Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn push_fails_when_constant_base_mismatches() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            const_base: 1,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push(chunk).expect_err("must fail");
+        assert!(err.message.contains("Chunk constant base mismatch"));
     }
 }

@@ -173,9 +173,7 @@ fn repl_ok_defaults_result_error_type_to_error() {
 
 #[test]
 fn repl_hides_internal_type_var_ids_in_result_display() {
-    let output = run_repl_session(
-        "deferror NoneError {\"null\"}\nret_e = Err(NoneError)\n:quit\n",
-    );
+    let output = run_repl_session("deferror NoneError {\"null\"}\nret_e = Err(NoneError)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -188,5 +186,23 @@ fn repl_hides_internal_type_var_ids_in_result_display() {
         stdout.contains("ret_e: Result<_, Error> = Err(NoneError)"),
         "expected Result type vars to be hidden in repl output, got:\n{}",
         stdout
+    );
+}
+
+#[test]
+fn repl_duplicate_function_name_is_rejected() {
+    let output = run_repl_session("def f() -> Int { 1 }\ndef f() -> Int { 2 }\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Duplicate top-level definition: f"),
+        "expected duplicate definition error in stderr, got:\n{}",
+        stderr
     );
 }

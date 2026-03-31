@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 fn surtr_bin() -> String {
     if let Ok(path) = env::var("CARGO_BIN_EXE_surtr") {
         return path;

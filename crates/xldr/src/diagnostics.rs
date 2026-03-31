@@ -210,7 +210,7 @@ fn infer_if_branch_mismatch_template(
             },
         ],
         help: Some(
-            "if/3 requires both branches to return the same type. Use if/2 when only side effects are needed."
+            "if/3 requires both branches to return the same type. Use if_then/2 when only side effects are needed."
                 .into(),
         ),
     })
@@ -255,7 +255,11 @@ fn infer_match_arm_mismatch_template(
 
     for (idx, (start, end)) in arm_spans.iter().enumerate() {
         let color = palette[idx % palette.len()];
-        let actual_ty = if idx == focus_idx { got_ty } else { expected_ty };
+        let actual_ty = if idx == focus_idx {
+            got_ty
+        } else {
+            expected_ty
+        };
         let message = format!(
             "arm #{} returns {} (expected {})",
             idx + 1,

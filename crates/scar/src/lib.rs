@@ -75,6 +75,8 @@ print(match flag {
         );
 
         let err = typecheck(resolved).expect_err("typecheck should fail");
-        assert!(err.message.contains("can only be used in functions returning Result"));
+        assert!(err
+            .message
+            .contains("can only be used in functions returning Result"));
     }
 }

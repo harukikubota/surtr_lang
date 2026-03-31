@@ -318,6 +318,26 @@ print(to_string(add(y: 2, 1)))"#,
         );
     }
 
+    #[test]
+    fn function_duplicate_name_is_compile_error() {
+        assert_compile_error(
+            r#"def f() -> Int { 1 }
+def f() -> Int { 2 }"#,
+            "Duplicate top-level definition: f",
+        );
+    }
+
+    #[test]
+    fn top_level_name_collision_between_struct_and_def_is_compile_error() {
+        assert_compile_error(
+            r#"defstruct User {
+  name: String,
+}
+def User() -> Int { 1 }"#,
+            "Duplicate top-level definition: User",
+        );
+    }
+
     // If and match
 
     #[test]
@@ -334,7 +354,7 @@ print(greeting)"#,
     fn if_expression_without_else_returns_unit() {
         assert_output(
             r#"flag = True
-if(flag, print("flag is true"))"#,
+if_then(flag, print("flag is true"))"#,
             &["flag is true"],
         );
     }
