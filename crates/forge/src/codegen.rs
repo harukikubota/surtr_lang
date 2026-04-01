@@ -150,6 +150,7 @@ impl ForgeSession {
         Ok((
             BytecodeChunk {
                 opcodes,
+                source_map: None,
                 const_base,
                 constants: new_constants,
                 new_locals,

@@ -1,7 +1,8 @@
 use sindr::ir::{
-    Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, line_column_for_offset,
+    line_column_for_offset, Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, SourceMap,
 };
 use sindr::runtime::{Callable, CallableTarget, Location, RichError, TypeRegistry, Value};
+use std::collections::BTreeSet;
 
 use crate::builtin::call_builtin;
 use crate::error::{RuntimeError, RuntimeErrorContext};
@@ -15,6 +16,7 @@ struct CallFrame {
 }
 
 /// The Surtr virtual machine — executes bytecode produced by Forge.
+#[derive(Clone)]
 pub struct VM {
     bytecode: Bytecode,
     /// Operand stack
@@ -188,6 +190,7 @@ impl VM {
 
     /// Execute the loaded bytecode (`run` mode expects `Halt`).
     pub fn run(&mut self) -> Result<(), RuntimeError> {
+        self.verify_loaded_bytecode()?;
         loop {
             if self.pc >= self.bytecode.opcodes.len() {
                 return Err(RuntimeError::new("PC out of bounds"));
@@ -210,41 +213,51 @@ impl VM {
     ///
     /// Contract with Forge `codegen_chunk`:
     /// - chunk opcode indices are chunk-local (`LoadConst` / `MakeError`)
+    /// - chunk `source_map` indices are chunk-local
     /// - this method relocates them using `const_base` / `error_template_base`
     /// - top-level execution starts at appended `code_base` and stops at first `Halt`
     pub fn push(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
+        let BytecodeChunk {
+            opcodes,
+            source_map,
+            const_base: chunk_const_base,
+            constants,
+            new_locals,
+            type_entries,
+            error_template_base: chunk_error_template_base,
+            error_templates,
+            functions,
+        } = chunk;
         let code_base = self.bytecode.opcodes.len();
         let const_base = self.bytecode.constants.len();
         let error_template_base = self.bytecode.error_templates.len();
-        if chunk.const_base as usize != const_base {
+        if chunk_const_base as usize != const_base {
             return Err(RuntimeError::new(format!(
                 "Chunk constant base mismatch: chunk={}, vm={}",
-                chunk.const_base, const_base
+                chunk_const_base, const_base
             )));
         }
-        if chunk.error_template_base as usize != error_template_base {
+        if chunk_error_template_base as usize != error_template_base {
             return Err(RuntimeError::new(format!(
                 "Chunk error template base mismatch: chunk={}, vm={}",
-                chunk.error_template_base, error_template_base
+                chunk_error_template_base, error_template_base
             )));
         }
-        let mut chunk_opcodes = chunk.opcodes;
+        let mut chunk_opcodes = opcodes;
         Self::relocate_chunk_indices(
             &mut chunk_opcodes,
             code_base,
             const_base,
             error_template_base,
         )?;
-        self.bytecode.constants.extend(chunk.constants);
-        self.bytecode
-            .type_registry
-            .entries
-            .extend(chunk.type_entries);
-        self.bytecode.error_templates.extend(chunk.error_templates);
+        self.bytecode.constants.extend(constants);
+        self.bytecode.type_registry.entries.extend(type_entries);
+        self.bytecode.error_templates.extend(error_templates);
         self.bytecode.opcodes.extend(chunk_opcodes);
+        self.relocate_and_extend_source_map(source_map, code_base)?;
         // Invariant: runtime uses O(1) lookup `functions[fun_idx as usize]`.
         // push() may append a new slot or replace an existing slot, but never create holes.
-        for mut entry in chunk.functions {
+        for mut entry in functions {
             entry.entry_pc += code_base as u32;
             let idx = entry.fun_idx as usize;
             if idx == self.bytecode.functions.len() {
@@ -262,7 +275,7 @@ impl VM {
         if let Some(frame) = self.frames.first_mut() {
             frame
                 .locals
-                .extend(std::iter::repeat_n(Value::Unit, chunk.new_locals));
+                .extend(std::iter::repeat_n(Value::Unit, new_locals));
         }
 
         let mut pc = code_base;
@@ -281,6 +294,281 @@ impl VM {
         let result = self.stack.pop().unwrap_or(Value::Unit);
         self.stack.clear();
         Ok(result)
+    }
+
+    /// Execute a chunk atomically, preserving the existing VM state on failure.
+    pub fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
+        self.verify_chunk(&chunk)?;
+        let mut next = self.clone();
+        let result = next.push(chunk)?;
+        next.verify_loaded_bytecode()?;
+        *self = next;
+        Ok(result)
+    }
+
+    fn verify_loaded_bytecode(&self) -> Result<(), RuntimeError> {
+        Self::verify_program(&self.bytecode)
+    }
+
+    fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
+        Self::verify_type_registry_entries(&bytecode.type_registry.entries, None)?;
+        Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
+
+        let halt_pos = if let Some(pos) = bytecode
+            .opcodes
+            .iter()
+            .position(|op| matches!(op, Opcode::Halt))
+        {
+            pos
+        } else if bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::Return))
+        {
+            return Err(RuntimeError::new("Return at top-level"));
+        } else {
+            return Err(RuntimeError::new("Bytecode verifier: missing Halt"));
+        };
+
+        for (idx, op) in bytecode.opcodes.iter().enumerate() {
+            match op {
+                Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
+                    if *addr as usize >= bytecode.opcodes.len() {
+                        return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
+                    }
+                }
+                Opcode::LoadConst(idx) => {
+                    if *idx as usize >= bytecode.constants.len() {
+                        return Err(RuntimeError::new(format!(
+                            "LoadConst index out of bounds: {}",
+                            idx
+                        )));
+                    }
+                }
+                Opcode::MakeError(template_id) => {
+                    if *template_id as usize >= bytecode.error_templates.len() {
+                        return Err(RuntimeError::new(format!(
+                            "Unknown error template: {}",
+                            template_id
+                        )));
+                    }
+                }
+                Opcode::Return if idx <= halt_pos => {
+                    return Err(RuntimeError::new("Return at top-level"));
+                }
+                _ => {}
+            }
+        }
+
+        for (idx, entry) in bytecode.functions.iter().enumerate() {
+            if entry.fun_idx as usize != idx {
+                return Err(RuntimeError::new(format!(
+                    "Function table invariant violated: functions[{}].fun_idx = {}",
+                    idx, entry.fun_idx
+                )));
+            }
+            if entry.entry_pc as usize >= bytecode.opcodes.len() {
+                return Err(RuntimeError::new(format!(
+                    "Function {} entry_pc out of bounds: {}",
+                    entry.fun_idx, entry.entry_pc
+                )));
+            }
+            if entry.entry_pc as usize <= halt_pos {
+                return Err(RuntimeError::new(format!(
+                    "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
+                    entry.fun_idx, entry.entry_pc, halt_pos
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn verify_chunk(&self, chunk: &BytecodeChunk) -> Result<(), RuntimeError> {
+        Self::verify_type_registry_entries(
+            &chunk.type_entries,
+            Some(&self.bytecode.type_registry.entries),
+        )?;
+        Self::verify_source_map_entries(chunk.source_map.as_ref(), chunk.opcodes.len(), "chunk")?;
+
+        let const_base = self.bytecode.constants.len();
+        if chunk.const_base as usize != const_base {
+            return Err(RuntimeError::new(format!(
+                "Chunk constant base mismatch: chunk={}, vm={}",
+                chunk.const_base, const_base
+            )));
+        }
+
+        let error_template_base = self.bytecode.error_templates.len();
+        if chunk.error_template_base as usize != error_template_base {
+            return Err(RuntimeError::new(format!(
+                "Chunk error template base mismatch: chunk={}, vm={}",
+                chunk.error_template_base, error_template_base
+            )));
+        }
+
+        let halt_pos = chunk
+            .opcodes
+            .iter()
+            .position(|op| matches!(op, Opcode::Halt))
+            .ok_or_else(|| RuntimeError::new("Bytecode verifier: chunk missing Halt"))?;
+
+        for (idx, op) in chunk.opcodes.iter().enumerate() {
+            match op {
+                Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
+                    if *addr as usize >= chunk.opcodes.len() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: chunk jump target out of bounds: {}",
+                            addr
+                        )));
+                    }
+                }
+                Opcode::LoadConst(idx) => {
+                    if *idx as usize >= chunk.constants.len() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: chunk LoadConst index out of bounds: {}",
+                            idx
+                        )));
+                    }
+                }
+                Opcode::MakeError(template_id) => {
+                    if *template_id as usize >= chunk.error_templates.len() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: chunk error template out of bounds: {}",
+                            template_id
+                        )));
+                    }
+                }
+                Opcode::Return if idx <= halt_pos => {
+                    return Err(RuntimeError::new("Return at top-level"));
+                }
+                _ => {}
+            }
+        }
+
+        let mut seen_fun_idxs = BTreeSet::new();
+        let mut next_append_idx = self.bytecode.functions.len();
+        let mut sorted_entries = chunk.functions.iter().collect::<Vec<_>>();
+        sorted_entries.sort_by_key(|entry| entry.fun_idx);
+
+        for entry in sorted_entries {
+            let idx = entry.fun_idx as usize;
+            if !seen_fun_idxs.insert(entry.fun_idx) {
+                return Err(RuntimeError::new(format!(
+                    "Bytecode verifier: duplicate function entry for fun_idx {}",
+                    entry.fun_idx
+                )));
+            }
+            if idx > next_append_idx {
+                return Err(RuntimeError::new(format!(
+                    "Function table invariant violated in chunk: fun_idx {} > len {}",
+                    idx, next_append_idx
+                )));
+            }
+            if idx == next_append_idx {
+                next_append_idx += 1;
+            }
+            if entry.entry_pc as usize >= chunk.opcodes.len() {
+                return Err(RuntimeError::new(format!(
+                    "Bytecode verifier: function {} entry_pc out of chunk bounds: {}",
+                    entry.fun_idx, entry.entry_pc
+                )));
+            }
+            if entry.entry_pc as usize <= halt_pos {
+                return Err(RuntimeError::new(format!(
+                    "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
+                    entry.fun_idx, entry.entry_pc, halt_pos
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn verify_type_registry_entries(
+        entries: &[sindr::runtime::TypeEntry],
+        existing: Option<&[sindr::runtime::TypeEntry]>,
+    ) -> Result<(), RuntimeError> {
+        let mut seen_tags = BTreeSet::new();
+        if let Some(existing) = existing {
+            for entry in existing {
+                seen_tags.insert(entry.tag);
+            }
+        }
+
+        for entry in entries {
+            if matches!(entry.tag, 0 | 1) {
+                return Err(RuntimeError::new(format!(
+                    "Bytecode verifier: reserved result tag reused in TypeRegistry: {}",
+                    entry.tag
+                )));
+            }
+
+            if !seen_tags.insert(entry.tag) {
+                return Err(RuntimeError::new(format!(
+                    "Bytecode verifier: duplicate type tag in TypeRegistry: {}",
+                    entry.tag
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn verify_source_map_entries(
+        source_map: Option<&SourceMap>,
+        opcode_len: usize,
+        context: &str,
+    ) -> Result<(), RuntimeError> {
+        let Some(source_map) = source_map else {
+            return Ok(());
+        };
+        let mut seen_opcode_indices = BTreeSet::new();
+        for entry in &source_map.entries {
+            if entry.opcode_index as usize >= opcode_len {
+                return Err(RuntimeError::new(format!(
+                    "Bytecode verifier: {}source_map opcode_index out of bounds: {}",
+                    if context.is_empty() { "" } else { "chunk " },
+                    entry.opcode_index
+                )));
+            }
+
+            if !seen_opcode_indices.insert(entry.opcode_index) {
+                return Err(RuntimeError::new(format!(
+                    "Bytecode verifier: {}duplicate source_map entry for opcode_index {}",
+                    if context.is_empty() { "" } else { "chunk " },
+                    entry.opcode_index
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn relocate_and_extend_source_map(
+        &mut self,
+        source_map: Option<SourceMap>,
+        code_base: usize,
+    ) -> Result<(), RuntimeError> {
+        let Some(mut source_map) = source_map else {
+            return Ok(());
+        };
+
+        let code_base =
+            u32::try_from(code_base).map_err(|_| RuntimeError::new("opcode count exceeds u32"))?;
+        for entry in &mut source_map.entries {
+            entry.opcode_index = entry
+                .opcode_index
+                .checked_add(code_base)
+                .ok_or_else(|| RuntimeError::new("source_map opcode index overflow"))?;
+        }
+
+        match self.bytecode.source_map.as_mut() {
+            Some(existing) => existing.entries.extend(source_map.entries),
+            None => self.bytecode.source_map = Some(source_map),
+        }
+
+        Ok(())
     }
 
     fn relocate_chunk_indices(
@@ -891,8 +1179,11 @@ impl VM {
 #[cfg(test)]
 mod tests {
     use super::VM;
-    use sindr::ir::{Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode};
-    use sindr::runtime::{TypeRegistry, Value};
+    use sindr::ir::{
+        Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
+        SourceMap,
+    };
+    use sindr::runtime::{TypeEntry, TypeKind, TypeRegistry, Value};
 
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
@@ -1006,6 +1297,7 @@ mod tests {
         let chunk = BytecodeChunk {
             // `Jump(2)` must be relocated to absolute pc=3 because code_base=1.
             opcodes: vec![Opcode::Jump(2), Opcode::LoadConst(0), Opcode::LoadConst(1)],
+            source_map: None,
             const_base: 0,
             constants: vec![Constant::Int(99), Constant::Int(7)],
             new_locals: 0,
@@ -1027,6 +1319,7 @@ mod tests {
 
         let chunk = BytecodeChunk {
             opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
+            source_map: None,
             const_base: 1,
             constants: vec![Constant::Int(42)],
             new_locals: 0,
@@ -1057,6 +1350,7 @@ mod tests {
 
         let chunk = BytecodeChunk {
             opcodes: vec![Opcode::LoadConst(0), Opcode::MakeError(0), Opcode::Halt],
+            source_map: None,
             const_base: 0,
             constants: vec![Constant::Str("new message".into())],
             new_locals: 0,
@@ -1090,11 +1384,13 @@ mod tests {
     #[test]
     fn make_error_prefers_call_site_line_and_column_when_source_is_available() {
         let source = "deferror Boom {\n  \"boom\"\n}\n\nBoom()\n".to_string();
-        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt])).with_source(source, "sample.srt".into());
+        let mut vm =
+            VM::new(base_bytecode(vec![Opcode::Halt])).with_source(source, "sample.srt".into());
         vm.frames[0].call_site = Some((30, 36));
         let result = vm
             .push(BytecodeChunk {
                 opcodes: vec![Opcode::LoadConst(0), Opcode::MakeError(0), Opcode::Halt],
+                source_map: None,
                 const_base: 0,
                 constants: vec![Constant::Str("boom".into())],
                 new_locals: 0,
@@ -1130,6 +1426,7 @@ mod tests {
         let mut vm = VM::new(bytecode);
         let chunk = BytecodeChunk {
             opcodes: vec![Opcode::Halt],
+            source_map: None,
             const_base: 1,
             constants: Vec::new(),
             new_locals: 0,
@@ -1141,5 +1438,278 @@ mod tests {
 
         let err = vm.push(chunk).expect_err("must fail");
         assert!(err.message.contains("Chunk constant base mismatch"));
+    }
+
+    #[test]
+    fn push_atomic_preserves_vm_on_failure() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let before = vm.clone();
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: None,
+            const_base: 1,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("Chunk constant base mismatch"));
+        assert_eq!(vm.bytecode, before.bytecode);
+        assert_eq!(vm.stack, before.stack);
+        assert_eq!(vm.frames.len(), before.frames.len());
+        assert_eq!(vm.pc, before.pc);
+    }
+
+    #[test]
+    fn push_atomic_rejects_chunk_without_halt() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let before = vm.clone();
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::LoadConst(0)],
+            source_map: None,
+            const_base: 0,
+            constants: vec![Constant::Int(1)],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("chunk missing Halt"));
+        assert_eq!(vm.bytecode, before.bytecode);
+    }
+
+    #[test]
+    fn push_relocates_chunk_source_map_indices() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: Some(SourceMap {
+                entries: vec![OpcodeSource {
+                    opcode_index: 0,
+                    span_start: 2,
+                    span_end: 5,
+                    line: 1,
+                    column: 3,
+                    source_name: Some("repl".into()),
+                }],
+            }),
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        vm.push(chunk).expect("push should succeed");
+        let source_map = vm
+            .bytecode
+            .source_map
+            .expect("source map should be present");
+        assert_eq!(source_map.entries.len(), 1);
+        assert_eq!(source_map.entries[0].opcode_index, 1);
+        assert_eq!(source_map.entries[0].line, 1);
+        assert_eq!(source_map.entries[0].column, 3);
+        assert_eq!(source_map.entries[0].source_name.as_deref(), Some("repl"));
+    }
+
+    #[test]
+    fn push_atomic_rejects_chunk_out_of_bounds_source_map_entry() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: Some(SourceMap {
+                entries: vec![OpcodeSource {
+                    opcode_index: 1,
+                    span_start: 0,
+                    span_end: 1,
+                    line: 1,
+                    column: 1,
+                    source_name: Some("repl".into()),
+                }],
+            }),
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err
+            .message
+            .contains("chunk source_map opcode_index out of bounds"));
+    }
+
+    #[test]
+    fn run_rejects_function_entry_before_top_level_halt() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::Return]);
+        bytecode.functions = vec![FunctionEntry {
+            fun_idx: 0,
+            entry_pc: 0,
+            num_locals: 0,
+            arity: 0,
+        }];
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("must be after top-level Halt"));
+    }
+
+    #[test]
+    fn run_rejects_reserved_type_tag_in_registry() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 0,
+            name: "Bad".into(),
+            kind: TypeKind::Struct,
+            field_names: vec![],
+        });
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("reserved result tag"));
+    }
+
+    #[test]
+    fn run_rejects_duplicate_type_tag_in_registry() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 10,
+            name: "A".into(),
+            kind: TypeKind::Struct,
+            field_names: vec![],
+        });
+        bytecode.type_registry.register(TypeEntry {
+            tag: 10,
+            name: "B".into(),
+            kind: TypeKind::Record,
+            field_names: vec![],
+        });
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("duplicate type tag"));
+    }
+
+    #[test]
+    fn run_rejects_out_of_bounds_source_map_entry() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.source_map = Some(SourceMap {
+            entries: vec![OpcodeSource {
+                opcode_index: 1,
+                span_start: 0,
+                span_end: 1,
+                line: 1,
+                column: 1,
+                source_name: Some("main.srt".into()),
+            }],
+        });
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err
+            .message
+            .contains("source_map opcode_index out of bounds"));
+    }
+
+    #[test]
+    fn run_rejects_duplicate_source_map_opcode_index() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::Halt]);
+        bytecode.source_map = Some(SourceMap {
+            entries: vec![
+                OpcodeSource {
+                    opcode_index: 0,
+                    span_start: 0,
+                    span_end: 1,
+                    line: 1,
+                    column: 1,
+                    source_name: Some("main.srt".into()),
+                },
+                OpcodeSource {
+                    opcode_index: 0,
+                    span_start: 2,
+                    span_end: 3,
+                    line: 1,
+                    column: 3,
+                    source_name: Some("main.srt".into()),
+                },
+            ],
+        });
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("duplicate source_map entry"));
+    }
+
+    #[test]
+    fn push_atomic_rejects_chunk_reserved_type_tag() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: None,
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: vec![TypeEntry {
+                tag: 1,
+                name: "Bad".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![],
+            }],
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("reserved result tag"));
+    }
+
+    #[test]
+    fn push_atomic_rejects_chunk_duplicate_type_tag_against_vm() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 10,
+            name: "Existing".into(),
+            kind: TypeKind::Struct,
+            field_names: vec![],
+        });
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: None,
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: vec![TypeEntry {
+                tag: 10,
+                name: "Duplicate".into(),
+                kind: TypeKind::Record,
+                field_names: vec![],
+            }],
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("duplicate type tag"));
     }
 }
