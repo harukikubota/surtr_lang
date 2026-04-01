@@ -6,3 +6,4 @@ pub mod token;
 
 // Re-export the main entry point
 pub use parser::parse;
+pub use parser::parse_with_source;

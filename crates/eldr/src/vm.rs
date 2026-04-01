@@ -1,5 +1,6 @@
-use sindr::ir::{Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode};
+use sindr::ir::{Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, SourceMap};
 use sindr::runtime::{Callable, CallableTarget, Location, RichError, TypeRegistry, Value};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::builtin::call_builtin;
 use crate::error::RuntimeError;
@@ -13,6 +14,7 @@ struct CallFrame {
 }
 
 /// The Surtr virtual machine — executes bytecode produced by Forge.
+#[derive(Clone)]
 pub struct VM {
     bytecode: Bytecode,
     /// Operand stack
@@ -22,7 +24,7 @@ pub struct VM {
     /// Program counter (used by full-program `run`)
     pc: usize,
     /// Source code (for eprint / ariadne)
-    source: Option<String>,
+    sources: BTreeMap<String, String>,
     /// Source file name
     source_file: Option<String>,
     /// Captured stdout (for testing). `None` = print to real stdout.
@@ -44,7 +46,7 @@ impl VM {
                 locals: vec![Value::Unit; num_locals],
             }],
             pc: 0,
-            source: None,
+            sources: BTreeMap::new(),
             source_file: None,
             output: None,
             error_output: None,
@@ -66,19 +68,30 @@ impl VM {
 
     /// Set source code for error reporting.
     pub fn with_source(mut self, source: String, file: String) -> Self {
-        self.source = Some(source);
+        self.add_source(source, file.clone());
         self.source_file = Some(file);
         self
     }
 
+    /// Register an additional named source for diagnostics.
+    pub fn add_source(&mut self, source: String, file: String) {
+        self.sources.insert(file, source);
+    }
+
     /// Access source text if attached.
     pub fn source(&self) -> Option<&str> {
-        self.source.as_deref()
+        self.source_file()
+            .and_then(|file| self.source_for_file(file))
     }
 
     /// Access source file name if attached.
     pub fn source_file(&self) -> Option<&str> {
         self.source_file.as_deref()
+    }
+
+    /// Access source text for a specific file label.
+    pub fn source_for_file(&self, file: &str) -> Option<&str> {
+        self.sources.get(file).map(String::as_str)
     }
 
     /// Enable stdout capture (for testing).
@@ -107,15 +120,18 @@ impl VM {
 
     /// Execute the loaded bytecode (`run` mode expects `Halt`).
     pub fn run(&mut self) -> Result<(), RuntimeError> {
+        self.verify_loaded_bytecode()?;
         loop {
             if self.pc >= self.bytecode.opcodes.len() {
-                return Err(RuntimeError {
-                    message: "PC out of bounds".into(),
-                });
+                return Err(RuntimeError::new("PC out of bounds"));
             }
-            let op = self.bytecode.opcodes[self.pc].clone();
+            let op_pc = self.pc;
+            let op = self.bytecode.opcodes[op_pc].clone();
             let mut next_pc = self.pc + 1;
-            let halted = self.execute_opcode(op, &mut next_pc)?;
+            let halted = match self.execute_opcode(op, &mut next_pc) {
+                Ok(halted) => halted,
+                Err(err) => return Err(self.attach_opcode_location(err, op_pc)),
+            };
             self.pc = next_pc;
 
             if halted {
@@ -127,47 +143,59 @@ impl VM {
     /// Execute an incremental bytecode chunk and return the final stack top.
     /// If the stack is empty at the end, returns `Unit`.
     ///
+    /// This is a low-level API. It mutates the VM incrementally and may leave
+    /// partially-applied state behind if execution fails midway through.
+    ///
     /// Contract with Forge `codegen_chunk`:
     /// - chunk opcode indices are chunk-local (`LoadConst` / `MakeError`)
+    /// - chunk `source_map` indices are chunk-local
     /// - this method relocates them using `const_base` / `error_template_base`
     /// - top-level execution starts at appended `code_base` and stops at first `Halt`
     pub fn push(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
+        let BytecodeChunk {
+            opcodes,
+            source_map,
+            const_base: chunk_const_base,
+            constants,
+            new_locals,
+            type_entries,
+            error_template_base: chunk_error_template_base,
+            error_templates,
+            functions,
+        } = chunk;
         let code_base = self.bytecode.opcodes.len();
         let const_base = self.bytecode.constants.len();
         let error_template_base = self.bytecode.error_templates.len();
-        if chunk.const_base as usize != const_base {
-            return Err(RuntimeError {
-                message: format!(
+        if chunk_const_base as usize != const_base {
+            return Err(RuntimeError::new(format!(
                     "Chunk constant base mismatch: chunk={}, vm={}",
-                    chunk.const_base, const_base
-                ),
-            });
+                    chunk_const_base, const_base
+                )));
         }
-        if chunk.error_template_base as usize != error_template_base {
-            return Err(RuntimeError {
-                message: format!(
+        if chunk_error_template_base as usize != error_template_base {
+            return Err(RuntimeError::new(format!(
                     "Chunk error template base mismatch: chunk={}, vm={}",
-                    chunk.error_template_base, error_template_base
-                ),
-            });
+                    chunk_error_template_base, error_template_base
+                )));
         }
-        let mut chunk_opcodes = chunk.opcodes;
+        let mut chunk_opcodes = opcodes;
         Self::relocate_chunk_indices(
             &mut chunk_opcodes,
             code_base,
             const_base,
             error_template_base,
         )?;
-        self.bytecode.constants.extend(chunk.constants);
+        self.bytecode.constants.extend(constants);
         self.bytecode
             .type_registry
             .entries
-            .extend(chunk.type_entries);
-        self.bytecode.error_templates.extend(chunk.error_templates);
+            .extend(type_entries);
+        self.bytecode.error_templates.extend(error_templates);
         self.bytecode.opcodes.extend(chunk_opcodes);
+        self.relocate_and_extend_source_map(source_map, code_base)?;
         // Invariant: runtime uses O(1) lookup `functions[fun_idx as usize]`.
         // push() may append a new slot or replace an existing slot, but never create holes.
-        for mut entry in chunk.functions {
+        for mut entry in functions {
             entry.entry_pc += code_base as u32;
             let idx = entry.fun_idx as usize;
             if idx == self.bytecode.functions.len() {
@@ -175,26 +203,28 @@ impl VM {
             } else if idx < self.bytecode.functions.len() {
                 self.bytecode.functions[idx] = entry;
             } else {
-                return Err(RuntimeError {
-                    message: format!(
+                return Err(RuntimeError::new(format!(
                         "Function table invariant violated in chunk: fun_idx {} > len {}",
                         idx,
                         self.bytecode.functions.len()
-                    ),
-                });
+                    )));
             }
         }
         if let Some(frame) = self.frames.first_mut() {
             frame
                 .locals
-                .extend(std::iter::repeat_n(Value::Unit, chunk.new_locals));
+                .extend(std::iter::repeat_n(Value::Unit, new_locals));
         }
 
         let mut pc = code_base;
         while pc < self.bytecode.opcodes.len() {
-            let op = self.bytecode.opcodes[pc].clone();
+            let op_pc = pc;
+            let op = self.bytecode.opcodes[op_pc].clone();
             pc += 1;
-            let halted = self.execute_opcode(op, &mut pc)?;
+            let halted = match self.execute_opcode(op, &mut pc) {
+                Ok(halted) => halted,
+                Err(err) => return Err(self.attach_opcode_location(err, op_pc)),
+            };
             if halted {
                 break;
             }
@@ -205,53 +235,349 @@ impl VM {
         Ok(result)
     }
 
+    /// Execute a chunk atomically.
+    ///
+    /// This is the standard incremental execution API for REPL-style callers.
+    /// The chunk is verified before execution. The VM is updated only when
+    /// execution succeeds. On failure, the original VM state is preserved.
+    pub fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
+        self.verify_chunk(&chunk)?;
+        let mut next = self.clone();
+        let result = next.push(chunk)?;
+        next.verify_loaded_bytecode()?;
+        *self = next;
+        Ok(result)
+    }
+
+    fn verify_loaded_bytecode(&self) -> Result<(), RuntimeError> {
+        Self::verify_program(&self.bytecode)
+    }
+
+    fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
+        Self::verify_type_registry_entries(&bytecode.type_registry.entries, None)?;
+        Self::verify_source_map(bytecode)?;
+
+        let halt_pos = if let Some(pos) = bytecode
+            .opcodes
+            .iter()
+            .position(|op| matches!(op, Opcode::Halt))
+        {
+            pos
+        } else if bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::Return))
+        {
+            return Err(RuntimeError::new("Return at top-level"));
+        } else {
+            return Err(RuntimeError::new("Bytecode verifier: missing Halt"));
+        };
+
+        for (idx, op) in bytecode.opcodes.iter().enumerate() {
+            match op {
+                Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
+                    if *addr as usize >= bytecode.opcodes.len() {
+                        return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
+                    }
+                }
+                Opcode::LoadConst(idx) => {
+                    if *idx as usize >= bytecode.constants.len() {
+                        return Err(RuntimeError::new(format!("LoadConst index out of bounds: {}", idx)));
+                    }
+                }
+                Opcode::MakeError(template_id) => {
+                    if *template_id as usize >= bytecode.error_templates.len() {
+                        return Err(RuntimeError::new(format!("Unknown error template: {}", template_id)));
+                    }
+                }
+                Opcode::Return if idx <= halt_pos => {
+                    return Err(RuntimeError::new("Return at top-level"));
+                }
+                _ => {}
+            }
+        }
+
+        for (idx, entry) in bytecode.functions.iter().enumerate() {
+            if entry.fun_idx as usize != idx {
+                return Err(RuntimeError::new(format!(
+                        "Function table invariant violated: functions[{}].fun_idx = {}",
+                        idx, entry.fun_idx
+                    )));
+            }
+            if entry.entry_pc as usize >= bytecode.opcodes.len() {
+                return Err(RuntimeError::new(format!(
+                        "Function {} entry_pc out of bounds: {}",
+                        entry.fun_idx, entry.entry_pc
+                    )));
+            }
+            if entry.entry_pc as usize <= halt_pos {
+                return Err(RuntimeError::new(format!(
+                        "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
+                        entry.fun_idx, entry.entry_pc, halt_pos
+                    )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn verify_chunk(&self, chunk: &BytecodeChunk) -> Result<(), RuntimeError> {
+        Self::verify_type_registry_entries(
+            &chunk.type_entries,
+            Some(&self.bytecode.type_registry.entries),
+        )?;
+        Self::verify_source_map_entries(chunk.source_map.as_ref(), chunk.opcodes.len(), "chunk")?;
+
+        let const_base = self.bytecode.constants.len();
+        if chunk.const_base as usize != const_base {
+            return Err(RuntimeError::new(format!(
+                    "Chunk constant base mismatch: chunk={}, vm={}",
+                    chunk.const_base, const_base
+                )));
+        }
+
+        let error_template_base = self.bytecode.error_templates.len();
+        if chunk.error_template_base as usize != error_template_base {
+            return Err(RuntimeError::new(format!(
+                    "Chunk error template base mismatch: chunk={}, vm={}",
+                    chunk.error_template_base, error_template_base
+                )));
+        }
+
+        let halt_pos = chunk
+            .opcodes
+            .iter()
+            .position(|op| matches!(op, Opcode::Halt))
+            .ok_or_else(|| RuntimeError::new("Bytecode verifier: chunk missing Halt"))?;
+
+        for (idx, op) in chunk.opcodes.iter().enumerate() {
+            match op {
+                Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
+                    if *addr as usize >= chunk.opcodes.len() {
+                        return Err(RuntimeError::new(format!("Bytecode verifier: chunk jump target out of bounds: {}", addr)));
+                    }
+                }
+                Opcode::LoadConst(idx) => {
+                    if *idx as usize >= chunk.constants.len() {
+                        return Err(RuntimeError::new(format!("Bytecode verifier: chunk LoadConst index out of bounds: {}", idx)));
+                    }
+                }
+                Opcode::MakeError(template_id) => {
+                    if *template_id as usize >= chunk.error_templates.len() {
+                        return Err(RuntimeError::new(format!("Bytecode verifier: chunk error template out of bounds: {}", template_id)));
+                    }
+                }
+                Opcode::Return if idx <= halt_pos => {
+                    return Err(RuntimeError::new("Return at top-level"));
+                }
+                _ => {}
+            }
+        }
+
+        let mut seen_fun_idxs = BTreeSet::new();
+        let mut next_append_idx = self.bytecode.functions.len();
+        let mut sorted_entries = chunk.functions.iter().collect::<Vec<_>>();
+        sorted_entries.sort_by_key(|entry| entry.fun_idx);
+
+        for entry in sorted_entries {
+            let idx = entry.fun_idx as usize;
+            if !seen_fun_idxs.insert(entry.fun_idx) {
+                return Err(RuntimeError::new(format!(
+                        "Bytecode verifier: duplicate function entry for fun_idx {}",
+                        entry.fun_idx
+                    )));
+            }
+            if idx > next_append_idx {
+                return Err(RuntimeError::new(format!(
+                        "Function table invariant violated in chunk: fun_idx {} > len {}",
+                        idx, next_append_idx
+                    )));
+            }
+            if idx == next_append_idx {
+                next_append_idx += 1;
+            }
+            if entry.entry_pc as usize >= chunk.opcodes.len() {
+                return Err(RuntimeError::new(format!(
+                        "Bytecode verifier: function {} entry_pc out of chunk bounds: {}",
+                        entry.fun_idx, entry.entry_pc
+                    )));
+            }
+            if entry.entry_pc as usize <= halt_pos {
+                return Err(RuntimeError::new(format!(
+                        "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
+                        entry.fun_idx, entry.entry_pc, halt_pos
+                    )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn verify_type_registry_entries(
+        entries: &[sindr::runtime::TypeEntry],
+        existing: Option<&[sindr::runtime::TypeEntry]>,
+    ) -> Result<(), RuntimeError> {
+        let mut seen_tags = BTreeSet::new();
+        if let Some(existing) = existing {
+            for entry in existing {
+                seen_tags.insert(entry.tag);
+            }
+        }
+
+        for entry in entries {
+            if matches!(entry.tag, 0 | 1) {
+                return Err(RuntimeError::new(format!(
+                        "Bytecode verifier: reserved result tag reused in TypeRegistry: {}",
+                        entry.tag
+                    )));
+            }
+
+            if !seen_tags.insert(entry.tag) {
+                return Err(RuntimeError::new(format!(
+                        "Bytecode verifier: duplicate type tag in TypeRegistry: {}",
+                        entry.tag
+                    )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn verify_source_map(bytecode: &Bytecode) -> Result<(), RuntimeError> {
+        Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
+        Ok(())
+    }
+
+    fn verify_source_map_entries(
+        source_map: Option<&SourceMap>,
+        opcode_len: usize,
+        context: &str,
+    ) -> Result<(), RuntimeError> {
+        let Some(source_map) = source_map else {
+            return Ok(());
+        };
+        let mut seen_opcode_indices = BTreeSet::new();
+        for entry in &source_map.entries {
+            if entry.opcode_index as usize >= opcode_len {
+                return Err(RuntimeError::new(format!(
+                        "Bytecode verifier: {}source_map opcode_index out of bounds: {}",
+                        if context.is_empty() {
+                            ""
+                        } else {
+                            "chunk "
+                        },
+                        entry.opcode_index
+                    )));
+            }
+
+            if !seen_opcode_indices.insert(entry.opcode_index) {
+                return Err(RuntimeError::new(format!(
+                        "Bytecode verifier: {}duplicate source_map entry for opcode_index {}",
+                        if context.is_empty() {
+                            ""
+                        } else {
+                            "chunk "
+                        },
+                        entry.opcode_index
+                    )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn relocate_and_extend_source_map(
+        &mut self,
+        source_map: Option<SourceMap>,
+        code_base: usize,
+    ) -> Result<(), RuntimeError> {
+        let Some(mut source_map) = source_map else {
+            return Ok(());
+        };
+
+        let code_base = u32::try_from(code_base).map_err(|_| RuntimeError::new("opcode count exceeds u32"))?;
+        for entry in &mut source_map.entries {
+            entry.opcode_index =
+                entry
+                    .opcode_index
+                    .checked_add(code_base)
+                    .ok_or_else(|| RuntimeError::new("source_map opcode index overflow"))?;
+        }
+
+        match self.bytecode.source_map.as_mut() {
+            Some(existing) => existing.entries.extend(source_map.entries),
+            None => self.bytecode.source_map = Some(source_map),
+        }
+
+        Ok(())
+    }
+
+    fn attach_opcode_location(&self, err: RuntimeError, opcode_index: usize) -> RuntimeError {
+        if err.location.is_some() {
+            return err;
+        }
+
+        let Some(location) = self.source_location_for_opcode(opcode_index) else {
+            return err;
+        };
+        err.with_location(location)
+    }
+
+    fn source_location_for_opcode(&self, opcode_index: usize) -> Option<Location> {
+        let source_map = self.bytecode.source_map.as_ref()?;
+        let entry = source_map
+            .entries
+            .iter()
+            .find(|entry| entry.opcode_index as usize == opcode_index)?;
+        Some(Location {
+            file: entry
+                .source_name
+                .clone()
+                .or_else(|| self.source_file().map(str::to_string))
+                .unwrap_or_else(|| "<bytecode>".to_string()),
+            func: "<runtime>".to_string(),
+            line: entry.line,
+            column: entry.column,
+            span_start: entry.span_start,
+            span_end: entry.span_end,
+        })
+    }
+
     fn relocate_chunk_indices(
         opcodes: &mut [Opcode],
         code_base: usize,
         const_base: usize,
         error_template_base: usize,
     ) -> Result<(), RuntimeError> {
-        let code_base = u32::try_from(code_base).map_err(|_| RuntimeError {
-            message: format!("Code base too large for jump relocation: {}", code_base),
-        })?;
-        let const_base = u32::try_from(const_base).map_err(|_| RuntimeError {
-            message: format!("Constant base too large for relocation: {}", const_base),
-        })?;
-        let error_template_base = u32::try_from(error_template_base).map_err(|_| RuntimeError {
-            message: format!(
+        let code_base = u32::try_from(code_base).map_err(|_| RuntimeError::new(format!("Code base too large for jump relocation: {}", code_base)))?;
+        let const_base = u32::try_from(const_base).map_err(|_| RuntimeError::new(format!("Constant base too large for relocation: {}", const_base)))?;
+        let error_template_base = u32::try_from(error_template_base).map_err(|_| RuntimeError::new(format!(
                 "Error template base too large for relocation: {}",
                 error_template_base
-            ),
-        })?;
+            )))?;
 
         for op in opcodes.iter_mut() {
             match op {
                 Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
-                    *addr = addr.checked_add(code_base).ok_or_else(|| RuntimeError {
-                        message: format!(
+                    *addr = addr.checked_add(code_base).ok_or_else(|| RuntimeError::new(format!(
                             "Jump relocation overflow: target {} + base {}",
                             *addr, code_base
-                        ),
-                    })?;
+                        )))?;
                 }
                 Opcode::LoadConst(idx) => {
-                    *idx = idx.checked_add(const_base).ok_or_else(|| RuntimeError {
-                        message: format!(
+                    *idx = idx.checked_add(const_base).ok_or_else(|| RuntimeError::new(format!(
                             "Const relocation overflow: index {} + base {}",
                             *idx, const_base
-                        ),
-                    })?;
+                        )))?;
                 }
                 Opcode::MakeError(template_id) => {
                     *template_id =
                         template_id
                             .checked_add(error_template_base)
-                            .ok_or_else(|| RuntimeError {
-                                message: format!(
+                            .ok_or_else(|| RuntimeError::new(format!(
                                     "Error template relocation overflow: id {} + base {}",
                                     *template_id, error_template_base
-                                ),
-                            })?;
+                                )))?;
                 }
                 _ => {}
             }
@@ -268,9 +594,7 @@ impl VM {
                     .bytecode
                     .constants
                     .get(idx as usize)
-                    .ok_or_else(|| RuntimeError {
-                        message: format!("LoadConst index out of bounds: {}", idx),
-                    })?;
+                    .ok_or_else(|| RuntimeError::new(format!("LoadConst index out of bounds: {}", idx)))?;
                 let val = match c {
                     Constant::Int(n) => Value::Int(*n),
                     Constant::Float(f) => Value::Float(*f),
@@ -301,9 +625,7 @@ impl VM {
                     .locals
                     .get(slot as usize)
                     .cloned()
-                    .ok_or_else(|| RuntimeError {
-                        message: format!("LoadLocal out of bounds: {}", slot),
-                    })?;
+                    .ok_or_else(|| RuntimeError::new(format!("LoadLocal out of bounds: {}", slot)))?;
                 self.stack.push(val);
             }
 
@@ -313,9 +635,7 @@ impl VM {
                     .current_frame_mut()?
                     .locals
                     .get_mut(slot as usize)
-                    .ok_or_else(|| RuntimeError {
-                        message: format!("StoreLocal out of bounds: {}", slot),
-                    })?;
+                    .ok_or_else(|| RuntimeError::new(format!("StoreLocal out of bounds: {}", slot)))?;
                 *target = val;
             }
 
@@ -329,18 +649,14 @@ impl VM {
             Opcode::MulInt => self.int_binop(|a, b| Ok(Value::Int(a * b)))?,
             Opcode::DivInt => self.int_binop(|a, b| {
                 if b == 0 {
-                    Err(RuntimeError {
-                        message: "Division by zero".into(),
-                    })
+                    Err(RuntimeError::new("Division by zero"))
                 } else {
                     Ok(Value::Int(a / b))
                 }
             })?,
             Opcode::ModInt => self.int_binop(|a, b| {
                 if b == 0 {
-                    Err(RuntimeError {
-                        message: "Modulo by zero".into(),
-                    })
+                    Err(RuntimeError::new("Modulo by zero"))
                 } else {
                     Ok(Value::Int(a % b))
                 }
@@ -435,13 +751,9 @@ impl VM {
                 fields.reverse();
                 let tag_val = self.pop_stack()?;
                 let tag = match tag_val {
-                    Value::Int(tag) => u32::try_from(tag).map_err(|_| RuntimeError {
-                        message: format!("StructNew: invalid tag value {}", tag),
-                    })?,
+                    Value::Int(tag) => u32::try_from(tag).map_err(|_| RuntimeError::new(format!("StructNew: invalid tag value {}", tag)))?,
                     other => {
-                        return Err(RuntimeError {
-                            message: format!("StructNew: expected Int tag, got {:?}", other),
-                        });
+                        return Err(RuntimeError::new(format!("StructNew: expected Int tag, got {:?}", other)));
                     }
                 };
                 self.stack.push(Value::Tagged { tag, fields });
@@ -454,15 +766,11 @@ impl VM {
                             fields
                                 .get(idx as usize)
                                 .cloned()
-                                .ok_or_else(|| RuntimeError {
-                                    message: format!("Field index {} out of bounds", idx),
-                                })?;
+                                .ok_or_else(|| RuntimeError::new(format!("Field index {} out of bounds", idx)))?;
                         self.stack.push(field);
                     }
                     _ => {
-                        return Err(RuntimeError {
-                            message: "GetField on non-tagged value".into(),
-                        });
+                        return Err(RuntimeError::new("GetField on non-tagged value"));
                     }
                 }
             }
@@ -473,9 +781,7 @@ impl VM {
                         self.stack.push(Value::Int(tag as i64));
                     }
                     _ => {
-                        return Err(RuntimeError {
-                            message: "GetTag on non-tagged value".into(),
-                        });
+                        return Err(RuntimeError::new("GetTag on non-tagged value"));
                     }
                 }
             }
@@ -494,12 +800,10 @@ impl VM {
             Opcode::Call(fun_idx, arity, span_start, span_end) => {
                 let entry = self.function_entry(fun_idx)?.clone();
                 if entry.arity != arity {
-                    return Err(RuntimeError {
-                        message: format!(
+                    return Err(RuntimeError::new(format!(
                             "Call arity mismatch for function {}: expected {}, got {}",
                             fun_idx, entry.arity, arity
-                        ),
-                    });
+                        )));
                 }
 
                 let mut args = Vec::with_capacity(arity as usize);
@@ -509,12 +813,10 @@ impl VM {
                 args.reverse();
 
                 if entry.entry_pc as usize >= self.bytecode.opcodes.len() {
-                    return Err(RuntimeError {
-                        message: format!(
+                    return Err(RuntimeError::new(format!(
                             "Function {} entry_pc out of bounds: {}",
                             fun_idx, entry.entry_pc
-                        ),
-                    });
+                        )));
                 }
 
                 let locals = Self::build_locals_for_call(&entry, args)?;
@@ -533,18 +835,14 @@ impl VM {
                 let message = match self.pop_stack()? {
                     Value::Str(s) => s,
                     other => {
-                        return Err(RuntimeError {
-                            message: format!("MakeError expects String, got {:?}", other),
-                        });
+                        return Err(RuntimeError::new(format!("MakeError expects String, got {:?}", other)));
                     }
                 };
                 let template = self
                     .bytecode
                     .error_templates
                     .get(template_id as usize)
-                    .ok_or_else(|| RuntimeError {
-                        message: format!("Unknown error template: {}", template_id),
-                    })?;
+                    .ok_or_else(|| RuntimeError::new(format!("Unknown error template: {}", template_id)))?;
                 let call_site = self.current_frame()?.call_site;
                 let (span_start, span_end) = call_site
                     .map(|(start, end)| (start, end))
@@ -584,9 +882,7 @@ impl VM {
                         callable
                     }
                     _ => {
-                        return Err(RuntimeError {
-                            message: "MakeClosure expects a callable target".into(),
-                        });
+                        return Err(RuntimeError::new("MakeClosure expects a callable target"));
                     }
                 };
                 self.stack.push(Value::Callable(callable));
@@ -602,9 +898,7 @@ impl VM {
                 let callable = match self.pop_stack()? {
                     Value::Callable(callable) => callable,
                     _ => {
-                        return Err(RuntimeError {
-                            message: "CallClosure expects a callable value".into(),
-                        });
+                        return Err(RuntimeError::new("CallClosure expects a callable value"));
                     }
                 };
 
@@ -619,22 +913,18 @@ impl VM {
                     CallableTarget::Function(fun_idx) => {
                         let entry = self.function_entry(fun_idx)?.clone();
                         if entry.arity as usize != full_args.len() {
-                            return Err(RuntimeError {
-                                message: format!(
+                            return Err(RuntimeError::new(format!(
                                     "Call arity mismatch for function {}: expected {}, got {}",
                                     fun_idx,
                                     entry.arity,
                                     full_args.len()
-                                ),
-                            });
+                                )));
                         }
                         if entry.entry_pc as usize >= self.bytecode.opcodes.len() {
-                            return Err(RuntimeError {
-                                message: format!(
+                            return Err(RuntimeError::new(format!(
                                     "Function {} entry_pc out of bounds: {}",
                                     fun_idx, entry.entry_pc
-                                ),
-                            });
+                                )));
                         }
 
                         let locals = Self::build_locals_for_call(&entry, full_args)?;
@@ -663,9 +953,7 @@ impl VM {
                     }
                     Value::Bool(true) => {}
                     _ => {
-                        return Err(RuntimeError {
-                            message: "JumpIfFalse: expected Bool".into(),
-                        });
+                        return Err(RuntimeError::new("JumpIfFalse: expected Bool"));
                     }
                 }
             }
@@ -677,9 +965,7 @@ impl VM {
                     }
                     Value::Bool(false) => {}
                     _ => {
-                        return Err(RuntimeError {
-                            message: "JumpIfTrue: expected Bool".into(),
-                        });
+                        return Err(RuntimeError::new("JumpIfTrue: expected Bool"));
                     }
                 }
             }
@@ -690,15 +976,11 @@ impl VM {
             // Return
             Opcode::Return => {
                 if self.frames.len() == 1 {
-                    return Err(RuntimeError {
-                        message: "Return at top-level".into(),
-                    });
+                    return Err(RuntimeError::new("Return at top-level"));
                 }
 
                 let ret = self.pop_stack()?;
-                let frame = self.frames.pop().ok_or_else(|| RuntimeError {
-                    message: "Return with empty frame stack".into(),
-                })?;
+                let frame = self.frames.pop().ok_or_else(|| RuntimeError::new("Return with empty frame stack"))?;
                 self.stack.truncate(frame.stack_base);
                 self.stack.push(ret);
                 *pc = frame.return_pc;
@@ -714,14 +996,12 @@ impl VM {
     ) -> Result<Vec<Value>, RuntimeError> {
         let num_locals = entry.num_locals as usize;
         if num_locals < args.len() {
-            return Err(RuntimeError {
-                message: format!(
+            return Err(RuntimeError::new(format!(
                     "Function {} requires at least {} local slots, got {}",
                     entry.fun_idx,
                     args.len(),
                     num_locals
-                ),
-            });
+                )));
         }
 
         let mut locals = vec![Value::Unit; num_locals];
@@ -737,17 +1017,13 @@ impl VM {
             .bytecode
             .functions
             .get(idx)
-            .ok_or_else(|| RuntimeError {
-                message: format!("Unknown function index: {}", fun_idx),
-            })?;
+            .ok_or_else(|| RuntimeError::new(format!("Unknown function index: {}", fun_idx)))?;
 
         if entry.fun_idx != fun_idx {
-            return Err(RuntimeError {
-                message: format!(
+            return Err(RuntimeError::new(format!(
                     "Function table invariant violated: functions[{}].fun_idx = {}",
                     idx, entry.fun_idx
-                ),
-            });
+                )));
         }
 
         Ok(entry)
@@ -756,9 +1032,7 @@ impl VM {
     fn validate_jump_target(&self, addr: u32) -> Result<usize, RuntimeError> {
         let target = addr as usize;
         if target >= self.bytecode.opcodes.len() {
-            return Err(RuntimeError {
-                message: format!("Invalid jump target: {}", addr),
-            });
+            return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
         }
         Ok(target)
     }
@@ -766,56 +1040,42 @@ impl VM {
     // Stack helpers
 
     fn pop_stack(&mut self) -> Result<Value, RuntimeError> {
-        self.stack.pop().ok_or_else(|| RuntimeError {
-            message: "Stack underflow".into(),
-        })
+        self.stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow"))
     }
 
     fn current_frame(&self) -> Result<&CallFrame, RuntimeError> {
-        self.frames.last().ok_or_else(|| RuntimeError {
-            message: "Frame stack underflow".into(),
-        })
+        self.frames.last().ok_or_else(|| RuntimeError::new("Frame stack underflow"))
     }
 
     fn current_frame_mut(&mut self) -> Result<&mut CallFrame, RuntimeError> {
-        self.frames.last_mut().ok_or_else(|| RuntimeError {
-            message: "Frame stack underflow".into(),
-        })
+        self.frames.last_mut().ok_or_else(|| RuntimeError::new("Frame stack underflow"))
     }
 
     fn pop_int(&mut self) -> Result<i64, RuntimeError> {
         match self.pop_stack()? {
             Value::Int(n) => Ok(n),
-            other => Err(RuntimeError {
-                message: format!("Expected Int, got {:?}", other),
-            }),
+            other => Err(RuntimeError::new(format!("Expected Int, got {:?}", other))),
         }
     }
 
     fn pop_float(&mut self) -> Result<f64, RuntimeError> {
         match self.pop_stack()? {
             Value::Float(f) => Ok(f),
-            other => Err(RuntimeError {
-                message: format!("Expected Float, got {:?}", other),
-            }),
+            other => Err(RuntimeError::new(format!("Expected Float, got {:?}", other))),
         }
     }
 
     fn pop_str(&mut self) -> Result<String, RuntimeError> {
         match self.pop_stack()? {
             Value::Str(s) => Ok(s),
-            other => Err(RuntimeError {
-                message: format!("Expected Str, got {:?}", other),
-            }),
+            other => Err(RuntimeError::new(format!("Expected Str, got {:?}", other))),
         }
     }
 
     fn pop_bool(&mut self) -> Result<bool, RuntimeError> {
         match self.pop_stack()? {
             Value::Bool(b) => Ok(b),
-            other => Err(RuntimeError {
-                message: format!("Expected Bool, got {:?}", other),
-            }),
+            other => Err(RuntimeError::new(format!("Expected Bool, got {:?}", other))),
         }
     }
 
@@ -845,7 +1105,8 @@ impl VM {
 mod tests {
     use super::VM;
     use sindr::ir::{Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode};
-    use sindr::runtime::{TypeRegistry, Value};
+    use sindr::ir::{OpcodeSource, SourceMap};
+    use sindr::runtime::{TypeEntry, TypeKind, TypeRegistry, Value};
 
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
@@ -878,6 +1139,38 @@ mod tests {
         let bytecode = base_bytecode(vec![Opcode::Jump(42), Opcode::Halt]);
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("Invalid jump target"));
+    }
+
+    #[test]
+    fn runtime_error_uses_source_map_location() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::DivInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(1), Constant::Int(0)];
+        bytecode.source_map = Some(SourceMap {
+            entries: vec![OpcodeSource {
+                opcode_index: 2,
+                span_start: 4,
+                span_end: 9,
+                line: 2,
+                column: 5,
+                source_name: Some("main.srt".into()),
+            }],
+        });
+
+        let err = VM::new(bytecode)
+            .with_source("x = 1 / 0\n".into(), "main.srt".into())
+            .run()
+            .expect_err("must fail");
+        let location = err.location.expect("runtime error should have location");
+        assert_eq!(location.file, "main.srt");
+        assert_eq!(location.line, 2);
+        assert_eq!(location.column, 5);
+        assert_eq!(location.span_start, 4);
+        assert_eq!(location.span_end, 9);
     }
 
     #[test]
@@ -938,6 +1231,7 @@ mod tests {
         let chunk = BytecodeChunk {
             // `Jump(2)` must be relocated to absolute pc=3 because code_base=1.
             opcodes: vec![Opcode::Jump(2), Opcode::LoadConst(0), Opcode::LoadConst(1)],
+            source_map: None,
             const_base: 0,
             constants: vec![Constant::Int(99), Constant::Int(7)],
             new_locals: 0,
@@ -959,6 +1253,7 @@ mod tests {
 
         let chunk = BytecodeChunk {
             opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
+            source_map: None,
             const_base: 1,
             constants: vec![Constant::Int(42)],
             new_locals: 0,
@@ -989,6 +1284,7 @@ mod tests {
 
         let chunk = BytecodeChunk {
             opcodes: vec![Opcode::LoadConst(0), Opcode::MakeError(0), Opcode::Halt],
+            source_map: None,
             const_base: 0,
             constants: vec![Constant::Str("new message".into())],
             new_locals: 0,
@@ -1025,6 +1321,7 @@ mod tests {
         let mut vm = VM::new(bytecode);
         let chunk = BytecodeChunk {
             opcodes: vec![Opcode::Halt],
+            source_map: None,
             const_base: 1,
             constants: Vec::new(),
             new_locals: 0,
@@ -1036,5 +1333,270 @@ mod tests {
 
         let err = vm.push(chunk).expect_err("must fail");
         assert!(err.message.contains("Chunk constant base mismatch"));
+    }
+
+    #[test]
+    fn push_atomic_preserves_vm_on_failure() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let before = vm.clone();
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: None,
+            const_base: 1,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("Chunk constant base mismatch"));
+        assert_eq!(vm.bytecode, before.bytecode);
+        assert_eq!(vm.stack, before.stack);
+        assert_eq!(vm.frames.len(), before.frames.len());
+        assert_eq!(vm.pc, before.pc);
+    }
+
+    #[test]
+    fn push_atomic_rejects_chunk_without_halt() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let before = vm.clone();
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::LoadConst(0)],
+            source_map: None,
+            const_base: 0,
+            constants: vec![Constant::Int(1)],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("chunk missing Halt"));
+        assert_eq!(vm.bytecode, before.bytecode);
+    }
+
+    #[test]
+    fn push_relocates_chunk_source_map_indices() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: Some(SourceMap {
+                entries: vec![OpcodeSource {
+                    opcode_index: 0,
+                    span_start: 2,
+                    span_end: 5,
+                    line: 1,
+                    column: 3,
+                    source_name: Some("repl".into()),
+                }],
+            }),
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        vm.push(chunk).expect("push should succeed");
+        let source_map = vm.bytecode.source_map.expect("source map should be present");
+        assert_eq!(source_map.entries.len(), 1);
+        assert_eq!(source_map.entries[0].opcode_index, 1);
+        assert_eq!(source_map.entries[0].line, 1);
+        assert_eq!(source_map.entries[0].column, 3);
+    }
+
+    #[test]
+    fn push_atomic_rejects_chunk_out_of_bounds_source_map_entry() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: Some(SourceMap {
+                entries: vec![OpcodeSource {
+                    opcode_index: 1,
+                    span_start: 0,
+                    span_end: 1,
+                    line: 1,
+                    column: 1,
+                    source_name: Some("repl".into()),
+                }],
+            }),
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("chunk source_map opcode_index out of bounds"));
+    }
+
+    #[test]
+    fn run_rejects_function_entry_before_top_level_halt() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::Return]);
+        bytecode.functions = vec![FunctionEntry {
+            fun_idx: 0,
+            entry_pc: 0,
+            num_locals: 0,
+            arity: 0,
+        }];
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("must be after top-level Halt"));
+    }
+
+    #[test]
+    fn run_rejects_reserved_type_tag_in_registry() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 0,
+            name: "Bad".into(),
+            kind: TypeKind::Struct,
+            field_names: vec![],
+        });
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("reserved result tag"));
+    }
+
+    #[test]
+    fn run_rejects_duplicate_type_tag_in_registry() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 10,
+            name: "A".into(),
+            kind: TypeKind::Struct,
+            field_names: vec![],
+        });
+        bytecode.type_registry.register(TypeEntry {
+            tag: 10,
+            name: "B".into(),
+            kind: TypeKind::Record,
+            field_names: vec![],
+        });
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("duplicate type tag"));
+    }
+
+    #[test]
+    fn run_rejects_out_of_bounds_source_map_entry() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.source_map = Some(SourceMap {
+            entries: vec![OpcodeSource {
+                opcode_index: 1,
+                span_start: 0,
+                span_end: 1,
+                line: 1,
+                column: 1,
+                source_name: Some("main.srt".into()),
+            }],
+        });
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("source_map opcode_index out of bounds"));
+    }
+
+    #[test]
+    fn run_rejects_duplicate_source_map_opcode_index() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::Halt]);
+        bytecode.source_map = Some(SourceMap {
+            entries: vec![
+                OpcodeSource {
+                    opcode_index: 0,
+                    span_start: 0,
+                    span_end: 1,
+                    line: 1,
+                    column: 1,
+                    source_name: Some("main.srt".into()),
+                },
+                OpcodeSource {
+                    opcode_index: 0,
+                    span_start: 2,
+                    span_end: 3,
+                    line: 1,
+                    column: 3,
+                    source_name: Some("main.srt".into()),
+                },
+            ],
+        });
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("duplicate source_map entry"));
+    }
+
+    #[test]
+    fn push_atomic_rejects_chunk_reserved_type_tag() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: None,
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: vec![TypeEntry {
+                tag: 1,
+                name: "Bad".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![],
+            }],
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("reserved result tag"));
+    }
+
+    #[test]
+    fn push_atomic_rejects_chunk_duplicate_type_tag_against_vm() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 10,
+            name: "Existing".into(),
+            kind: TypeKind::Struct,
+            field_names: vec![],
+        });
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::Halt],
+            source_map: None,
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: vec![TypeEntry {
+                tag: 10,
+                name: "Duplicate".into(),
+                kind: TypeKind::Record,
+                field_names: vec![],
+            }],
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("duplicate type tag"));
     }
 }

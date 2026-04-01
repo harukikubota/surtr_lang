@@ -10,7 +10,7 @@ pub use codegen::{
 
 #[cfg(test)]
 mod tests {
-    use super::codegen;
+    use super::{codegen, ForgeSession};
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
 
@@ -26,6 +26,17 @@ mod tests {
 
     fn codegen_source(source: &str) -> sindr::ir::Bytecode {
         let typed = typed_with_builtin_prelude(source);
+        codegen(typed).expect("codegen should succeed")
+    }
+
+    fn codegen_source_with_origin(source: &str, file_name: &str) -> sindr::ir::Bytecode {
+        let mut ast = spire::parse_with_source(BUILTIN_PRELUDE_SOURCE, "builtin.srt")
+            .expect("builtin prelude should parse");
+        let mut user_ast =
+            spire::parse_with_source(source, file_name).expect("source should parse");
+        ast.append(&mut user_ast);
+        let resolved = sigil::resolve(ast).expect("source should resolve");
+        let typed = scar::typecheck(resolved).expect("source should typecheck");
         codegen(typed).expect("codegen should succeed")
     }
 
@@ -96,5 +107,43 @@ print("ok")"#,
         assert_eq!(bytecode.type_registry.entries[1].tag, 3);
         assert_eq!(bytecode.type_registry.entries[1].name, "Point");
         assert_eq!(bytecode.type_registry.entries[1].kind, TypeKind::Record);
+    }
+
+    #[test]
+    fn codegen_emits_source_map_for_programs() {
+        let bytecode = codegen_source(r#"print("ok")"#);
+        let source_map = bytecode.source_map.expect("source map should be present");
+        assert!(!source_map.entries.is_empty());
+        assert_eq!(source_map.entries[0].opcode_index, 0);
+    }
+
+    #[test]
+    fn codegen_chunk_emits_source_map() {
+        let typed = typed_with_builtin_prelude(r#"print("ok")"#);
+        let mut session = ForgeSession::new();
+        let (chunk, _) = session
+            .codegen_chunk(typed)
+            .expect("chunk codegen should succeed");
+        let source_map = chunk.source_map.expect("chunk source map should be present");
+        assert!(!source_map.entries.is_empty());
+        assert_eq!(source_map.entries[0].opcode_index, 0);
+    }
+
+    #[test]
+    fn codegen_preserves_source_origin_in_source_map() {
+        let bytecode = codegen_source_with_origin(r#"print("ok")"#, "main.srt");
+        let source_map = bytecode.source_map.expect("source map should be present");
+        assert!(
+            source_map
+                .entries
+                .iter()
+                .any(|entry| entry.source_name.as_deref() == Some("main.srt"))
+        );
+        assert!(
+            source_map
+                .entries
+                .iter()
+                .any(|entry| entry.source_name.as_deref() == Some("builtin.srt"))
+        );
     }
 }

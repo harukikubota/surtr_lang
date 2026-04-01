@@ -3,6 +3,52 @@
 pub struct Span {
     pub start: usize,
     pub end: usize,
+    pub source_name: Option<String>,
+}
+
+impl Span {
+    pub fn new(start: usize, end: usize) -> Self {
+        Self {
+            start,
+            end,
+            source_name: None,
+        }
+    }
+
+    pub fn with_source(start: usize, end: usize, source_name: Option<String>) -> Self {
+        Self {
+            start,
+            end,
+            source_name,
+        }
+    }
+
+    pub fn with_end(&self, end: usize) -> Self {
+        Self {
+            start: self.start,
+            end,
+            source_name: self.source_name.clone(),
+        }
+    }
+
+    pub fn shifted(&self, delta: usize) -> Self {
+        Self {
+            start: self.start + delta,
+            end: self.end + delta,
+            source_name: self.source_name.clone(),
+        }
+    }
+
+    pub fn cover(start: &Span, end: &Span) -> Self {
+        Self {
+            start: start.start,
+            end: end.end,
+            source_name: start
+                .source_name
+                .clone()
+                .or_else(|| end.source_name.clone()),
+        }
+    }
 }
 
 /// A plain identifier string. Kept as its own type for readability.

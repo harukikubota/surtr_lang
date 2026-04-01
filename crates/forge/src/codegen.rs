@@ -17,7 +17,7 @@ use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     let mut gene = Codegen::new();
     gene.emit_program(typed)?;
-    let (opcodes, state) = gene.finalize();
+    let (opcodes, source_map, state) = gene.finalize();
     Ok(Bytecode {
         opcodes,
         constants: state.constants,
@@ -25,7 +25,7 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         type_registry: state.type_registry,
         error_templates: state.error_templates,
         functions: state.functions,
-        source_map: None,
+        source_map,
     })
 }
 
@@ -125,7 +125,7 @@ impl ForgeSession {
         let mut gene = Codegen::from_state(before.clone());
         gene.set_chunk_constant_dedup_start(const_base);
         gene.emit_program_chunk(typed)?;
-        let (mut opcodes, after) = gene.finalize();
+        let (mut opcodes, source_map, after) = gene.finalize();
         localize_chunk_indices(&mut opcodes, const_base, error_template_base)?;
 
         let new_constants = after.constants[before.constants.len()..].to_vec();
@@ -140,16 +140,17 @@ impl ForgeSession {
 
         let const_base = u32::try_from(const_base).map_err(|_| CodegenError {
             message: "constant base exceeds u32".into(),
-            span: Span { start: 0, end: 0 },
+            span: Span::new(0, 0),
         })?;
         let error_template_base = u32::try_from(error_template_base).map_err(|_| CodegenError {
             message: "error template base exceeds u32".into(),
-            span: Span { start: 0, end: 0 },
+            span: Span::new(0, 0),
         })?;
 
         Ok((
             BytecodeChunk {
                 opcodes,
+                source_map,
                 const_base,
                 constants: new_constants,
                 new_locals,
@@ -178,7 +179,7 @@ fn localize_chunk_indices(
                             "chunk constant index {} is below base {}",
                             idx_usize, const_base
                         ),
-                        span: Span { start: 0, end: 0 },
+                        span: Span::new(0, 0),
                     });
                 }
                 *idx = (idx_usize - const_base) as u32;
@@ -191,7 +192,7 @@ fn localize_chunk_indices(
                             "chunk error template index {} is below base {}",
                             id_usize, error_template_base
                         ),
-                        span: Span { start: 0, end: 0 },
+                        span: Span::new(0, 0),
                     });
                 }
                 *template_id = (id_usize - error_template_base) as u32;
@@ -324,12 +325,14 @@ struct PendingClosure {
 
 struct Codegen {
     ir: Vec<IrOp>,
+    ir_spans: Vec<Option<Span>>,
     state: CodegenState,
     next_label: u32,
     label_positions: HashMap<Label, usize>, // label → IR index it points to
     pending_closures: Vec<PendingClosure>,
     in_function: bool,
     constant_dedup_start: usize,
+    current_span: Option<Span>,
 }
 
 impl Codegen {
@@ -340,12 +343,14 @@ impl Codegen {
     fn from_state(state: CodegenState) -> Self {
         Self {
             ir: Vec::new(),
+            ir_spans: Vec::new(),
             state,
             next_label: 0,
             label_positions: HashMap::new(),
             pending_closures: Vec::new(),
             in_function: false,
             constant_dedup_start: 0,
+            current_span: None,
         }
     }
 
@@ -489,24 +494,40 @@ impl Codegen {
 
     fn emit(&mut self, op: Opcode) {
         self.ir.push(IrOp::Op(op));
+        self.ir_spans.push(self.current_span.clone());
     }
 
     fn emit_jump(&mut self, label: Label) {
         self.ir.push(IrOp::JumpLabel(label));
+        self.ir_spans.push(self.current_span.clone());
     }
 
     fn emit_jump_if_false(&mut self, label: Label) {
         self.ir.push(IrOp::JumpIfFalseLabel(label));
+        self.ir_spans.push(self.current_span.clone());
     }
 
     #[allow(dead_code)]
     fn emit_jump_if_true(&mut self, label: Label) {
         self.ir.push(IrOp::JumpIfTrueLabel(label));
+        self.ir_spans.push(self.current_span.clone());
     }
 
     #[allow(dead_code)]
     fn current_pos(&self) -> usize {
         self.ir.len()
+    }
+
+    fn with_span<T>(
+        &mut self,
+        span: Option<Span>,
+        f: impl FnOnce(&mut Self) -> Result<T, CodegenError>,
+    ) -> Result<T, CodegenError> {
+        let saved = self.current_span.clone();
+        self.current_span = span;
+        let result = f(self);
+        self.current_span = saved;
+        result
     }
 
     // ── Program ──
@@ -695,183 +716,182 @@ impl Codegen {
     }
 
     fn emit_node(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        match &node.node {
-            TypedInner::Lit(lit) => {
-                let c = self.lit_to_constant(lit);
-                let idx = self.add_constant(c);
-                self.emit(Opcode::LoadConst(idx));
-            }
+        self.with_span(Some(node.span.clone()), |this| {
+            match &node.node {
+                TypedInner::Lit(lit) => {
+                    let c = this.lit_to_constant(lit);
+                    let idx = this.add_constant(c);
+                    this.emit(Opcode::LoadConst(idx));
+                }
 
-            TypedInner::Var(id) => {
-                if matches!(node.ty, Ty::BuiltinFunc { .. } | Ty::UserFunc { .. }) {
-                    return Err(CodegenError {
-                        message: "Function values must be captured explicitly".into(),
-                        span: node.span.clone(),
+                TypedInner::Var(id) => {
+                    if matches!(node.ty, Ty::BuiltinFunc { .. } | Ty::UserFunc { .. }) {
+                        return Err(CodegenError {
+                            message: "Function values must be captured explicitly".into(),
+                            span: node.span.clone(),
+                        });
+                    }
+                    let slot = this.alloc_slot(id.unique_id);
+                    this.emit(Opcode::LoadLocal(slot));
+                }
+
+                TypedInner::Bind(pat, rhs) => {
+                    this.emit_node(rhs)?;
+                    match pat {
+                        TypedPattern::Var(_, id) => {
+                            let slot = this.alloc_slot(id.unique_id);
+                            this.emit(Opcode::StoreLocal(slot));
+                        }
+                        TypedPattern::Wildcard(_) => {
+                            this.emit(Opcode::Pop);
+                        }
+                    }
+                    let unit_idx = this.add_constant(Constant::Unit);
+                    this.emit(Opcode::LoadConst(unit_idx));
+                }
+
+                TypedInner::SafeBind(pat, rhs) => {
+                    this.emit_safebind(pat, rhs)?;
+                }
+
+                TypedInner::App(func, args) => {
+                    this.emit_app(node.span.clone(), func, args)?;
+                }
+
+                TypedInner::BinOp(op, left, right) => {
+                    this.emit_node(left)?;
+                    this.emit_node(right)?;
+                    let opcode = this.binop_to_opcode(op, &left.ty)?;
+                    this.emit(opcode);
+                }
+
+                TypedInner::List(elems) => {
+                    if elems.is_empty() {
+                        this.emit(Opcode::ListEmpty);
+                    } else {
+                        for elem in elems {
+                            this.emit_node(elem)?;
+                        }
+                        this.emit(Opcode::ListNew(elems.len() as u32));
+                    }
+                }
+
+                TypedInner::InterpolatedStr(parts) => {
+                    this.emit_interpolated_str(parts)?;
+                }
+
+                TypedInner::If(cond, then, else_opt) => {
+                    this.emit_if(cond, then, else_opt)?;
+                }
+
+                TypedInner::Match(scrutinee, arms) => {
+                    this.emit_match(scrutinee, arms)?;
+                }
+
+                TypedInner::FieldAccess(expr, idx) => {
+                    this.emit_node(expr)?;
+                    this.emit(Opcode::GetField(*idx));
+                }
+
+                TypedInner::StructLit(tag, fields) => {
+                    let tag_const = this.add_constant(Constant::Int(*tag as i64));
+                    this.emit(Opcode::LoadConst(tag_const));
+                    for field in fields {
+                        this.emit_node(field)?;
+                    }
+                    this.emit(Opcode::StructNew(fields.len() as u32));
+                }
+
+                TypedInner::ConstructorCall(tag, fields) => {
+                    let tag_const = this.add_constant(Constant::Int(*tag as i64));
+                    this.emit(Opcode::LoadConst(tag_const));
+                    for field in fields {
+                        this.emit_node(field)?;
+                    }
+                    this.emit(Opcode::StructNew(fields.len() as u32));
+                }
+
+                TypedInner::Block(stmts) => {
+                    for (i, s) in stmts.iter().enumerate() {
+                        this.emit_node(s)?;
+                        if i < stmts.len() - 1 {
+                            this.emit(Opcode::Pop);
+                        }
+                    }
+                }
+
+                TypedInner::Semi(inner) => {
+                    this.emit_node(inner)?;
+                    this.emit(Opcode::Pop);
+                    let unit_idx = this.add_constant(Constant::Unit);
+                    this.emit(Opcode::LoadConst(unit_idx));
+                }
+
+                TypedInner::DeferrorDef(_, _, _, _, _) => {
+                    let unit_idx = this.add_constant(Constant::Unit);
+                    this.emit(Opcode::LoadConst(unit_idx));
+                }
+
+                TypedInner::Def(_fun_idx, _id, _params, _ret_ty, _body) => {
+                    let unit_idx = this.add_constant(Constant::Unit);
+                    this.emit(Opcode::LoadConst(unit_idx));
+                }
+
+                TypedInner::Closure(params, captures, body) => {
+                    let filtered_captures: Vec<ResolvedId> = captures
+                        .iter()
+                        .filter(|id| this.state.slot_map.contains_key(&id.unique_id))
+                        .cloned()
+                        .collect();
+                    let fun_idx = this.reserve_fun_idx();
+                    this.pending_closures.push(PendingClosure {
+                        fun_idx,
+                        captures: filtered_captures.clone(),
+                        params: params.clone(),
+                        body: body.clone(),
                     });
-                }
-                let slot = self.alloc_slot(id.unique_id);
-                self.emit(Opcode::LoadLocal(slot));
-            }
-
-            TypedInner::Bind(pat, rhs) => {
-                self.emit_node(rhs)?;
-                match pat {
-                    TypedPattern::Var(_, id) => {
-                        let slot = self.alloc_slot(id.unique_id);
-                        self.emit(Opcode::StoreLocal(slot));
+                    this.emit(Opcode::LoadFunctionRef(fun_idx));
+                    for capture in &filtered_captures {
+                        let slot = this.alloc_slot(capture.unique_id);
+                        this.emit(Opcode::LoadLocal(slot));
                     }
-                    TypedPattern::Wildcard(_) => {
-                        self.emit(Opcode::Pop);
+                    this.emit(Opcode::MakeClosure(filtered_captures.len() as u8));
+                }
+
+                TypedInner::Capture(target, args) => {
+                    this.emit_callable_ref(target)?;
+                    for arg in args {
+                        this.emit_node(arg)?;
                     }
-                }
-                // Bind produces Unit
-                let unit_idx = self.add_constant(Constant::Unit);
-                self.emit(Opcode::LoadConst(unit_idx));
-            }
-
-            TypedInner::SafeBind(pat, rhs) => {
-                self.emit_safebind(pat, rhs)?;
-            }
-
-            TypedInner::App(func, args) => {
-                self.emit_app(node.span.clone(), func, args)?;
-            }
-
-            TypedInner::BinOp(op, left, right) => {
-                self.emit_node(left)?;
-                self.emit_node(right)?;
-                let opcode = self.binop_to_opcode(op, &left.ty)?;
-                self.emit(opcode);
-            }
-
-            TypedInner::List(elems) => {
-                if elems.is_empty() {
-                    self.emit(Opcode::ListEmpty);
-                } else {
-                    for elem in elems {
-                        self.emit_node(elem)?;
-                    }
-                    self.emit(Opcode::ListNew(elems.len() as u32));
-                }
-            }
-
-            TypedInner::InterpolatedStr(parts) => {
-                self.emit_interpolated_str(parts)?;
-            }
-
-            TypedInner::If(cond, then, else_opt) => {
-                self.emit_if(cond, then, else_opt)?;
-            }
-
-            TypedInner::Match(scrutinee, arms) => {
-                self.emit_match(scrutinee, arms)?;
-            }
-
-            TypedInner::FieldAccess(expr, idx) => {
-                self.emit_node(expr)?;
-                self.emit(Opcode::GetField(*idx));
-            }
-
-            TypedInner::StructLit(tag, fields) => {
-                // Push tag first, then fields
-                let tag_const = self.add_constant(Constant::Int(*tag as i64));
-                self.emit(Opcode::LoadConst(tag_const));
-                for field in fields {
-                    self.emit_node(field)?;
-                }
-                // StructNew expects tag + n fields on stack
-                self.emit(Opcode::StructNew(fields.len() as u32));
-            }
-
-            TypedInner::ConstructorCall(tag, fields) => {
-                let tag_const = self.add_constant(Constant::Int(*tag as i64));
-                self.emit(Opcode::LoadConst(tag_const));
-                for field in fields {
-                    self.emit_node(field)?;
-                }
-                self.emit(Opcode::StructNew(fields.len() as u32));
-            }
-
-            TypedInner::Block(stmts) => {
-                for (i, s) in stmts.iter().enumerate() {
-                    self.emit_node(s)?;
-                    if i < stmts.len() - 1 {
-                        self.emit(Opcode::Pop);
+                    if !args.is_empty() {
+                        this.emit(Opcode::MakeClosure(args.len() as u8));
                     }
                 }
-            }
 
-            TypedInner::Semi(inner) => {
-                self.emit_node(inner)?;
-                self.emit(Opcode::Pop);
-                let unit_idx = self.add_constant(Constant::Unit);
-                self.emit(Opcode::LoadConst(unit_idx));
-            }
-
-            TypedInner::DeferrorDef(_, _, _, _, _) => {
-                let unit_idx = self.add_constant(Constant::Unit);
-                self.emit(Opcode::LoadConst(unit_idx));
-            }
-
-            TypedInner::Def(_fun_idx, _id, _params, _ret_ty, _body) => {
-                let unit_idx = self.add_constant(Constant::Unit);
-                self.emit(Opcode::LoadConst(unit_idx));
-            }
-
-            TypedInner::Closure(params, captures, body) => {
-                let filtered_captures: Vec<ResolvedId> = captures
-                    .iter()
-                    .filter(|id| self.state.slot_map.contains_key(&id.unique_id))
-                    .cloned()
-                    .collect();
-                let fun_idx = self.reserve_fun_idx();
-                self.pending_closures.push(PendingClosure {
-                    fun_idx,
-                    captures: filtered_captures.clone(),
-                    params: params.clone(),
-                    body: body.clone(),
-                });
-                self.emit(Opcode::LoadFunctionRef(fun_idx));
-                for capture in &filtered_captures {
-                    let slot = self.alloc_slot(capture.unique_id);
-                    self.emit(Opcode::LoadLocal(slot));
+                TypedInner::StructDef(tag, name, field_names) => {
+                    this.state.type_registry.register(TypeEntry {
+                        tag: *tag,
+                        name: name.clone(),
+                        kind: TypeKind::Struct,
+                        field_names: field_names.clone(),
+                    });
+                    let unit_idx = this.add_constant(Constant::Unit);
+                    this.emit(Opcode::LoadConst(unit_idx));
                 }
-                self.emit(Opcode::MakeClosure(filtered_captures.len() as u8));
-            }
 
-            TypedInner::Capture(target, args) => {
-                self.emit_callable_ref(target)?;
-                for arg in args {
-                    self.emit_node(arg)?;
-                }
-                if !args.is_empty() {
-                    self.emit(Opcode::MakeClosure(args.len() as u8));
+                TypedInner::RecordDef(tag, name, field_names) => {
+                    this.state.type_registry.register(TypeEntry {
+                        tag: *tag,
+                        name: name.clone(),
+                        kind: TypeKind::Record,
+                        field_names: field_names.clone(),
+                    });
+                    let unit_idx = this.add_constant(Constant::Unit);
+                    this.emit(Opcode::LoadConst(unit_idx));
                 }
             }
-
-            TypedInner::StructDef(tag, name, field_names) => {
-                self.state.type_registry.register(TypeEntry {
-                    tag: *tag,
-                    name: name.clone(),
-                    kind: TypeKind::Struct,
-                    field_names: field_names.clone(),
-                });
-                let unit_idx = self.add_constant(Constant::Unit);
-                self.emit(Opcode::LoadConst(unit_idx));
-            }
-
-            TypedInner::RecordDef(tag, name, field_names) => {
-                self.state.type_registry.register(TypeEntry {
-                    tag: *tag,
-                    name: name.clone(),
-                    kind: TypeKind::Record,
-                    field_names: field_names.clone(),
-                });
-                let unit_idx = self.add_constant(Constant::Unit);
-                self.emit(Opcode::LoadConst(unit_idx));
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn emit_safebind(&mut self, pat: &TypedPattern, rhs: &TypedNode) -> Result<(), CodegenError> {
@@ -934,7 +954,7 @@ impl Codegen {
                         "Function table invariant violated: functions[{}].fun_idx = {}",
                         idx, entry.fun_idx
                     ),
-                    span: Span { start: 0, end: 0 },
+                    span: Span::new(0, 0),
                 });
             }
         }
@@ -1192,7 +1212,7 @@ impl Codegen {
     }
 
     fn binop_to_opcode(&self, op: &BinOp, left_ty: &Ty) -> Result<Opcode, CodegenError> {
-        let dummy_span = Span { start: 0, end: 0 };
+        let dummy_span = Span::new(0, 0);
         match (op, left_ty) {
             (BinOp::Add, Ty::Int) => Ok(Opcode::AddInt),
             (BinOp::Sub, Ty::Int) => Ok(Opcode::SubInt),
@@ -1229,7 +1249,7 @@ impl Codegen {
 
     // ── Finish: resolve labels → absolute addresses ──
 
-    fn finalize(self) -> (Vec<Opcode>, CodegenState) {
+    fn finalize(self) -> (Vec<Opcode>, Option<SourceMap>, CodegenState) {
         // Resolve labels to absolute IR indices → opcode positions.
         // IR ops map 1:1 to opcodes, so IR index == opcode index.
         let mut opcodes = Vec::new();
@@ -1250,6 +1270,30 @@ impl Codegen {
                 }
             }
         }
-        (opcodes, self.state)
+
+        let source_entries = self
+            .ir_spans
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, span)| {
+                span.map(|span| OpcodeSource {
+                    opcode_index: idx as u32,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                    line: 0,
+                    column: 0,
+                    source_name: span.source_name.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let source_map = if source_entries.is_empty() {
+            None
+        } else {
+            Some(SourceMap {
+                entries: source_entries,
+            })
+        };
+
+        (opcodes, source_map, self.state)
     }
 }

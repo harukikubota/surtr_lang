@@ -3,10 +3,18 @@ use crate::error::ParseError;
 use crate::token::{Spanned, Token};
 
 pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
+    tokenize_with_source(source, None)
+}
+
+pub fn tokenize_with_source(
+    source: &str,
+    source_name: Option<String>,
+) -> Result<Vec<Spanned<Token>>, ParseError> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut i = 0;
+    let span = |start: usize, end: usize| Span::with_source(start, end, source_name.clone());
 
     while i < len {
         let c = chars[i];
@@ -29,10 +37,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
         if c == '\n' {
             tokens.push(Spanned {
                 token: Token::Newline,
-                span: Span {
-                    start: i,
-                    end: i + 1,
-                },
+                span: span(i, i + 1),
             });
             i += 1;
             continue;
@@ -52,13 +57,13 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 _ => {
                     return Err(ParseError::syntax(
                         format!("Unknown attribute: @{}", name),
-                        Span { start, end: i },
+                        span(start, i),
                     ));
                 }
             };
             tokens.push(Spanned {
                 token,
-                span: Span { start, end: i },
+                span: span(start, i),
             });
             continue;
         }
@@ -87,12 +92,12 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 i += 1;
             }
             if i >= len {
-                return Err(ParseError::incomplete("\"", Span { start, end: i }));
+                return Err(ParseError::incomplete("\"", span(start, i)));
             }
             i += 1;
             tokens.push(Spanned {
                 token: Token::Str(s),
-                span: Span { start, end: i },
+                span: span(start, i),
             });
             continue;
         }
@@ -119,12 +124,12 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 i += 1;
             }
             if i >= len {
-                return Err(ParseError::incomplete("'", Span { start, end: i }));
+                return Err(ParseError::incomplete("'", span(start, i)));
             }
             i += 1;
             tokens.push(Spanned {
                 token: Token::Str(s),
-                span: Span { start, end: i },
+                span: span(start, i),
             });
             continue;
         }
@@ -141,21 +146,21 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                     i += 1;
                 }
                 let text: String = chars[start..i].iter().collect();
-                let val: f64 = text.parse().map_err(|_| {
-                    ParseError::syntax(format!("Invalid float: {}", text), Span { start, end: i })
-                })?;
+                let val: f64 = text
+                    .parse()
+                    .map_err(|_| ParseError::syntax(format!("Invalid float: {}", text), span(start, i)))?;
                 tokens.push(Spanned {
                     token: Token::Float(val),
-                    span: Span { start, end: i },
+                    span: span(start, i),
                 });
             } else {
                 let text: String = chars[start..i].iter().collect();
                 let val: i64 = text.parse().map_err(|_| {
-                    ParseError::syntax(format!("Invalid integer: {}", text), Span { start, end: i })
+                    ParseError::syntax(format!("Invalid integer: {}", text), span(start, i))
                 })?;
                 tokens.push(Spanned {
                     token: Token::Int(val),
-                    span: Span { start, end: i },
+                    span: span(start, i),
                 });
             }
             continue;
@@ -180,7 +185,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             };
             tokens.push(Spanned {
                 token,
-                span: Span { start, end: i },
+                span: span(start, i),
             });
             continue;
         }
@@ -202,10 +207,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             if let Some(t) = tok {
                 tokens.push(Spanned {
                     token: t,
-                    span: Span {
-                        start: i,
-                        end: i + 2,
-                    },
+                    span: span(i, i + 2),
                 });
                 i += 2;
                 continue;
@@ -228,7 +230,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                     i += 2;
                     tokens.push(Spanned {
                         token: Token::Unit,
-                        span: Span { start, end: i },
+                        span: span(start, i),
                     });
                     continue;
                 }
@@ -249,23 +251,20 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             _ => {
                 return Err(ParseError::syntax(
                     format!("Unexpected character: '{}'", c),
-                    Span {
-                        start: i,
-                        end: i + 1,
-                    },
+                    span(i, i + 1),
                 ));
             }
         };
         tokens.push(Spanned {
             token,
-            span: Span { start, end: i + 1 },
+            span: span(start, i + 1),
         });
         i += 1;
     }
 
     tokens.push(Spanned {
         token: Token::Eof,
-        span: Span { start: i, end: i },
+        span: span(i, i),
     });
     Ok(tokens)
 }
@@ -330,5 +329,12 @@ mod tests {
         let tokens = tokenize("$A").unwrap();
         assert!(matches!(tokens[0].token, Token::Dollar));
         assert!(matches!(tokens[1].token, Token::Ident(ref s) if s == "A"));
+    }
+
+    #[test]
+    fn test_source_name_is_attached() {
+        let tokens = tokenize_with_source("num = 10", Some("repl".to_string())).unwrap();
+        assert_eq!(tokens[0].span.source_name.as_deref(), Some("repl"));
+        assert_eq!(tokens.last().unwrap().span.source_name.as_deref(), Some("repl"));
     }
 }

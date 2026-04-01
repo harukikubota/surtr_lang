@@ -109,6 +109,8 @@ pub struct OpcodeSource {
     pub span_end: u32,
     pub line: u32,
     pub column: u32,
+    #[serde(default)]
+    pub source_name: Option<String>,
 }
 
 /// A compiled Surtr program, ready for Eldr to execute.
@@ -127,6 +129,7 @@ pub struct Bytecode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BytecodeChunk {
     pub opcodes: Vec<Opcode>,
+    pub source_map: Option<SourceMap>,
     /// Base offset of constants in the VM-wide pool when this chunk is produced.
     pub const_base: u32,
     pub constants: Vec<Constant>,
@@ -461,6 +464,7 @@ mod tests {
                 span_end: 4,
                 line: 1,
                 column: 1,
+                source_name: None,
             }],
         }));
         let bytes = bytecode.encode().expect("encode should succeed");

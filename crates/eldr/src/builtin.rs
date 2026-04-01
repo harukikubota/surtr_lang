@@ -32,25 +32,19 @@ pub(crate) fn call_builtin(
     builtin_id: u16,
     args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
-    let meta = builtin_meta_by_id(builtin_id).ok_or_else(|| RuntimeError {
-        message: format!("Unknown builtin id: {}", builtin_id),
-    })?;
+    let meta = builtin_meta_by_id(builtin_id).ok_or_else(|| RuntimeError::new(format!("Unknown builtin id: {}", builtin_id)))?;
     if args.len() != usize::from(meta.arity) {
-        return Err(RuntimeError {
-            message: format!(
+        return Err(RuntimeError::new(format!(
                 "builtin {} arity mismatch: expected {}, got {}",
                 meta.name,
                 meta.arity,
                 args.len()
-            ),
-        });
+            )));
     }
 
     let func = BUILTIN_IMPLS
         .get(builtin_id as usize)
-        .ok_or_else(|| RuntimeError {
-            message: format!("Missing builtin implementation for id {}", builtin_id),
-        })?
+        .ok_or_else(|| RuntimeError::new(format!("Missing builtin implementation for id {}", builtin_id)))?
         .func;
 
     func(vm, args)
@@ -98,9 +92,7 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
                     .finish()
                     .eprint((file, Source::from(source)))
                 {
-                    return Err(RuntimeError {
-                        message: format!("Failed to render rich error report: {}", err),
-                    });
+                    return Err(RuntimeError::new(format!("Failed to render rich error report: {}", err)));
                 }
             } else {
                 eprintln!("Error: {}: {}", rich.kind, rich.message);

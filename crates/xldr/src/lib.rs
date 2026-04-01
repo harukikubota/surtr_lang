@@ -10,6 +10,7 @@ use rustyline::history::DefaultHistory;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper};
 use sindr::builtin::BUILTIN_METAS;
+use sindr::ir::BytecodeChunk;
 
 mod diagnostics;
 
@@ -110,7 +111,10 @@ struct ReplEngine {
 impl ReplEngine {
     fn new() -> Self {
         let forge_session = forge::ForgeSession::new();
-        let vm = eldr::VM::new_interactive(forge_session.type_registry());
+        let vm = eldr::VM::new_interactive(forge_session.type_registry())
+            .with_source(BUILTIN_PRELUDE_SOURCE.to_string(), BUILTIN_PRELUDE_FILE.to_string())
+            .with_output_capture()
+            .with_error_capture();
         let mut engine = Self {
             sigil_session: sigil::SigilSession::new(),
             scar_session: scar::ScarSession::new(),
@@ -130,7 +134,7 @@ impl ReplEngine {
     }
 
     fn bootstrap_builtins(&mut self) {
-        let ast = match spire::parse(BUILTIN_PRELUDE_SOURCE) {
+        let ast = match spire::parse_with_source(BUILTIN_PRELUDE_SOURCE, BUILTIN_PRELUDE_FILE) {
             Ok(ast) => ast,
             Err(e) => {
                 diagnostics::report_error(
@@ -170,7 +174,7 @@ impl ReplEngine {
             }
         };
 
-        let (chunk, meta) = match self.forge_session.codegen_chunk(typed) {
+        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
                 diagnostics::report_error(
@@ -182,10 +186,14 @@ impl ReplEngine {
             }
         };
 
-        if let Err(e) = self.vm.push(chunk) {
-            eprintln!("RuntimeError (builtin prelude): {}", e.message);
+        populate_chunk_source_map_lines(&mut chunk, BUILTIN_PRELUDE_FILE, BUILTIN_PRELUDE_SOURCE);
+
+        if let Err(e) = self.vm.push_atomic(chunk) {
+            report_runtime_error(&self.vm, &e, BUILTIN_PRELUDE_SOURCE, BUILTIN_PRELUDE_FILE);
             return;
         }
+
+        flush_captured_output(&mut self.vm);
 
         for name in &meta.function_defs {
             self.symbols.insert(name.clone());
@@ -227,7 +235,7 @@ impl ReplEngine {
         self.pending.push_str(line);
         self.pending.push('\n');
 
-        let ast = match spire::parse(&self.pending) {
+        let ast = match spire::parse_with_source(&self.pending, "repl") {
             Ok(ast) => ast,
             Err(e) if e.is_incomplete() => {
                 return ReplOutcome::Continue;
@@ -288,7 +296,7 @@ impl ReplEngine {
             }
         };
 
-        let (chunk, meta) = match self.forge_session.codegen_chunk(typed) {
+        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
                 self.sigil_session.rollback(sigil_cp);
@@ -305,8 +313,12 @@ impl ReplEngine {
             }
         };
 
-        match self.vm.push(chunk) {
+        self.vm.add_source(self.pending.clone(), "repl".to_string());
+        populate_chunk_source_map_lines(&mut chunk, "repl", &self.pending);
+
+        match self.vm.push_atomic(chunk) {
             Ok(value) => {
+                flush_captured_output(&mut self.vm);
                 display_repl_result(&self.vm, value.clone(), &meta);
                 for b in &meta.bindings {
                     self.symbols.insert(b.name.clone());
@@ -317,7 +329,7 @@ impl ReplEngine {
                 self.bump_line(Some(value));
             }
             Err(e) => {
-                eprintln!("RuntimeError: {}", e.message);
+                report_runtime_error(&self.vm, &e, &self.pending, "repl");
                 self.bump_line(None);
             }
         }
@@ -460,4 +472,106 @@ fn display_repl_result(vm: &eldr::VM, value: Value, meta: &forge::ChunkMeta) {
             println!("> {}", type_def.name);
         }
     }
+}
+
+fn flush_captured_output(vm: &mut eldr::VM) {
+    if let Some(buf) = vm.output.as_mut() {
+        for line in buf.drain(..) {
+            println!("{}", line);
+        }
+    }
+
+    if let Some(buf) = vm.error_output.as_mut() {
+        for line in buf.drain(..) {
+            eprintln!("{}", line);
+        }
+    }
+}
+
+fn populate_chunk_source_map_lines(chunk: &mut BytecodeChunk, source_name: &str, source: &str) {
+    let Some(source_map) = chunk.source_map.as_mut() else {
+        return;
+    };
+
+    let line_spans = source_line_spans(source);
+    for entry in &mut source_map.entries {
+        let pos = entry.span_start as usize;
+        entry.source_name = Some(source_name.to_string());
+        if let Some((line_idx, line_start)) = source_line_and_start(&line_spans, pos) {
+            entry.line = (line_idx + 1) as u32;
+            entry.column = (pos.saturating_sub(line_start) + 1) as u32;
+        }
+    }
+}
+
+fn report_runtime_error(vm: &eldr::VM, err: &eldr::error::RuntimeError, fallback_source: &str, fallback_file: &str) {
+    if let Some(location) = err.location.as_ref() {
+        if let Some(source) = vm.source_for_file(&location.file) {
+            diagnostics::report_error(
+                &location.file,
+                source,
+                diagnostics::simple_error(
+                    "RuntimeError",
+                    &err.message,
+                    spire::ast::Span::with_source(
+                        location.span_start as usize,
+                        location.span_end as usize,
+                        Some(location.file.clone()),
+                    ),
+                    None,
+                ),
+            );
+            return;
+        }
+
+        if location.file == fallback_file {
+            diagnostics::report_error(
+                fallback_file,
+                fallback_source,
+                diagnostics::simple_error(
+                    "RuntimeError",
+                    &err.message,
+                    spire::ast::Span::with_source(
+                        location.span_start as usize,
+                        location.span_end as usize,
+                        Some(location.file.clone()),
+                    ),
+                    None,
+                ),
+            );
+            return;
+        }
+
+        eprintln!(
+            "RuntimeError: {} ({}:{}:{})",
+            err.message, location.file, location.line, location.column
+        );
+        return;
+    }
+
+    eprintln!("RuntimeError: {}", err.message);
+}
+
+fn source_line_spans(source: &str) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = source.chars().collect();
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+
+    for (idx, ch) in chars.iter().enumerate() {
+        if *ch == '\n' {
+            spans.push((start, idx));
+            start = idx + 1;
+        }
+    }
+
+    spans.push((start, chars.len()));
+    spans
+}
+
+fn source_line_and_start(line_spans: &[(usize, usize)], pos: usize) -> Option<(usize, usize)> {
+    line_spans
+        .iter()
+        .enumerate()
+        .find(|(_, (start, end))| pos >= *start && pos <= *end)
+        .map(|(idx, (start, _))| (idx, *start))
 }

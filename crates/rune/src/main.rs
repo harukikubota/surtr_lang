@@ -3,6 +3,8 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
+use spire::ast::Span;
+
 mod diagnostics;
 mod dump;
 
@@ -142,7 +144,7 @@ fn parse_program_with_builtin_prelude(
     source: &str,
     file_path: &str,
 ) -> Result<Vec<spire::ast::Ast>, i32> {
-    let mut ast = match spire::parse(BUILTIN_PRELUDE_SOURCE) {
+    let mut ast = match spire::parse_with_source(BUILTIN_PRELUDE_SOURCE, BUILTIN_PRELUDE_FILE) {
         Ok(a) => a,
         Err(e) => {
             let message = e.message();
@@ -155,7 +157,7 @@ fn parse_program_with_builtin_prelude(
         }
     };
 
-    let mut user_ast = match spire::parse(source) {
+    let mut user_ast = match spire::parse_with_source(source, file_path) {
         Ok(a) => a,
         Err(e) => {
             let message = e.message();
@@ -199,7 +201,7 @@ fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Byte
     };
 
     // Phase 4: Forge — generate bytecode
-    let bytecode = match forge::codegen(typed) {
+    let mut bytecode = match forge::codegen(typed) {
         Ok(b) => b,
         Err(e) => {
             diagnostics::report_error(
@@ -211,6 +213,8 @@ fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Byte
         }
     };
 
+    populate_bytecode_source_map_lines(&mut bytecode, source, file_path);
+
     Ok(bytecode)
 }
 
@@ -219,14 +223,82 @@ fn execute_bytecode(
     source_context: Option<(String, String)>,
 ) -> Result<(), i32> {
     // Phase 5: Eldr — execute
-    let mut vm = match source_context {
-        Some((source, file_path)) => eldr::VM::new(bytecode).with_source(source, file_path),
+    let mut vm = match source_context.as_ref() {
+        Some((source, file_path)) => {
+            eldr::VM::new(bytecode).with_source(source.clone(), file_path.clone())
+        }
         None => eldr::VM::new(bytecode),
     };
     if let Err(e) = vm.run() {
-        eprintln!("RuntimeError: {}", e.message);
+        if let (Some(location), Some((source, file_path))) = (e.location.as_ref(), source_context.as_ref()) {
+            diagnostics::report_error(
+                file_path,
+                source,
+                diagnostics::simple_error(
+                    "RuntimeError",
+                    &e.message,
+                    Span::with_source(
+                        location.span_start as usize,
+                        location.span_end as usize,
+                        Some(location.file.clone()),
+                    ),
+                    None,
+                ),
+            );
+        } else if let Some(location) = e.location.as_ref() {
+            eprintln!(
+                "RuntimeError: {} ({}:{}:{})",
+                e.message, location.file, location.line, location.column
+            );
+        } else {
+            eprintln!("RuntimeError: {}", e.message);
+        }
         return Err(1);
     }
 
     Ok(())
+}
+
+fn populate_bytecode_source_map_lines(
+    bytecode: &mut forge::bytecode::Bytecode,
+    source: &str,
+    file_path: &str,
+) {
+    let Some(source_map) = bytecode.source_map.as_mut() else {
+        return;
+    };
+
+    let line_spans = source_line_spans(source);
+    for entry in &mut source_map.entries {
+        let pos = entry.span_start as usize;
+        entry.source_name = Some(file_path.to_string());
+        if let Some((line_idx, line_start)) = source_line_and_start(&line_spans, pos) {
+            entry.line = (line_idx + 1) as u32;
+            entry.column = (pos.saturating_sub(line_start) + 1) as u32;
+        }
+    }
+}
+
+fn source_line_spans(source: &str) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = source.chars().collect();
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+
+    for (idx, ch) in chars.iter().enumerate() {
+        if *ch == '\n' {
+            spans.push((start, idx));
+            start = idx + 1;
+        }
+    }
+
+    spans.push((start, chars.len()));
+    spans
+}
+
+fn source_line_and_start(line_spans: &[(usize, usize)], pos: usize) -> Option<(usize, usize)> {
+    line_spans
+        .iter()
+        .enumerate()
+        .find(|(_, (start, end))| pos >= *start && pos <= *end)
+        .map(|(idx, (start, _))| (idx, *start))
 }

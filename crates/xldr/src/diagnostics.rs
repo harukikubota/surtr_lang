@@ -106,19 +106,13 @@ fn infer_type_error_template(source: &str, focus: &Span, message: &str) -> Optio
             .trim()
             .to_string();
         let mut labels = vec![DiagnosticLabel {
-            span: Span {
-                start: decl_line.0,
-                end: decl_line.1,
-            },
+            span: Span::new(decl_line.0, decl_line.1),
             message: decl_text,
             color: Color::Blue,
         }];
 
         labels.push(DiagnosticLabel {
-            span: Span {
-                start: close_line.0,
-                end: close_line.1,
-            },
+            span: Span::new(close_line.0, close_line.1),
             message: "function body ends here".into(),
             color: Color::Yellow,
         });
@@ -133,10 +127,7 @@ fn infer_type_error_template(source: &str, focus: &Span, message: &str) -> Optio
                 .to_string();
             return Some(TemplateSpec {
                 labels: vec![DiagnosticLabel {
-                    span: Span {
-                        start: sig_line.0,
-                        end: sig_line.1,
-                    },
+                    span: Span::new(sig_line.0, sig_line.1),
                     message: sig_text,
                     color: Color::Blue,
                 }],
@@ -245,10 +236,7 @@ fn infer_match_arm_mismatch_template(
 
     let mut labels = Vec::new();
     labels.push(DiagnosticLabel {
-        span: Span {
-            start: match_start,
-            end: (match_start + 5).min(chars.len()),
-        },
+        span: Span::new(match_start, (match_start + 5).min(chars.len())),
         message: format!("match expression expects {}", expected_ty),
         color: Color::Magenta,
     });
@@ -267,10 +255,7 @@ fn infer_match_arm_mismatch_template(
             expected_ty
         );
         labels.push(DiagnosticLabel {
-            span: Span {
-                start: *start,
-                end: *end,
-            },
+            span: Span::new(*start, *end),
             message,
             color,
         });
@@ -393,10 +378,7 @@ fn trimmed_span_from_line(line_start: usize, chars: &[char], start: usize, end: 
         e -= 1;
     }
 
-    Span {
-        start: line_start + s,
-        end: line_start + e,
-    }
+    Span::new(line_start + s, line_start + e)
 }
 
 fn find_enclosing_match_block(chars: &[char], focus_pos: usize) -> Option<(usize, usize, usize)> {

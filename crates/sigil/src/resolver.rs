@@ -11,7 +11,7 @@ use crate::scope::Scope;
 
 fn initialize_scope() -> Scope {
     let mut scope = Scope::new();
-    let dummy = Span { start: 0, end: 0 };
+    let dummy = Span::new(0, 0);
     scope.define("Ok", dummy.clone());
     scope.define("Err", dummy);
     for meta in BUILTIN_METAS {

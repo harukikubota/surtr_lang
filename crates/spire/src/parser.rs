@@ -1,11 +1,25 @@
 use crate::ast::*;
 use crate::error::ParseError;
-use crate::lexer::tokenize;
+use crate::lexer::tokenize_with_source;
 use crate::token::{Spanned, Token};
 
 /// Parse Surtr source text into an abstract syntax tree.
 pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
-    let tokens = tokenize(source)?;
+    parse_with_source_opt(source, None)
+}
+
+pub fn parse_with_source(
+    source: &str,
+    source_name: impl Into<String>,
+) -> Result<Vec<Ast>, ParseError> {
+    parse_with_source_opt(source, Some(source_name.into()))
+}
+
+fn parse_with_source_opt(
+    source: &str,
+    source_name: Option<String>,
+) -> Result<Vec<Ast>, ParseError> {
+    let tokens = tokenize_with_source(source, source_name)?;
     let mut parser = Parser::new(tokens);
     parser.parse_program()
 }
@@ -197,10 +211,7 @@ impl Parser {
             let op_span = self.peek_span();
             self.advance(); // consume operator
             let right = self.parse_binop_expr(prec + 1)?;
-            let span = Span {
-                start: left.span().start,
-                end: right.span().end,
-            };
+            let span = Span::cover(left.span(), right.span());
             left = Ast::BinOp(span, op, Box::new(left), Box::new(right));
             let _ = op_span;
         }
@@ -216,10 +227,7 @@ impl Parser {
         while matches!(self.peek(), Token::Dot) {
             self.advance(); // consume .
             let (field, fspan) = self.expect_ident()?;
-            let span = Span {
-                start: expr.span().start,
-                end: fspan.end,
-            };
+            let span = expr.span().with_end(fspan.end);
             expr = Ast::FieldAccess(span, Box::new(expr), field);
         }
 
@@ -265,29 +273,16 @@ impl Parser {
                 let end = inner.span().end;
                 // Fold negative literals directly
                 match inner {
-                    Ast::Lit(_, Lit::Int(n)) => Ok(Ast::Lit(
-                        Span {
-                            start: sp.start,
-                            end,
-                        },
-                        Lit::Int(-n),
-                    )),
-                    Ast::Lit(_, Lit::Float(f)) => Ok(Ast::Lit(
-                        Span {
-                            start: sp.start,
-                            end,
-                        },
-                        Lit::Float(-f),
-                    )),
+                    Ast::Lit(_, Lit::Int(n)) => Ok(Ast::Lit(sp.with_end(end), Lit::Int(-n))),
+                    Ast::Lit(_, Lit::Float(f)) => {
+                        Ok(Ast::Lit(sp.with_end(end), Lit::Float(-f)))
+                    }
                     _ => {
                         // General unary minus: desugar to 0 - expr (for Int)
                         // For now, only support literal negation
                         Err(ParseError::syntax(
                             "Unary minus is only supported on numeric literals",
-                            Span {
-                                start: sp.start,
-                                end,
-                            },
+                            sp.with_end(end),
                         ))
                     }
                 }
@@ -311,13 +306,7 @@ impl Parser {
                 }
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RBrack)?;
-                Ok(Ast::List(
-                    Span {
-                        start: sp.start,
-                        end: end_span.end,
-                    },
-                    elems,
-                ))
+                Ok(Ast::List(sp.with_end(end_span.end), elems))
             }
 
             // Parenthesized expression
@@ -337,13 +326,7 @@ impl Parser {
                 } else {
                     let stmts = self.parse_block_stmts()?;
                     let end = self.expect(&Token::RBrace)?;
-                    Ok(Ast::Block(
-                        Span {
-                            start: sp.start,
-                            end: end.end,
-                        },
-                        stmts,
-                    ))
+                    Ok(Ast::Block(sp.with_end(end.end), stmts))
                 }
             }
 
@@ -411,10 +394,7 @@ impl Parser {
             }
             self.skip_newlines();
             let end_span = self.expect(&Token::RBrace)?;
-            let span = Span {
-                start: name_span.start,
-                end: end_span.end,
-            };
+            let span = name_span.with_end(end_span.end);
             return Ok(Ast::StructLit(span, name, fields));
         }
 
@@ -439,10 +419,7 @@ impl Parser {
                 }
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                let span = Span {
-                    start: name_span.start,
-                    end: end_span.end,
-                };
+                let span = name_span.with_end(end_span.end);
                 return Ok(Ast::ConstructorCall(span, name, args));
             } else {
                 // Normal function call
@@ -460,10 +437,7 @@ impl Parser {
                 }
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                let span = Span {
-                    start: name_span.start,
-                    end: end_span.end,
-                };
+                let span = name_span.with_end(end_span.end);
                 let func = Ast::Var(name_span, name);
                 return Ok(Ast::App(span, Box::new(func), args));
             }
@@ -473,10 +447,7 @@ impl Parser {
         // Lexer tokenizes `()` as Token::Unit.
         if matches!(self.peek(), Token::Unit) {
             let end_span = self.advance().span.clone();
-            let span = Span {
-                start: name_span.start,
-                end: end_span.end,
-            };
+            let span = name_span.with_end(end_span.end);
             if is_uppercase {
                 return Ok(Ast::ConstructorCall(span, name, Vec::new()));
             }
@@ -511,10 +482,7 @@ impl Parser {
             }
             let rhs = self.parse_expr()?;
             self.ensure_non_associative_assignment(&rhs)?;
-            let span = Span {
-                start: name_span.start,
-                end: rhs.span().end,
-            };
+            let span = name_span.with_end(rhs.span().end);
             let pat = AstPattern::Annotated(name_span, name, ty);
             return Ok(match assign_tok {
                 Token::Bind => Ast::Bind(span, pat, Box::new(rhs)),
@@ -529,10 +497,7 @@ impl Parser {
             self.advance();
             let rhs = self.parse_expr()?;
             self.ensure_non_associative_assignment(&rhs)?;
-            let span = Span {
-                start: name_span.start,
-                end: rhs.span().end,
-            };
+            let span = name_span.with_end(rhs.span().end);
             let pat = AstPattern::Var(name_span, name);
             return Ok(match assign_tok {
                 Token::Bind => Ast::Bind(span, pat, Box::new(rhs)),
@@ -586,14 +551,7 @@ impl Parser {
                 self.advance();
                 let ret = self.parse_type()?;
                 let end = self.expect(&Token::RParen)?;
-                return Ok(AstTy::Func(
-                    Span {
-                        start: sp.start,
-                        end: end.end,
-                    },
-                    Vec::new(),
-                    Box::new(ret),
-                ));
+                return Ok(AstTy::Func(sp.with_end(end.end), Vec::new(), Box::new(ret)));
             }
 
             let mut params = Vec::new();
@@ -605,14 +563,7 @@ impl Parser {
             self.expect(&Token::Arrow)?;
             let ret = self.parse_type()?;
             let end = self.expect(&Token::RParen)?;
-            return Ok(AstTy::Func(
-                Span {
-                    start: sp.start,
-                    end: end.end,
-                },
-                params,
-                Box::new(ret),
-            ));
+            return Ok(AstTy::Func(sp.with_end(end.end), params, Box::new(ret)));
         }
 
         // [Type] — list type
@@ -620,25 +571,13 @@ impl Parser {
             self.advance();
             let inner = self.parse_type()?;
             let end = self.expect(&Token::RBrack)?;
-            return Ok(AstTy::ListOf(
-                Span {
-                    start: sp.start,
-                    end: end.end,
-                },
-                Box::new(inner),
-            ));
+            return Ok(AstTy::ListOf(sp.with_end(end.end), Box::new(inner)));
         }
 
         if matches!(self.peek(), Token::Dollar) {
             self.advance();
             let (name, end) = self.expect_ident()?;
-            return Ok(AstTy::Named(
-                Span {
-                    start: sp.start,
-                    end: end.end,
-                },
-                format!("${}", name),
-            ));
+            return Ok(AstTy::Named(sp.with_end(end.end), format!("${}", name)));
         }
 
         // Named type, possibly with type args: Result<Int> or Result<Int, Error>
@@ -655,10 +594,7 @@ impl Parser {
                 None
             };
             let end = self.expect(&Token::Gt)?;
-            let span = Span {
-                start: sp.start,
-                end: end.end,
-            };
+            let span = sp.with_end(end.end);
 
             if name == "Result" {
                 return Ok(AstTy::ResultOf(span, Box::new(first), second));
@@ -699,22 +635,12 @@ impl Parser {
             body_stmts.into_iter().next().expect("checked non-empty")
         } else {
             Ast::Block(
-                Span {
-                    start: body_stmts[0].span().start,
-                    end: body_stmts[body_stmts.len() - 1].span().end,
-                },
+                Span::cover(body_stmts[0].span(), body_stmts[body_stmts.len() - 1].span()),
                 body_stmts,
             )
         };
         let end = self.expect(&Token::RBrace)?;
-        Ok(Ast::Closure(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            params,
-            Box::new(body),
-        ))
+        Ok(Ast::Closure(sp.with_end(end.end), params, Box::new(body)))
     }
 
     fn parse_capture_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
@@ -739,14 +665,7 @@ impl Parser {
             }
             other => (Box::new(other), Vec::new()),
         };
-        Ok(Ast::Capture(
-            Span {
-                start: sp.start,
-                end: target_end,
-            },
-            func,
-            args,
-        ))
+        Ok(Ast::Capture(sp.with_end(target_end), func, args))
     }
 
     // ── Data definitions (step 7, 9) ──
@@ -781,14 +700,7 @@ impl Parser {
             }
         }
         let end = self.expect(&Token::RBrace)?;
-        Ok(Ast::StructDef(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            name,
-            fields,
-        ))
+        Ok(Ast::StructDef(sp.with_end(end.end), name, fields))
     }
 
     /// `defrecord Name(field: Type, ...)`
@@ -827,14 +739,7 @@ impl Parser {
             }
         }
         let end = self.expect(&Token::RParen)?;
-        Ok(Ast::RecordDef(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            name,
-            fields,
-        ))
+        Ok(Ast::RecordDef(sp.with_end(end.end), name, fields))
     }
 
     /// `deferror Name { expr }` or `deferror Name(fields) { expr }`
@@ -886,10 +791,7 @@ impl Parser {
         let end = self.expect(&Token::RBrace)?;
 
         Ok(Ast::DeferrorDef(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
+            sp.with_end(end.end),
             name,
             fields,
             Box::new(show_expr),
@@ -962,15 +864,7 @@ impl Parser {
             sp.end
         };
 
-        Ok(Ast::BuiltinDecl(
-            Span {
-                start: sp.start,
-                end,
-            },
-            name,
-            params,
-            ret_ty,
-        ))
+        Ok(Ast::BuiltinDecl(sp.with_end(end), name, params, ret_ty))
     }
 
     /// `def name(arg: Type, ...) -> Type { expr }`
@@ -981,19 +875,10 @@ impl Parser {
         self.expect(&Token::LBrace)?;
         let body_stmts = self.parse_block_stmts()?;
         let end = self.expect(&Token::RBrace)?;
-        let body = Ast::Block(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            body_stmts,
-        );
+        let body = Ast::Block(sp.with_end(end.end), body_stmts);
 
         Ok(Ast::Def(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
+            sp.with_end(end.end),
             name,
             params,
             ret_ty,
@@ -1036,14 +921,7 @@ impl Parser {
             }
         }
         let end = self.expect(&Token::RBrace)?;
-        Ok(Ast::Match(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            Box::new(scrutinee),
-            arms,
-        ))
+        Ok(Ast::Match(sp.with_end(end.end), Box::new(scrutinee), arms))
     }
 
     /// Match pattern: `_`, literals, `Ok(var)`, `Err(var)`
@@ -1072,13 +950,7 @@ impl Parser {
                     Token::Int(n) => {
                         let int_span = self.peek_span();
                         self.advance();
-                        Ok(AstMatchPattern::IntLit(
-                            Span {
-                                start: sp.start,
-                                end: int_span.end,
-                            },
-                            -n,
-                        ))
+                        Ok(AstMatchPattern::IntLit(sp.with_end(int_span.end), -n))
                     }
                     _ => Err(ParseError::syntax(
                         "Expected integer after '-' in match pattern",
@@ -1183,12 +1055,13 @@ impl Parser {
                 return Err(ParseError::incomplete("}", base_span.clone()));
             }
 
-            let parsed = parse(&expr_src).map_err(|e| {
+            let parsed = parse_with_source_opt(&expr_src, base_span.source_name.clone()).map_err(|e| {
                 let expr_offset = base_span.start + 1 + expr_start;
-                let mapped = Span {
-                    start: expr_offset + e.span().start,
-                    end: expr_offset + e.span().end,
-                };
+                let mapped = Span::with_source(
+                    expr_offset + e.span().start,
+                    expr_offset + e.span().end,
+                    base_span.source_name.clone(),
+                );
                 ParseError::syntax(
                     format!("Invalid interpolation expression: {}", e.message()),
                     mapped,
@@ -1218,10 +1091,7 @@ impl Parser {
 }
 
 fn shift_span(span: Span, delta: usize) -> Span {
-    Span {
-        start: span.start + delta,
-        end: span.end + delta,
-    }
+    span.shifted(delta)
 }
 
 fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
@@ -1774,6 +1644,33 @@ def noop() {()}"#,
                     assert!(matches!(parts.get(1), Some(InterpolatedPart::Expr(expr))
                             if matches!(expr.as_ref(), Ast::Var(_, name) if name == "name")));
                     assert!(matches!(parts.get(2), Some(InterpolatedPart::Text(s)) if s == "!"));
+                }
+                _ => panic!("Expected InterpolatedStr"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_parse_with_source_attaches_origin() {
+        let ast = parse_with_source("x = 42", "main.srt").unwrap();
+        assert_eq!(ast[0].span().source_name.as_deref(), Some("main.srt"));
+    }
+
+    #[test]
+    fn test_interpolated_string_expr_keeps_origin() {
+        let ast = parse_with_source(r#"msg = "hi #{name}!""#, "main.srt").unwrap();
+        match &ast[0] {
+            Ast::Bind(span, _, rhs) => match rhs.as_ref() {
+                Ast::InterpolatedStr(rhs_span, parts) => {
+                    assert_eq!(span.source_name.as_deref(), Some("main.srt"));
+                    assert_eq!(rhs_span.source_name.as_deref(), Some("main.srt"));
+                    match parts.get(1) {
+                        Some(InterpolatedPart::Expr(expr)) => {
+                            assert_eq!(expr.span().source_name.as_deref(), Some("main.srt"));
+                        }
+                        _ => panic!("Expected interpolation expr"),
+                    }
                 }
                 _ => panic!("Expected InterpolatedStr"),
             },
