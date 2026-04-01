@@ -1,3 +1,4 @@
 @builtin def print(a: String) -> Unit
 @builtin def to_string(a: $A) -> String
+@builtin def inspect(a: $A) -> String
 @builtin def eprint(err: Error) -> Unit

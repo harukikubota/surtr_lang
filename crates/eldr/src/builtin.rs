@@ -19,6 +19,9 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_to_string,
     },
     BuiltinImpl {
+        func: builtin_inspect,
+    },
+    BuiltinImpl {
         func: builtin_eprint,
     },
 ];
@@ -59,10 +62,7 @@ pub(crate) fn call_builtin(
 fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let s = match &args[0] {
         Value::Str(s) => s.clone(),
-        other => {
-            let registry = vm.type_registry();
-            other.to_display_string(&registry)
-        }
+        other => inspect_value(vm, other),
     };
     match &mut vm.output {
         Some(buf) => buf.push(s),
@@ -72,9 +72,11 @@ fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
 }
 
 fn builtin_to_string(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let registry = vm.type_registry();
-    let s = args[0].to_display_string(&registry);
-    Ok(Value::Str(s))
+    Ok(Value::Str(inspect_value(vm, &args[0])))
+}
+
+fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Ok(Value::Str(inspect_value(vm, &args[0])))
 }
 
 fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -107,8 +109,7 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
             }
         }
         other => {
-            let registry = vm.type_registry();
-            let s = other.to_display_string(&registry);
+            let s = inspect_value(vm, other);
             match &mut vm.error_output {
                 Some(buf) => buf.push(s),
                 None => eprintln!("{}", s),
@@ -116,6 +117,11 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
         }
     }
     Ok(Value::Unit)
+}
+
+pub fn inspect_value(vm: &VM, value: &Value) -> String {
+    let registry = vm.type_registry();
+    value.to_display_string(&registry)
 }
 
 #[cfg(test)]

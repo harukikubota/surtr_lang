@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::io::{self, IsTerminal, Write};
 
+use eldr::builtin::inspect_value;
 use eldr::value::Value;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
@@ -170,7 +171,7 @@ impl ReplEngine {
             }
         };
 
-        let (chunk, meta) = match self.forge_session.codegen_chunk(typed) {
+        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
                 diagnostics::report_error(
@@ -182,8 +183,14 @@ impl ReplEngine {
             }
         };
 
+        populate_error_template_lines(&mut chunk.error_templates, BUILTIN_PRELUDE_SOURCE);
+        self.vm.set_source(
+            BUILTIN_PRELUDE_SOURCE.to_string(),
+            BUILTIN_PRELUDE_FILE.to_string(),
+        );
+
         if let Err(e) = self.vm.push(chunk) {
-            eprintln!("RuntimeError (builtin prelude): {}", e.message);
+            eldr::report_runtime_error(&e);
             return;
         }
 
@@ -288,7 +295,7 @@ impl ReplEngine {
             }
         };
 
-        let (chunk, meta) = match self.forge_session.codegen_chunk(typed) {
+        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
                 self.sigil_session.rollback(sigil_cp);
@@ -305,6 +312,9 @@ impl ReplEngine {
             }
         };
 
+        populate_error_template_lines(&mut chunk.error_templates, &self.pending);
+        self.vm.set_source(self.pending.clone(), "repl".to_string());
+
         match self.vm.push(chunk) {
             Ok(value) => {
                 display_repl_result(&self.vm, value.clone(), &meta);
@@ -317,7 +327,7 @@ impl ReplEngine {
                 self.bump_line(Some(value));
             }
             Err(e) => {
-                eprintln!("RuntimeError: {}", e.message);
+                eldr::report_runtime_error(&e);
                 self.bump_line(None);
             }
         }
@@ -350,8 +360,7 @@ impl ReplEngine {
 
         match self.results[line_num - 1].clone() {
             Some(value) => {
-                let registry = self.vm.type_registry();
-                println!("> {}", value.to_display_string(&registry));
+                println!("> {}", inspect_value(&self.vm, &value));
                 self.bump_line(Some(value));
             }
             None => {
@@ -434,10 +443,8 @@ pub fn repl_command() -> Result<(), i32> {
 }
 
 fn display_repl_result(vm: &eldr::VM, value: Value, meta: &forge::ChunkMeta) {
-    let registry = vm.type_registry();
-
     if !matches!(value, Value::Unit) {
-        println!("> {}", value.to_display_string(&registry));
+        println!("> {}", inspect_value(vm, &value));
         return;
     }
 
@@ -448,7 +455,7 @@ fn display_repl_result(vm: &eldr::VM, value: Value, meta: &forge::ChunkMeta) {
                     "> {}: {} = {}",
                     binding.name,
                     binding.ty,
-                    val.to_display_string(&registry)
+                    inspect_value(vm, &val)
                 );
             }
         }
@@ -460,4 +467,34 @@ fn display_repl_result(vm: &eldr::VM, value: Value, meta: &forge::ChunkMeta) {
             println!("> {}", type_def.name);
         }
     }
+}
+
+fn populate_error_template_lines(
+    error_templates: &mut [forge::bytecode::ErrTemplate],
+    source: &str,
+) {
+    for template in error_templates {
+        let (line, column) = line_column_for_offset(source, template.span_start as usize);
+        template.line = line;
+        template.column = column;
+    }
+}
+
+fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
+    let mut line = 1u32;
+    let mut column = 1u32;
+
+    for (idx, ch) in source.char_indices() {
+        if idx >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+
+    (line, column)
 }

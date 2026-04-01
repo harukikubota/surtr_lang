@@ -102,6 +102,21 @@ print(to_string(unit_val))"#,
     }
 
     #[test]
+    fn inspect_builtin_renders_like_current_display() {
+        assert_output(
+            r#"nums = [1, 2, 3]
+print(inspect(nums))
+print(inspect(Ok(10)))
+
+deferror MyError {
+  "error message."
+}
+print(inspect(Err(MyError)))"#,
+            &["[1, 2, 3]", "Ok(10)", "Err(MyError(\"error message.\"))"],
+        );
+    }
+
+    #[test]
     fn int_negative_literal() {
         assert_output("x = -5\nprint(to_string(x))", &["-5"]);
     }

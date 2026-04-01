@@ -71,6 +71,12 @@ impl VM {
         self
     }
 
+    /// Replace source context for later runtime diagnostics.
+    pub fn set_source(&mut self, source: String, file: String) {
+        self.source = Some(source);
+        self.source_file = Some(file);
+    }
+
     /// Access source text if attached.
     pub fn source(&self) -> Option<&str> {
         self.source.as_deref()

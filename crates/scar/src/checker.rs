@@ -67,6 +67,14 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
                 ret: Box::new(Ty::Str),
             }
         }
+        "inspect" => {
+            let a = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![a],
+                ret: Box::new(Ty::Str),
+            }
+        }
         "eprint" => Ty::BuiltinFunc {
             name: meta.name.into(),
             params: vec![Ty::Error],

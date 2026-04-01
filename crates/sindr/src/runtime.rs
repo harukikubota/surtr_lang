@@ -124,7 +124,7 @@ impl Value {
                             fields
                                 .first()
                                 .map(|v| match v {
-                                    Value::Error(rich) => rich.kind.clone(),
+                                    Value::Error(rich) => rich.to_display_string(),
                                     _ => v.to_display_string(registry),
                                 })
                                 .unwrap_or_default()
@@ -143,7 +143,7 @@ impl Value {
                     )
                 }
             },
-            Value::Error(rich) => rich.message.clone(),
+            Value::Error(rich) => rich.to_display_string(),
         }
     }
 }
@@ -154,6 +154,12 @@ pub struct RichError {
     pub kind: String,
     pub message: String,
     pub location: Location,
+}
+
+impl RichError {
+    pub fn to_display_string(&self) -> String {
+        format!("{}({:?})", self.kind, self.message)
+    }
 }
 
 /// Source location for error reporting.
@@ -233,11 +239,11 @@ mod tests {
                 span_end: 1,
             },
         }));
-        assert_eq!(value.to_display_string(&registry), "boom");
+        assert_eq!(value.to_display_string(&registry), "TestError(\"boom\")");
     }
 
     #[test]
-    fn display_result_err_with_rich_error_uses_error_kind() {
+    fn display_result_err_with_rich_error_uses_error_constructor_shape() {
         let registry = TypeRegistry::new();
         let value = Value::Tagged {
             tag: 1,
@@ -254,6 +260,9 @@ mod tests {
                 },
             }))],
         };
-        assert_eq!(value.to_display_string(&registry), "Err(NoneError)");
+        assert_eq!(
+            value.to_display_string(&registry),
+            "Err(NoneError(\"null\"))"
+        );
     }
 }
