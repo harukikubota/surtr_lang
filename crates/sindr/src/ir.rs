@@ -429,8 +429,8 @@ fn align4(len: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bytecode, BytecodeFormatError, Constant, ErrTemplate, FunctionEntry, LegacyBytecode,
-        Opcode, OpcodeSource, SourceMap, line_column_for_offset, populate_error_template_lines,
+        line_column_for_offset, populate_error_template_lines, Bytecode, BytecodeFormatError,
+        Constant, ErrTemplate, FunctionEntry, LegacyBytecode, Opcode, OpcodeSource, SourceMap,
     };
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
 

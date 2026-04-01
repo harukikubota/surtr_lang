@@ -243,7 +243,7 @@ fn execute_bytecode(
 #[cfg(test)]
 mod tests {
     use super::populate_error_template_lines;
-    use forge::bytecode::{ErrTemplate, line_column_for_offset};
+    use forge::bytecode::{line_column_for_offset, ErrTemplate};
 
     #[test]
     fn line_column_for_offset_tracks_multiline_source() {

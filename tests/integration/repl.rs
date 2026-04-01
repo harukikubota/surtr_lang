@@ -79,6 +79,24 @@ fn repl_keeps_bindings_between_inputs() {
 }
 
 #[test]
+fn repl_infers_closure_argument_type_from_add_constraint() {
+    let output = run_repl_session("fun = {|num| num + 5}\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("fun: (Int -> Int)"),
+        "expected closure argument type to infer as Int, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_compile_error_does_not_break_session_state() {
     let output = run_repl_session("x = 1\nbad: Int = \"oops\"\nx\n:quit\n");
     assert!(

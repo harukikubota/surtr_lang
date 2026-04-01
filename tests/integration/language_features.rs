@@ -211,6 +211,16 @@ print(to_string(add1(2)))"#,
     }
 
     #[test]
+    fn closure_argument_type_infers_from_add_constraint() {
+        assert_output(
+            r#"x = 10
+fun = {|num| x = x + 5;x+num}
+print(to_string(fun(3)))"#,
+            &["18"],
+        );
+    }
+
+    #[test]
     fn closure_builtin_capture() {
         assert_output(
             r#"printer = &print

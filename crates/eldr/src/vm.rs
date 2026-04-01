@@ -1,6 +1,4 @@
-use sindr::ir::{
-    Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, line_column_for_offset,
-};
+use sindr::ir::{line_column_for_offset, Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode};
 use sindr::runtime::{Callable, CallableTarget, Location, RichError, TypeRegistry, Value};
 
 use crate::builtin::call_builtin;
@@ -1090,7 +1088,8 @@ mod tests {
     #[test]
     fn make_error_prefers_call_site_line_and_column_when_source_is_available() {
         let source = "deferror Boom {\n  \"boom\"\n}\n\nBoom()\n".to_string();
-        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt])).with_source(source, "sample.srt".into());
+        let mut vm =
+            VM::new(base_bytecode(vec![Opcode::Halt])).with_source(source, "sample.srt".into());
         vm.frames[0].call_site = Some((30, 36));
         let result = vm
             .push(BytecodeChunk {
