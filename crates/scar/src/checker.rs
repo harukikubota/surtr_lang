@@ -141,6 +141,7 @@ struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
     user_func_params: HashMap<u32, Vec<String>>,
+    substitutions: HashMap<u32, Ty>,
 }
 
 impl Checker {
@@ -149,6 +150,7 @@ impl Checker {
             env: initialize_env(),
             function_return_ty: None,
             user_func_params: HashMap::new(),
+            substitutions: HashMap::new(),
         }
     }
 
@@ -157,6 +159,7 @@ impl Checker {
             env,
             function_return_ty: None,
             user_func_params,
+            substitutions: HashMap::new(),
         }
     }
 
@@ -168,7 +171,8 @@ impl Checker {
         self.predeclare_functions(&stmts)?;
         let mut typed = Vec::new();
         for stmt in stmts {
-            typed.push(self.check_node(&stmt)?);
+            let node = self.check_node(&stmt)?;
+            typed.push(self.resolve_typed_node(node));
         }
         Ok(typed)
     }
@@ -241,15 +245,13 @@ impl Checker {
             }
 
             Resolved::Var(span, id) => {
-                let ty = self
-                    .env
-                    .lookup_var(id.unique_id)
-                    .cloned()
-                    .ok_or_else(|| TypeError {
+                let ty = self.resolve_ty(&self.env.lookup_var(id.unique_id).cloned().ok_or_else(
+                    || TypeError {
                         message: format!("Undefined variable: {}", id.name),
                         span: span.clone(),
                         hint: None,
-                    })?;
+                    },
+                )?);
                 Ok(TypedNode {
                     ty,
                     span: span.clone(),
@@ -380,14 +382,14 @@ impl Checker {
             }
         };
 
-        if let Some(ret_ty) = &self.function_return_ty {
+        if let Some(ret_ty) = self.function_return_ty.clone() {
             match ret_ty {
                 Ty::Result(_, fn_err_ty) => {
-                    if !self.types_compatible(fn_err_ty, &err_ty) {
+                    if !self.types_compatible(fn_err_ty.as_ref(), &err_ty) {
                         return Err(TypeError {
                             message: format!(
                                 "`=?` error type mismatch: function returns {}, but expression returns {}",
-                                self.ty_name(fn_err_ty),
+                                self.ty_name(fn_err_ty.as_ref()),
                                 self.ty_name(&err_ty)
                             ),
                             span: typed_rhs.span.clone(),
@@ -399,7 +401,7 @@ impl Checker {
                     return Err(TypeError {
                         message: format!(
                             "`=?` can only be used in functions returning Result<...>, got {}",
-                            self.ty_name(other)
+                            self.ty_name(&other)
                         ),
                         span: span.clone(),
                         hint: None,
@@ -523,9 +525,11 @@ impl Checker {
         }
     }
 
-    fn types_compatible(&self, expected: &Ty, got: &Ty) -> bool {
-        match (expected, got) {
-            (Ty::Var(_), _) | (_, Ty::Var(_)) => true,
+    fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> bool {
+        let expected = self.resolve_ty(expected);
+        let got = self.resolve_ty(got);
+        match (&expected, &got) {
+            (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
             (Ty::Int, Ty::Int)
             | (Ty::Float, Ty::Float)
             | (Ty::Str, Ty::Str)
@@ -547,6 +551,91 @@ impl Checker {
             (Ty::Struct(n1, _), Ty::Struct(n2, _)) => n1 == n2,
             (Ty::Record(n1, _), Ty::Record(n2, _)) => n1 == n2,
             _ => false,
+        }
+    }
+
+    fn bind_tyvar(&mut self, var: u32, ty: &Ty) -> bool {
+        let ty = self.resolve_ty(ty);
+        if ty == Ty::Var(var) {
+            return true;
+        }
+        if self.ty_contains_var(&ty, var) {
+            return false;
+        }
+        self.substitutions.insert(var, ty);
+        true
+    }
+
+    fn ty_contains_var(&self, ty: &Ty, needle: u32) -> bool {
+        match self.resolve_ty(ty) {
+            Ty::Var(var) => var == needle,
+            Ty::List(inner) => self.ty_contains_var(&inner, needle),
+            Ty::Func(params, ret) => {
+                params
+                    .iter()
+                    .any(|param| self.ty_contains_var(param, needle))
+                    || self.ty_contains_var(&ret, needle)
+            }
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                params
+                    .iter()
+                    .any(|param| self.ty_contains_var(param, needle))
+                    || self.ty_contains_var(&ret, needle)
+            }
+            Ty::Result(ok, err) => {
+                self.ty_contains_var(&ok, needle) || self.ty_contains_var(&err, needle)
+            }
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+                .iter()
+                .any(|(_, field_ty)| self.ty_contains_var(field_ty, needle)),
+            _ => false,
+        }
+    }
+
+    fn resolve_ty(&self, ty: &Ty) -> Ty {
+        match ty {
+            Ty::Var(var) => match self.substitutions.get(var) {
+                Some(bound) => self.resolve_ty(bound),
+                None => Ty::Var(*var),
+            },
+            Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
+            Ty::Func(params, ret) => Ty::Func(
+                params.iter().map(|param| self.resolve_ty(param)).collect(),
+                Box::new(self.resolve_ty(ret)),
+            ),
+            Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+                name: name.clone(),
+                params: params.iter().map(|param| self.resolve_ty(param)).collect(),
+                ret: Box::new(self.resolve_ty(ret)),
+            },
+            Ty::UserFunc {
+                fun_idx,
+                params,
+                ret,
+            } => Ty::UserFunc {
+                fun_idx: *fun_idx,
+                params: params.iter().map(|param| self.resolve_ty(param)).collect(),
+                ret: Box::new(self.resolve_ty(ret)),
+            },
+            Ty::Struct(name, fields) => Ty::Struct(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
+                    .collect(),
+            ),
+            Ty::Record(name, fields) => Ty::Record(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
+                    .collect(),
+            ),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.resolve_ty(ok)),
+                Box::new(self.resolve_ty(err)),
+            ),
+            other => other.clone(),
         }
     }
 
@@ -576,6 +665,144 @@ impl Checker {
             }),
             Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
             Ty::UserFunc { .. } => "UserFunc".into(),
+        }
+    }
+
+    fn resolve_typed_node(&self, node: TypedNode) -> TypedNode {
+        let span = node.span.clone();
+        let ty = self.resolve_ty(&node.ty);
+        let node = match node.node {
+            TypedInner::Lit(lit) => TypedInner::Lit(lit),
+            TypedInner::Var(id) => TypedInner::Var(id),
+            TypedInner::App(func, args) => TypedInner::App(
+                Box::new(self.resolve_typed_node(*func)),
+                args.into_iter()
+                    .map(|arg| self.resolve_typed_node(arg))
+                    .collect(),
+            ),
+            TypedInner::Block(stmts) => TypedInner::Block(
+                stmts
+                    .into_iter()
+                    .map(|stmt| self.resolve_typed_node(stmt))
+                    .collect(),
+            ),
+            TypedInner::Bind(pattern, rhs) => TypedInner::Bind(
+                self.resolve_typed_pattern(pattern),
+                Box::new(self.resolve_typed_node(*rhs)),
+            ),
+            TypedInner::SafeBind(pattern, rhs) => TypedInner::SafeBind(
+                self.resolve_typed_pattern(pattern),
+                Box::new(self.resolve_typed_node(*rhs)),
+            ),
+            TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
+                op,
+                Box::new(self.resolve_typed_node(*left)),
+                Box::new(self.resolve_typed_node(*right)),
+            ),
+            TypedInner::List(elems) => TypedInner::List(
+                elems
+                    .into_iter()
+                    .map(|elem| self.resolve_typed_node(elem))
+                    .collect(),
+            ),
+            TypedInner::InterpolatedStr(parts) => TypedInner::InterpolatedStr(
+                parts
+                    .into_iter()
+                    .map(|part| match part {
+                        TypedInterpolatedPart::Text(text) => TypedInterpolatedPart::Text(text),
+                        TypedInterpolatedPart::Expr(expr) => {
+                            TypedInterpolatedPart::Expr(Box::new(self.resolve_typed_node(*expr)))
+                        }
+                    })
+                    .collect(),
+            ),
+            TypedInner::If(cond, then, else_opt) => TypedInner::If(
+                Box::new(self.resolve_typed_node(*cond)),
+                Box::new(self.resolve_typed_node(*then)),
+                else_opt.map(|node| Box::new(self.resolve_typed_node(*node))),
+            ),
+            TypedInner::Match(scrutinee, arms) => TypedInner::Match(
+                Box::new(self.resolve_typed_node(*scrutinee)),
+                arms.into_iter()
+                    .map(|(pat, body)| (pat, self.resolve_typed_node(body)))
+                    .collect(),
+            ),
+            TypedInner::FieldAccess(expr, idx) => {
+                TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
+            }
+            TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
+                tag,
+                fields
+                    .into_iter()
+                    .map(|field| self.resolve_typed_node(field))
+                    .collect(),
+            ),
+            TypedInner::ConstructorCall(tag, fields) => TypedInner::ConstructorCall(
+                tag,
+                fields
+                    .into_iter()
+                    .map(|field| self.resolve_typed_node(field))
+                    .collect(),
+            ),
+            TypedInner::DeferrorDef(tag, binding, id, params, show) => TypedInner::DeferrorDef(
+                tag,
+                binding,
+                id,
+                params
+                    .into_iter()
+                    .map(|param| TypedFunParam {
+                        id: param.id,
+                        ty: self.resolve_ty(&param.ty),
+                    })
+                    .collect(),
+                Box::new(self.resolve_typed_node(*show)),
+            ),
+            TypedInner::Def(fun_idx, id, params, ret_ty, body) => TypedInner::Def(
+                fun_idx,
+                id,
+                params
+                    .into_iter()
+                    .map(|param| TypedFunParam {
+                        id: param.id,
+                        ty: self.resolve_ty(&param.ty),
+                    })
+                    .collect(),
+                self.resolve_ty(&ret_ty),
+                Box::new(self.resolve_typed_node(*body)),
+            ),
+            TypedInner::Closure(params, captures, body) => TypedInner::Closure(
+                params
+                    .into_iter()
+                    .map(|param| TypedClosureParam {
+                        id: param.id,
+                        ty: self.resolve_ty(&param.ty),
+                    })
+                    .collect(),
+                captures,
+                Box::new(self.resolve_typed_node(*body)),
+            ),
+            TypedInner::Capture(target, args) => TypedInner::Capture(
+                Box::new(self.resolve_typed_node(*target)),
+                args.into_iter()
+                    .map(|arg| self.resolve_typed_node(arg))
+                    .collect(),
+            ),
+            TypedInner::StructDef(tag, name, field_names) => {
+                TypedInner::StructDef(tag, name, field_names)
+            }
+            TypedInner::RecordDef(tag, name, field_names) => {
+                TypedInner::RecordDef(tag, name, field_names)
+            }
+            TypedInner::Semi(inner) => TypedInner::Semi(Box::new(self.resolve_typed_node(*inner))),
+        };
+
+        TypedNode { ty, span, node }
+    }
+
+    fn resolve_typed_pattern(&self, pattern: TypedPattern) -> TypedPattern {
+        match pattern {
+            TypedPattern::Var(ty, id) => TypedPattern::Var(self.resolve_ty(&ty), id),
+            TypedPattern::Wildcard(ty) => TypedPattern::Wildcard(self.resolve_ty(&ty)),
         }
     }
 
@@ -647,10 +874,10 @@ impl Checker {
         span: &Span,
     ) -> Result<(TypedPattern, Ty), TypeError> {
         match pat {
-            ResolvedPattern::Var(id) => Ok((
-                TypedPattern::Var(rhs_ty.clone(), id.clone()),
-                rhs_ty.clone(),
-            )),
+            ResolvedPattern::Var(id) => {
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                Ok((TypedPattern::Var(rhs_ty.clone(), id.clone()), rhs_ty))
+            }
             ResolvedPattern::Annotated(id, ast_ty) => {
                 let expected = self.resolve_ast_ty(ast_ty)?;
                 if !self.types_compatible(&expected, rhs_ty) {
@@ -664,10 +891,12 @@ impl Checker {
                         hint: None,
                     });
                 }
+                let expected = self.resolve_ty(&expected);
                 Ok((TypedPattern::Var(expected.clone(), id.clone()), expected))
             }
             ResolvedPattern::Wildcard(_wspan) => {
-                Ok((TypedPattern::Wildcard(rhs_ty.clone()), rhs_ty.clone()))
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                Ok((TypedPattern::Wildcard(rhs_ty.clone()), rhs_ty))
             }
         }
     }
@@ -681,8 +910,9 @@ impl Checker {
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
         let typed_func = self.check_node(func)?;
+        let func_ty = self.resolve_ty(&typed_func.ty);
 
-        match &typed_func.ty {
+        match &func_ty {
             Ty::BuiltinFunc { name, params, ret } => {
                 if args
                     .iter()
@@ -732,7 +962,7 @@ impl Checker {
                 }
 
                 Ok(TypedNode {
-                    ty: ret.as_ref().clone(),
+                    ty: self.resolve_ty(ret),
                     span: span.clone(),
                     node: TypedInner::App(Box::new(typed_func), typed_args),
                 })
@@ -844,7 +1074,7 @@ impl Checker {
                 }
 
                 Ok(TypedNode {
-                    ty: ret.as_ref().clone(),
+                    ty: self.resolve_ty(ret),
                     span: span.clone(),
                     node: TypedInner::App(Box::new(typed_func), typed_args),
                 })
@@ -895,7 +1125,7 @@ impl Checker {
                 }
 
                 Ok(TypedNode {
-                    ty: ret.as_ref().clone(),
+                    ty: self.resolve_ty(ret),
                     span: span.clone(),
                     node: TypedInner::App(Box::new(typed_func), typed_args),
                 })
@@ -962,17 +1192,28 @@ impl Checker {
             body_checker.function_return_ty = Some(expected_ret.as_ref().clone());
         }
         let typed_body = body_checker.check_node(body)?;
+        let typed_body = body_checker.resolve_typed_node(typed_body);
         self.env.next_tyvar = self.env.next_tyvar.max(body_checker.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(body_checker.env.next_tag);
 
         let param_tys = typed_params
             .iter()
-            .map(|p| p.ty.clone())
+            .map(|p| body_checker.resolve_ty(&p.ty))
             .collect::<Vec<_>>();
         Ok(TypedNode {
-            ty: Ty::Func(param_tys, Box::new(typed_body.ty.clone())),
+            ty: Ty::Func(param_tys, Box::new(body_checker.resolve_ty(&typed_body.ty))),
             span: span.clone(),
-            node: TypedInner::Closure(typed_params, captures.to_vec(), Box::new(typed_body)),
+            node: TypedInner::Closure(
+                typed_params
+                    .into_iter()
+                    .map(|param| TypedClosureParam {
+                        id: param.id,
+                        ty: body_checker.resolve_ty(&param.ty),
+                    })
+                    .collect(),
+                captures.to_vec(),
+                Box::new(typed_body),
+            ),
         })
     }
 
@@ -988,7 +1229,8 @@ impl Checker {
             .map(|a| self.check_node(a))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let (params, ret) = match &typed_target.ty {
+        let target_ty = self.resolve_ty(&typed_target.ty);
+        let (params, ret) = match &target_ty {
             Ty::BuiltinFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
             Ty::UserFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
             Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
@@ -1029,7 +1271,13 @@ impl Checker {
 
         let remaining = params[typed_args.len()..].to_vec();
         Ok(TypedNode {
-            ty: Ty::Func(remaining, Box::new(ret)),
+            ty: Ty::Func(
+                remaining
+                    .into_iter()
+                    .map(|ty| self.resolve_ty(&ty))
+                    .collect(),
+                Box::new(self.resolve_ty(&ret)),
+            ),
             span: span.clone(),
             node: TypedInner::Capture(Box::new(typed_target), typed_args),
         })
@@ -1063,72 +1311,87 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
         let typed_right = self.check_node(right)?;
-        let lt = &typed_left.ty;
-        let rt = &typed_right.ty;
+        let lt = self.resolve_ty(&typed_left.ty);
+        let rt = self.resolve_ty(&typed_right.ty);
 
         let result_ty = match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => match (lt, rt) {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => match (&lt, &rt) {
                 (Ty::Int, Ty::Int) => Ok(Ty::Int),
                 (Ty::Float, Ty::Float) => Ok(Ty::Float),
+                (Ty::Var(_), Ty::Int) | (Ty::Int, Ty::Var(_)) => {
+                    self.types_compatible(&lt, &Ty::Int);
+                    self.types_compatible(&rt, &Ty::Int);
+                    Ok(Ty::Int)
+                }
+                (Ty::Var(_), Ty::Float) | (Ty::Float, Ty::Var(_)) => {
+                    self.types_compatible(&lt, &Ty::Float);
+                    self.types_compatible(&rt, &Ty::Float);
+                    Ok(Ty::Float)
+                }
                 _ => Err(TypeError {
                     message: format!(
                         "Cannot apply {:?} to {} and {}",
                         op,
-                        self.ty_name(lt),
-                        self.ty_name(rt)
+                        self.ty_name(&lt),
+                        self.ty_name(&rt)
                     ),
                     span: span.clone(),
                     hint: None,
                 }),
             },
-            BinOp::Mod => match (lt, rt) {
+            BinOp::Mod => match (&lt, &rt) {
                 (Ty::Int, Ty::Int) => Ok(Ty::Int),
+                (Ty::Var(_), Ty::Int) | (Ty::Int, Ty::Var(_)) => {
+                    self.types_compatible(&lt, &Ty::Int);
+                    self.types_compatible(&rt, &Ty::Int);
+                    Ok(Ty::Int)
+                }
                 _ => Err(TypeError {
                     message: format!(
                         "% requires (Int, Int), got ({}, {})",
-                        self.ty_name(lt),
-                        self.ty_name(rt)
+                        self.ty_name(&lt),
+                        self.ty_name(&rt)
                     ),
                     span: span.clone(),
                     hint: None,
                 }),
             },
-            BinOp::Eq | BinOp::Neq => match (lt, rt) {
+            BinOp::Eq | BinOp::Neq => match (&lt, &rt) {
                 (Ty::Int, Ty::Int) | (Ty::Str, Ty::Str) | (Ty::Bool, Ty::Bool) => Ok(Ty::Bool),
-                _ if !self.types_compatible(lt, rt) => Err(TypeError {
+                _ if !self.types_compatible(&lt, &rt) => Err(TypeError {
                     message: format!(
                         "Cannot compare {} and {}",
-                        self.ty_name(lt),
-                        self.ty_name(rt)
+                        self.ty_name(&lt),
+                        self.ty_name(&rt)
                     ),
                     span: span.clone(),
                     hint: None,
                 }),
                 _ => Err(TypeError {
-                    message: format!("== / != not supported for {} in phase 1", self.ty_name(lt)),
+                    message: format!("== / != not supported for {} in phase 1", self.ty_name(&lt)),
                     span: span.clone(),
                     hint: None,
                 }),
             },
-            BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => match (lt, rt) {
+            BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => match (&lt, &rt) {
                 (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) => Ok(Ty::Bool),
                 _ => Err(TypeError {
                     message: format!(
                         "Cannot compare {} and {}",
-                        self.ty_name(lt),
-                        self.ty_name(rt)
+                        self.ty_name(&lt),
+                        self.ty_name(&rt)
                     ),
                     span: span.clone(),
                     hint: None,
                 }),
             },
-            BinOp::Concat => match (lt, rt) {
+            BinOp::Concat => match (&lt, &rt) {
                 (Ty::Str, Ty::Str) => Ok(Ty::Str),
                 _ => Err(TypeError {
                     message: format!(
                         "++ requires (String, String), got ({}, {})",
-                        self.ty_name(lt),
-                        self.ty_name(rt)
+                        self.ty_name(&lt),
+                        self.ty_name(&rt)
                     ),
                     span: span.clone(),
                     hint: None,
@@ -2066,11 +2329,13 @@ impl Checker {
         let mut show_checker =
             Checker::with_env_and_params(show_env, self.user_func_params.clone());
         show_checker.function_return_ty = Some(Ty::Str);
-        let typed_show = show_checker.check_node(show_expr).map_err(|err| TypeError {
-            message: err.message,
-            span: span.clone(),
-            hint: err.hint,
-        })?;
+        let typed_show = show_checker
+            .check_node(show_expr)
+            .map_err(|err| TypeError {
+                message: err.message,
+                span: span.clone(),
+                hint: err.hint,
+            })?;
         self.env.next_tyvar = self.env.next_tyvar.max(show_checker.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(show_checker.env.next_tag);
         if !self.types_compatible(&Ty::Str, &typed_show.ty) {
