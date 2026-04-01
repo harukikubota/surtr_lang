@@ -185,3 +185,52 @@ print(to_string(bad()))"#,
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn run_source_runtime_error_verbose_dump_is_opt_in() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_runtime_error_verbose");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def bad() -> Int {
+  1 / 0
+}
+
+print(to_string(bad()))"#,
+    );
+    let output = Command::new(&bin)
+        .env("SURTR_VERBOSE_RUNTIME_ERROR", "1")
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("pc:"),
+        "expected verbose runtime dump to include pc, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("opcode: DivInt"),
+        "expected verbose runtime dump to include opcode, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("detail: stack_depth="),
+        "expected verbose runtime dump to include detail lines, got:\n{}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
