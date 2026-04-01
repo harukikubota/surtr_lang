@@ -2066,7 +2066,11 @@ impl Checker {
         let mut show_checker =
             Checker::with_env_and_params(show_env, self.user_func_params.clone());
         show_checker.function_return_ty = Some(Ty::Str);
-        let typed_show = show_checker.check_node(show_expr)?;
+        let typed_show = show_checker.check_node(show_expr).map_err(|err| TypeError {
+            message: err.message,
+            span: span.clone(),
+            hint: err.hint,
+        })?;
         self.env.next_tyvar = self.env.next_tyvar.max(show_checker.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(show_checker.env.next_tag);
         if !self.types_compatible(&Ty::Str, &typed_show.ty) {
@@ -2075,7 +2079,7 @@ impl Checker {
                     "deferror show block must return String, got {}",
                     self.ty_name(&typed_show.ty)
                 ),
-                span: typed_show.span.clone(),
+                span: span.clone(),
                 hint: None,
             });
         }

@@ -149,6 +149,44 @@ match err_result {
 }
 
 #[test]
+fn run_source_deferror_compile_error_points_to_definition_site() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_deferror_compile_location");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"deferror BadMessage {
+  1
+}
+
+Err(BadMessage)"#,
+    );
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("sample.srt:1:"),
+        "expected deferror compile error to point at definition site on line 1, got:\n{}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn run_source_runtime_error_points_to_call_site_when_available() {
     let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_runtime_error_location");
