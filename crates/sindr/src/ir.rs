@@ -170,6 +170,33 @@ pub struct ErrTemplate {
     pub num_params: u8,
 }
 
+pub fn populate_error_template_lines(error_templates: &mut [ErrTemplate], source: &str) {
+    for template in error_templates {
+        let (line, column) = line_column_for_offset(source, template.span_start as usize);
+        template.line = line;
+        template.column = column;
+    }
+}
+
+pub fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
+    let mut line = 1u32;
+    let mut column = 1u32;
+
+    for (idx, ch) in source.char_indices() {
+        if idx >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+
+    (line, column)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum BytecodeFormatError {
     HeaderTooShort,
@@ -403,7 +430,7 @@ fn align4(len: usize) -> usize {
 mod tests {
     use super::{
         Bytecode, BytecodeFormatError, Constant, ErrTemplate, FunctionEntry, LegacyBytecode,
-        Opcode, OpcodeSource, SourceMap,
+        Opcode, OpcodeSource, SourceMap, line_column_for_offset, populate_error_template_lines,
     };
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
 
@@ -510,5 +537,32 @@ mod tests {
         let decoded = Bytecode::decode(&bytes).expect("legacy decode should succeed");
         assert_eq!(decoded.source_map, None);
         assert_eq!(decoded.constants, vec![Constant::Int(7)]);
+    }
+
+    #[test]
+    fn line_column_for_offset_tracks_multiline_source() {
+        let source = "deferror Boom {\n  \"boom\"\n}\n";
+        assert_eq!(line_column_for_offset(source, 0), (1, 1));
+        assert_eq!(line_column_for_offset(source, 16), (2, 1));
+    }
+
+    #[test]
+    fn populate_error_template_lines_uses_span_start() {
+        let source = "deferror Boom {\n  \"boom\"\n}\n";
+        let mut templates = vec![ErrTemplate {
+            id: 0,
+            kind: "Boom".into(),
+            span_start: 16,
+            span_end: 24,
+            line: 0,
+            column: 0,
+            format: "{}".into(),
+            num_params: 1,
+        }];
+
+        populate_error_template_lines(&mut templates, source);
+
+        assert_eq!(templates[0].line, 2);
+        assert_eq!(templates[0].column, 1);
     }
 }

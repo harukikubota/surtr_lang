@@ -1,4 +1,6 @@
-use sindr::ir::{Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode};
+use sindr::ir::{
+    Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, line_column_for_offset,
+};
 use sindr::runtime::{Callable, CallableTarget, Location, RichError, TypeRegistry, Value};
 
 use crate::builtin::call_builtin;
@@ -613,14 +615,21 @@ impl VM {
                 let (span_start, span_end) = call_site
                     .map(|(start, end)| (start, end))
                     .unwrap_or((template.span_start, template.span_end));
+                let (line, column) = match call_site {
+                    Some((span_start, _)) => self
+                        .source()
+                        .map(|source| line_column_for_offset(source, span_start as usize))
+                        .unwrap_or((template.line, template.column)),
+                    None => (template.line, template.column),
+                };
                 let location = Location {
                     file: self
                         .source_file()
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| "<repl>".to_string()),
                     func: template.kind.clone(),
-                    line: template.line,
-                    column: template.column,
+                    line,
+                    column,
                     span_start,
                     span_end,
                 };
@@ -879,25 +888,6 @@ impl VM {
     }
 }
 
-fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
-    let mut line = 1u32;
-    let mut column = 1u32;
-
-    for (idx, ch) in source.char_indices() {
-        if idx >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-
-    (line, column)
-}
-
 #[cfg(test)]
 mod tests {
     use super::VM;
@@ -1092,6 +1082,43 @@ mod tests {
                 assert_eq!(rich.message, "new message");
                 assert_eq!(rich.location.line, 2);
                 assert_eq!(rich.location.column, 3);
+            }
+            other => panic!("expected Value::Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn make_error_prefers_call_site_line_and_column_when_source_is_available() {
+        let source = "deferror Boom {\n  \"boom\"\n}\n\nBoom()\n".to_string();
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt])).with_source(source, "sample.srt".into());
+        vm.frames[0].call_site = Some((30, 36));
+        let result = vm
+            .push(BytecodeChunk {
+                opcodes: vec![Opcode::LoadConst(0), Opcode::MakeError(0), Opcode::Halt],
+                const_base: 0,
+                constants: vec![Constant::Str("boom".into())],
+                new_locals: 0,
+                type_entries: Vec::new(),
+                error_template_base: 0,
+                error_templates: vec![ErrTemplate {
+                    id: 0,
+                    kind: "Boom".into(),
+                    span_start: 0,
+                    span_end: 5,
+                    line: 1,
+                    column: 1,
+                    format: "{}".into(),
+                    num_params: 1,
+                }],
+                functions: Vec::new(),
+            })
+            .expect("push should succeed");
+        match result {
+            Value::Error(rich) => {
+                assert_eq!(rich.location.line, 5);
+                assert_eq!(rich.location.column, 3);
+                assert_eq!(rich.location.span_start, 30);
+                assert_eq!(rich.location.span_end, 36);
             }
             other => panic!("expected Value::Error, got {:?}", other),
         }

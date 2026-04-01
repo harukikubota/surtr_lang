@@ -3,6 +3,8 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
+use forge::bytecode::populate_error_template_lines;
+
 mod diagnostics;
 mod dump;
 
@@ -238,40 +240,10 @@ fn execute_bytecode(
     Ok(())
 }
 
-fn populate_error_template_lines(
-    error_templates: &mut [forge::bytecode::ErrTemplate],
-    source: &str,
-) {
-    for template in error_templates {
-        let (line, column) = line_column_for_offset(source, template.span_start as usize);
-        template.line = line;
-        template.column = column;
-    }
-}
-
-fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
-    let mut line = 1u32;
-    let mut column = 1u32;
-
-    for (idx, ch) in source.char_indices() {
-        if idx >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-
-    (line, column)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{line_column_for_offset, populate_error_template_lines};
-    use forge::bytecode::ErrTemplate;
+    use super::populate_error_template_lines;
+    use forge::bytecode::{ErrTemplate, line_column_for_offset};
 
     #[test]
     fn line_column_for_offset_tracks_multiline_source() {

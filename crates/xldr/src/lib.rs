@@ -3,6 +3,7 @@ use std::io::{self, IsTerminal, Write};
 
 use eldr::builtin::inspect_value;
 use eldr::value::Value;
+use forge::bytecode::populate_error_template_lines;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -477,34 +478,4 @@ fn display_repl_result(vm: &eldr::VM, value: Value, meta: &forge::ChunkMeta) {
             println!("> {}", type_def.name);
         }
     }
-}
-
-fn populate_error_template_lines(
-    error_templates: &mut [forge::bytecode::ErrTemplate],
-    source: &str,
-) {
-    for template in error_templates {
-        let (line, column) = line_column_for_offset(source, template.span_start as usize);
-        template.line = line;
-        template.column = column;
-    }
-}
-
-fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
-    let mut line = 1u32;
-    let mut column = 1u32;
-
-    for (idx, ch) in source.char_indices() {
-        if idx >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-
-    (line, column)
 }
