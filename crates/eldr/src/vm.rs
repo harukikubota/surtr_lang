@@ -87,6 +87,26 @@ impl VM {
         self.source_file.as_deref()
     }
 
+    pub fn runtime_error_location(&self) -> Option<Location> {
+        let (span_start, span_end) = self.current_frame().ok()?.call_site?;
+        let file = self
+            .source_file()
+            .map(str::to_string)
+            .unwrap_or_else(|| "<runtime>".to_string());
+        let (line, column) = self
+            .source()
+            .map(|source| line_column_for_offset(source, span_start as usize))
+            .unwrap_or((0, 0));
+        Some(Location {
+            file,
+            func: "<runtime>".into(),
+            line,
+            column,
+            span_start,
+            span_end,
+        })
+    }
+
     /// Enable stdout capture (for testing).
     pub fn with_output_capture(mut self) -> Self {
         self.output = Some(Vec::new());
@@ -845,6 +865,25 @@ impl VM {
         self.stack.push(f(a, b));
         Ok(())
     }
+}
+
+fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
+    let mut line = 1u32;
+    let mut column = 1u32;
+
+    for (idx, ch) in source.char_indices() {
+        if idx >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+
+    (line, column)
 }
 
 #[cfg(test)]

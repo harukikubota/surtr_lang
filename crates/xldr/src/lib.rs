@@ -190,7 +190,12 @@ impl ReplEngine {
         );
 
         if let Err(e) = self.vm.push(chunk) {
-            eldr::report_runtime_error(&e);
+            eldr::report_runtime_error(
+                &e,
+                self.vm.source(),
+                self.vm.source_file(),
+                self.vm.runtime_error_location(),
+            );
             return;
         }
 
@@ -327,7 +332,12 @@ impl ReplEngine {
                 self.bump_line(Some(value));
             }
             Err(e) => {
-                eldr::report_runtime_error(&e);
+                eldr::report_runtime_error(
+                    &e,
+                    self.vm.source(),
+                    self.vm.source_file(),
+                    self.vm.runtime_error_location(),
+                );
                 self.bump_line(None);
             }
         }

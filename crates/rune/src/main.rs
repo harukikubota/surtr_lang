@@ -226,7 +226,12 @@ fn execute_bytecode(
         None => eldr::VM::new(bytecode),
     };
     if let Err(e) = vm.run() {
-        eldr::report_runtime_error(&e);
+        eldr::report_runtime_error(
+            &e,
+            vm.source(),
+            vm.source_file(),
+            vm.runtime_error_location(),
+        );
         return Err(1);
     }
 
