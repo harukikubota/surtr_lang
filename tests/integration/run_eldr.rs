@@ -191,10 +191,7 @@ fn run_source_safe_div_zero_returns_err_value() {
     let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_safe_div_zero");
     let source_path = temp.join("sample.srt");
-    write_source(
-        &source_path,
-        r#"print(inspect(safe_div(1, 0)))"#,
-    );
+    write_source(&source_path, r#"print(inspect(safe_div(1, 0)))"#);
     let output = Command::new(&bin)
         .args([
             "run",
@@ -218,7 +215,11 @@ fn run_source_safe_div_zero_returns_err_value() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.trim().is_empty(), "expected no stderr, got:\n{}", stderr);
+    assert!(
+        stderr.trim().is_empty(),
+        "expected no stderr, got:\n{}",
+        stderr
+    );
 
     let _ = fs::remove_dir_all(temp);
 }
@@ -228,10 +229,7 @@ fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
     let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_safe_mod_zero");
     let source_path = temp.join("sample.srt");
-    write_source(
-        &source_path,
-        r#"print(inspect(safe_mod(1, 0)))"#,
-    );
+    write_source(&source_path, r#"print(inspect(safe_mod(1, 0)))"#);
     let output = Command::new(&bin)
         .env("SURTR_VERBOSE_RUNTIME_ERROR", "1")
         .args([
@@ -256,7 +254,11 @@ fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.trim().is_empty(), "expected no stderr, got:\n{}", stderr);
+    assert!(
+        stderr.trim().is_empty(),
+        "expected no stderr, got:\n{}",
+        stderr
+    );
 
     let _ = fs::remove_dir_all(temp);
 }

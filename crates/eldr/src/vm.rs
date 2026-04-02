@@ -216,7 +216,7 @@ impl VM {
     /// - chunk `source_map` indices are chunk-local
     /// - this method relocates them using `const_base` / `error_template_base`
     /// - top-level execution starts at appended `code_base` and stops at first `Halt`
-    pub fn push(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
+    fn execute_chunk(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
         let BytecodeChunk {
             opcodes,
             source_map,
@@ -256,7 +256,7 @@ impl VM {
         self.bytecode.opcodes.extend(chunk_opcodes);
         self.relocate_and_extend_source_map(source_map, code_base)?;
         // Invariant: runtime uses O(1) lookup `functions[fun_idx as usize]`.
-        // push() may append a new slot or replace an existing slot, but never create holes.
+        // Chunk application may append a new slot or replace an existing slot, but never create holes.
         for mut entry in functions {
             entry.entry_pc += code_base as u32;
             let idx = entry.fun_idx as usize;
@@ -300,7 +300,7 @@ impl VM {
     pub fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
         self.verify_chunk(&chunk)?;
         let mut next = self.clone();
-        let result = next.push(chunk)?;
+        let result = next.execute_chunk(chunk)?;
         next.verify_loaded_bytecode()?;
         *self = next;
         Ok(result)
@@ -652,14 +652,16 @@ impl VM {
             Opcode::LoadBuiltinRef(builtin_id) => {
                 self.stack.push(Value::Callable(Callable {
                     target: CallableTarget::Builtin(builtin_id),
-                    captured: Vec::new(),
+                    lexical_captures: Vec::new(),
+                    partial_args: Vec::new(),
                 }));
             }
 
             Opcode::LoadFunctionRef(fun_idx) => {
                 self.stack.push(Value::Callable(Callable {
                     target: CallableTarget::Function(fun_idx),
-                    captured: Vec::new(),
+                    lexical_captures: Vec::new(),
+                    partial_args: Vec::new(),
                 }));
             }
 
@@ -913,24 +915,43 @@ impl VM {
                 })));
             }
 
-            Opcode::MakeClosure(num_captured) => {
-                let mut captured = Vec::with_capacity(num_captured as usize);
+            Opcode::CaptureClosure(num_captured) => {
+                let mut lexical_captures = Vec::with_capacity(num_captured as usize);
                 for _ in 0..num_captured {
-                    captured.push(self.pop_stack()?);
+                    lexical_captures.push(self.pop_stack()?);
                 }
-                captured.reverse();
-                // NOTE: `captured` currently co-locates lexical captures and partial-application args.
-                // CallClosure prepends them to runtime args before `build_locals_for_call`.
+                lexical_captures.reverse();
                 let target = self.pop_stack()?;
                 let callable = match target {
                     Value::Callable(mut callable) => {
-                        let mut merged = callable.captured;
-                        merged.extend(captured);
-                        callable.captured = merged;
+                        callable.lexical_captures.extend(lexical_captures);
                         callable
                     }
                     _ => {
-                        return Err(RuntimeError::new("MakeClosure expects a callable target"));
+                        return Err(RuntimeError::new(
+                            "CaptureClosure expects a callable target",
+                        ));
+                    }
+                };
+                self.stack.push(Value::Callable(callable));
+            }
+
+            Opcode::CapturePartial(num_args) => {
+                let mut partial_args = Vec::with_capacity(num_args as usize);
+                for _ in 0..num_args {
+                    partial_args.push(self.pop_stack()?);
+                }
+                partial_args.reverse();
+                let target = self.pop_stack()?;
+                let callable = match target {
+                    Value::Callable(mut callable) => {
+                        callable.partial_args.extend(partial_args);
+                        callable
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(
+                            "CapturePartial expects a callable target",
+                        ));
                     }
                 };
                 self.stack.push(Value::Callable(callable));
@@ -950,7 +971,8 @@ impl VM {
                     }
                 };
 
-                let mut full_args = callable.captured;
+                let mut full_args = callable.lexical_captures;
+                full_args.extend(callable.partial_args);
                 full_args.extend(args);
 
                 match callable.target {
@@ -1280,7 +1302,12 @@ mod tests {
 
         let chunk = BytecodeChunk {
             // `Jump(2)` must be relocated to absolute pc=3 because code_base=1.
-            opcodes: vec![Opcode::Jump(2), Opcode::LoadConst(0), Opcode::LoadConst(1)],
+            opcodes: vec![
+                Opcode::Jump(2),
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::Halt,
+            ],
             source_map: None,
             const_base: 0,
             constants: vec![Constant::Int(99), Constant::Int(7)],
@@ -1291,7 +1318,7 @@ mod tests {
             functions: Vec::new(),
         };
 
-        let result = vm.push(chunk).expect("push should succeed");
+        let result = vm.push_atomic(chunk).expect("push should succeed");
         assert_eq!(result, Value::Int(7));
     }
 
@@ -1313,7 +1340,7 @@ mod tests {
             functions: Vec::new(),
         };
 
-        let result = vm.push(chunk).expect("push should succeed");
+        let result = vm.push_atomic(chunk).expect("push should succeed");
         assert_eq!(result, Value::Int(42));
     }
 
@@ -1353,7 +1380,7 @@ mod tests {
             functions: Vec::new(),
         };
 
-        let result = vm.push(chunk).expect("push should succeed");
+        let result = vm.push_atomic(chunk).expect("push should succeed");
         match result {
             Value::Error(rich) => {
                 assert_eq!(rich.kind, "NewKind");
@@ -1372,7 +1399,7 @@ mod tests {
             VM::new(base_bytecode(vec![Opcode::Halt])).with_source(source, "sample.srt".into());
         vm.frames[0].call_site = Some((30, 36));
         let result = vm
-            .push(BytecodeChunk {
+            .push_atomic(BytecodeChunk {
                 opcodes: vec![Opcode::LoadConst(0), Opcode::MakeError(0), Opcode::Halt],
                 source_map: None,
                 const_base: 0,
@@ -1420,7 +1447,7 @@ mod tests {
             functions: Vec::new(),
         };
 
-        let err = vm.push(chunk).expect_err("must fail");
+        let err = vm.push_atomic(chunk).expect_err("must fail");
         assert!(err.message.contains("Chunk constant base mismatch"));
     }
 
@@ -1499,7 +1526,7 @@ mod tests {
             functions: Vec::new(),
         };
 
-        vm.push(chunk).expect("push should succeed");
+        vm.push_atomic(chunk).expect("push should succeed");
         let source_map = vm
             .bytecode
             .source_map

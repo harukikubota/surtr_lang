@@ -288,13 +288,15 @@ impl Checker {
             }
 
             Resolved::Var(span, id) => {
-                let stored_ty = self.env.lookup_var(id.unique_id).cloned().ok_or_else(|| {
-                    TypeError {
-                        message: format!("Undefined variable: {}", id.name),
-                        span: span.clone(),
-                        hint: None,
-                    }
-                })?;
+                let stored_ty =
+                    self.env
+                        .lookup_var(id.unique_id)
+                        .cloned()
+                        .ok_or_else(|| TypeError {
+                            message: format!("Undefined variable: {}", id.name),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
                 let ty = match &stored_ty {
                     Ty::BuiltinFunc { .. } => self.instantiate_builtin_ty(&stored_ty),
                     _ => self.resolve_ty(&stored_ty),
@@ -672,9 +674,8 @@ impl Checker {
         if let Ok(def) = def {
             if def.kind != crate::env::TypeKind::Error {
                 return Err(TypeError {
-                    message:
-                        "The error marker E in Result<T, E> must be a deferror-defined type."
-                            .into(),
+                    message: "The error marker E in Result<T, E> must be a deferror-defined type."
+                        .into(),
                     span,
                     hint: None,
                 });
@@ -1113,7 +1114,8 @@ impl Checker {
                 Ok((TypedPattern::Var(rhs_ty.clone(), id.clone()), rhs_ty))
             }
             ResolvedPattern::Annotated(id, ast_ty) => {
-                let expected = self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                let expected =
+                    self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
                 if !self.types_compatible(&expected, rhs_ty) {
                     return Err(TypeError {
                         message: format!(
@@ -2376,10 +2378,7 @@ impl Checker {
                 )
             } else {
                 let ok_var = self.env.fresh_tyvar();
-                (
-                    1u32,
-                    Ty::Result(Box::new(ok_var), Box::new(Ty::Error)),
-                )
+                (1u32, Ty::Result(Box::new(ok_var), Box::new(Ty::Error)))
             };
             return Ok(TypedNode {
                 ty: result_ty,

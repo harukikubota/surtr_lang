@@ -525,7 +525,7 @@ impl Codegen {
         stmts: Vec<TypedNode>,
         pop_last: bool,
     ) -> Result<(), CodegenError> {
-        // Contract with VM::push():
+        // Contract with VM::push_atomic():
         // - Main/top-level statements are emitted first.
         // - A single Halt terminates top-level execution.
         // - Function bodies are emitted strictly after Halt and are entered only via Call/CallClosure.
@@ -837,7 +837,7 @@ impl Codegen {
                     let slot = self.alloc_slot(capture.unique_id);
                     self.emit(Opcode::LoadLocal(slot));
                 }
-                self.emit(Opcode::MakeClosure(filtered_captures.len() as u8));
+                self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
             }
 
             TypedInner::Capture(target, args) => {
@@ -846,7 +846,7 @@ impl Codegen {
                     self.emit_node(arg)?;
                 }
                 if !args.is_empty() {
-                    self.emit(Opcode::MakeClosure(args.len() as u8));
+                    self.emit(Opcode::CapturePartial(args.len() as u8));
                 }
             }
 

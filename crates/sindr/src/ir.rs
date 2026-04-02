@@ -68,7 +68,8 @@ pub enum Opcode {
 
     // User-defined function call
     Call(u32, u8, u32, u32),
-    MakeClosure(u8),
+    CaptureClosure(u8),
+    CapturePartial(u8),
     MakeError(u32),
     CallClosure(u8, u32, u32),
 
