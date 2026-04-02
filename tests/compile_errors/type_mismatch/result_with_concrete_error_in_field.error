@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Result<T, E> is only allowed in function return signatures.

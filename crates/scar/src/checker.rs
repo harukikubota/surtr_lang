@@ -11,6 +11,13 @@ use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::Ty;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeSyntaxContext {
+    General,
+    FunctionReturn,
+    ErrorMarker,
+}
+
 /// Type-check the resolved AST, producing a fully typed tree.
 pub fn typecheck(resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
     let mut checker = Checker::new();
@@ -181,6 +188,7 @@ impl Checker {
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
+        self.predeclare_error_types(&stmts);
         self.predeclare_functions(&stmts)?;
         let mut typed = Vec::new();
         for stmt in stmts {
@@ -188,6 +196,14 @@ impl Checker {
             typed.push(self.resolve_typed_node(node));
         }
         Ok(typed)
+    }
+
+    fn predeclare_error_types(&mut self, stmts: &[Resolved]) {
+        for stmt in stmts {
+            if let Resolved::DeferrorDef(_, id, _, _) = stmt {
+                self.env.declare_error_type_name(id.name.clone());
+            }
+        }
     }
 
     fn predeclare_functions(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
@@ -199,10 +215,20 @@ impl Checker {
                     let mut tyvars = HashMap::new();
                     let param_tys = params
                         .iter()
-                        .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
+                        .map(|param| {
+                            self.resolve_builtin_ast_ty_in_context(
+                                &param.ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            )
+                        })
                         .collect::<Result<Vec<_>, _>>()?;
                     let ret = match ret_ty {
-                        Some(ty) => self.resolve_builtin_ast_ty(ty, &mut tyvars)?,
+                        Some(ty) => self.resolve_builtin_ast_ty_in_context(
+                            ty,
+                            TypeSyntaxContext::FunctionReturn,
+                            &mut tyvars,
+                        )?,
                         None => Ty::Unit,
                     };
                     self.env.bind_var(
@@ -217,14 +243,18 @@ impl Checker {
                 Resolved::Def(_, id, params, ret_ty, _) => {
                     let param_tys = params
                         .iter()
-                        .map(|param| self.resolve_ast_ty(&param.ty))
+                        .map(|param| {
+                            self.resolve_ast_ty_in_context(&param.ty, TypeSyntaxContext::General)
+                        })
                         .collect::<Result<Vec<_>, _>>()?;
                     let param_names = params
                         .iter()
                         .map(|param| param.id.name.clone())
                         .collect::<Vec<_>>();
                     let ret = match ret_ty {
-                        Some(ty) => self.resolve_ast_ty(ty)?,
+                        Some(ty) => {
+                            self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::FunctionReturn)?
+                        }
                         None => Ty::Unit,
                     };
                     self.env.bind_var(
@@ -282,7 +312,8 @@ impl Checker {
                     Resolved::Closure(cspan, params, captures, body),
                 ) = (pat, rhs.as_ref())
                 {
-                    let expected = self.resolve_ast_ty(ast_ty)?;
+                    let expected =
+                        self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
                     self.check_closure(cspan, params, captures, body, Some(&expected))?
                 } else {
                     self.check_node(rhs)?
@@ -451,7 +482,24 @@ impl Checker {
         }
     }
 
-    fn resolve_ast_ty(&self, ast_ty: &AstTy) -> Result<Ty, TypeError> {
+    fn ast_ty_span(ast_ty: &AstTy) -> &Span {
+        match ast_ty {
+            AstTy::Named(span, _)
+            | AstTy::ListOf(span, _)
+            | AstTy::ResultOf(span, _, _)
+            | AstTy::Func(span, _, _) => span,
+        }
+    }
+
+    fn resolve_ast_ty_in_context(
+        &self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+    ) -> Result<Ty, TypeError> {
+        if context == TypeSyntaxContext::ErrorMarker {
+            return self.resolve_error_marker_type(ast_ty);
+        }
+
         match ast_ty {
             AstTy::Named(span, name) => match name.as_str() {
                 "Int" => Ok(Ty::Int),
@@ -482,13 +530,24 @@ impl Checker {
                 }
             },
             AstTy::ListOf(_, inner) => {
-                let inner_ty = self.resolve_ast_ty(inner)?;
+                let inner_ty = self.resolve_ast_ty_in_context(inner, TypeSyntaxContext::General)?;
                 Ok(Ty::List(Box::new(inner_ty)))
             }
-            AstTy::ResultOf(_, ok_ty, err_ty) => {
-                let ok = self.resolve_ast_ty(ok_ty)?;
+            AstTy::ResultOf(span, ok_ty, err_ty) => {
+                let ok = self.resolve_ast_ty_in_context(ok_ty, TypeSyntaxContext::General)?;
                 let err = match err_ty {
-                    Some(e) => self.resolve_ast_ty(e)?,
+                    Some(e) => {
+                        if context != TypeSyntaxContext::FunctionReturn {
+                            return Err(TypeError {
+                                message:
+                                    "Result<T, E> is only allowed in function return signatures."
+                                        .into(),
+                                span: span.clone(),
+                                hint: Some("Use Result<T> in local code.".into()),
+                            });
+                        }
+                        self.resolve_ast_ty_in_context(e, TypeSyntaxContext::ErrorMarker)?
+                    }
                     None => Ty::Error, // Result<T> = Result<T, Error>
                 };
                 Ok(Ty::Result(Box::new(ok), Box::new(err)))
@@ -496,9 +555,9 @@ impl Checker {
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
-                    .map(|p| self.resolve_ast_ty(p))
+                    .map(|p| self.resolve_ast_ty_in_context(p, TypeSyntaxContext::General))
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_ast_ty(ret)?;
+                let ret = self.resolve_ast_ty_in_context(ret, TypeSyntaxContext::General)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
         }
@@ -509,8 +568,26 @@ impl Checker {
         ast_ty: &AstTy,
         tyvars: &mut HashMap<String, Ty>,
     ) -> Result<Ty, TypeError> {
+        self.resolve_builtin_ast_ty_in_context(ast_ty, TypeSyntaxContext::General, tyvars)
+    }
+
+    fn resolve_builtin_ast_ty_in_context(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
         match ast_ty {
             AstTy::Named(_, name) if name.starts_with('$') => {
+                if context == TypeSyntaxContext::ErrorMarker {
+                    return Err(TypeError {
+                        message:
+                            "The error marker E in Result<T, E> must be a deferror-defined type."
+                                .into(),
+                        span: Self::ast_ty_span(ast_ty).clone(),
+                        hint: None,
+                    });
+                }
                 if let Some(existing) = tyvars.get(name) {
                     return Ok(existing.clone());
                 }
@@ -519,13 +596,36 @@ impl Checker {
                 Ok(fresh)
             }
             AstTy::ListOf(_, inner) => {
-                let inner_ty = self.resolve_builtin_ast_ty(inner, tyvars)?;
+                let inner_ty = self.resolve_builtin_ast_ty_in_context(
+                    inner,
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
                 Ok(Ty::List(Box::new(inner_ty)))
             }
-            AstTy::ResultOf(_, ok_ty, err_ty) => {
-                let ok = self.resolve_builtin_ast_ty(ok_ty, tyvars)?;
+            AstTy::ResultOf(span, ok_ty, err_ty) => {
+                let ok = self.resolve_builtin_ast_ty_in_context(
+                    ok_ty,
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
                 let err = match err_ty {
-                    Some(e) => self.resolve_builtin_ast_ty(e, tyvars)?,
+                    Some(e) => {
+                        if context != TypeSyntaxContext::FunctionReturn {
+                            return Err(TypeError {
+                                message:
+                                    "Result<T, E> is only allowed in function return signatures."
+                                        .into(),
+                                span: span.clone(),
+                                hint: Some("Use Result<T> in local code.".into()),
+                            });
+                        }
+                        self.resolve_builtin_ast_ty_in_context(
+                            e,
+                            TypeSyntaxContext::ErrorMarker,
+                            tyvars,
+                        )?
+                    }
                     None => Ty::Error,
                 };
                 Ok(Ty::Result(Box::new(ok), Box::new(err)))
@@ -533,13 +633,65 @@ impl Checker {
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
-                    .map(|p| self.resolve_builtin_ast_ty(p, tyvars))
+                    .map(|p| {
+                        self.resolve_builtin_ast_ty_in_context(
+                            p,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_builtin_ast_ty(ret, tyvars)?;
+                let ret = self.resolve_builtin_ast_ty_in_context(
+                    ret,
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
-            _ => self.resolve_ast_ty(ast_ty),
+            _ => self.resolve_ast_ty_in_context(ast_ty, context),
         }
+    }
+
+    fn resolve_error_marker_type(&self, ast_ty: &AstTy) -> Result<Ty, TypeError> {
+        let span = Self::ast_ty_span(ast_ty).clone();
+        let AstTy::Named(_, name) = ast_ty else {
+            return Err(TypeError {
+                message: "The error marker E in Result<T, E> must be a deferror-defined type."
+                    .into(),
+                span,
+                hint: None,
+            });
+        };
+
+        let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
+            message: "The error marker E in Result<T, E> must be a deferror-defined type.".into(),
+            span: span.clone(),
+            hint: None,
+        });
+
+        if let Ok(def) = def {
+            if def.kind != crate::env::TypeKind::Error {
+                return Err(TypeError {
+                    message:
+                        "The error marker E in Result<T, E> must be a deferror-defined type."
+                            .into(),
+                    span,
+                    hint: None,
+                });
+            }
+            return Ok(Ty::Error);
+        }
+
+        if !self.env.is_declared_error_type_name(name) {
+            return Err(TypeError {
+                message: "The error marker E in Result<T, E> must be a deferror-defined type."
+                    .into(),
+                span,
+                hint: None,
+            });
+        }
+
+        Ok(Ty::Error)
     }
 
     fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> bool {
@@ -961,7 +1113,7 @@ impl Checker {
                 Ok((TypedPattern::Var(rhs_ty.clone(), id.clone()), rhs_ty))
             }
             ResolvedPattern::Annotated(id, ast_ty) => {
-                let expected = self.resolve_ast_ty(ast_ty)?;
+                let expected = self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
                 if !self.types_compatible(&expected, rhs_ty) {
                     return Err(TypeError {
                         message: format!(
@@ -1917,7 +2069,7 @@ impl Checker {
         let mut typed_params = Vec::new();
 
         for param in params {
-            let param_ty = self.resolve_ast_ty(&param.ty)?;
+            let param_ty = self.resolve_ast_ty_in_context(&param.ty, TypeSyntaxContext::General)?;
             fun_env.bind_var(param.id.unique_id, param_ty.clone());
             typed_params.push(TypedFunParam {
                 id: param.id.clone(),
@@ -1926,7 +2078,7 @@ impl Checker {
         }
 
         let expected_ret = match ret_ty {
-            Some(ty) => self.resolve_ast_ty(ty)?,
+            Some(ty) => self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::FunctionReturn)?,
             None => Ty::Unit,
         };
 
@@ -1996,7 +2148,12 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let ty_fields: Vec<(String, Ty)> = fields
             .iter()
-            .map(|f| Ok((f.name.clone(), self.resolve_ast_ty(&f.ty)?)))
+            .map(|f| {
+                Ok((
+                    f.name.clone(),
+                    self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
+                ))
+            })
             .collect::<Result<Vec<_>, TypeError>>()?;
 
         let tag = self.env.register_type_def(
@@ -2026,7 +2183,12 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let ty_fields: Vec<(String, Ty)> = fields
             .iter()
-            .map(|f| Ok((f.name.clone(), self.resolve_ast_ty(&f.ty)?)))
+            .map(|f| {
+                Ok((
+                    f.name.clone(),
+                    self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
+                ))
+            })
             .collect::<Result<Vec<_>, TypeError>>()?;
 
         let tag = self.env.register_type_def(
@@ -2189,6 +2351,24 @@ impl Checker {
                     });
                 }
             };
+            if id.name == "Err" {
+                if !matches!(inner.ty, Ty::Error) {
+                    return Err(TypeError {
+                        message: "Err(...) requires a concrete deferror value.".into(),
+                        span: inner.span.clone(),
+                        hint: Some(
+                            "Use a deferror-defined value in Err(...), not a plain value.".into(),
+                        ),
+                    });
+                }
+                if !self.is_concrete_error_value(&inner) {
+                    return Err(TypeError {
+                        message: "Error is abstract and cannot be constructed directly.".into(),
+                        span: inner.span.clone(),
+                        hint: Some("Use a concrete deferror value in Err(...).".into()),
+                    });
+                }
+            }
             let (tag, result_ty) = if id.name == "Ok" {
                 (
                     0u32,
@@ -2198,7 +2378,7 @@ impl Checker {
                 let ok_var = self.env.fresh_tyvar();
                 (
                     1u32,
-                    Ty::Result(Box::new(ok_var), Box::new(inner.ty.clone())),
+                    Ty::Result(Box::new(ok_var), Box::new(Ty::Error)),
                 )
             };
             return Ok(TypedNode {
@@ -2344,7 +2524,7 @@ impl Checker {
         let ty_fields: Vec<(Ty, ResolvedId)> = fields
             .iter()
             .map(|f| {
-                let ty = self.resolve_ast_ty(&f.ty)?;
+                let ty = self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?;
                 let id = f.id.clone().ok_or_else(|| TypeError {
                     message: format!("Missing resolved field id for {}", f.name),
                     span: f.span.clone(),
@@ -2387,6 +2567,7 @@ impl Checker {
                 ret: Box::new(Ty::Error),
             },
         );
+        self.env.register_error_constructor(id.unique_id);
 
         for (ty, resolved_id) in &ty_fields {
             show_env.bind_var(resolved_id.unique_id, ty.clone());
@@ -2425,5 +2606,16 @@ impl Checker {
                 Box::new(typed_show),
             ),
         })
+    }
+
+    fn is_concrete_error_value(&self, node: &TypedNode) -> bool {
+        match &node.node {
+            TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
+            TypedInner::App(func, _) => match &func.node {
+                TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
+                _ => false,
+            },
+            _ => false,
+        }
     }
 }

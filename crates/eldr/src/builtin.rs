@@ -90,14 +90,14 @@ fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
     match (&args[0], &args[1]) {
         (Value::Int(a), Value::Int(b)) => {
             if *b == 0 {
-                Ok(err_result(vm, "DivisionByZero", "division by zero"))
+                Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
             } else {
                 Ok(ok_result(Value::Int(a / b)))
             }
         }
         (Value::Float(a), Value::Float(b)) => {
             if *b == 0.0 {
-                Ok(err_result(vm, "DivisionByZero", "division by zero"))
+                Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
             } else {
                 Ok(ok_result(Value::Float(a / b)))
             }
@@ -113,7 +113,7 @@ fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
     match (&args[0], &args[1]) {
         (Value::Int(a), Value::Int(b)) => {
             if *b == 0 {
-                Ok(err_result(vm, "ModuloByZero", "modulo by zero"))
+                Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
             } else {
                 Ok(ok_result(Value::Int(a % b)))
             }

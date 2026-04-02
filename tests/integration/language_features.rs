@@ -681,6 +681,20 @@ match err1 {
     }
 
     #[test]
+    fn builtin_prelude_provides_none_error() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"ret: Result<Int> = Err(NoneError)
+match ret {
+  Ok(val) => print(to_string(val)),
+  Err(e)  => eprint(e),
+}"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(stderr, vec!["Error: NoneError: None Value."]);
+    }
+
+    #[test]
     fn deferror_interpolated_message_display() {
         let (stdout, stderr) = run_surtr_with_stderr(
             r#"deferror PageNotFound(html: String) {

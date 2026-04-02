@@ -193,7 +193,7 @@ fn repl_ok_defaults_result_error_type_to_error() {
 
 #[test]
 fn repl_hides_internal_type_var_ids_in_result_display() {
-    let output = run_repl_session("deferror NoneError {\"null\"}\nret_e = Err(NoneError)\n:quit\n");
+    let output = run_repl_session("ret_e = Err(NoneError)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -203,7 +203,7 @@ fn repl_hides_internal_type_var_ids_in_result_display() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("ret_e: Result<_, Error> = Err(NoneError(\"null\"))"),
+        stdout.contains("ret_e: Result<_, Error> = Err(NoneError(\"None Value.\"))"),
         "expected Result type vars to be hidden in repl output, got:\n{}",
         stdout
     );

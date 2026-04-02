@@ -1,0 +1,5 @@
+deferror ParseError { "parse" }
+
+defstruct Response {
+  value: Result<Int, ParseError>
+}

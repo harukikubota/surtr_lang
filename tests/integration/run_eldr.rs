@@ -212,7 +212,7 @@ fn run_source_safe_div_zero_returns_err_value() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Err(DivisionByZero(\"division by zero\"))"),
+        stdout.contains("Err(ZeroDivisionError(\"division by zero\"))"),
         "expected safe_div zero to return Err value, got:\n{}",
         stdout
     );
@@ -250,7 +250,7 @@ fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Err(ModuloByZero(\"modulo by zero\"))"),
+        stdout.contains("Err(ZeroDivisionError(\"division by zero\"))"),
         "expected safe_mod zero to return Err value, got:\n{}",
         stdout
     );
