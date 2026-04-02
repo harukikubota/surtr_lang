@@ -202,7 +202,7 @@ print(to_string(strs))"#,
 
     #[test]
     fn list_empty_with_annotation() {
-        assert_output("empty: [Int] = []\nprint(to_string(empty))", &["[]"]);
+        assert_output("empty: List<Int> = []\nprint(to_string(empty))", &["[]"]);
     }
 
     #[test]
@@ -805,9 +805,9 @@ print(to_string(num + num2))
 print(to_string(10 > 5))
 print(to_string("abc" == "abc"))
 print("hello" ++ " world")
-nums: [Int] = [1, 2, 3]
+nums: List<Int> = [1, 2, 3]
 print(to_string(nums))
-empty: [Int] = []
+empty: List<Int> = []
 print(to_string(empty))
 defstruct User {
   name: String,

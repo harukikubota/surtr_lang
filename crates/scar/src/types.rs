@@ -9,7 +9,7 @@ pub enum Ty {
     Bool,
     Unit,
 
-    /// `[T]`
+    /// `List<T>`
     List(Box<Ty>),
 
     /// Generic function type: `(params) -> ret`

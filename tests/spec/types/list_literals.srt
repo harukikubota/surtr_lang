@@ -4,5 +4,5 @@ print(to_string(nums))
 strs = ["a", "b", "c"]
 print(to_string(strs))
 
-empty: [Int] = []
+empty: List<Int> = []
 print(to_string(empty))
