@@ -210,6 +210,30 @@ fn repl_hides_internal_type_var_ids_in_result_display() {
 }
 
 #[test]
+fn repl_safe_xxx_zero_uses_zero_division_error() {
+    let output = run_repl_session("print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Err(ZeroDivisionError(\"division by zero\"))"),
+        "expected ZeroDivisionError display in repl output, got:\n{}",
+        stdout
+    );
+    assert_eq!(
+        stdout.matches("Err(ZeroDivisionError(\"division by zero\"))").count(),
+        2,
+        "expected both safe_div and safe_mod to use ZeroDivisionError, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_duplicate_function_name_is_rejected() {
     let output = run_repl_session("def f() -> Int { 1 }\ndef f() -> Int { 2 }\n:quit\n");
     assert!(

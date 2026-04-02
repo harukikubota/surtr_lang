@@ -140,6 +140,17 @@ print(inspect(Err(MyError)))"#,
     }
 
     #[test]
+    fn safe_xxx_zero_returns_zero_division_error_display() {
+        assert_output(
+            "print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))",
+            &[
+                "Err(ZeroDivisionError(\"division by zero\"))",
+                "Err(ZeroDivisionError(\"division by zero\"))",
+            ],
+        );
+    }
+
+    #[test]
     fn comparison_int_ops() {
         assert_output(
             "print(to_string(10 > 5))\nprint(to_string(10 < 5))\nprint(to_string(10 == 10))",
@@ -692,6 +703,30 @@ match ret {
         .expect("Pipeline failed");
         assert_eq!(stdout, Vec::<String>::new());
         assert_eq!(stderr, vec!["Error: NoneError: None Value."]);
+    }
+
+    #[test]
+    fn builtin_safe_xxx_zero_error_can_be_matched_and_eprinted() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"match safe_div(1, 0) {
+  Ok(val) => print(to_string(val)),
+  Err(e)  => eprint(e),
+}
+
+match safe_mod(1, 0) {
+  Ok(val) => print(to_string(val)),
+  Err(e)  => eprint(e),
+}"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(
+            stderr,
+            vec![
+                "Error: ZeroDivisionError: division by zero",
+                "Error: ZeroDivisionError: division by zero",
+            ]
+        );
     }
 
     #[test]
