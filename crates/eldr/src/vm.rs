@@ -695,26 +695,11 @@ impl VM {
             Opcode::AddInt => self.int_binop(|a, b| Ok(Value::Int(a + b)))?,
             Opcode::SubInt => self.int_binop(|a, b| Ok(Value::Int(a - b)))?,
             Opcode::MulInt => self.int_binop(|a, b| Ok(Value::Int(a * b)))?,
-            Opcode::DivInt => self.int_binop(|a, b| {
-                if b == 0 {
-                    Err(RuntimeError::new("Division by zero"))
-                } else {
-                    Ok(Value::Int(a / b))
-                }
-            })?,
-            Opcode::ModInt => self.int_binop(|a, b| {
-                if b == 0 {
-                    Err(RuntimeError::new("Modulo by zero"))
-                } else {
-                    Ok(Value::Int(a % b))
-                }
-            })?,
 
             // Arithmetic (Float)
             Opcode::AddFloat => self.float_binop(|a, b| Value::Float(a + b))?,
             Opcode::SubFloat => self.float_binop(|a, b| Value::Float(a - b))?,
             Opcode::MulFloat => self.float_binop(|a, b| Value::Float(a * b))?,
-            Opcode::DivFloat => self.float_binop(|a, b| Value::Float(a / b))?,
 
             // Comparison (Int)
             Opcode::EqInt => self.int_binop(|a, b| Ok(Value::Bool(a == b)))?,
@@ -1222,16 +1207,15 @@ mod tests {
     fn runtime_error_captures_vm_context() {
         let bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::DivInt,
+            Opcode::JumpIfFalse(0),
             Opcode::Halt,
         ]);
         let mut vm = VM::new(bytecode);
-        vm.bytecode.constants = vec![Constant::Int(1), Constant::Int(0)];
+        vm.bytecode.constants = vec![Constant::Int(1)];
 
         let err = vm.run().expect_err("must fail");
-        assert_eq!(err.context.pc, Some(2));
-        assert_eq!(err.context.opcode.as_deref(), Some("DivInt"));
+        assert_eq!(err.context.pc, Some(1));
+        assert_eq!(err.context.opcode.as_deref(), Some("JumpIfFalse(0)"));
         assert!(err
             .context
             .details

@@ -16,14 +16,11 @@ pub enum Opcode {
     AddInt,
     SubInt,
     MulInt,
-    DivInt,
-    ModInt,
 
     // Arithmetic (Float)
     AddFloat,
     SubFloat,
     MulFloat,
-    DivFloat,
 
     // Comparison (Int)
     EqInt,

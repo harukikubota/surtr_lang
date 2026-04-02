@@ -1,11 +1,11 @@
 print(to_string(10 + 5))
 print(to_string(10 - 3))
 print(to_string(4 * 3))
-print(to_string(10 / 3))
-print(to_string(10 % 3))
+print(inspect(safe_div(10, 3)))
+print(inspect(safe_mod(10, 3)))
 
 print(to_string(1.5 + 2.5))
-print(to_string(10.0 / 3.0))
+print(inspect(safe_div(10.0, 3.0)))
 
 print(to_string(10 > 5))
 print(to_string(10 < 5))

@@ -177,8 +177,6 @@ impl Parser {
             Token::Minus => Some((4, BinOp::Sub)),
             // Multiplicative
             Token::Star => Some((5, BinOp::Mul)),
-            Token::Slash => Some((5, BinOp::Div)),
-            Token::Percent => Some((5, BinOp::Mod)),
             _ => None,
         }
     }

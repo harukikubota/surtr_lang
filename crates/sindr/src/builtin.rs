@@ -30,8 +30,20 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "($A) -> String",
     },
     BuiltinMeta {
-        name: "eprint",
+        name: "safe_div",
         builtin_id: 3,
+        arity: 2,
+        sig_str: "($A, $A) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "safe_mod",
+        builtin_id: 4,
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Int>",
+    },
+    BuiltinMeta {
+        name: "eprint",
+        builtin_id: 5,
         arity: 1,
         sig_str: "(Error) -> Unit",
     },

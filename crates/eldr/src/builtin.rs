@@ -2,6 +2,7 @@ use crate::error::RuntimeError;
 use crate::value::Value;
 use crate::vm::VM;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
+use sindr::runtime::{Location, RichError};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -20,6 +21,12 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         func: builtin_inspect,
+    },
+    BuiltinImpl {
+        func: builtin_safe_div,
+    },
+    BuiltinImpl {
+        func: builtin_safe_mod,
     },
     BuiltinImpl {
         func: builtin_eprint,
@@ -79,6 +86,45 @@ fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError>
     Ok(Value::Str(inspect_value(vm, &args[0])))
 }
 
+fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    match (&args[0], &args[1]) {
+        (Value::Int(a), Value::Int(b)) => {
+            if *b == 0 {
+                Ok(err_result(vm, "DivisionByZero", "division by zero"))
+            } else {
+                Ok(ok_result(Value::Int(a / b)))
+            }
+        }
+        (Value::Float(a), Value::Float(b)) => {
+            if *b == 0.0 {
+                Ok(err_result(vm, "DivisionByZero", "division by zero"))
+            } else {
+                Ok(ok_result(Value::Float(a / b)))
+            }
+        }
+        (left, right) => Err(RuntimeError::new(format!(
+            "safe_div expects (Int, Int) or (Float, Float), got ({:?}, {:?})",
+            left, right
+        ))),
+    }
+}
+
+fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    match (&args[0], &args[1]) {
+        (Value::Int(a), Value::Int(b)) => {
+            if *b == 0 {
+                Ok(err_result(vm, "ModuloByZero", "modulo by zero"))
+            } else {
+                Ok(ok_result(Value::Int(a % b)))
+            }
+        }
+        (left, right) => Err(RuntimeError::new(format!(
+            "safe_mod expects (Int, Int), got ({:?}, {:?})",
+            left, right
+        ))),
+    }
+}
+
 fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match &args[0] {
         Value::Error(rich) => {
@@ -123,6 +169,33 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     let registry = vm.type_registry();
     value.to_display_string(&registry)
+}
+
+fn ok_result(value: Value) -> Value {
+    Value::Tagged {
+        tag: 0,
+        fields: vec![value],
+    }
+}
+
+fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
+    let location = vm.runtime_error_location().unwrap_or_else(|| Location {
+        file: vm.source_file().unwrap_or("<runtime>").to_string(),
+        func: "<builtin>".into(),
+        line: 0,
+        column: 0,
+        span_start: 0,
+        span_end: 0,
+    });
+
+    Value::Tagged {
+        tag: 1,
+        fields: vec![Value::Error(Box::new(RichError {
+            kind: kind.into(),
+            message: message.into(),
+            location,
+        }))],
+    }
 }
 
 #[cfg(test)]

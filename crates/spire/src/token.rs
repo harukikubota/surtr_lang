@@ -23,8 +23,6 @@ pub enum Token {
     Plus,    // +
     Minus,   // -
     Star,    // *
-    Slash,   // /
-    Percent, // %
     Concat,  // ++
 
     // ── Comparison / equality ──

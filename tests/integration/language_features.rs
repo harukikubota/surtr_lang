@@ -126,16 +126,16 @@ print(inspect(Err(MyError)))"#,
     #[test]
     fn arithmetic_int_ops() {
         assert_output(
-            "print(to_string(10 + 5))\nprint(to_string(10 - 3))\nprint(to_string(4 * 3))\nprint(to_string(10 / 3))\nprint(to_string(10 % 3))",
-            &["15", "7", "12", "3", "1"],
+            "print(to_string(10 + 5))\nprint(to_string(10 - 3))\nprint(to_string(4 * 3))\nprint(inspect(safe_div(10, 3)))\nprint(inspect(safe_mod(10, 3)))",
+            &["15", "7", "12", "Ok(3)", "Ok(1)"],
         );
     }
 
     #[test]
     fn arithmetic_float_ops() {
         assert_output(
-            "print(to_string(1.5 + 2.5))\nprint(to_string(10.0 / 3.0))",
-            &["4.0", "3.3333333333333335"],
+            "print(to_string(1.5 + 2.5))\nprint(inspect(safe_div(10.0, 3.0)))",
+            &["4.0", "Ok(3.3333333333333335)"],
         );
     }
 

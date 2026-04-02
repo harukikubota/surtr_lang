@@ -75,6 +75,19 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
                 ret: Box::new(Ty::Str),
             }
         }
+        "safe_div" => {
+            let a = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![a.clone(), a.clone()],
+                ret: Box::new(Ty::Result(Box::new(a), Box::new(Ty::Error))),
+            }
+        }
+        "safe_mod" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Int, Ty::Int],
+            ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
+        },
         "eprint" => Ty::BuiltinFunc {
             name: meta.name.into(),
             params: vec![Ty::Error],
@@ -245,13 +258,17 @@ impl Checker {
             }
 
             Resolved::Var(span, id) => {
-                let ty = self.resolve_ty(&self.env.lookup_var(id.unique_id).cloned().ok_or_else(
-                    || TypeError {
+                let stored_ty = self.env.lookup_var(id.unique_id).cloned().ok_or_else(|| {
+                    TypeError {
                         message: format!("Undefined variable: {}", id.name),
                         span: span.clone(),
                         hint: None,
-                    },
-                )?);
+                    }
+                })?;
+                let ty = match &stored_ty {
+                    Ty::BuiltinFunc { .. } => self.instantiate_builtin_ty(&stored_ty),
+                    _ => self.resolve_ty(&stored_ty),
+                };
                 Ok(TypedNode {
                     ty,
                     span: span.clone(),
@@ -637,6 +654,71 @@ impl Checker {
             ),
             other => other.clone(),
         }
+    }
+
+    fn instantiate_builtin_ty(&mut self, ty: &Ty) -> Ty {
+        fn instantiate(checker: &mut Checker, ty: &Ty, fresh: &mut HashMap<u32, Ty>) -> Ty {
+            match ty {
+                Ty::Var(var) => fresh
+                    .entry(*var)
+                    .or_insert_with(|| checker.env.fresh_tyvar())
+                    .clone(),
+                Ty::List(inner) => Ty::List(Box::new(instantiate(checker, inner, fresh))),
+                Ty::Func(params, ret) => Ty::Func(
+                    params
+                        .iter()
+                        .map(|param| instantiate(checker, param, fresh))
+                        .collect(),
+                    Box::new(instantiate(checker, ret, fresh)),
+                ),
+                Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+                    name: name.clone(),
+                    params: params
+                        .iter()
+                        .map(|param| instantiate(checker, param, fresh))
+                        .collect(),
+                    ret: Box::new(instantiate(checker, ret, fresh)),
+                },
+                Ty::UserFunc {
+                    fun_idx,
+                    params,
+                    ret,
+                } => Ty::UserFunc {
+                    fun_idx: *fun_idx,
+                    params: params
+                        .iter()
+                        .map(|param| instantiate(checker, param, fresh))
+                        .collect(),
+                    ret: Box::new(instantiate(checker, ret, fresh)),
+                },
+                Ty::Struct(name, fields) => Ty::Struct(
+                    name.clone(),
+                    fields
+                        .iter()
+                        .map(|(field, field_ty)| {
+                            (field.clone(), instantiate(checker, field_ty, fresh))
+                        })
+                        .collect(),
+                ),
+                Ty::Record(name, fields) => Ty::Record(
+                    name.clone(),
+                    fields
+                        .iter()
+                        .map(|(field, field_ty)| {
+                            (field.clone(), instantiate(checker, field_ty, fresh))
+                        })
+                        .collect(),
+                ),
+                Ty::Result(ok, err) => Ty::Result(
+                    Box::new(instantiate(checker, ok, fresh)),
+                    Box::new(instantiate(checker, err, fresh)),
+                ),
+                other => other.clone(),
+            }
+        }
+
+        let mut fresh = HashMap::new();
+        instantiate(self, ty, &mut fresh)
     }
 
     fn ty_name(&self, ty: &Ty) -> String {
@@ -1315,7 +1397,7 @@ impl Checker {
         let rt = self.resolve_ty(&typed_right.ty);
 
         let result_ty = match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => match (&lt, &rt) {
+            BinOp::Add | BinOp::Sub | BinOp::Mul => match (&lt, &rt) {
                 (Ty::Int, Ty::Int) => Ok(Ty::Int),
                 (Ty::Float, Ty::Float) => Ok(Ty::Float),
                 (Ty::Var(_), Ty::Int) | (Ty::Int, Ty::Var(_)) => {
@@ -1332,23 +1414,6 @@ impl Checker {
                     message: format!(
                         "Cannot apply {:?} to {} and {}",
                         op,
-                        self.ty_name(&lt),
-                        self.ty_name(&rt)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
-            },
-            BinOp::Mod => match (&lt, &rt) {
-                (Ty::Int, Ty::Int) => Ok(Ty::Int),
-                (Ty::Var(_), Ty::Int) | (Ty::Int, Ty::Var(_)) => {
-                    self.types_compatible(&lt, &Ty::Int);
-                    self.types_compatible(&rt, &Ty::Int);
-                    Ok(Ty::Int)
-                }
-                _ => Err(TypeError {
-                    message: format!(
-                        "% requires (Int, Int), got ({}, {})",
                         self.ty_name(&lt),
                         self.ty_name(&rt)
                     ),
