@@ -126,16 +126,27 @@ print(inspect(Err(MyError)))"#,
     #[test]
     fn arithmetic_int_ops() {
         assert_output(
-            "print(to_string(10 + 5))\nprint(to_string(10 - 3))\nprint(to_string(4 * 3))\nprint(to_string(10 / 3))\nprint(to_string(10 % 3))",
-            &["15", "7", "12", "3", "1"],
+            "print(to_string(10 + 5))\nprint(to_string(10 - 3))\nprint(to_string(4 * 3))\nprint(inspect(safe_div(10, 3)))\nprint(inspect(safe_mod(10, 3)))",
+            &["15", "7", "12", "Ok(3)", "Ok(1)"],
         );
     }
 
     #[test]
     fn arithmetic_float_ops() {
         assert_output(
-            "print(to_string(1.5 + 2.5))\nprint(to_string(10.0 / 3.0))",
-            &["4.0", "3.3333333333333335"],
+            "print(to_string(1.5 + 2.5))\nprint(inspect(safe_div(10.0, 3.0)))",
+            &["4.0", "Ok(3.3333333333333335)"],
+        );
+    }
+
+    #[test]
+    fn safe_xxx_zero_returns_zero_division_error_display() {
+        assert_output(
+            "print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))",
+            &[
+                "Err(ZeroDivisionError(\"division by zero\"))",
+                "Err(ZeroDivisionError(\"division by zero\"))",
+            ],
         );
     }
 
@@ -191,7 +202,7 @@ print(to_string(strs))"#,
 
     #[test]
     fn list_empty_with_annotation() {
-        assert_output("empty: [Int] = []\nprint(to_string(empty))", &["[]"]);
+        assert_output("empty: List<Int> = []\nprint(to_string(empty))", &["[]"]);
     }
 
     #[test]
@@ -681,6 +692,44 @@ match err1 {
     }
 
     #[test]
+    fn builtin_prelude_provides_none_error() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"ret: Result<Int> = Err(NoneError)
+match ret {
+  Ok(val) => print(to_string(val)),
+  Err(e)  => eprint(e),
+}"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(stderr, vec!["Error: NoneError: None Value."]);
+    }
+
+    #[test]
+    fn builtin_safe_xxx_zero_error_can_be_matched_and_eprinted() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"match safe_div(1, 0) {
+  Ok(val) => print(to_string(val)),
+  Err(e)  => eprint(e),
+}
+
+match safe_mod(1, 0) {
+  Ok(val) => print(to_string(val)),
+  Err(e)  => eprint(e),
+}"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(
+            stderr,
+            vec![
+                "Error: ZeroDivisionError: division by zero",
+                "Error: ZeroDivisionError: division by zero",
+            ]
+        );
+    }
+
+    #[test]
     fn deferror_interpolated_message_display() {
         let (stdout, stderr) = run_surtr_with_stderr(
             r#"deferror PageNotFound(html: String) {
@@ -756,9 +805,9 @@ print(to_string(num + num2))
 print(to_string(10 > 5))
 print(to_string("abc" == "abc"))
 print("hello" ++ " world")
-nums: [Int] = [1, 2, 3]
+nums: List<Int> = [1, 2, 3]
 print(to_string(nums))
-empty: [Int] = []
+empty: List<Int> = []
 print(to_string(empty))
 defstruct User {
   name: String,

@@ -187,18 +187,11 @@ Err(BadMessage)"#,
 }
 
 #[test]
-fn run_source_runtime_error_points_to_call_site_when_available() {
+fn run_source_safe_div_zero_returns_err_value() {
     let bin = surtr_bin();
-    let temp = unique_temp_dir("surtr_runtime_error_location");
+    let temp = unique_temp_dir("surtr_safe_div_zero");
     let source_path = temp.join("sample.srt");
-    write_source(
-        &source_path,
-        r#"def bad() -> Int {
-  1 / 0
-}
-
-print(to_string(bad()))"#,
-    );
+    write_source(&source_path, r#"print(inspect(safe_div(1, 0)))"#);
     let output = Command::new(&bin)
         .args([
             "run",
@@ -208,16 +201,23 @@ print(to_string(bad()))"#,
         .expect("failed to run source command");
 
     assert!(
-        !output.status.success(),
-        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Err(ZeroDivisionError(\"division by zero\"))"),
+        "expected safe_div zero to return Err value, got:\n{}",
+        stdout
+    );
+
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("sample.srt:5:"),
-        "expected runtime error to point at call site on line 5, got:\n{}",
+        stderr.trim().is_empty(),
+        "expected no stderr, got:\n{}",
         stderr
     );
 
@@ -225,18 +225,11 @@ print(to_string(bad()))"#,
 }
 
 #[test]
-fn run_source_runtime_error_verbose_dump_is_opt_in() {
+fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
     let bin = surtr_bin();
-    let temp = unique_temp_dir("surtr_runtime_error_verbose");
+    let temp = unique_temp_dir("surtr_safe_mod_zero");
     let source_path = temp.join("sample.srt");
-    write_source(
-        &source_path,
-        r#"def bad() -> Int {
-  1 / 0
-}
-
-print(to_string(bad()))"#,
-    );
+    write_source(&source_path, r#"print(inspect(safe_mod(1, 0)))"#);
     let output = Command::new(&bin)
         .env("SURTR_VERBOSE_RUNTIME_ERROR", "1")
         .args([
@@ -247,26 +240,23 @@ print(to_string(bad()))"#,
         .expect("failed to run source command");
 
     assert!(
-        !output.status.success(),
-        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Err(ZeroDivisionError(\"division by zero\"))"),
+        "expected safe_mod zero to return Err value, got:\n{}",
+        stdout
+    );
+
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("pc:"),
-        "expected verbose runtime dump to include pc, got:\n{}",
-        stderr
-    );
-    assert!(
-        stderr.contains("opcode: DivInt"),
-        "expected verbose runtime dump to include opcode, got:\n{}",
-        stderr
-    );
-    assert!(
-        stderr.contains("detail: stack_depth="),
-        "expected verbose runtime dump to include detail lines, got:\n{}",
+        stderr.trim().is_empty(),
+        "expected no stderr, got:\n{}",
         stderr
     );
 

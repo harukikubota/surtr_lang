@@ -218,8 +218,6 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             '+' => Token::Plus,
             '-' => Token::Minus,
             '*' => Token::Star,
-            '/' => Token::Slash,
-            '%' => Token::Percent,
             '=' => Token::Bind,
             '<' => Token::Lt,
             '>' => Token::Gt,

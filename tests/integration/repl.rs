@@ -193,7 +193,7 @@ fn repl_ok_defaults_result_error_type_to_error() {
 
 #[test]
 fn repl_hides_internal_type_var_ids_in_result_display() {
-    let output = run_repl_session("deferror NoneError {\"null\"}\nret_e = Err(NoneError)\n:quit\n");
+    let output = run_repl_session("ret_e = Err(NoneError)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -203,8 +203,35 @@ fn repl_hides_internal_type_var_ids_in_result_display() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("ret_e: Result<_, Error> = Err(NoneError(\"null\"))"),
+        stdout.contains("ret_e: Result<_, Error> = Err(NoneError(\"None Value.\"))"),
         "expected Result type vars to be hidden in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_safe_xxx_zero_uses_zero_division_error() {
+    let output =
+        run_repl_session("print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Err(ZeroDivisionError(\"division by zero\"))"),
+        "expected ZeroDivisionError display in repl output, got:\n{}",
+        stdout
+    );
+    assert_eq!(
+        stdout
+            .matches("Err(ZeroDivisionError(\"division by zero\"))")
+            .count(),
+        2,
+        "expected both safe_div and safe_mod to use ZeroDivisionError, got:\n{}",
         stdout
     );
 }
@@ -241,7 +268,7 @@ fn repl_eprint_reports_generation_site_line() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("repl:2:"),
+        stderr.contains("REPL:2:"),
         "expected repl error to point at generation site within the current repl chunk, got:\n{}",
         stderr
     );

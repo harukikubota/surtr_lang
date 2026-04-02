@@ -1,0 +1,3 @@
+deferror ParseError { "parse" }
+
+value: Result<Int, ParseError> = Ok(1)

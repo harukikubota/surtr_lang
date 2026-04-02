@@ -26,8 +26,6 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
-    Div,
-    Mod,
     Eq,
     Neq,
     Lt,
@@ -43,7 +41,7 @@ pub enum BinOp {
 pub enum AstTy {
     /// `Int`, `String`, `Boolean`, `Unit`, `User`, ...
     Named(Span, Symbol),
-    /// `[Int]`, `[String]`, ...
+    /// `List<Int>`, `List<String>`, ...
     ListOf(Span, Box<AstTy>),
     /// `Result<Int>` or `Result<Int, ParseError>`
     ResultOf(Span, Box<AstTy>, Option<Box<AstTy>>),

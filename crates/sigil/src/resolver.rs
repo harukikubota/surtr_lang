@@ -92,6 +92,16 @@ impl Resolver {
         self.scope
     }
 
+    fn with_child_scope<T>(
+        &mut self,
+        f: impl FnOnce(&mut Resolver) -> Result<T, ResolveError>,
+    ) -> Result<T, ResolveError> {
+        let mut child = Resolver::with_scope(self.scope.clone());
+        let out = f(&mut child)?;
+        self.scope.advance_next_id_to(child.scope.next_id());
+        Ok(out)
+    }
+
     fn resolve_program(&mut self, stmts: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
         self.predeclare_functions(&stmts)?;
         let mut resolved = Vec::new();
@@ -269,10 +279,12 @@ impl Resolver {
             }
 
             Ast::Block(span, stmts) => {
-                let resolved = stmts
-                    .into_iter()
-                    .map(|s| self.resolve_node(s))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let resolved = self.with_child_scope(|child| {
+                    stmts
+                        .into_iter()
+                        .map(|s| child.resolve_node(s))
+                        .collect::<Result<Vec<_>, _>>()
+                })?;
                 Ok(Resolved::Block(span, resolved))
             }
 
@@ -628,25 +640,25 @@ impl Resolver {
         pat: spire::ast::AstMatchPattern,
         body: Ast,
     ) -> Result<(ResolvedMatchPattern, Resolved), ResolveError> {
-        match pat {
+        self.with_child_scope(|child| match pat {
             spire::ast::AstMatchPattern::Wildcard(span) => {
-                let resolved_body = self.resolve_node(body)?;
+                let resolved_body = child.resolve_node(body)?;
                 Ok((ResolvedMatchPattern::Wildcard(span), resolved_body))
             }
             spire::ast::AstMatchPattern::BoolLit(span, b) => {
-                let resolved_body = self.resolve_node(body)?;
+                let resolved_body = child.resolve_node(body)?;
                 Ok((ResolvedMatchPattern::BoolLit(span, b), resolved_body))
             }
             spire::ast::AstMatchPattern::IntLit(span, n) => {
-                let resolved_body = self.resolve_node(body)?;
+                let resolved_body = child.resolve_node(body)?;
                 Ok((ResolvedMatchPattern::IntLit(span, n), resolved_body))
             }
             spire::ast::AstMatchPattern::StrLit(span, s) => {
-                let resolved_body = self.resolve_node(body)?;
+                let resolved_body = child.resolve_node(body)?;
                 Ok((ResolvedMatchPattern::StrLit(span, s), resolved_body))
             }
             spire::ast::AstMatchPattern::Constructor(span, ctor_name, inner_name) => {
-                let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
+                let ctor_uid = child.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
                     span: span.clone(),
                 })?;
@@ -657,7 +669,7 @@ impl Resolver {
                 };
                 let inner_id = match inner_name {
                     Some(name) => {
-                        let uid = self.scope.define(&name, span.clone());
+                        let uid = child.scope.define(&name, span.clone());
                         Some(ResolvedId {
                             name,
                             unique_id: uid,
@@ -666,13 +678,13 @@ impl Resolver {
                     }
                     None => None,
                 };
-                let resolved_body = self.resolve_node(body)?;
+                let resolved_body = child.resolve_node(body)?;
                 Ok((
                     ResolvedMatchPattern::Constructor(span, ctor_id, inner_id),
                     resolved_body,
                 ))
             }
-        }
+        })
     }
 }
 
@@ -834,7 +846,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::Closure(_, _, captures, _) => {
             for cap in captures {
-                if !free.iter().any(|seen| seen.unique_id == cap.unique_id) {
+                if !bound.contains(&cap.unique_id)
+                    && !free.iter().any(|seen| seen.unique_id == cap.unique_id)
+                {
                     free.push(cap.clone());
                 }
             }
@@ -1062,6 +1076,73 @@ g = &print(1)"#,
                 assert!(matches!(rhs.as_ref(), Resolved::ConstructorCall(_, _, _)));
             }
             _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
+    fn test_block_binding_does_not_escape() {
+        let result = parse_and_resolve(
+            r#"{
+  x = 1
+  x
+}
+x"#,
+        );
+        let err = result.expect_err("block-local binding must not escape");
+        assert!(err.message.contains("Undefined variable: x"));
+    }
+
+    #[test]
+    fn test_match_arm_binding_does_not_escape() {
+        let result = parse_and_resolve(
+            r#"value: Result<Int> = Ok(1)
+match value {
+  Ok(x) => x,
+  Err(e) => 0,
+}
+x"#,
+        );
+        let err = result.expect_err("match-arm binding must not escape");
+        assert!(err.message.contains("Undefined variable: x"));
+    }
+
+    #[test]
+    fn test_match_arm_binding_does_not_leak_to_other_arms() {
+        let result = parse_and_resolve(
+            r#"value: Result<Int> = Ok(1)
+match value {
+  Ok(x) => x,
+  Err(e) => x,
+}"#,
+        );
+        let err = result.expect_err("match-arm binding must stay within its own arm");
+        assert!(err.message.contains("Undefined variable: x"));
+    }
+
+    #[test]
+    fn test_nested_closure_does_not_overcapture_outer_local() {
+        let resolved = parse_and_resolve(r#"f = {|x| {|y| x + y}}"#).unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Closure(_, outer_params, outer_captures, outer_body) => {
+                    assert_eq!(outer_params.len(), 1);
+                    assert!(outer_captures.is_empty());
+                    match outer_body.as_ref() {
+                        Resolved::Closure(_, inner_params, inner_captures, inner_body) => {
+                            assert_eq!(inner_params.len(), 1);
+                            assert_eq!(inner_captures.len(), 1);
+                            assert_eq!(inner_captures[0].name, "x");
+                            assert!(matches!(
+                                inner_body.as_ref(),
+                                Resolved::BinOp(_, BinOp::Add, _, _)
+                            ));
+                        }
+                        _ => panic!("Expected inner Closure"),
+                    }
+                }
+                _ => panic!("Expected outer Closure"),
+            },
+            _ => panic!("Expected Bind"),
         }
     }
 }

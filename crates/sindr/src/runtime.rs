@@ -56,7 +56,8 @@ pub enum Value {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Callable {
     pub target: CallableTarget,
-    pub captured: Vec<Value>,
+    pub lexical_captures: Vec<Value>,
+    pub partial_args: Vec<Value>,
 }
 
 /// Callable target reference.
@@ -137,9 +138,10 @@ impl Value {
                 CallableTarget::Builtin(id) => format!("<builtin:{}>", id),
                 CallableTarget::Function(fun_idx) => {
                     format!(
-                        "<function:{}; captured={}>",
+                        "<function:{}; lexical_captures={}; partial_args={}>",
                         fun_idx,
-                        callable.captured.len()
+                        callable.lexical_captures.len(),
+                        callable.partial_args.len()
                     )
                 }
             },

@@ -1,0 +1,5 @@
+deferror ParseError { "parse" }
+
+def handle(value: Result<Int, ParseError>) -> Unit {
+  ()
+}

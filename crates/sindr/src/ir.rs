@@ -16,14 +16,11 @@ pub enum Opcode {
     AddInt,
     SubInt,
     MulInt,
-    DivInt,
-    ModInt,
 
     // Arithmetic (Float)
     AddFloat,
     SubFloat,
     MulFloat,
-    DivFloat,
 
     // Comparison (Int)
     EqInt,
@@ -71,7 +68,8 @@ pub enum Opcode {
 
     // User-defined function call
     Call(u32, u8, u32, u32),
-    MakeClosure(u8),
+    CaptureClosure(u8),
+    CapturePartial(u8),
     MakeError(u32),
     CallClosure(u8, u32, u32),
 

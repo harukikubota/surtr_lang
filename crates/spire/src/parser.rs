@@ -108,8 +108,7 @@ impl Parser {
         while !matches!(self.peek(), Token::Eof) {
             let stmt = self.parse_stmt()?;
             stmts.push(stmt);
-            // consume statement separators
-            while matches!(self.peek(), Token::Newline | Token::Semicolon) {
+            while matches!(self.peek(), Token::Newline) {
                 self.advance();
             }
         }
@@ -132,7 +131,16 @@ impl Parser {
         }
 
         let expr = self.parse_expr()?;
-        Ok(expr)
+        if matches!(self.peek(), Token::Semicolon) {
+            let semi = self.advance().span.clone();
+            let span = Span {
+                start: expr.span().start,
+                end: semi.end,
+            };
+            Ok(Ast::Semi(span, Box::new(expr)))
+        } else {
+            Ok(expr)
+        }
     }
 
     fn parse_block_stmts(&mut self) -> Result<Vec<Ast>, ParseError> {
@@ -145,7 +153,7 @@ impl Parser {
             }
             let stmt = self.parse_stmt()?;
             stmts.push(stmt);
-            while matches!(self.peek(), Token::Newline | Token::Semicolon) {
+            while matches!(self.peek(), Token::Newline) {
                 self.advance();
             }
         }
@@ -177,8 +185,6 @@ impl Parser {
             Token::Minus => Some((4, BinOp::Sub)),
             // Multiplicative
             Token::Star => Some((5, BinOp::Mul)),
-            Token::Slash => Some((5, BinOp::Div)),
-            Token::Percent => Some((5, BinOp::Mod)),
             _ => None,
         }
     }
@@ -261,6 +267,19 @@ impl Parser {
             // Negative number: unary minus
             Token::Minus => {
                 self.advance();
+                if let Token::Ident(name) = self.peek().clone() {
+                    let name_span = self.peek_span();
+                    return Err(ParseError::syntax(
+                        format!(
+                            "Unary minus on variables is not supported in Phase 1; write `0 - {}` instead of `-{}`",
+                            name, name
+                        ),
+                        Span {
+                            start: sp.start,
+                            end: name_span.end,
+                        },
+                    ));
+                }
                 let inner = self.parse_primary()?;
                 let end = inner.span().end;
                 // Fold negative literals directly
@@ -283,7 +302,7 @@ impl Parser {
                         // General unary minus: desugar to 0 - expr (for Int)
                         // For now, only support literal negation
                         Err(ParseError::syntax(
-                            "Unary minus is only supported on numeric literals",
+                            "Unary minus is only supported on numeric literals in Phase 1; write `0 - expr` for general subtraction",
                             Span {
                                 start: sp.start,
                                 end,
@@ -395,7 +414,7 @@ impl Parser {
                     self.skip_newlines();
                     let (field_name, _) = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
-                    let val = self.parse_expr()?;
+                    let val = self.parse_non_assignment_expr()?;
                     fields.push((field_name, val));
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
@@ -565,14 +584,26 @@ impl Parser {
             self.advance();
             if matches!(self.peek(), Token::Colon) {
                 self.advance();
-                let val = self.parse_expr()?;
+                let val = self.parse_non_assignment_expr()?;
                 return Ok(RecordLitArg::Named(name, val));
             }
             // Not named, restore and parse as expression
             self.pos = save;
         }
-        let expr = self.parse_expr()?;
+        let expr = self.parse_non_assignment_expr()?;
         Ok(RecordLitArg::Positional(expr))
+    }
+
+    fn parse_non_assignment_expr(&mut self) -> Result<Ast, ParseError> {
+        let expr = self.parse_expr()?;
+        if matches!(expr, Ast::Bind(_, _, _) | Ast::SafeBind(_, _, _)) {
+            Err(ParseError::syntax(
+                "Assignments (`=` and `=?`) are statements and cannot appear in argument position",
+                expr.span().clone(),
+            ))
+        } else {
+            Ok(expr)
+        }
     }
 
     // ── Type annotation parsing ──
@@ -615,20 +646,6 @@ impl Parser {
             ));
         }
 
-        // [Type] — list type
-        if matches!(self.peek(), Token::LBrack) {
-            self.advance();
-            let inner = self.parse_type()?;
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(AstTy::ListOf(
-                Span {
-                    start: sp.start,
-                    end: end.end,
-                },
-                Box::new(inner),
-            ));
-        }
-
         if matches!(self.peek(), Token::Dollar) {
             self.advance();
             let (name, end) = self.expect_ident()?;
@@ -663,7 +680,11 @@ impl Parser {
             if name == "Result" {
                 return Ok(AstTy::ResultOf(span, Box::new(first), second));
             }
-            // Generic named type — for now just treat as Named
+            if name == "List" && second.is_none() {
+                return Ok(AstTy::ListOf(span, Box::new(first)));
+            }
+            // Keep parsing the generic syntax so we can reserve it for future user-defined
+            // generic types, but for now only `Result<...>` and `List<...>` are preserved.
             return Ok(AstTy::Named(span, name));
         }
 
@@ -719,32 +740,65 @@ impl Parser {
 
     fn parse_capture_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
         self.expect(&Token::Amp)?;
-        let target = self.parse_primary()?;
-        let target_end = target.span().end;
-        let (func, args) = match target {
-            Ast::App(span, func, args) => {
-                let mut positional = Vec::new();
-                for arg in args {
-                    match arg {
-                        RecordLitArg::Positional(expr) => positional.push(expr),
-                        RecordLitArg::Named(name, _) => {
-                            return Err(ParseError::syntax(
-                                format!("capture does not accept named argument '{}'", name),
-                                span,
-                            ));
-                        }
+        let (name, name_span) = self.expect_ident()?;
+        let is_uppercase = name
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false);
+        if is_uppercase {
+            return Err(ParseError::syntax(
+                "Constructor capture is not supported; use a lambda instead",
+                Span {
+                    start: sp.start,
+                    end: name_span.end,
+                },
+            ));
+        }
+
+        let mut parsed_args = Vec::new();
+        let mut end = name_span.end;
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+            self.skip_newlines();
+            if !matches!(self.peek(), Token::RParen) {
+                parsed_args.push(self.parse_record_lit_arg()?);
+                while matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::RParen) {
+                        break;
                     }
+                    parsed_args.push(self.parse_record_lit_arg()?);
                 }
-                (func, positional)
             }
-            other => (Box::new(other), Vec::new()),
-        };
+            self.skip_newlines();
+            let end_span = self.expect(&Token::RParen)?;
+            end = end_span.end;
+        }
+
+        let mut args = Vec::new();
+        for arg in parsed_args {
+            match arg {
+                RecordLitArg::Positional(expr) => args.push(expr),
+                RecordLitArg::Named(arg_name, _) => {
+                    return Err(ParseError::syntax(
+                        format!("capture does not accept named argument '{}'", arg_name),
+                        Span {
+                            start: sp.start,
+                            end,
+                        },
+                    ));
+                }
+            }
+        }
+
         Ok(Ast::Capture(
             Span {
                 start: sp.start,
-                end: target_end,
+                end,
             },
-            func,
+            Box::new(Ast::Var(name_span, name)),
             args,
         ))
     }
@@ -1092,20 +1146,23 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
-                // Constructor pattern: Ok(var) / Err(var)
-                if matches!(self.peek(), Token::LParen) {
-                    self.advance();
-                    let inner = if matches!(self.peek(), Token::RParen) {
-                        None
-                    } else {
-                        let (inner_name, _) = self.expect_ident()?;
-                        Some(inner_name)
-                    };
-                    self.expect(&Token::RParen)?;
-                    Ok(AstMatchPattern::Constructor(sp, name, inner))
+                if name == "Ok" || name == "Err" {
+                    self.expect(&Token::LParen)?;
+                    let (inner_name, _) = self.expect_ident()?;
+                    let end = self.expect(&Token::RParen)?;
+                    Ok(AstMatchPattern::Constructor(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        name,
+                        Some(inner_name),
+                    ))
                 } else {
-                    // Bare identifier as constructor without parens (e.g. error value)
-                    Ok(AstMatchPattern::Constructor(sp, name, None))
+                    Err(ParseError::syntax(
+                        "Phase 1 match patterns only support `_`, booleans, integer/string literals, and `Ok(name)` / `Err(name)`; remove this test when CamelCase patterns are implemented",
+                        sp,
+                    ))
                 }
             }
             Token::Eof => Err(ParseError::incomplete("match pattern", sp)),
@@ -1654,7 +1711,7 @@ def noop() {()}"#,
 
     #[test]
     fn test_empty_list_with_annotation() {
-        let ast = parse("empty: [Int] = []").unwrap();
+        let ast = parse("empty: List<Int> = []").unwrap();
         match &ast[0] {
             Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::ListOf(_, inner)), rhs) => {
                 assert!(matches!(inner.as_ref(), AstTy::Named(_, ref n) if n == "Int"));
@@ -1719,11 +1776,38 @@ def noop() {()}"#,
                 Ast::Closure(_, params, body) => {
                     assert_eq!(params.len(), 1);
                     assert!(matches!(params[0].name.as_str(), "num"));
-                    assert!(matches!(body.as_ref(), Ast::Block(_, stmts) if stmts.len() == 2));
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::BinOp(_, _, _, _)])
+                    ));
                 }
                 _ => panic!("Expected Closure"),
             },
             _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_semicolon_wraps_statement_in_semi() {
+        let ast = parse("print(\"x\");").unwrap();
+        assert!(matches!(
+            &ast[0],
+            Ast::Semi(_, inner) if matches!(inner.as_ref(), Ast::App(_, _, _))
+        ));
+    }
+
+    #[test]
+    fn test_function_body_trailing_semicolon_is_explicit_unit() {
+        let ast = parse("def fun() -> Unit { print(\"x\"); }").unwrap();
+        match &ast[0] {
+            Ast::Def(_, _, _, _, body) => {
+                assert!(matches!(
+                    body.as_ref(),
+                    Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::Semi(_, inner)] if matches!(inner.as_ref(), Ast::App(_, _, _)))
+                ));
+            }
+            _ => panic!("Expected Def"),
         }
     }
 
@@ -1793,6 +1877,12 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_negative_variable_reports_phase1_guidance() {
+        let err = parse("x = -value").expect_err("Expected parse error");
+        assert!(err.message().contains("write `0 - value` instead of `-value`"));
+    }
+
+    #[test]
     fn test_field_access() {
         let ast = parse("user.name").unwrap();
         assert!(matches!(&ast[0], Ast::FieldAccess(_, _, ref f) if f == "name"));
@@ -1837,5 +1927,43 @@ def noop() {()}"#,
             },
             _ => panic!("Expected Bind with Match"),
         }
+    }
+
+    #[test]
+    fn test_match_camel_case_pattern_is_rejected_for_now() {
+        // Remove this test when CamelCase match patterns are intentionally implemented.
+        let err = parse(
+            r#"x = match value {
+  Some(y) => y,
+  _ => 0,
+}"#,
+        )
+        .expect_err("Expected parse error");
+        assert!(err.message().contains("remove this test when CamelCase patterns are implemented"));
+    }
+
+    #[test]
+    fn test_match_bare_constructor_pattern_is_rejected_for_now() {
+        // Remove this test when CamelCase match patterns are intentionally implemented.
+        let err = parse(
+            r#"x = match value {
+  ParseError => 0,
+  _ => 1,
+}"#,
+        )
+        .expect_err("Expected parse error");
+        assert!(err.message().contains("remove this test when CamelCase patterns are implemented"));
+    }
+
+    #[test]
+    fn test_constructor_capture_is_rejected() {
+        let err = parse("f = &Some").expect_err("Expected parse error");
+        assert!(err.message().contains("use a lambda instead"));
+    }
+
+    #[test]
+    fn test_assignment_is_rejected_in_argument_position() {
+        let err = parse("f(x: y = 1)").expect_err("Expected parse error");
+        assert!(err.message().contains("cannot appear in argument position"));
     }
 }

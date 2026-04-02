@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use spire::ast::Symbol;
 
@@ -34,6 +34,10 @@ pub struct TypeEnv {
     pub next_fun_idx: u32,
     /// Next fresh type variable id
     pub next_tyvar: u32,
+    /// Declared `deferror` type names, available before full type registration
+    pub error_type_names: HashSet<Symbol>,
+    /// `deferror` constructor bindings by unique_id
+    pub error_constructor_ids: HashSet<u32>,
 }
 
 impl TypeEnv {
@@ -44,6 +48,8 @@ impl TypeEnv {
             next_tag: 2, // 0 = Ok, 1 = Err
             next_fun_idx: 0,
             next_tyvar: 0,
+            error_type_names: HashSet::new(),
+            error_constructor_ids: HashSet::new(),
         }
     }
 
@@ -88,5 +94,21 @@ impl TypeEnv {
         let id = self.next_tyvar;
         self.next_tyvar += 1;
         Ty::Var(id)
+    }
+
+    pub fn register_error_constructor(&mut self, unique_id: u32) {
+        self.error_constructor_ids.insert(unique_id);
+    }
+
+    pub fn is_error_constructor(&self, unique_id: u32) -> bool {
+        self.error_constructor_ids.contains(&unique_id)
+    }
+
+    pub fn declare_error_type_name(&mut self, name: Symbol) {
+        self.error_type_names.insert(name);
+    }
+
+    pub fn is_declared_error_type_name(&self, name: &str) -> bool {
+        self.error_type_names.contains(name)
     }
 }

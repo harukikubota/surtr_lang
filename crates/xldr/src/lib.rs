@@ -17,6 +17,7 @@ mod diagnostics;
 
 const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
+const REPL_MODULE_NAME: &str = "REPL";
 
 struct ReplHelper {
     hinter: HistoryHinter,
@@ -190,7 +191,7 @@ impl ReplEngine {
             BUILTIN_PRELUDE_FILE.to_string(),
         );
 
-        if let Err(e) = self.vm.push(chunk) {
+        if let Err(e) = self.vm.push_atomic(chunk) {
             eldr::report_runtime_error(
                 &e,
                 self.vm.source(),
@@ -248,7 +249,7 @@ impl ReplEngine {
             Err(e) => {
                 let message = e.message();
                 diagnostics::report_error(
-                    "repl",
+                    REPL_MODULE_NAME,
                     &self.pending,
                     diagnostics::simple_error("ParseError", message, e.span().clone(), None),
                 );
@@ -274,7 +275,7 @@ impl ReplEngine {
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
                 diagnostics::report_error(
-                    "repl",
+                    REPL_MODULE_NAME,
                     &self.pending,
                     diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
                 );
@@ -291,7 +292,7 @@ impl ReplEngine {
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
                 diagnostics::report_error(
-                    "repl",
+                    REPL_MODULE_NAME,
                     &self.pending,
                     diagnostics::type_error_spec(&self.pending, &e),
                 );
@@ -308,7 +309,7 @@ impl ReplEngine {
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
                 diagnostics::report_error(
-                    "repl",
+                    REPL_MODULE_NAME,
                     &self.pending,
                     diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
                 );
@@ -319,9 +320,10 @@ impl ReplEngine {
         };
 
         populate_error_template_lines(&mut chunk.error_templates, &self.pending);
-        self.vm.set_source(self.pending.clone(), "repl".to_string());
+        self.vm
+            .set_source(self.pending.clone(), REPL_MODULE_NAME.to_string());
 
-        match self.vm.push(chunk) {
+        match self.vm.push_atomic(chunk) {
             Ok(value) => {
                 display_repl_result(&self.vm, value.clone(), &meta);
                 for b in &meta.bindings {

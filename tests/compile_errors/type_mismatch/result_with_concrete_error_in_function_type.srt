@@ -1,0 +1,3 @@
+deferror ParseError { "parse" }
+
+handler: (String -> Result<Int, ParseError>) = {|text| Ok(1)}

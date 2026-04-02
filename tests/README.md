@@ -2,6 +2,8 @@
 
 This repository uses a spec-first test layout.
 
+Preferred runner: `cargo nextest run`
+
 - `tests/spec/**.srt` + `.expected`
   - End-to-end behavior fixtures (`stdout` match)
   - Runner: `tests/integration/run_srt.rs` (`spec_fixtures_match_expected_stdout`)

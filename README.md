@@ -36,6 +36,23 @@ cargo run -p rune -- run lib/hello.eldr
 cargo run -p rune -- dump lib/hello.eldr --format json | jq .
 ```
 
+## Testing
+
+Use `cargo-nextest` as the default test runner for this workspace.
+
+```bash
+cargo nextest run
+```
+
+For a clean baseline run that includes compilation:
+
+```bash
+cargo clean
+/usr/bin/time -p cargo nextest run
+```
+
+`cargo test` remains available when you specifically want the standard Cargo runner.
+
 ## Docs
 
 - [Phase 1 Flow](./doc/phase1-flow.md)

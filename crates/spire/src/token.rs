@@ -20,12 +20,10 @@ pub enum Token {
     Ident(String),
 
     // ── Arithmetic operators ──
-    Plus,    // +
-    Minus,   // -
-    Star,    // *
-    Slash,   // /
-    Percent, // %
-    Concat,  // ++
+    Plus,   // +
+    Minus,  // -
+    Star,   // *
+    Concat, // ++
 
     // ── Comparison / equality ──
     EqEq,   // ==
