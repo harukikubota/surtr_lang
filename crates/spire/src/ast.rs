@@ -63,6 +63,12 @@ pub enum AstPattern {
     ListNil(Span),
     /// `[head, ..tail]`
     ListCons(Span, Box<AstPattern>, Box<AstPattern>),
+    /// Integer literal in pattern position.
+    IntLit(Span, i64),
+    /// String literal in pattern position.
+    StrLit(Span, String),
+    /// Boolean literal in pattern position.
+    BoolLit(Span, bool),
     /// `Ok(inner)` in safe-bind patterns
     Constructor(Span, Symbol, Box<AstPattern>),
 }

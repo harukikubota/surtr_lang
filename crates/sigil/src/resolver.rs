@@ -645,6 +645,9 @@ impl Resolver {
                 Box::new(self.resolve_pattern(*head)?),
                 Box::new(self.resolve_pattern(*tail)?),
             )),
+            AstPattern::IntLit(span, n) => Ok(ResolvedPattern::IntLit(span, n)),
+            AstPattern::StrLit(span, s) => Ok(ResolvedPattern::StrLit(span, s)),
+            AstPattern::BoolLit(span, b) => Ok(ResolvedPattern::BoolLit(span, b)),
             AstPattern::Constructor(span, ctor_name, inner) => {
                 let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
@@ -987,7 +990,11 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
             collect_bind_pattern_bindings(head, bound);
             collect_bind_pattern_bindings(tail, bound);
         }
-        ResolvedPattern::Wildcard(_) | ResolvedPattern::ListNil(_) => {}
+        ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::ListNil(_)
+        | ResolvedPattern::IntLit(_, _)
+        | ResolvedPattern::StrLit(_, _)
+        | ResolvedPattern::BoolLit(_, _) => {}
     }
 }
 
@@ -1217,6 +1224,24 @@ g = &print(1)"#,
                 assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
             }
             _ => panic!("Expected SafeBind with constructor pattern"),
+        }
+    }
+
+    #[test]
+    fn test_safebind_list_with_constructor_literal_pattern_resolution() {
+        let resolved = parse_and_resolve("[Ok(1), ..tail] =? lr").unwrap();
+        match &resolved[0] {
+            Resolved::SafeBind(_, ResolvedPattern::ListCons(head, tail), rhs) => {
+                assert!(matches!(
+                    head.as_ref(),
+                    ResolvedPattern::Constructor(ctor, inner)
+                        if ctor.name == "Ok"
+                        && matches!(inner.as_ref(), ResolvedPattern::IntLit(_, 1))
+                ));
+                assert!(matches!(tail.as_ref(), ResolvedPattern::Var(id) if id.name == "tail"));
+                assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "lr"));
+            }
+            _ => panic!("Expected SafeBind list constructor pattern"),
         }
     }
 

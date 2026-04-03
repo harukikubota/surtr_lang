@@ -102,4 +102,30 @@ Ok(num) =? value"#,
             Some(TypedInner::SafeBind(_, _))
         ));
     }
+
+    #[test]
+    fn safebind_list_pattern_accepts_plain_list_rhs() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"value = [1, 2, 3]
+[head, ..tail] =? value"#,
+        );
+        let typed = typecheck(resolved).expect("typecheck should succeed");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::SafeBind(_, _))
+        ));
+    }
+
+    #[test]
+    fn safebind_list_pattern_accepts_nested_constructor_literals() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"lr = [Ok(1), Ok(2), Ok(3)]
+[Ok(1), Ok(2), _] =? lr"#,
+        );
+        let typed = typecheck(resolved).expect("typecheck should succeed");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::SafeBind(_, _))
+        ));
+    }
 }

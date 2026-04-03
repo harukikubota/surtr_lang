@@ -90,6 +90,26 @@ impl Parser {
         }
     }
 
+    fn stmt_has_explicit_separator(stmt: &Ast) -> bool {
+        matches!(stmt, Ast::Semi(_, _))
+    }
+
+    fn ensure_stmt_boundary(&self, stmt: &Ast, allow_rbrace: bool) -> Result<(), ParseError> {
+        if Self::stmt_has_explicit_separator(stmt) {
+            return Ok(());
+        }
+        let ok = matches!(self.peek(), Token::Newline | Token::Eof)
+            || (allow_rbrace && matches!(self.peek(), Token::RBrace));
+        if ok {
+            Ok(())
+        } else {
+            Err(ParseError::syntax(
+                "Expected newline or `;` between statements",
+                self.peek_span(),
+            ))
+        }
+    }
+
     #[allow(dead_code)]
     fn at_stmt_end(&self) -> bool {
         matches!(
@@ -111,6 +131,7 @@ impl Parser {
         self.skip_newlines();
         while !matches!(self.peek(), Token::Eof) {
             let stmt = self.parse_stmt()?;
+            self.ensure_stmt_boundary(&stmt, false)?;
             stmts.push(stmt);
             while matches!(self.peek(), Token::Newline) {
                 self.advance();
@@ -137,6 +158,14 @@ impl Parser {
         if matches!(self.peek(), Token::LBrack) || self.is_constructor_pattern_start() {
             let save = self.pos;
             if let Ok(stmt) = self.parse_pattern_safebind_stmt() {
+                if matches!(self.peek(), Token::Semicolon) {
+                    let semi = self.advance().span.clone();
+                    let span = Span {
+                        start: stmt.span().start,
+                        end: semi.end,
+                    };
+                    return Ok(Ast::Semi(span, Box::new(stmt)));
+                }
                 return Ok(stmt);
             }
             self.pos = save;
@@ -164,6 +193,7 @@ impl Parser {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             let stmt = self.parse_stmt()?;
+            self.ensure_stmt_boundary(&stmt, true)?;
             stmts.push(stmt);
             while matches!(self.peek(), Token::Newline) {
                 self.advance();
@@ -749,6 +779,43 @@ impl Parser {
                 self.advance();
                 Ok(AstPattern::Wildcard(sp))
             }
+            Token::Int(n) => {
+                self.advance();
+                Ok(AstPattern::IntLit(sp, n))
+            }
+            Token::Minus => {
+                self.advance();
+                let neg_span = self.peek_span();
+                match self.peek().clone() {
+                    Token::Int(n) => {
+                        self.advance();
+                        Ok(AstPattern::IntLit(
+                            Span {
+                                start: sp.start,
+                                end: neg_span.end,
+                            },
+                            -n,
+                        ))
+                    }
+                    Token::Eof => Err(ParseError::incomplete("integer literal", neg_span)),
+                    _ => Err(ParseError::syntax(
+                        "Expected integer literal after '-' in pattern",
+                        neg_span,
+                    )),
+                }
+            }
+            Token::Str(s) => {
+                self.advance();
+                Ok(AstPattern::StrLit(sp, s))
+            }
+            Token::True => {
+                self.advance();
+                Ok(AstPattern::BoolLit(sp, true))
+            }
+            Token::False => {
+                self.advance();
+                Ok(AstPattern::BoolLit(sp, false))
+            }
             Token::Ident(name) => {
                 if name
                     .chars()
@@ -790,7 +857,7 @@ impl Parser {
             Token::LBrack => self.parse_list_bind_pattern(),
             Token::Eof => Err(ParseError::incomplete("list pattern", sp)),
             _ => Err(ParseError::syntax(
-                "Pattern supports identifiers, `_`, list patterns, and nested `Ok(...)` patterns",
+                "Pattern supports identifiers, literals, `_`, list patterns, and nested `Ok(...)` patterns",
                 sp,
             )),
         }
@@ -1191,12 +1258,22 @@ impl Parser {
         self.expect(&Token::AtBuiltin)?;
         self.skip_newlines();
         let (_def_span, name, params, ret_ty) = self.parse_def_signature()?;
-        self.skip_newlines();
 
-        if matches!(self.peek(), Token::LBrace) {
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::Newline)
+        ) {
+            lookahead += 1;
+        }
+
+        if matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::LBrace)
+        ) {
             return Err(ParseError::syntax(
                 "@builtin declaration must not have a function body",
-                self.peek_span(),
+                self.tokens[lookahead].span.clone(),
             ));
         }
 
@@ -1578,6 +1655,9 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::Wildcard(span)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
+        | AstPattern::IntLit(span, _)
+        | AstPattern::StrLit(span, _)
+        | AstPattern::BoolLit(span, _)
         | AstPattern::Constructor(span, _, _) => span,
     }
 }
@@ -1639,6 +1719,9 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
             Box::new(shift_pattern(*head, delta)),
             Box::new(shift_pattern(*tail, delta)),
         ),
+        AstPattern::IntLit(span, n) => AstPattern::IntLit(shift_span(span, delta), n),
+        AstPattern::StrLit(span, s) => AstPattern::StrLit(shift_span(span, delta), s),
+        AstPattern::BoolLit(span, b) => AstPattern::BoolLit(shift_span(span, delta), b),
         AstPattern::Constructor(span, name, inner) => AstPattern::Constructor(
             shift_span(span, delta),
             name,
@@ -2124,6 +2207,26 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_list_pattern_with_nested_constructor_literals_safebind() {
+        let ast = parse("[Ok(1), Ok(2), _] =? lr").unwrap();
+        match &ast[0] {
+            Ast::SafeBind(_, pattern, rhs) => {
+                assert!(matches!(
+                    pattern,
+                    AstPattern::ListCons(_, first, rest)
+                        if matches!(first.as_ref(),
+                            AstPattern::Constructor(_, ctor, inner)
+                            if ctor == "Ok" && matches!(inner.as_ref(), AstPattern::IntLit(_, 1))
+                        )
+                        && matches!(rhs.as_ref(), Ast::Var(_, name) if name == "lr")
+                        && matches!(rest.as_ref(), AstPattern::ListCons(_, _, _))
+                ));
+            }
+            _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
     fn test_result_type_annotation() {
         let ast = parse("r: Result<Int> = Ok(42)").unwrap();
         match &ast[0] {
@@ -2217,6 +2320,27 @@ def noop() {()}"#,
     fn test_multiline() {
         let ast = parse("x = 1\ny = 2\nprint(to_string(x))").unwrap();
         assert_eq!(ast.len(), 3);
+    }
+
+    #[test]
+    fn test_statements_on_same_line_require_separator() {
+        let err = parse("[]1").expect_err("Expected parse error");
+        assert!(err.message().contains("Expected newline or `;`"));
+    }
+
+    #[test]
+    fn test_safebind_rhs_requires_statement_separator() {
+        let err = parse("[] =? []1").expect_err("Expected parse error");
+        assert!(err.message().contains("Expected newline or `;`"));
+    }
+
+    #[test]
+    fn test_safebind_allows_trailing_semicolon() {
+        let ast = parse("[] =? value;").unwrap();
+        assert!(matches!(
+            &ast[0],
+            Ast::Semi(_, inner) if matches!(inner.as_ref(), Ast::SafeBind(_, _, _))
+        ));
     }
 
     #[test]

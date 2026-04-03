@@ -413,13 +413,18 @@ impl Checker {
         rhs: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
-        let (ok_ty, err_ty) = match &typed_rhs.ty {
-            Ty::Result(ok, err) => (ok.as_ref().clone(), err.as_ref().clone()),
+        let rhs_ty = self.resolve_ty(&typed_rhs.ty);
+        let (ok_ty, mut propagated_err_tys) = match rhs_ty {
+            Ty::Result(ok, err) => (ok.as_ref().clone(), vec![err.as_ref().clone()]),
+            Ty::List(_) if Self::is_top_level_list_pattern(pat) => {
+                // `uncons(List<A>) -> Result<_, Error>`-like behavior for list destructuring.
+                (self.resolve_ty(&typed_rhs.ty), vec![Ty::Error])
+            }
             other => {
                 return Err(TypeError {
                     message: format!(
                         "`=?` requires Result on the right-hand side, got {}",
-                        self.ty_name(other)
+                        self.ty_name(&other)
                     ),
                     span: typed_rhs.span.clone(),
                     hint: Some(
@@ -445,7 +450,6 @@ impl Checker {
                 }
             };
 
-            let mut propagated_err_tys = vec![err_ty.clone()];
             self.collect_pattern_result_error_types(&typed_pat, &mut propagated_err_tys);
 
             for propagated in propagated_err_tys {
@@ -470,6 +474,13 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::SafeBind(typed_pat, Box::new(typed_rhs)),
         })
+    }
+
+    fn is_top_level_list_pattern(pat: &ResolvedPattern) -> bool {
+        matches!(
+            pat,
+            ResolvedPattern::ListNil(_) | ResolvedPattern::ListCons(_, _)
+        )
     }
 
     // ── Helpers ──
@@ -1049,6 +1060,9 @@ impl Checker {
                 Box::new(self.resolve_typed_pattern(*head)),
                 Box::new(self.resolve_typed_pattern(*tail)),
             ),
+            TypedPattern::IntLit(ty, n) => TypedPattern::IntLit(self.resolve_ty(&ty), n),
+            TypedPattern::StrLit(ty, s) => TypedPattern::StrLit(self.resolve_ty(&ty), s),
+            TypedPattern::BoolLit(ty, b) => TypedPattern::BoolLit(self.resolve_ty(&ty), b),
             TypedPattern::ResultOk(ty, inner) => TypedPattern::ResultOk(
                 self.resolve_ty(&ty),
                 Box::new(self.resolve_typed_pattern(*inner)),
@@ -1190,6 +1204,48 @@ impl Checker {
                     rhs_ty,
                 ))
             }
+            ResolvedPattern::IntLit(pspan, n) => {
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                if !self.types_compatible(&Ty::Int, &rhs_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "integer literal pattern requires Int, got {}",
+                            self.ty_name(&rhs_ty)
+                        ),
+                        span: pspan.clone(),
+                        hint: None,
+                    });
+                }
+                Ok((TypedPattern::IntLit(Ty::Int, *n), rhs_ty))
+            }
+            ResolvedPattern::StrLit(pspan, s) => {
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                if !self.types_compatible(&Ty::Str, &rhs_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "string literal pattern requires String, got {}",
+                            self.ty_name(&rhs_ty)
+                        ),
+                        span: pspan.clone(),
+                        hint: None,
+                    });
+                }
+                Ok((TypedPattern::StrLit(Ty::Str, s.clone()), rhs_ty))
+            }
+            ResolvedPattern::BoolLit(pspan, b) => {
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                if !self.types_compatible(&Ty::Bool, &rhs_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "boolean literal pattern requires Boolean, got {}",
+                            self.ty_name(&rhs_ty)
+                        ),
+                        span: pspan.clone(),
+                        hint: None,
+                    });
+                }
+                Ok((TypedPattern::BoolLit(Ty::Bool, *b), rhs_ty))
+            }
             ResolvedPattern::Constructor(ctor_id, inner) => {
                 if ctor_id.name != "Ok" {
                     return Err(TypeError {
@@ -1233,7 +1289,11 @@ impl Checker {
             TypedPattern::Var(_, id) => {
                 self.env.bind_var(id.unique_id, rhs_ty.clone());
             }
-            TypedPattern::Wildcard(_) | TypedPattern::ListNil(_) => {}
+            TypedPattern::Wildcard(_)
+            | TypedPattern::ListNil(_)
+            | TypedPattern::IntLit(_, _)
+            | TypedPattern::StrLit(_, _)
+            | TypedPattern::BoolLit(_, _) => {}
             TypedPattern::ListCons(_, head, tail) => {
                 let elem_ty = match rhs_ty {
                     Ty::List(inner) => inner.as_ref().clone(),
@@ -1265,7 +1325,12 @@ impl Checker {
                 self.collect_pattern_result_error_types(head, out);
                 self.collect_pattern_result_error_types(tail, out);
             }
-            TypedPattern::Var(_, _) | TypedPattern::Wildcard(_) | TypedPattern::ListNil(_) => {}
+            TypedPattern::Var(_, _)
+            | TypedPattern::Wildcard(_)
+            | TypedPattern::ListNil(_)
+            | TypedPattern::IntLit(_, _)
+            | TypedPattern::StrLit(_, _)
+            | TypedPattern::BoolLit(_, _) => {}
         }
     }
 

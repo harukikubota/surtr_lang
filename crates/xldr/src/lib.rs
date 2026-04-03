@@ -173,7 +173,7 @@ impl ReplEngine {
             }
         };
 
-        let (mut chunk, meta) = match self.forge_session.codegen_chunk_repl_result(typed) {
+        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
                 diagnostics::report_error(
@@ -302,7 +302,7 @@ impl ReplEngine {
             }
         };
 
-        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
+        let (mut chunk, meta) = match self.forge_session.codegen_chunk_repl_result(typed) {
             Ok(c) => c,
             Err(e) => {
                 self.sigil_session.rollback(sigil_cp);

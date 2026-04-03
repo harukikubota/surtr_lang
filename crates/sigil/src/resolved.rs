@@ -110,6 +110,9 @@ pub enum ResolvedPattern {
     Wildcard(Span),
     ListNil(Span),
     ListCons(Box<ResolvedPattern>, Box<ResolvedPattern>),
+    IntLit(Span, i64),
+    StrLit(Span, String),
+    BoolLit(Span, bool),
     Constructor(ResolvedId, Box<ResolvedPattern>),
 }
 

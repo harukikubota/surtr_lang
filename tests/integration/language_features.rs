@@ -635,6 +635,68 @@ print(to_string(tail))"#,
     }
 
     #[test]
+    fn safebind_list_pattern_plain_list_ok() {
+        assert_output(
+            r#"value = [1, 2, 3]
+[head, ..tail] =? value
+print(to_string(head))
+print(to_string(tail))"#,
+            &["1", "[2, 3]"],
+        );
+    }
+
+    #[test]
+    fn safebind_list_pattern_plain_list_empty_propagates_empty_list() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"value: List<Int> = []
+[head, ..tail] =? value
+print("after")"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
+    }
+
+    #[test]
+    fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_longer_rhs() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"li = [1, 2]
+[f] =? li"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stderr, vec!["Error: IndexOutOfBounds: LHS.len(1) < RHS.len(2)"]);
+    }
+
+    #[test]
+    fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_shorter_rhs() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"li = [1]
+[e1, e2] =? li"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stderr, vec!["Error: IndexOutOfBounds: LHS.len(2) > RHS.len(1)"]);
+    }
+
+    #[test]
+    fn safebind_list_pattern_with_nested_constructor_literals_ok() {
+        assert_output(
+            r#"lr = [Ok(1), Ok(2), Ok(3)]
+[Ok(1), Ok(2), _] =? lr
+print("ok")"#,
+            &["ok"],
+        );
+    }
+
+    #[test]
+    fn safebind_list_pattern_with_nested_constructor_and_tail_ok() {
+        assert_output(
+            r#"lr = [Ok(1), Ok(2), Ok(3)]
+[Ok(1), ..tail] =? lr
+print(to_string(tail))"#,
+            &["[Ok(2), Ok(3)]"],
+        );
+    }
+
+    #[test]
     fn safebind_top_ok_pattern_requires_nested_result() {
         assert_compile_error(
             r#"value: Result<Int> = Ok(5)
@@ -760,7 +822,7 @@ print("after")"#,
 
     #[test]
     fn plain_bind_rejects_result_test_pattern() {
-        assert_compile_error("Ok(num) = Ok(1)", "Unexpected token: Bind");
+        assert_compile_error("Ok(num) = Ok(1)", "Expected newline or `;`");
     }
 
     // Errors

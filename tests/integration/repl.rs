@@ -79,6 +79,34 @@ fn repl_keeps_bindings_between_inputs() {
 }
 
 #[test]
+fn repl_echoes_bindings_even_with_trailing_semicolons() {
+    let output = run_repl_session("n = 1;w = 2; r = 3;\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("n: Int = 1"),
+        "expected semicolon-terminated binding n to be echoed, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("w: Int = 2"),
+        "expected semicolon-terminated binding w to be echoed, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("r: Int = 3"),
+        "expected semicolon-terminated binding r to be echoed, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_infers_closure_argument_type_from_add_constraint() {
     let output = run_repl_session("fun = {|num| num + 5}\n:quit\n");
     assert!(
@@ -231,6 +259,106 @@ fn repl_evaluates_main_result_err_immediately() {
         stderr.contains("NoneError"),
         "expected evaluated Err to be reported in stderr, got:\n{}",
         stderr
+    );
+}
+
+#[test]
+fn repl_safebind_constructor_pattern_echoes_binding() {
+    let output = run_repl_session("ret = Ok(1)\nrr = Ok(ret)\nOk(num) =? rr\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("num: Int = 1"),
+        "expected constructor-pattern safebind to echo num binding, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_safebind_list_pattern_echoes_all_bindings() {
+    let output = run_repl_session("rv: Result<List<Int>> = Ok([1, 2, 3])\n[h, ..t] =? rv\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("h: Int = 1"),
+        "expected list-pattern safebind to echo h binding, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("t: List<Int> = [2, 3]"),
+        "expected list-pattern safebind to echo t binding, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_safebind_list_pattern_accepts_plain_list_rhs() {
+    let output = run_repl_session("li = [1, 2, 3]\n[h, ..t] =? li\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("h: Int = 1"),
+        "expected list-pattern safebind on plain list rhs to echo h binding, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("t: List<Int> = [2, 3]"),
+        "expected list-pattern safebind on plain list rhs to echo t binding, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_safebind_list_pattern_accepts_nested_constructor_literals() {
+    let output = run_repl_session("lr = [Ok(1), Ok(2), Ok(3)]\n[Ok(1), Ok(2), _] =? lr\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("ParseError"),
+        "expected no parse error for nested constructor list pattern, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn repl_safebind_list_pattern_accepts_nested_constructor_with_tail() {
+    let output = run_repl_session("lr = [Ok(1), Ok(2), Ok(3)]\n[Ok(1), ..tail] =? lr\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("tail: List<Result<Int, Error>> = [Ok(2), Ok(3)]"),
+        "expected nested constructor with tail to bind tail, got:\n{}",
+        stdout
     );
 }
 

@@ -10,3 +10,5 @@ deferror NoneError { "None Value." }
 deferror ZeroDivisionError { "division by zero" }
 
 deferror EmptyList { "Empty List." }
+
+deferror IndexOutOfBounds(detail: String) { detail }
