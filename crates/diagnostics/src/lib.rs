@@ -406,7 +406,7 @@ fn find_enclosing_match_block(chars: &[char], focus_pos: usize) -> Option<(usize
         if !is_match_keyword_at(chars, i) {
             continue;
         }
-        let mut j = i + 5; // after "match"
+        let mut j = i + 5;
         while j < chars.len() && chars[j].is_ascii_whitespace() {
             j += 1;
         }
@@ -423,9 +423,7 @@ fn find_enclosing_match_block(chars: &[char], focus_pos: usize) -> Option<(usize
                     brace_open = Some(j);
                     break;
                 }
-                '\n' if paren_depth == 0 && bracket_depth == 0 => {
-                    // keep scanning, match arm blocks are commonly multiline
-                }
+                '\n' if paren_depth == 0 && bracket_depth == 0 => {}
                 _ => {}
             }
             j += 1;

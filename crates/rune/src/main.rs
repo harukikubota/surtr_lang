@@ -4,8 +4,6 @@ use std::path::Path;
 use std::process;
 
 use forge::bytecode::populate_error_template_lines;
-
-mod diagnostics;
 mod dump;
 
 const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";

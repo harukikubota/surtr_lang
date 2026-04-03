@@ -13,8 +13,6 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper};
 use sindr::builtin::BUILTIN_METAS;
 
-mod diagnostics;
-
 const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
 const REPL_MODULE_NAME: &str = "REPL";

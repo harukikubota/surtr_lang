@@ -1,0 +1,10 @@
+[package]
+name = "diagnostics"
+version = "0.1.0"
+edition = "2021"
+description = "Shared Surtr diagnostics rendering utilities"
+
+[dependencies]
+ariadne = "0.6.0"
+scar = { path = "../scar" }
+spire = { path = "../spire" }

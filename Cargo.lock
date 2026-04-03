@@ -43,6 +43,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "diagnostics"
+version = "0.1.0"
+dependencies = [
+ "ariadne",
+ "scar",
+ "spire",
+]
+
+[[package]]
 name = "eldr"
 version = "0.1.0"
 dependencies = [
@@ -184,7 +193,7 @@ dependencies = [
 name = "rune"
 version = "0.1.0"
 dependencies = [
- "ariadne",
+ "diagnostics",
  "eldr",
  "forge",
  "scar",
@@ -463,7 +472,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 name = "xldr"
 version = "0.1.0"
 dependencies = [
- "ariadne",
+ "diagnostics",
  "eldr",
  "forge",
  "rustyline",
