@@ -1130,6 +1130,127 @@ print(to_string(1))"#,
     }
 
     #[test]
+    fn test_forward_reference_to_function_resolves_to_same_unique_id() {
+        let resolved = parse_and_resolve(
+            r#"result = add(1, 2)
+def add(x: Int, y: Int) -> Int { x + y }"#,
+        )
+        .unwrap();
+
+        let call_id = match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::App(_, func, _) => match func.as_ref() {
+                    Resolved::Var(_, id) => id.unique_id,
+                    _ => panic!("Expected function variable in App"),
+                },
+                _ => panic!("Expected App on forward function reference"),
+            },
+            _ => panic!("Expected Bind"),
+        };
+
+        let def_id = match &resolved[1] {
+            Resolved::Def(_, id, _, _, _) => id.unique_id,
+            _ => panic!("Expected Def"),
+        };
+
+        assert_eq!(call_id, def_id);
+    }
+
+    #[test]
+    fn test_forward_reference_to_struct_literal_resolves_to_same_unique_id() {
+        let resolved = parse_and_resolve(
+            r#"user = User { name: "alice", age: 30 }
+defstruct User {
+  name: String,
+  age: Int,
+}"#,
+        )
+        .unwrap();
+
+        let lit_id = match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::StructLit(_, id, _) => id.unique_id,
+                _ => panic!("Expected StructLit"),
+            },
+            _ => panic!("Expected Bind"),
+        };
+
+        let def_id = match &resolved[1] {
+            Resolved::StructDef(_, id, _) => id.unique_id,
+            _ => panic!("Expected StructDef"),
+        };
+
+        assert_eq!(lit_id, def_id);
+    }
+
+    #[test]
+    fn test_forward_reference_to_record_constructor_resolves_to_same_unique_id() {
+        let resolved = parse_and_resolve(
+            r#"point = Point(1.0, 2.0)
+defrecord Point(x: Float, y: Float)"#,
+        )
+        .unwrap();
+
+        let ctor_id = match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::ConstructorCall(_, id, _) => id.unique_id,
+                _ => panic!("Expected ConstructorCall"),
+            },
+            _ => panic!("Expected Bind"),
+        };
+
+        let def_id = match &resolved[1] {
+            Resolved::RecordDef(_, id, _) => id.unique_id,
+            _ => panic!("Expected RecordDef"),
+        };
+
+        assert_eq!(ctor_id, def_id);
+    }
+
+    #[test]
+    fn test_forward_reference_to_deferror_constructor_resolves_to_same_unique_id() {
+        let resolved = parse_and_resolve(
+            r#"err = PageNotFound("404")
+deferror PageNotFound(html: String) {
+  "Page Not Found. #{html}"
+}"#,
+        )
+        .unwrap();
+
+        let ctor_id = match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::ConstructorCall(_, id, _) => id.unique_id,
+                _ => panic!("Expected ConstructorCall"),
+            },
+            _ => panic!("Expected Bind"),
+        };
+
+        let def_id = match &resolved[1] {
+            Resolved::DeferrorDef(_, id, _, _) => id.unique_id,
+            _ => panic!("Expected DeferrorDef"),
+        };
+
+        assert_eq!(ctor_id, def_id);
+    }
+
+    #[test]
+    fn test_unresolved_forward_constructor_is_error() {
+        let result = parse_and_resolve(r#"value = MissingType(1)"#);
+        let err = result.expect_err("unknown forward constructor must fail");
+        assert!(err.message.contains("Undefined type: MissingType"));
+    }
+
+    #[test]
+    fn test_duplicate_top_level_struct_is_error() {
+        let result = parse_and_resolve(
+            r#"defstruct User { name: String }
+defstruct User { name: String }"#,
+        );
+        let err = result.expect_err("duplicate struct must fail");
+        assert!(err.message.contains("Duplicate top-level definition: User"));
+    }
+
+    #[test]
     fn test_shadowing() {
         let resolved = parse_and_resolve("x = 1\nx = x + 1").unwrap();
         // The second x should have a different unique_id
