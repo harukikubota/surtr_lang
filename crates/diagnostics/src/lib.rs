@@ -1,6 +1,7 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use scar::error::TypeError;
 use spire::ast::Span;
+use std::io::{self, Write};
 
 #[derive(Debug, Clone)]
 pub struct DiagnosticSpec {
@@ -55,6 +56,18 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
 }
 
 pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
+    let report = build_report(file_name, &spec);
+
+    if let Err(err) = report.eprint((file_name, Source::from(source))) {
+        let mut stderr = io::stderr().lock();
+        let _ = write_fallback_diagnostic(&mut stderr, file_name, &spec, &err);
+    }
+}
+
+fn build_report<'a>(
+    file_name: &'a str,
+    spec: &'a DiagnosticSpec,
+) -> Report<'a, (&'a str, std::ops::Range<usize>)> {
     let mut builder = Report::build(
         ReportKind::Error,
         (file_name, spec.primary_span.start..spec.primary_span.end),
@@ -66,22 +79,47 @@ pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
             .with_color(Color::Red),
     );
 
-    for label in spec.labels {
+    for label in &spec.labels {
         builder = builder.with_label(
             Label::new((file_name, label.span.start..label.span.end))
-                .with_message(label.message)
+                .with_message(&label.message)
                 .with_color(label.color),
         );
     }
 
-    if let Some(h) = spec.help {
+    if let Some(h) = &spec.help {
         builder = builder.with_help(h);
     }
 
-    builder
-        .finish()
-        .eprint((file_name, Source::from(source)))
-        .unwrap();
+    builder.finish()
+}
+
+fn write_fallback_diagnostic(
+    writer: &mut impl Write,
+    file_name: &str,
+    spec: &DiagnosticSpec,
+    render_err: &io::Error,
+) -> io::Result<()> {
+    writeln!(writer, "diagnostic rendering failed: {}", render_err)?;
+    writeln!(writer, "{}: {}", spec.kind, spec.message)?;
+    writeln!(
+        writer,
+        "--> {}:{}-{}",
+        file_name, spec.primary_span.start, spec.primary_span.end
+    )?;
+    for label in &spec.labels {
+        writeln!(
+            writer,
+            "= note: {} [{}-{}]",
+            label.message, label.span.start, label.span.end
+        )?;
+    }
+    if let Some(help) = &spec.help {
+        for line in help.lines() {
+            writeln!(writer, "= help: {}", line)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -536,4 +574,71 @@ fn trim_char_span(chars: &[char], start: usize, end: usize) -> (usize, usize) {
         e -= 1;
     }
     (s, e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("writer failed"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("writer failed"))
+        }
+    }
+
+    #[test]
+    fn fallback_diagnostic_preserves_core_fields() {
+        let spec = DiagnosticSpec {
+            kind: "TypeError".into(),
+            message: "expected Int, got String".into(),
+            primary_span: Span { start: 13, end: 23 },
+            labels: vec![DiagnosticLabel {
+                span: Span { start: 13, end: 23 },
+                message: "binding value".into(),
+                color: Color::Blue,
+            }],
+            help: Some("The type annotation requires Int".into()),
+        };
+
+        let mut buf = Vec::new();
+        write_fallback_diagnostic(
+            &mut buf,
+            "main.srt",
+            &spec,
+            &io::Error::other("broken pipe"),
+        )
+        .expect("fallback output should succeed");
+
+        let text = String::from_utf8(buf).expect("fallback output must be valid utf-8");
+        assert!(text.contains("diagnostic rendering failed: broken pipe"));
+        assert!(text.contains("TypeError: expected Int, got String"));
+        assert!(text.contains("--> main.srt:13-23"));
+        assert!(text.contains("= note: binding value [13-23]"));
+        assert!(text.contains("= help: The type annotation requires Int"));
+    }
+
+    #[test]
+    fn fallback_diagnostic_returns_writer_error() {
+        let spec = simple_error(
+            "ParseError",
+            "unexpected token",
+            Span { start: 2, end: 5 },
+            None,
+        );
+        let err = write_fallback_diagnostic(
+            &mut FailingWriter,
+            "main.srt",
+            &spec,
+            &io::Error::other("broken pipe"),
+        )
+        .expect_err("failing writer should propagate io error");
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
 }
