@@ -69,7 +69,7 @@ impl Default for SigilSession {
 
 struct Resolver {
     scope: Scope,
-    /// Fresh IDs reserved in predeclaration order for each function-like name.
+    /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
 }
 
@@ -166,6 +166,12 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
+                    let uid = self.scope.reserve_id();
+                    self.predeclared_ids
+                        .entry(name.clone())
+                        .or_default()
+                        .push_back(uid);
+                    self.scope.define_with_id(name, uid);
                 }
                 _ => {}
             }
@@ -301,15 +307,13 @@ impl Resolver {
                 Ok(Resolved::Semi(span, Box::new(resolved)))
             }
 
-            // Struct/Record/Deferror definitions — register type names
+            // Struct/Record/Deferror definitions — reuse predeclared IDs
             Ast::StructDef(span, name, fields) => {
-                if self.scope.lookup(&name).is_some() {
-                    return Err(ResolveError {
-                        message: format!("Duplicate top-level definition: {}", name),
-                        span: span.clone(),
-                    });
-                }
-                let uid = self.scope.define(&name, span.clone());
+                let uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                self.scope.define_with_id(&name, uid);
                 let rid = ResolvedId {
                     name,
                     unique_id: uid,
@@ -328,13 +332,11 @@ impl Resolver {
             }
 
             Ast::RecordDef(span, name, fields) => {
-                if self.scope.lookup(&name).is_some() {
-                    return Err(ResolveError {
-                        message: format!("Duplicate top-level definition: {}", name),
-                        span: span.clone(),
-                    });
-                }
-                let uid = self.scope.define(&name, span.clone());
+                let uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                self.scope.define_with_id(&name, uid);
                 let rid = ResolvedId {
                     name,
                     unique_id: uid,
@@ -353,13 +355,11 @@ impl Resolver {
             }
 
             Ast::DeferrorDef(span, name, fields, show_expr) => {
-                if self.scope.lookup(&name).is_some() {
-                    return Err(ResolveError {
-                        message: format!("Duplicate top-level definition: {}", name),
-                        span: span.clone(),
-                    });
-                }
-                let uid = self.scope.define(&name, span.clone());
+                let uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                self.scope.define_with_id(&name, uid);
                 let rid = ResolvedId {
                     name,
                     unique_id: uid,
