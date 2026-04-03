@@ -6,7 +6,7 @@ use sigil::resolved::*;
 use sindr::builtin::{builtin_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS};
 use spire::ast::{AstTy, BinOp, Lit, Span};
 
-use crate::env::TypeEnv;
+use crate::env::{TypeEnv, TypeKind};
 use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::Ty;
@@ -189,6 +189,7 @@ impl Checker {
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
         self.predeclare_error_types(&stmts);
+        self.predeclare_type_signatures(&stmts)?;
         self.predeclare_functions(&stmts)?;
         let mut typed = Vec::new();
         for stmt in stmts {
@@ -204,6 +205,94 @@ impl Checker {
                 self.env.declare_error_type_name(id.name.clone());
             }
         }
+    }
+
+    fn predeclare_type_signatures(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
+        // Pass 1: reserve deterministic tags for all user-defined types.
+        for stmt in stmts {
+            match stmt {
+                Resolved::StructDef(_, id, _) => {
+                    self.env
+                        .predeclare_type_def(id.name.clone(), TypeKind::Struct);
+                }
+                Resolved::RecordDef(_, id, _) => {
+                    self.env
+                        .predeclare_type_def(id.name.clone(), TypeKind::Record);
+                }
+                Resolved::DeferrorDef(_, id, _, _) => {
+                    self.env
+                        .predeclare_type_def(id.name.clone(), TypeKind::Error);
+                }
+                _ => {}
+            }
+        }
+
+        // Pass 2: finalize field signatures and constructor-like bindings.
+        for stmt in stmts {
+            match stmt {
+                Resolved::StructDef(_, id, fields) => {
+                    let ty_fields = fields
+                        .iter()
+                        .map(|f| {
+                            Ok((
+                                f.name.clone(),
+                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, TypeError>>()?;
+                    self.env
+                        .resolve_type_def_signature(&id.name, ty_fields.clone())
+                        .ok_or_else(|| TypeError {
+                            message: format!("Unknown type declaration: {}", id.name),
+                            span: id.span.clone(),
+                            hint: None,
+                        })?;
+                    self.env
+                        .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields));
+                }
+                Resolved::RecordDef(_, id, fields) => {
+                    let ty_fields = fields
+                        .iter()
+                        .map(|f| {
+                            Ok((
+                                f.name.clone(),
+                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, TypeError>>()?;
+                    self.env
+                        .resolve_type_def_signature(&id.name, ty_fields.clone())
+                        .ok_or_else(|| TypeError {
+                            message: format!("Unknown type declaration: {}", id.name),
+                            span: id.span.clone(),
+                            hint: None,
+                        })?;
+                    self.env
+                        .bind_var(id.unique_id, Ty::Record(id.name.clone(), ty_fields));
+                }
+                Resolved::DeferrorDef(_, id, fields, _) => {
+                    let ty_fields = fields
+                        .iter()
+                        .map(|f| {
+                            Ok((
+                                f.name.clone(),
+                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, TypeError>>()?;
+                    self.env
+                        .resolve_type_def_signature(&id.name, ty_fields)
+                        .ok_or_else(|| TypeError {
+                            message: format!("Unknown type declaration: {}", id.name),
+                            span: id.span.clone(),
+                            hint: None,
+                        })?;
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 
     fn predeclare_functions(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
@@ -266,6 +355,25 @@ impl Checker {
                         },
                     );
                     self.user_func_params.insert(id.unique_id, param_names);
+                    fun_idx += 1;
+                }
+                Resolved::DeferrorDef(_, id, fields, _) => {
+                    let param_tys = fields
+                        .iter()
+                        .map(|field| {
+                            self.resolve_ast_ty_in_context(&field.ty, TypeSyntaxContext::General)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    self.env.bind_var(
+                        id.unique_id,
+                        Ty::UserFunc {
+                            fun_idx,
+                            params: param_tys,
+                            ret: Box::new(Ty::Error),
+                        },
+                    );
+                    self.env.register_error_constructor(id.unique_id);
                     fun_idx += 1;
                 }
                 _ => {}
@@ -2568,11 +2676,14 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
 
-        let tag = self.env.register_type_def(
-            id.name.clone(),
-            crate::env::TypeKind::Struct,
-            ty_fields.clone(),
-        );
+        let tag = self
+            .env
+            .resolve_type_def_signature(&id.name, ty_fields.clone())
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown struct type declaration: {}", id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
 
         // Also bind the type name as a constructor-like entity
         self.env
@@ -2603,11 +2714,14 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
 
-        let tag = self.env.register_type_def(
-            id.name.clone(),
-            crate::env::TypeKind::Record,
-            ty_fields.clone(),
-        );
+        let tag = self
+            .env
+            .resolve_type_def_signature(&id.name, ty_fields.clone())
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown record type declaration: {}", id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
 
         self.env
             .bind_var(id.unique_id, Ty::Record(id.name.clone(), ty_fields.clone()));
@@ -2943,17 +3057,20 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
 
-        let tag = self.env.register_type_def(
-            id.name.clone(),
-            crate::env::TypeKind::Error,
-            ty_fields
-                .iter()
-                .map(|(ty, rid)| (rid.name.clone(), ty.clone()))
-                .collect(),
-        );
-
-        let fun_idx = self.env.next_fun_idx;
-        self.env.next_fun_idx += 1;
+        let tag = self
+            .env
+            .resolve_type_def_signature(
+                &id.name,
+                ty_fields
+                    .iter()
+                    .map(|(ty, rid)| (rid.name.clone(), ty.clone()))
+                    .collect(),
+            )
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown error type declaration: {}", id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
 
         let mut show_env = self.env.clone();
         let typed_params: Vec<TypedFunParam> = ty_fields
@@ -2966,6 +3083,17 @@ impl Checker {
                 }
             })
             .collect();
+
+        let fun_idx = match self.env.lookup_var(id.unique_id) {
+            Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
+            _ => {
+                return Err(TypeError {
+                    message: format!("Undefined function: {}", id.name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        };
 
         // The error builder behaves like a function returning Error.
         self.env.bind_var(

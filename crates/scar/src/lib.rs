@@ -128,4 +128,33 @@ Ok(num) =? value"#,
             Some(TypedInner::SafeBind(_, _))
         ));
     }
+
+    #[test]
+    fn forward_struct_type_annotation_and_literal_are_allowed() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"user: User = User { name: "alice", age: 30 }
+defstruct User {
+  name: String,
+  age: Int,
+}"#,
+        );
+        let typed = typecheck(resolved).expect("forward struct reference should typecheck");
+        assert!(typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _))));
+    }
+
+    #[test]
+    fn forward_deferror_value_can_flow_into_err() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"ret: Result<Int> = Err(NotFound)
+deferror NotFound {
+  "not found"
+}"#,
+        );
+        let typed = typecheck(resolved).expect("forward deferror constructor should typecheck");
+        assert!(typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::DeferrorDef(_, _, _, _, _))));
+    }
 }
