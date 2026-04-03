@@ -10,11 +10,16 @@ mod dump;
 
 const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
+const RUNE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     let result = match args.get(1).map(String::as_str) {
+        Some("--version") => {
+            println!("surtr {}", RUNE_VERSION);
+            Ok(())
+        }
         Some("run") => {
             if args.len() != 3 {
                 print_usage();
@@ -23,14 +28,7 @@ fn main() {
                 run_command(&args[2])
             }
         }
-        Some("repl") => {
-            if args.len() != 2 {
-                print_usage();
-                Err(1)
-            } else {
-                xldr::repl_command()
-            }
-        }
+        Some("repl") => parse_repl_options(&args[2..]).and_then(xldr::repl_command),
         Some("build") => {
             if !(3..=4).contains(&args.len()) {
                 print_usage();
@@ -60,10 +58,30 @@ fn main() {
 
 fn print_usage() {
     eprintln!("Usage:");
+    eprintln!("  surtr --version");
     eprintln!("  surtr run <file.srt|file.eldr>");
-    eprintln!("  surtr repl");
+    eprintln!("  surtr repl [--quiet] [--banner] [--version]");
     eprintln!("  surtr build <file.srt> [output.eldr]");
     eprintln!("  surtr dump <file.eldr> [--format json]");
+}
+
+fn parse_repl_options(args: &[String]) -> Result<xldr::ReplOptions, i32> {
+    let mut options = xldr::ReplOptions::default();
+
+    for arg in args {
+        match arg.as_str() {
+            "--quiet" => options.quiet = true,
+            "--banner" => options.banner = xldr::BannerMode::Detailed,
+            "--version" => options.version = true,
+            other => {
+                eprintln!("repl: unknown option '{}'", other);
+                print_usage();
+                return Err(1);
+            }
+        }
+    }
+
+    Ok(options)
 }
 
 fn run_command(file_path: &str) -> Result<(), i32> {

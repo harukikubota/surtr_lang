@@ -24,10 +24,11 @@ fn surtr_bin() -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn run_repl_session(input: &str) -> Output {
+fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
     let bin = PathBuf::from(surtr_bin());
     let mut child = Command::new(bin)
         .arg("repl")
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -44,6 +45,10 @@ fn run_repl_session(input: &str) -> Output {
     child.wait_with_output().expect("failed to wait on repl")
 }
 
+fn run_repl_session(input: &str) -> Output {
+    run_repl_session_with_args(&[], input)
+}
+
 #[test]
 fn repl_quit_exits_cleanly() {
     let output = run_repl_session(":quit\n");
@@ -52,6 +57,83 @@ fn repl_quit_exits_cleanly() {
         "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn repl_prints_light_banner_by_default() {
+    let output = run_repl_session(":quit\n");
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Surtr xldr"),
+        "expected lightweight banner in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_quiet_suppresses_banner() {
+    let output = run_repl_session_with_args(&["--quiet"], ":quit\n");
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Surtr xldr"),
+        "expected quiet mode to suppress the banner, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_banner_flag_prints_detailed_banner() {
+    let output = run_repl_session_with_args(&["--banner"], ":quit\n");
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("██\\   ██\\ ██\\      ██████\\  ██████\\"),
+        "expected detailed banner in repl output, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\\__|  \\__|\\_______|\\______/ \\__|  \\__|"),
+        "expected detailed banner command help in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_version_prints_version_and_exits() {
+    let output = run_repl_session_with_args(&["--version"], "");
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim() == "xldr 0.1.0",
+        "expected xldr version output, got:\n{}",
+        stdout
     );
 }
 

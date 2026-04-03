@@ -18,6 +18,30 @@ mod diagnostics;
 const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
 const REPL_MODULE_NAME: &str = "REPL";
+const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BannerMode {
+    Light,
+    Detailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplOptions {
+    pub quiet: bool,
+    pub banner: BannerMode,
+    pub version: bool,
+}
+
+impl Default for ReplOptions {
+    fn default() -> Self {
+        Self {
+            quiet: false,
+            banner: BannerMode::Light,
+            version: false,
+        }
+    }
+}
 
 struct ReplHelper {
     hinter: HistoryHinter,
@@ -432,7 +456,16 @@ impl ReplEngine {
     }
 }
 
-pub fn repl_command() -> Result<(), i32> {
+pub fn repl_command(options: ReplOptions) -> Result<(), i32> {
+    if options.version {
+        println!("xldr {}", XLDR_VERSION);
+        return Ok(());
+    }
+
+    if !options.quiet {
+        print_banner(options.banner);
+    }
+
     let mut engine = ReplEngine::new();
 
     if io::stdin().is_terminal() {
@@ -496,6 +529,28 @@ pub fn repl_command() -> Result<(), i32> {
     }
 
     Ok(())
+}
+
+fn print_banner(mode: BannerMode) {
+    match mode {
+        BannerMode::Light => {
+            println!("Surtr xldr {}", XLDR_VERSION);
+        }
+        BannerMode::Detailed => {
+            println!(
+                r"
+    ██\   ██\ ██\      ██████\  ██████\  
+    ╚██\ ██  |██ |     ██  __██\ ██  __██\ 
+     ╚████  / ██ |     ██ /  ██ |██ |  ██ |
+     ██  ██<  ██ |     ██ |  ██ |██████  |
+    ██  /\██\ ██ |     ██ |  ██ |██  __██< 
+    ██ /  ██ |███████\ ██████  |██ |  ██ |
+    \__|  \__|\_______|\______/ \__|  \__|
+    
+    "
+            );
+        }
+    }
 }
 
 fn display_repl_result(vm: &eldr::VM, value: Value, meta: &forge::ChunkMeta) {

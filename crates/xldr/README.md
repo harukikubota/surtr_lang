@@ -12,6 +12,7 @@ Xldr owns REPL session state and user-facing interactive execution behavior.
 - Keep incremental session state across inputs
 - Handle REPL commands like `:quit` and `:v`
 - Drive incremental parse/resolve/typecheck/codegen/execute for interactive input
+- Render the startup banner and version output for `surtr repl`
 
 ## Non-responsibilities
 
