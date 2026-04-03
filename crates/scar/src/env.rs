@@ -19,6 +19,16 @@ pub struct TypeDefInfo {
     pub kind: TypeKind,
     pub name: Symbol,
     pub fields: Vec<(Symbol, Ty)>,
+    pub state: TypeDefState,
+}
+
+/// Resolution state for user-defined type signatures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeDefState {
+    /// Name/kind/tag are known, but field signature is not finalized yet.
+    Declared,
+    /// Full field signature is available.
+    SignatureResolved,
 }
 
 /// Type environment — tracks variable types and type definitions.
@@ -63,13 +73,20 @@ impl TypeEnv {
         self.vars.get(&unique_id)
     }
 
-    /// Register a type definition, assigning the next tag.
-    pub fn register_type_def(
-        &mut self,
-        name: Symbol,
-        kind: TypeKind,
-        fields: Vec<(Symbol, Ty)>,
-    ) -> u32 {
+    /// Predeclare a type definition and reserve a deterministic tag.
+    ///
+    /// Tags are assigned in declaration traversal order from the caller.
+    /// Re-predeclaring the same type name reuses the already reserved tag.
+    pub fn predeclare_type_def(&mut self, name: Symbol, kind: TypeKind) -> u32 {
+        if let Some(existing) = self.type_defs.get(&name) {
+            debug_assert!(
+                existing.kind == kind,
+                "Type predeclared with different kind: {}",
+                name
+            );
+            return existing.tag;
+        }
+
         let tag = self.next_tag;
         self.next_tag += 1;
         self.type_defs.insert(
@@ -78,15 +95,51 @@ impl TypeEnv {
                 tag,
                 kind,
                 name,
-                fields,
+                fields: Vec::new(),
+                state: TypeDefState::Declared,
             },
         );
+        tag
+    }
+
+    /// Finalize a predeclared type definition with its field signature.
+    ///
+    /// Returns `None` when the type name has not been predeclared.
+    pub fn resolve_type_def_signature(
+        &mut self,
+        name: &str,
+        fields: Vec<(Symbol, Ty)>,
+    ) -> Option<u32> {
+        let def = self.type_defs.get_mut(name)?;
+        def.fields = fields;
+        def.state = TypeDefState::SignatureResolved;
+        Some(def.tag)
+    }
+
+    /// Register a type definition using the legacy single-step API.
+    ///
+    /// This keeps existing call-sites working while internally using the
+    /// predeclare/resolve flow.
+    pub fn register_type_def(
+        &mut self,
+        name: Symbol,
+        kind: TypeKind,
+        fields: Vec<(Symbol, Ty)>,
+    ) -> u32 {
+        let tag = self.predeclare_type_def(name.clone(), kind);
+        let _ = self.resolve_type_def_signature(&name, fields);
         tag
     }
 
     /// Look up a type definition by name.
     pub fn lookup_type_def(&self, name: &str) -> Option<&TypeDefInfo> {
         self.type_defs.get(name)
+    }
+
+    pub fn is_type_signature_resolved(&self, name: &str) -> bool {
+        self.type_defs
+            .get(name)
+            .is_some_and(|def| def.state == TypeDefState::SignatureResolved)
     }
 
     /// Generate a fresh type variable.
@@ -110,5 +163,68 @@ impl TypeEnv {
 
     pub fn is_declared_error_type_name(&self, name: &str) -> bool {
         self.error_type_names.contains(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TypeDefState, TypeEnv, TypeKind};
+    use crate::types::Ty;
+
+    #[test]
+    fn predeclare_type_def_assigns_deterministic_tags() {
+        let mut env = TypeEnv::new();
+
+        let user_tag = env.predeclare_type_def("User".into(), TypeKind::Struct);
+        let point_tag = env.predeclare_type_def("Point".into(), TypeKind::Record);
+        let user_tag_again = env.predeclare_type_def("User".into(), TypeKind::Struct);
+
+        assert_eq!(user_tag, 2);
+        assert_eq!(point_tag, 3);
+        assert_eq!(user_tag_again, user_tag);
+        assert_eq!(env.next_tag, 4);
+    }
+
+    #[test]
+    fn resolve_type_def_signature_finalizes_predeclared_entry() {
+        let mut env = TypeEnv::new();
+        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::Error);
+
+        let before = env.lookup_type_def("ApiError").expect("must exist");
+        assert_eq!(before.state, TypeDefState::Declared);
+        assert!(before.fields.is_empty());
+
+        let resolved = env.resolve_type_def_signature(
+            "ApiError",
+            vec![("code".into(), Ty::Int), ("msg".into(), Ty::Str)],
+        );
+        assert_eq!(resolved, Some(tag));
+        assert!(env.is_type_signature_resolved("ApiError"));
+
+        let after = env.lookup_type_def("ApiError").expect("must exist");
+        assert_eq!(after.state, TypeDefState::SignatureResolved);
+        assert_eq!(
+            after.fields,
+            vec![("code".into(), Ty::Int), ("msg".into(), Ty::Str)]
+        );
+    }
+
+    #[test]
+    fn register_type_def_still_behaves_as_single_step_api() {
+        let mut env = TypeEnv::new();
+        let tag = env.register_type_def(
+            "Pair".into(),
+            TypeKind::Record,
+            vec![("first".into(), Ty::Int), ("second".into(), Ty::Str)],
+        );
+
+        assert_eq!(tag, 2);
+        let def = env.lookup_type_def("Pair").expect("must exist");
+        assert_eq!(def.state, TypeDefState::SignatureResolved);
+        assert_eq!(def.tag, 2);
+        assert_eq!(
+            def.fields,
+            vec![("first".into(), Ty::Int), ("second".into(), Ty::Str)]
+        );
     }
 }
