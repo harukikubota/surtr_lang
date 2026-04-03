@@ -110,6 +110,7 @@ pub enum ResolvedPattern {
     Wildcard(Span),
     ListNil(Span),
     ListCons(Box<ResolvedPattern>, Box<ResolvedPattern>),
+    Constructor(ResolvedId, Box<ResolvedPattern>),
 }
 
 /// Match pattern (resolved).

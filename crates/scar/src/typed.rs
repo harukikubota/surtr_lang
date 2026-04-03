@@ -73,6 +73,8 @@ pub enum TypedPattern {
     Wildcard(Ty),
     ListNil(Ty),
     ListCons(Ty, Box<TypedPattern>, Box<TypedPattern>),
+    /// `Ok(inner)` pattern node in safe-bind recursion.
+    ResultOk(Ty, Box<TypedPattern>),
 }
 
 /// Match pattern (typed).

@@ -210,6 +210,31 @@ fn repl_hides_internal_type_var_ids_in_result_display() {
 }
 
 #[test]
+fn repl_evaluates_main_result_err_immediately() {
+    let output = run_repl_session("Err(NoneError)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("> Err("),
+        "expected Err result to be evaluated immediately instead of echoed, got:\n{}",
+        stdout
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("NoneError"),
+        "expected evaluated Err to be reported in stderr, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
 fn repl_safe_xxx_zero_uses_zero_division_error() {
     let output =
         run_repl_session("print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))\n:quit\n");

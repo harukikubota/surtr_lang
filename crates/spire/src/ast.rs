@@ -63,6 +63,8 @@ pub enum AstPattern {
     ListNil(Span),
     /// `[head, ..tail]`
     ListCons(Span, Box<AstPattern>, Box<AstPattern>),
+    /// `Ok(inner)` in safe-bind patterns
+    Constructor(Span, Symbol, Box<AstPattern>),
 }
 
 // ── Match patterns ──

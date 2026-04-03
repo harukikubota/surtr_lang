@@ -79,4 +79,27 @@ print(match flag {
             .message
             .contains("can only be used in functions returning Result"));
     }
+
+    #[test]
+    fn safebind_top_ok_pattern_requires_nested_result_rhs() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"value: Result<Int> = Ok(1)
+Ok(num) =? value"#,
+        );
+        let err = typecheck(resolved).expect_err("typecheck should fail");
+        assert!(err.message.contains("`Ok(...)` pattern requires Result"));
+    }
+
+    #[test]
+    fn safebind_top_ok_pattern_accepts_nested_result_rhs() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"value: Result<Result<Int>> = Ok(Ok(1))
+Ok(num) =? value"#,
+        );
+        let typed = typecheck(resolved).expect("typecheck should succeed");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::SafeBind(_, _))
+        ));
+    }
 }

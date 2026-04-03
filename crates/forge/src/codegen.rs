@@ -117,6 +117,21 @@ impl ForgeSession {
         &mut self,
         typed: Vec<TypedNode>,
     ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+        self.codegen_chunk_with_options(typed, false)
+    }
+
+    pub fn codegen_chunk_repl_result(
+        &mut self,
+        typed: Vec<TypedNode>,
+    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+        self.codegen_chunk_with_options(typed, true)
+    }
+
+    fn codegen_chunk_with_options(
+        &mut self,
+        typed: Vec<TypedNode>,
+        top_level_returns_result: bool,
+    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
         let before = self.state.clone();
         let typed_for_meta = typed.clone();
         let const_base = before.constants.len();
@@ -124,6 +139,7 @@ impl ForgeSession {
 
         let mut gene = Codegen::from_state(before.clone());
         gene.set_chunk_constant_dedup_start(const_base);
+        gene.set_top_level_returns_result(top_level_returns_result);
         gene.emit_program_chunk(typed)?;
         let (mut opcodes, after) = gene.finalize();
         localize_chunk_indices(&mut opcodes, const_base, error_template_base)?;
@@ -330,6 +346,7 @@ struct Codegen {
     label_positions: HashMap<Label, usize>, // label → IR index it points to
     pending_closures: Vec<PendingClosure>,
     in_function: bool,
+    top_level_returns_result: bool,
     constant_dedup_start: usize,
 }
 
@@ -346,12 +363,17 @@ impl Codegen {
             label_positions: HashMap::new(),
             pending_closures: Vec::new(),
             in_function: false,
+            top_level_returns_result: false,
             constant_dedup_start: 0,
         }
     }
 
     fn set_chunk_constant_dedup_start(&mut self, start: usize) {
         self.constant_dedup_start = start;
+    }
+
+    fn set_top_level_returns_result(&mut self, enabled: bool) {
+        self.top_level_returns_result = enabled;
     }
 
     fn fresh_label(&mut self) -> Label {
@@ -886,19 +908,7 @@ impl Codegen {
         let ok_path = self.fresh_label();
         self.emit_jump_if_false(ok_path);
 
-        self.emit(Opcode::LoadLocal(result_slot));
-        if self.in_function {
-            self.emit(Opcode::Return);
-        } else {
-            // Script path: report and stop immediately.
-            self.emit(Opcode::GetField(0));
-            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-                message: "Unknown builtin: eprint".into(),
-                span: rhs.span.clone(),
-            })?;
-            self.emit(Opcode::CallBuiltin(eprint_id, 1));
-            self.emit(Opcode::Halt);
-        }
+        self.emit_propagate_result_from_local(result_slot, rhs.span.clone())?;
 
         self.patch_label(ok_path);
 
@@ -909,7 +919,7 @@ impl Codegen {
         self.emit(Opcode::StoreLocal(payload_slot));
 
         let pattern_fail = self.fresh_label();
-        self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail)?;
+        self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail, &rhs.span)?;
         self.emit_pattern_bind_from_local(pat, payload_slot)?;
         let success_label = self.fresh_label();
         self.emit_jump(success_label);
@@ -935,6 +945,12 @@ impl Codegen {
             self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
             self.emit(Opcode::StructNew(1));
             self.emit(Opcode::Return);
+        } else if self.top_level_returns_result {
+            let tag_const = self.add_constant(Constant::Int(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
+            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::Halt);
         } else {
             self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
             let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
@@ -959,7 +975,9 @@ impl Codegen {
             TypedPattern::Wildcard(_) => {
                 self.emit(Opcode::Pop);
             }
-            TypedPattern::ListNil(_) | TypedPattern::ListCons(_, _, _) => {
+            TypedPattern::ListNil(_)
+            | TypedPattern::ListCons(_, _, _)
+            | TypedPattern::ResultOk(_, _) => {
                 let slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::StoreLocal(slot));
@@ -974,6 +992,7 @@ impl Codegen {
         pat: &TypedPattern,
         slot: u32,
         fail_label: Label,
+        err_span: &Span,
     ) -> Result<(), CodegenError> {
         match pat {
             TypedPattern::Var(_, _) | TypedPattern::Wildcard(_) => {}
@@ -992,14 +1011,33 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::ListHead);
                 self.emit(Opcode::StoreLocal(head_slot));
-                self.emit_pattern_test_from_local(head, head_slot, fail_label)?;
+                self.emit_pattern_test_from_local(head, head_slot, fail_label, err_span)?;
 
                 let tail_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::ListTail);
                 self.emit(Opcode::StoreLocal(tail_slot));
-                self.emit_pattern_test_from_local(tail, tail_slot, fail_label)?;
+                self.emit_pattern_test_from_local(tail, tail_slot, fail_label, err_span)?;
+            }
+            TypedPattern::ResultOk(_, inner) => {
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::GetTag);
+                let err_tag = self.add_constant(Constant::Int(1));
+                self.emit(Opcode::LoadConst(err_tag));
+                self.emit(Opcode::EqInt);
+
+                let inner_ok = self.fresh_label();
+                self.emit_jump_if_false(inner_ok);
+                self.emit_propagate_result_from_local(slot, err_span.clone())?;
+                self.patch_label(inner_ok);
+
+                let inner_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::StoreLocal(inner_slot));
+                self.emit_pattern_test_from_local(inner, inner_slot, fail_label, err_span)?;
             }
         }
         Ok(())
@@ -1032,6 +1070,36 @@ impl Codegen {
                 self.emit(Opcode::StoreLocal(tail_slot));
                 self.emit_pattern_bind_from_local(tail, tail_slot)?;
             }
+            TypedPattern::ResultOk(_, inner) => {
+                let inner_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::StoreLocal(inner_slot));
+                self.emit_pattern_bind_from_local(inner, inner_slot)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_propagate_result_from_local(
+        &mut self,
+        result_slot: u32,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        self.emit(Opcode::LoadLocal(result_slot));
+        if self.in_function {
+            self.emit(Opcode::Return);
+        } else if self.top_level_returns_result {
+            self.emit(Opcode::Halt);
+        } else {
+            self.emit(Opcode::GetField(0));
+            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                message: "Unknown builtin: eprint".into(),
+                span,
+            })?;
+            self.emit(Opcode::CallBuiltin(eprint_id, 1));
+            self.emit(Opcode::Halt);
         }
         Ok(())
     }

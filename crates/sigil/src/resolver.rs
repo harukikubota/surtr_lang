@@ -645,6 +645,20 @@ impl Resolver {
                 Box::new(self.resolve_pattern(*head)?),
                 Box::new(self.resolve_pattern(*tail)?),
             )),
+            AstPattern::Constructor(span, ctor_name, inner) => {
+                let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
+                    message: format!("Undefined constructor: {}", ctor_name),
+                    span: span.clone(),
+                })?;
+                Ok(ResolvedPattern::Constructor(
+                    ResolvedId {
+                        name: ctor_name,
+                        unique_id: ctor_uid,
+                        span,
+                    },
+                    Box::new(self.resolve_pattern(*inner)?),
+                ))
+            }
         }
     }
 
@@ -717,7 +731,10 @@ impl Resolver {
                 let head = child.resolve_match_pattern_node(*head)?;
                 let tail = child.resolve_match_pattern_node(*tail)?;
                 let resolved_body = child.resolve_node(body)?;
-                Ok((ResolvedMatchPattern::ListCons(Box::new(head), Box::new(tail)), resolved_body))
+                Ok((
+                    ResolvedMatchPattern::ListCons(Box::new(head), Box::new(tail)),
+                    resolved_body,
+                ))
             }
         })
     }
@@ -739,8 +756,12 @@ impl Resolver {
             spire::ast::AstMatchPattern::BoolLit(span, b) => {
                 Ok(ResolvedMatchPattern::BoolLit(span, b))
             }
-            spire::ast::AstMatchPattern::IntLit(span, n) => Ok(ResolvedMatchPattern::IntLit(span, n)),
-            spire::ast::AstMatchPattern::StrLit(span, s) => Ok(ResolvedMatchPattern::StrLit(span, s)),
+            spire::ast::AstMatchPattern::IntLit(span, n) => {
+                Ok(ResolvedMatchPattern::IntLit(span, n))
+            }
+            spire::ast::AstMatchPattern::StrLit(span, s) => {
+                Ok(ResolvedMatchPattern::StrLit(span, s))
+            }
             spire::ast::AstMatchPattern::Constructor(span, ctor_name, inner_name) => {
                 let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
@@ -762,15 +783,19 @@ impl Resolver {
                     }
                     None => None,
                 };
-                Ok(ResolvedMatchPattern::Constructor(ctor_id.span.clone(), ctor_id, inner_id))
+                Ok(ResolvedMatchPattern::Constructor(
+                    ctor_id.span.clone(),
+                    ctor_id,
+                    inner_id,
+                ))
             }
             spire::ast::AstMatchPattern::ListNil(span) => Ok(ResolvedMatchPattern::ListNil(span)),
-            spire::ast::AstMatchPattern::ListCons(_, head, tail) => Ok(
-                ResolvedMatchPattern::ListCons(
+            spire::ast::AstMatchPattern::ListCons(_, head, tail) => {
+                Ok(ResolvedMatchPattern::ListCons(
                     Box::new(self.resolve_match_pattern_node(*head)?),
                     Box::new(self.resolve_match_pattern_node(*tail)?),
-                ),
-            ),
+                ))
+            }
         }
     }
 }
@@ -817,24 +842,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             for stmt in stmts {
                 collect_captures_inner(stmt, &mut local_bound, free);
                 match stmt {
-                    Resolved::Bind(_, pat, _) => match pat {
-                        ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
-                            local_bound.insert(id.unique_id);
-                        }
-                        ResolvedPattern::Wildcard(_) | ResolvedPattern::ListNil(_) => {}
-                        ResolvedPattern::ListCons(_, _) => {
-                            collect_bind_pattern_bindings(pat, &mut local_bound);
-                        }
-                    },
-                    Resolved::SafeBind(_, pat, _) => match pat {
-                        ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
-                            local_bound.insert(id.unique_id);
-                        }
-                        ResolvedPattern::Wildcard(_) | ResolvedPattern::ListNil(_) => {}
-                        ResolvedPattern::ListCons(_, _) => {
-                            collect_bind_pattern_bindings(pat, &mut local_bound);
-                        }
-                    },
+                    Resolved::Bind(_, pat, _) | Resolved::SafeBind(_, pat, _) => {
+                        collect_bind_pattern_bindings(pat, &mut local_bound);
+                    }
                     Resolved::Def(_, id, params, _, _) => {
                         local_bound.insert(id.unique_id);
                         for param in params {
@@ -858,23 +868,11 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::Bind(_, pat, rhs) => {
             collect_captures_inner(rhs, bound, free);
-            match pat {
-                ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
-                    bound.insert(id.unique_id);
-                }
-                ResolvedPattern::Wildcard(_) | ResolvedPattern::ListNil(_) => {}
-                ResolvedPattern::ListCons(_, _) => collect_bind_pattern_bindings(pat, bound),
-            }
+            collect_bind_pattern_bindings(pat, bound);
         }
         Resolved::SafeBind(_, pat, rhs) => {
             collect_captures_inner(rhs, bound, free);
-            match pat {
-                ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
-                    bound.insert(id.unique_id);
-                }
-                ResolvedPattern::Wildcard(_) | ResolvedPattern::ListNil(_) => {}
-                ResolvedPattern::ListCons(_, _) => collect_bind_pattern_bindings(pat, bound),
-            }
+            collect_bind_pattern_bindings(pat, bound);
         }
         Resolved::BinOp(_, _, left, right) => {
             collect_captures_inner(left, bound, free);
@@ -981,6 +979,9 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
     match pat {
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
             bound.insert(id.unique_id);
+        }
+        ResolvedPattern::Constructor(_, inner) => {
+            collect_bind_pattern_bindings(inner, bound);
         }
         ResolvedPattern::ListCons(head, tail) => {
             collect_bind_pattern_bindings(head, bound);
@@ -1203,6 +1204,19 @@ g = &print(1)"#,
                 assert!(matches!(rhs.as_ref(), Resolved::ConstructorCall(_, _, _)));
             }
             _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
+    fn test_safebind_constructor_pattern_resolution() {
+        let resolved = parse_and_resolve("Ok(num) =? value").unwrap();
+        match &resolved[0] {
+            Resolved::SafeBind(_, ResolvedPattern::Constructor(ctor, inner), rhs) => {
+                assert_eq!(ctor.name, "Ok");
+                assert!(matches!(inner.as_ref(), ResolvedPattern::Var(id) if id.name == "num"));
+                assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
+            }
+            _ => panic!("Expected SafeBind with constructor pattern"),
         }
     }
 

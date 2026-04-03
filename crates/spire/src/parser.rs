@@ -26,6 +26,10 @@ impl Parser {
         &self.tokens[self.pos].token
     }
 
+    fn peek_n(&self, n: usize) -> Option<&Token> {
+        self.tokens.get(self.pos + n).map(|sp| &sp.token)
+    }
+
     fn peek_span(&self) -> Span {
         self.tokens[self.pos].span.clone()
     }
@@ -130,9 +134,9 @@ impl Parser {
             _ => {}
         }
 
-        if matches!(self.peek(), Token::LBrack) {
+        if matches!(self.peek(), Token::LBrack) || self.is_constructor_pattern_start() {
             let save = self.pos;
-            if let Ok(stmt) = self.parse_list_safebind_stmt() {
+            if let Ok(stmt) = self.parse_pattern_safebind_stmt() {
                 return Ok(stmt);
             }
             self.pos = save;
@@ -175,11 +179,11 @@ impl Parser {
         self.parse_binop_expr(0)
     }
 
-    fn parse_list_safebind_stmt(&mut self) -> Result<Ast, ParseError> {
-        let pat = self.parse_list_bind_pattern()?;
+    fn parse_pattern_safebind_stmt(&mut self) -> Result<Ast, ParseError> {
+        let pat = self.parse_bind_pattern_atom()?;
         if !matches!(self.peek(), Token::SafeBind) {
             return Err(ParseError::syntax(
-                "List destructuring is currently supported in `=?` pattern position",
+                "Pattern destructuring is currently supported in `=?` pattern position",
                 self.peek_span(),
             ));
         }
@@ -191,6 +195,19 @@ impl Parser {
             end: rhs.span().end,
         };
         Ok(Ast::SafeBind(span, pat, Box::new(rhs)))
+    }
+
+    fn is_constructor_pattern_start(&self) -> bool {
+        let is_upper_ident = matches!(
+            self.peek(),
+            Token::Ident(name)
+                if name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false)
+        );
+        is_upper_ident && matches!(self.peek_n(1), Some(Token::LParen))
     }
 
     // ── Binary operators with precedence climbing ──
@@ -733,13 +750,47 @@ impl Parser {
                 Ok(AstPattern::Wildcard(sp))
             }
             Token::Ident(name) => {
+                if name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false)
+                    && matches!(self.peek_n(1), Some(Token::LParen))
+                {
+                    self.advance();
+                    self.expect(&Token::LParen)?;
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::RParen) {
+                        return Err(ParseError::syntax(
+                            "Constructor pattern requires exactly one inner pattern",
+                            self.peek_span(),
+                        ));
+                    }
+                    let inner = self.parse_bind_pattern_atom()?;
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::Comma) {
+                        return Err(ParseError::syntax(
+                            "Constructor pattern supports exactly one inner pattern",
+                            self.peek_span(),
+                        ));
+                    }
+                    let end = self.expect(&Token::RParen)?;
+                    return Ok(AstPattern::Constructor(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        name,
+                        Box::new(inner),
+                    ));
+                }
                 self.advance();
                 Ok(AstPattern::Var(sp, name))
             }
             Token::LBrack => self.parse_list_bind_pattern(),
             Token::Eof => Err(ParseError::incomplete("list pattern", sp)),
             _ => Err(ParseError::syntax(
-                "List patterns only support identifiers, `_`, and nested list patterns",
+                "Pattern supports identifiers, `_`, list patterns, and nested `Ok(...)` patterns",
                 sp,
             )),
         }
@@ -1526,24 +1577,33 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::Annotated(span, _, _)
         | AstPattern::Wildcard(span)
         | AstPattern::ListNil(span)
-        | AstPattern::ListCons(span, _, _) => span,
+        | AstPattern::ListCons(span, _, _)
+        | AstPattern::Constructor(span, _, _) => span,
     }
 }
 
 fn fixed_bind_list_pattern(start: usize, end: usize, items: Vec<AstPattern>) -> AstPattern {
     let span = Span { start, end };
-    items.into_iter().rev().fold(
-        AstPattern::ListNil(span.clone()),
-        |tail, head| AstPattern::ListCons(span.clone(), Box::new(head), Box::new(tail)),
-    )
+    items
+        .into_iter()
+        .rev()
+        .fold(AstPattern::ListNil(span.clone()), |tail, head| {
+            AstPattern::ListCons(span.clone(), Box::new(head), Box::new(tail))
+        })
 }
 
-fn fixed_match_list_pattern(start: usize, end: usize, items: Vec<AstMatchPattern>) -> AstMatchPattern {
+fn fixed_match_list_pattern(
+    start: usize,
+    end: usize,
+    items: Vec<AstMatchPattern>,
+) -> AstMatchPattern {
     let span = Span { start, end };
-    items.into_iter().rev().fold(
-        AstMatchPattern::ListNil(span.clone()),
-        |tail, head| AstMatchPattern::ListCons(span.clone(), Box::new(head), Box::new(tail)),
-    )
+    items
+        .into_iter()
+        .rev()
+        .fold(AstMatchPattern::ListNil(span.clone()), |tail, head| {
+            AstMatchPattern::ListCons(span.clone(), Box::new(head), Box::new(tail))
+        })
 }
 
 fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
@@ -1579,6 +1639,11 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
             Box::new(shift_pattern(*head, delta)),
             Box::new(shift_pattern(*tail, delta)),
         ),
+        AstPattern::Constructor(span, name, inner) => AstPattern::Constructor(
+            shift_span(span, delta),
+            name,
+            Box::new(shift_pattern(*inner, delta)),
+        ),
     }
 }
 
@@ -1592,7 +1657,9 @@ fn shift_fun_param(param: FunParam, delta: usize) -> FunParam {
 
 fn shift_match_pattern(pat: AstMatchPattern, delta: usize) -> AstMatchPattern {
     match pat {
-        AstMatchPattern::Binding(span, name) => AstMatchPattern::Binding(shift_span(span, delta), name),
+        AstMatchPattern::Binding(span, name) => {
+            AstMatchPattern::Binding(shift_span(span, delta), name)
+        }
         AstMatchPattern::Wildcard(span) => AstMatchPattern::Wildcard(shift_span(span, delta)),
         AstMatchPattern::BoolLit(span, b) => AstMatchPattern::BoolLit(shift_span(span, delta), b),
         AstMatchPattern::IntLit(span, n) => AstMatchPattern::IntLit(shift_span(span, delta), n),
@@ -2040,6 +2107,23 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_constructor_pattern_safebind() {
+        let ast = parse("Ok(num) =? value").unwrap();
+        match &ast[0] {
+            Ast::SafeBind(_, pattern, rhs) => {
+                assert!(matches!(
+                    pattern,
+                    AstPattern::Constructor(_, ctor, inner)
+                        if ctor == "Ok"
+                        && matches!(inner.as_ref(), AstPattern::Var(_, name) if name == "num")
+                ));
+                assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+            }
+            _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
     fn test_result_type_annotation() {
         let ast = parse("r: Result<Int> = Ok(42)").unwrap();
         match &ast[0] {
@@ -2197,7 +2281,9 @@ def noop() {()}"#,
     #[test]
     fn test_negative_variable_reports_phase1_guidance() {
         let err = parse("x = -value").expect_err("Expected parse error");
-        assert!(err.message().contains("write `0 - value` instead of `-value`"));
+        assert!(err
+            .message()
+            .contains("write `0 - value` instead of `-value`"));
     }
 
     #[test]
@@ -2257,7 +2343,9 @@ def noop() {()}"#,
 }"#,
         )
         .expect_err("Expected parse error");
-        assert!(err.message().contains("remove this test when CamelCase patterns are implemented"));
+        assert!(err
+            .message()
+            .contains("remove this test when CamelCase patterns are implemented"));
     }
 
     #[test]
@@ -2270,7 +2358,9 @@ def noop() {()}"#,
 }"#,
         )
         .expect_err("Expected parse error");
-        assert!(err.message().contains("remove this test when CamelCase patterns are implemented"));
+        assert!(err
+            .message()
+            .contains("remove this test when CamelCase patterns are implemented"));
     }
 
     #[test]

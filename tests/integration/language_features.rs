@@ -635,6 +635,41 @@ print(to_string(tail))"#,
     }
 
     #[test]
+    fn safebind_top_ok_pattern_requires_nested_result() {
+        assert_compile_error(
+            r#"value: Result<Int> = Ok(5)
+Ok(num) =? value"#,
+            "`Ok(...)` pattern requires Result",
+        );
+    }
+
+    #[test]
+    fn safebind_top_ok_pattern_allows_nested_result() {
+        assert_output(
+            r#"value: Result<Result<Int>> = Ok(Ok(5))
+Ok(num) =? value
+print(to_string(num + 1))"#,
+            &["6"],
+        );
+    }
+
+    #[test]
+    fn safebind_nested_result_err_propagates() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"deferror Oops {
+  "oops"
+}
+
+value: Result<Result<Int>> = Ok(Err(Oops))
+Ok(num) =? value
+print("after")"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(stderr, vec!["Error: Oops: oops"]);
+    }
+
+    #[test]
     fn safebind_list_pattern_empty_propagates_empty_list() {
         let (_stdout, stderr) = run_surtr_with_stderr(
             r#"def fun() -> Result<Int> {

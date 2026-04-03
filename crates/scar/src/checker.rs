@@ -429,21 +429,10 @@ impl Checker {
             }
         };
 
+        let (typed_pat, pat_ty) = self.check_pattern(pat, &ok_ty, span)?;
         if let Some(ret_ty) = self.function_return_ty.clone() {
-            match ret_ty {
-                Ty::Result(_, fn_err_ty) => {
-                    if !self.types_compatible(fn_err_ty.as_ref(), &err_ty) {
-                        return Err(TypeError {
-                            message: format!(
-                                "`=?` error type mismatch: function returns {}, but expression returns {}",
-                                self.ty_name(fn_err_ty.as_ref()),
-                                self.ty_name(&err_ty)
-                            ),
-                            span: typed_rhs.span.clone(),
-                            hint: None,
-                        });
-                    }
-                }
+            let fn_err_ty = match ret_ty {
+                Ty::Result(_, fn_err_ty) => fn_err_ty,
                 other => {
                     return Err(TypeError {
                         message: format!(
@@ -454,10 +443,26 @@ impl Checker {
                         hint: None,
                     });
                 }
+            };
+
+            let mut propagated_err_tys = vec![err_ty.clone()];
+            self.collect_pattern_result_error_types(&typed_pat, &mut propagated_err_tys);
+
+            for propagated in propagated_err_tys {
+                if !self.types_compatible(fn_err_ty.as_ref(), &propagated) {
+                    return Err(TypeError {
+                        message: format!(
+                            "`=?` error type mismatch: function returns {}, but expression returns {}",
+                            self.ty_name(fn_err_ty.as_ref()),
+                            self.ty_name(&propagated)
+                        ),
+                        span: typed_rhs.span.clone(),
+                        hint: None,
+                    });
+                }
             }
         }
 
-        let (typed_pat, pat_ty) = self.check_pattern(pat, &ok_ty, span)?;
         self.bind_typed_pattern(&typed_pat, &pat_ty);
 
         Ok(TypedNode {
@@ -1044,6 +1049,10 @@ impl Checker {
                 Box::new(self.resolve_typed_pattern(*head)),
                 Box::new(self.resolve_typed_pattern(*tail)),
             ),
+            TypedPattern::ResultOk(ty, inner) => TypedPattern::ResultOk(
+                self.resolve_ty(&ty),
+                Box::new(self.resolve_typed_pattern(*inner)),
+            ),
         }
     }
 
@@ -1173,7 +1182,46 @@ impl Checker {
                 let tail_ty = Ty::List(Box::new(elem_ty.clone()));
                 let (typed_tail, _) = self.check_pattern(tail, &tail_ty, span)?;
                 Ok((
-                    TypedPattern::ListCons(rhs_ty.clone(), Box::new(typed_head), Box::new(typed_tail)),
+                    TypedPattern::ListCons(
+                        rhs_ty.clone(),
+                        Box::new(typed_head),
+                        Box::new(typed_tail),
+                    ),
+                    rhs_ty,
+                ))
+            }
+            ResolvedPattern::Constructor(ctor_id, inner) => {
+                if ctor_id.name != "Ok" {
+                    return Err(TypeError {
+                        message: format!(
+                            "SafeBind constructor pattern only supports Ok(...), got {}(...)",
+                            ctor_id.name
+                        ),
+                        span: ctor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                let ok_ty = match &rhs_ty {
+                    Ty::Result(ok, _) => ok.as_ref().clone(),
+                    other => {
+                        return Err(TypeError {
+                            message: format!(
+                                "`Ok(...)` pattern requires Result<...>, got {}",
+                                self.ty_name(other)
+                            ),
+                            span: ctor_id.span.clone(),
+                            hint: Some(
+                                "Use `num =? expr` directly for Result<T>, and only add `Ok(...)` on the left for nested Result values.".into(),
+                            ),
+                        });
+                    }
+                };
+
+                let (typed_inner, _) = self.check_pattern(inner, &ok_ty, span)?;
+                Ok((
+                    TypedPattern::ResultOk(rhs_ty.clone(), Box::new(typed_inner)),
                     rhs_ty,
                 ))
             }
@@ -1195,6 +1243,29 @@ impl Checker {
                 let tail_ty = Ty::List(Box::new(elem_ty));
                 self.bind_typed_pattern(tail, &tail_ty);
             }
+            TypedPattern::ResultOk(_, inner) => {
+                let ok_ty = match rhs_ty {
+                    Ty::Result(ok, _) => ok.as_ref().clone(),
+                    _ => return,
+                };
+                self.bind_typed_pattern(inner, &ok_ty);
+            }
+        }
+    }
+
+    fn collect_pattern_result_error_types(&self, pat: &TypedPattern, out: &mut Vec<Ty>) {
+        match pat {
+            TypedPattern::ResultOk(ty, inner) => {
+                if let Ty::Result(_, err) = self.resolve_ty(ty) {
+                    out.push(err.as_ref().clone());
+                }
+                self.collect_pattern_result_error_types(inner, out);
+            }
+            TypedPattern::ListCons(_, head, tail) => {
+                self.collect_pattern_result_error_types(head, out);
+                self.collect_pattern_result_error_types(tail, out);
+            }
+            TypedPattern::Var(_, _) | TypedPattern::Wildcard(_) | TypedPattern::ListNil(_) => {}
         }
     }
 
@@ -1709,10 +1780,7 @@ impl Checker {
             Ty::List(inner) => inner.as_ref().clone(),
             other => {
                 return Err(TypeError {
-                    message: format!(
-                        "list tail must be List<...>, got {}",
-                        self.ty_name(other)
-                    ),
+                    message: format!("list tail must be List<...>, got {}", self.ty_name(other)),
                     span: typed_tail.span.clone(),
                     hint: Some("Use `[head, ..tail]` with a list tail value".into()),
                 });
@@ -1739,7 +1807,11 @@ impl Checker {
         })
     }
 
-    fn check_list_literal(&mut self, span: &Span, elems: &[Resolved]) -> Result<TypedNode, TypeError> {
+    fn check_list_literal(
+        &mut self,
+        span: &Span,
+        elems: &[Resolved],
+    ) -> Result<TypedNode, TypeError> {
         if elems.is_empty() {
             return self.check_list_nil(span);
         }

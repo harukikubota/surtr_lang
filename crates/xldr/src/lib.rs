@@ -173,7 +173,7 @@ impl ReplEngine {
             }
         };
 
-        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
+        let (mut chunk, meta) = match self.forge_session.codegen_chunk_repl_result(typed) {
             Ok(c) => c,
             Err(e) => {
                 diagnostics::report_error(
@@ -325,14 +325,18 @@ impl ReplEngine {
 
         match self.vm.push_atomic(chunk) {
             Ok(value) => {
-                display_repl_result(&self.vm, value.clone(), &meta);
-                for b in &meta.bindings {
-                    self.symbols.insert(b.name.clone());
+                if self.report_main_result_error_if_any(&value) {
+                    self.bump_line(None);
+                } else {
+                    display_repl_result(&self.vm, value.clone(), &meta);
+                    for b in &meta.bindings {
+                        self.symbols.insert(b.name.clone());
+                    }
+                    for name in &meta.function_defs {
+                        self.symbols.insert(name.clone());
+                    }
+                    self.bump_line(Some(value));
                 }
-                for name in &meta.function_defs {
-                    self.symbols.insert(name.clone());
-                }
-                self.bump_line(Some(value));
             }
             Err(e) => {
                 eldr::report_runtime_error(
@@ -379,6 +383,45 @@ impl ReplEngine {
             None => {
                 eprintln!("Line {} has no value", line_num);
                 self.bump_line(None);
+            }
+        }
+    }
+
+    fn report_main_result_error_if_any(&self, value: &Value) -> bool {
+        match value {
+            Value::Tagged { tag: 1, fields } => {
+                if let Some(err_value) = fields.first() {
+                    self.report_error_value(err_value);
+                } else {
+                    eprintln!("Error: InvalidResult: missing Err payload");
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn report_error_value(&self, value: &Value) {
+        match value {
+            Value::Error(rich) => {
+                let start = rich.location.span_start as usize;
+                let mut end = rich.location.span_end as usize;
+                if end <= start {
+                    end = start.saturating_add(1);
+                }
+                diagnostics::report_error(
+                    REPL_MODULE_NAME,
+                    &self.pending,
+                    diagnostics::simple_error(
+                        rich.kind.clone(),
+                        rich.message.clone(),
+                        spire::ast::Span { start, end },
+                        None,
+                    ),
+                );
+            }
+            other => {
+                eprintln!("Error: {}", inspect_value(&self.vm, other));
             }
         }
     }
