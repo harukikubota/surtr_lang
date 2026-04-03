@@ -978,9 +978,7 @@ impl Codegen {
 
         if let Some(items) = Self::collect_exact_list_pattern_items(pat) {
             let lhs_len = items.len();
-            let fail_shorts = (0..lhs_len)
-                .map(|_| self.fresh_label())
-                .collect::<Vec<_>>();
+            let fail_shorts = (0..lhs_len).map(|_| self.fresh_label()).collect::<Vec<_>>();
             let fail_long = self.fresh_label();
             let fail_mismatch = self.fresh_label();
             let rest_slot = self.emit_exact_list_pattern_test_from_local(
@@ -997,7 +995,12 @@ impl Codegen {
 
             for (rhs_len, fail_short) in fail_shorts.into_iter().enumerate() {
                 self.patch_label(fail_short);
-                self.emit_list_len_mismatch_failure_concrete(lhs_len, rhs_len, ">", rhs.span.clone())?;
+                self.emit_list_len_mismatch_failure_concrete(
+                    lhs_len,
+                    rhs_len,
+                    ">",
+                    rhs.span.clone(),
+                )?;
             }
 
             self.patch_label(fail_long);
@@ -1043,9 +1046,7 @@ impl Codegen {
 
         if let Some(items) = Self::collect_exact_list_pattern_items(pat) {
             let lhs_len = items.len();
-            let fail_shorts = (0..lhs_len)
-                .map(|_| self.fresh_label())
-                .collect::<Vec<_>>();
+            let fail_shorts = (0..lhs_len).map(|_| self.fresh_label()).collect::<Vec<_>>();
             let fail_long = self.fresh_label();
             let fail_mismatch = self.fresh_label();
             let rest_slot = self.emit_exact_list_pattern_test_from_local(
@@ -1062,7 +1063,12 @@ impl Codegen {
 
             for (rhs_len, fail_short) in fail_shorts.into_iter().enumerate() {
                 self.patch_label(fail_short);
-                self.emit_list_len_mismatch_failure_concrete(lhs_len, rhs_len, ">", rhs.span.clone())?;
+                self.emit_list_len_mismatch_failure_concrete(
+                    lhs_len,
+                    rhs_len,
+                    ">",
+                    rhs.span.clone(),
+                )?;
             }
 
             self.patch_label(fail_long);
@@ -1292,7 +1298,9 @@ impl Codegen {
         self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
     }
 
-    fn collect_exact_list_pattern_items<'a>(pat: &'a TypedPattern) -> Option<Vec<&'a TypedPattern>> {
+    fn collect_exact_list_pattern_items<'a>(
+        pat: &'a TypedPattern,
+    ) -> Option<Vec<&'a TypedPattern>> {
         fn walk<'a>(pat: &'a TypedPattern, out: &mut Vec<&'a TypedPattern>) -> bool {
             match pat {
                 TypedPattern::ListNil(_) => true,
@@ -1305,7 +1313,11 @@ impl Codegen {
         }
 
         let mut out = Vec::new();
-        if walk(pat, &mut out) { Some(out) } else { None }
+        if walk(pat, &mut out) {
+            Some(out)
+        } else {
+            None
+        }
     }
 
     fn emit_exact_list_pattern_test_from_local(

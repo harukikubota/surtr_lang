@@ -155,7 +155,7 @@ impl Parser {
             _ => {}
         }
 
-        if matches!(self.peek(), Token::LBrack) || self.is_constructor_pattern_start() {
+        if self.is_pattern_safebind_stmt_start() {
             let save = self.pos;
             if let Ok(stmt) = self.parse_pattern_safebind_stmt() {
                 if matches!(self.peek(), Token::Semicolon) {
@@ -227,17 +227,17 @@ impl Parser {
         Ok(Ast::SafeBind(span, pat, Box::new(rhs)))
     }
 
-    fn is_constructor_pattern_start(&self) -> bool {
-        let is_upper_ident = matches!(
+    fn is_pattern_safebind_stmt_start(&self) -> bool {
+        matches!(
             self.peek(),
-            Token::Ident(name)
-                if name
-                    .chars()
-                    .next()
-                    .map(|c| c.is_uppercase())
-                    .unwrap_or(false)
-        );
-        is_upper_ident && matches!(self.peek_n(1), Some(Token::LParen))
+            Token::LBrack
+                | Token::Ident(_)
+                | Token::Int(_)
+                | Token::Str(_)
+                | Token::True
+                | Token::False
+                | Token::Minus
+        )
     }
 
     // ── Binary operators with precedence climbing ──
@@ -866,13 +866,16 @@ impl Parser {
     // ── Type annotation parsing ──
 
     fn parse_type(&mut self) -> Result<AstTy, ParseError> {
+        self.skip_newlines();
         let sp = self.peek_span();
 
         if matches!(self.peek(), Token::LParen) {
             self.advance();
+            self.skip_newlines();
             if matches!(self.peek(), Token::Arrow) {
                 self.advance();
                 let ret = self.parse_type()?;
+                self.skip_newlines();
                 let end = self.expect(&Token::RParen)?;
                 return Ok(AstTy::Func(
                     Span {
@@ -886,12 +889,16 @@ impl Parser {
 
             let mut params = Vec::new();
             params.push(self.parse_type()?);
+            self.skip_newlines();
             while matches!(self.peek(), Token::Comma) {
                 self.advance();
+                self.skip_newlines();
                 params.push(self.parse_type()?);
+                self.skip_newlines();
             }
             self.expect(&Token::Arrow)?;
             let ret = self.parse_type()?;
+            self.skip_newlines();
             let end = self.expect(&Token::RParen)?;
             return Ok(AstTy::Func(
                 Span {
@@ -921,13 +928,17 @@ impl Parser {
         // Check for type parameters: Name<T> or Name<T, E>
         if matches!(self.peek(), Token::Lt) {
             self.advance();
+            self.skip_newlines();
             let first = self.parse_type()?;
+            self.skip_newlines();
             let second = if matches!(self.peek(), Token::Comma) {
                 self.advance();
+                self.skip_newlines();
                 Some(Box::new(self.parse_type()?))
             } else {
                 None
             };
+            self.skip_newlines();
             let end = self.expect(&Token::Gt)?;
             let span = Span {
                 start: sp.start,
@@ -1532,6 +1543,26 @@ impl Parser {
                 self.advance();
                 Ok(AstMatchPattern::IntLit(sp, n))
             }
+            Token::Minus => {
+                self.advance();
+                match self.peek().clone() {
+                    Token::Int(n) => {
+                        let int_span = self.peek_span();
+                        self.advance();
+                        Ok(AstMatchPattern::IntLit(
+                            Span {
+                                start: sp.start,
+                                end: int_span.end,
+                            },
+                            -n,
+                        ))
+                    }
+                    _ => Err(ParseError::syntax(
+                        "Expected integer after '-' in list pattern item",
+                        sp,
+                    )),
+                }
+            }
             Token::Str(s) => {
                 self.advance();
                 Ok(AstMatchPattern::StrLit(sp, s))
@@ -1581,8 +1612,47 @@ impl Parser {
             let expr_start = i;
             let mut depth = 1usize;
             let mut expr_src = String::new();
+            let mut quoted_by: Option<char> = None;
+            let mut escaped = false;
+            let mut in_comment = false;
             while i < chars.len() {
                 let c = chars[i];
+                if let Some(quote) = quoted_by {
+                    expr_src.push(c);
+                    if escaped {
+                        escaped = false;
+                    } else if c == '\\' {
+                        escaped = true;
+                    } else if c == quote {
+                        quoted_by = None;
+                    }
+                    i += 1;
+                    continue;
+                }
+
+                if in_comment {
+                    expr_src.push(c);
+                    if c == '\n' {
+                        in_comment = false;
+                    }
+                    i += 1;
+                    continue;
+                }
+
+                if c == '"' || c == '\'' {
+                    quoted_by = Some(c);
+                    expr_src.push(c);
+                    i += 1;
+                    continue;
+                }
+
+                if c == '#' {
+                    in_comment = true;
+                    expr_src.push(c);
+                    i += 1;
+                    continue;
+                }
+
                 if c == '{' {
                     depth += 1;
                     expr_src.push(c);
@@ -2207,6 +2277,30 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_wildcard_pattern_safebind() {
+        let ast = parse("_ =? value").unwrap();
+        match &ast[0] {
+            Ast::SafeBind(_, pattern, rhs) => {
+                assert!(matches!(pattern, AstPattern::Wildcard(_)));
+                assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+            }
+            _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
+    fn test_integer_literal_pattern_safebind() {
+        let ast = parse("1 =? value").unwrap();
+        match &ast[0] {
+            Ast::SafeBind(_, pattern, rhs) => {
+                assert!(matches!(pattern, AstPattern::IntLit(_, 1)));
+                assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+            }
+            _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
     fn test_list_pattern_with_nested_constructor_literals_safebind() {
         let ast = parse("[Ok(1), Ok(2), _] =? lr").unwrap();
         match &ast[0] {
@@ -2250,6 +2344,28 @@ def noop() {()}"#,
                 );
             }
             _ => panic!("Expected annotated Bind with function type and closure"),
+        }
+    }
+
+    #[test]
+    fn test_multiline_function_type_annotation() {
+        let ast = parse(
+            r#"handler: (
+  Int,
+  String
+  -> Unit
+) = {|x, y| print(y)}"#,
+        )
+        .unwrap();
+        match &ast[0] {
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Func(_, params, ret)), rhs) => {
+                assert_eq!(params.len(), 2);
+                assert!(matches!(params[0], AstTy::Named(_, ref name) if name == "Int"));
+                assert!(matches!(params[1], AstTy::Named(_, ref name) if name == "String"));
+                assert!(matches!(ret.as_ref(), AstTy::Named(_, name) if name == "Unit"));
+                assert!(matches!(rhs.as_ref(), Ast::Closure(_, params, _) if params.len() == 2));
+            }
+            _ => panic!("Expected multiline function type bind"),
         }
     }
 
@@ -2392,6 +2508,24 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_interpolated_string_allows_brace_in_inner_string_literal() {
+        let ast = parse(r#"msg = '#{to_string("}")}'"#).unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::InterpolatedStr(_, parts) => {
+                    assert!(matches!(
+                        parts.as_slice(),
+                        [InterpolatedPart::Expr(expr)]
+                            if matches!(expr.as_ref(), Ast::App(_, _, _))
+                    ));
+                }
+                _ => panic!("Expected InterpolatedStr"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
     fn test_negative_int() {
         let ast = parse("x = -5").unwrap();
         match &ast[0] {
@@ -2450,6 +2584,31 @@ def noop() {()}"#,
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Match(_, _, arms) => {
                     assert!(matches!(&arms[0].0, AstMatchPattern::StrLit(_, s) if s == "a"));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
+        }
+    }
+
+    #[test]
+    fn test_match_negative_int_in_list_pattern() {
+        let ast = parse(
+            r#"x = match nums {
+  [-1] => "neg",
+  _ => "other",
+}"#,
+        )
+        .unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Match(_, _, arms) => {
+                    assert!(matches!(
+                        &arms[0].0,
+                        AstMatchPattern::ListCons(_, head, tail)
+                            if matches!(head.as_ref(), AstMatchPattern::IntLit(_, -1))
+                                && matches!(tail.as_ref(), AstMatchPattern::ListNil(_))
+                    ));
                 }
                 _ => panic!("Expected Match"),
             },

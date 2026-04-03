@@ -786,7 +786,8 @@ impl VM {
                 let head = self.pop_stack()?;
                 match tail {
                     Value::List(handle) => {
-                        self.stack.push(Value::List(ListHandle::cons(head, &handle)));
+                        self.stack
+                            .push(Value::List(ListHandle::cons(head, &handle)));
                     }
                     other => {
                         return Err(RuntimeError::new(format!(

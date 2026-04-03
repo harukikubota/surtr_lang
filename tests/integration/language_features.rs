@@ -663,7 +663,10 @@ print("after")"#,
 [f] =? li"#,
         )
         .expect("Pipeline failed");
-        assert_eq!(stderr, vec!["Error: IndexOutOfBounds: LHS.len(1) < RHS.len(2)"]);
+        assert_eq!(
+            stderr,
+            vec!["Error: IndexOutOfBounds: LHS.len(1) < RHS.len(2)"]
+        );
     }
 
     #[test]
@@ -673,7 +676,10 @@ print("after")"#,
 [e1, e2] =? li"#,
         )
         .expect("Pipeline failed");
-        assert_eq!(stderr, vec!["Error: IndexOutOfBounds: LHS.len(2) > RHS.len(1)"]);
+        assert_eq!(
+            stderr,
+            vec!["Error: IndexOutOfBounds: LHS.len(2) > RHS.len(1)"]
+        );
     }
 
     #[test]
