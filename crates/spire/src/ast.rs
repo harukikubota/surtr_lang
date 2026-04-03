@@ -59,12 +59,18 @@ pub enum AstPattern {
     Annotated(Span, Symbol, AstTy),
     /// `_`
     Wildcard(Span),
+    /// `[]`
+    ListNil(Span),
+    /// `[head, ..tail]`
+    ListCons(Span, Box<AstPattern>, Box<AstPattern>),
 }
 
 // ── Match patterns ──
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AstMatchPattern {
+    /// `x` inside pattern substructure
+    Binding(Span, Symbol),
     /// `_`
     Wildcard(Span),
     /// `True` / `False`
@@ -75,6 +81,10 @@ pub enum AstMatchPattern {
     StrLit(Span, String),
     /// `Ok(val)` / `Err(e)` — constructor with optional inner binding
     Constructor(Span, Symbol, Option<Symbol>),
+    /// `[]`
+    ListNil(Span),
+    /// `[head, ..tail]`
+    ListCons(Span, Box<AstMatchPattern>, Box<AstMatchPattern>),
 }
 
 // ── Struct / Record fields ──
@@ -147,8 +157,14 @@ pub enum Ast {
     /// Binary operation: `a + b`, `x == y`
     BinOp(Span, BinOp, Box<Ast>, Box<Ast>),
 
-    /// List literal: `[1, 2, 3]`, `[]`
-    List(Span, Vec<Ast>),
+    /// Empty list literal: `[]`
+    ListNil(Span),
+
+    /// Cons-style list construction: `[head, ..tail]`
+    ListCons(Span, Box<Ast>, Box<Ast>),
+
+    /// Fixed list literal: `[1, 2, 3]`
+    ListLiteral(Span, Vec<Ast>),
 
     /// Interpolated string: `"hi #{name}"`
     InterpolatedStr(Span, Vec<InterpolatedPart>),

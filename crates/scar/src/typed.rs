@@ -21,7 +21,9 @@ pub enum TypedInner {
     Bind(TypedPattern, Box<TypedNode>),
     SafeBind(TypedPattern, Box<TypedNode>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
-    List(Vec<TypedNode>),
+    ListNil,
+    ListCons(Box<TypedNode>, Box<TypedNode>),
+    ListLiteral(Vec<TypedNode>),
     InterpolatedStr(Vec<TypedInterpolatedPart>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Match(Box<TypedNode>, Vec<(TypedMatchPattern, TypedNode)>),
@@ -69,11 +71,14 @@ pub enum TypedInterpolatedPart {
 pub enum TypedPattern {
     Var(Ty, ResolvedId),
     Wildcard(Ty),
+    ListNil(Ty),
+    ListCons(Ty, Box<TypedPattern>, Box<TypedPattern>),
 }
 
 /// Match pattern (typed).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedMatchPattern {
+    Binding(ResolvedId),
     /// `_`
     Wildcard,
     /// `True` / `False`
@@ -84,6 +89,10 @@ pub enum TypedMatchPattern {
     StrLit(String),
     /// Constructor tag + optional inner binding
     Constructor(u32, Option<ResolvedId>),
+    /// `[]`
+    ListNil,
+    /// `[head, ..tail]`
+    ListCons(Box<TypedMatchPattern>, Box<TypedMatchPattern>),
 }
 
 /// Function parameter (typed).

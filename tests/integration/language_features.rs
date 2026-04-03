@@ -206,8 +206,21 @@ print(to_string(strs))"#,
     }
 
     #[test]
+    fn list_cons_expr() {
+        assert_output(
+            "tail: List<Int> = [2, 3]\nnums = [1, ..tail]\nprint(to_string(nums))",
+            &["[1, 2, 3]"],
+        );
+    }
+
+    #[test]
     fn list_reject_mixed_types() {
         assert_compile_error(r#"mixed = [1, "two"]"#, "expected Int, got String");
+    }
+
+    #[test]
+    fn list_cons_rejects_non_list_tail() {
+        assert_compile_error("nums = [1, ..2]", "list tail must be List<...>");
     }
 
     // Closures and partial application
@@ -460,6 +473,18 @@ print(match s {
     }
 
     #[test]
+    fn match_list_patterns() {
+        assert_output(
+            r#"nums: List<Int> = [1, 2, 3]
+print(match nums {
+  [] => "empty",
+  [head, ..tail] => to_string(head),
+})"#,
+            &["1"],
+        );
+    }
+
+    #[test]
     fn match_boolean_non_exhaustive_error() {
         assert_compile_error(
             r#"flag = True
@@ -596,6 +621,36 @@ num =? value
 print(to_string(num + 1))"#,
             &["6"],
         );
+    }
+
+    #[test]
+    fn safebind_list_pattern_ok() {
+        assert_output(
+            r#"value: Result<List<Int>> = Ok([1, 2, 3])
+[head, ..tail] =? value
+print(to_string(head))
+print(to_string(tail))"#,
+            &["1", "[2, 3]"],
+        );
+    }
+
+    #[test]
+    fn safebind_list_pattern_empty_propagates_empty_list() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"def fun() -> Result<Int> {
+  value: Result<List<Int>> = Ok([])
+  [head, ..tail] =? value
+  Ok(head)
+}
+
+ret: Result<Int> = fun()
+match ret {
+  Ok(v) => print(to_string(v)),
+  Err(e) => eprint(e),
+}"#,
+        )
+        .expect("program should run");
+        assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
     }
 
     #[test]

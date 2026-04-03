@@ -1,7 +1,9 @@
 use sindr::ir::{
     line_column_for_offset, Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, SourceMap,
 };
-use sindr::runtime::{Callable, CallableTarget, Location, RichError, TypeRegistry, Value};
+use sindr::runtime::{
+    Callable, CallableTarget, ListHandle, Location, RichError, TypeRegistry, Value,
+};
 use std::collections::BTreeSet;
 
 use crate::builtin::call_builtin;
@@ -771,10 +773,82 @@ impl VM {
                     elems.push(self.pop_stack()?);
                 }
                 elems.reverse();
-                self.stack.push(Value::List(elems));
+                self.stack.push(Value::List(ListHandle::from_items(elems)));
             }
             Opcode::ListEmpty => {
-                self.stack.push(Value::List(Vec::new()));
+                self.stack.push(Value::List(ListHandle::empty()));
+            }
+            Opcode::ListNil => {
+                self.stack.push(Value::List(ListHandle::empty()));
+            }
+            Opcode::ListCons => {
+                let tail = self.pop_stack()?;
+                let head = self.pop_stack()?;
+                match tail {
+                    Value::List(handle) => {
+                        self.stack.push(Value::List(ListHandle::cons(head, &handle)));
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListCons expects list tail, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListIsEmpty => {
+                let list = self.pop_stack()?;
+                match list {
+                    Value::List(handle) => self.stack.push(Value::Bool(handle.is_empty())),
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListIsEmpty expects List, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListHead => {
+                let list = self.pop_stack()?;
+                match list {
+                    Value::List(handle) => {
+                        let head = handle
+                            .head_value()
+                            .ok_or_else(|| RuntimeError::new("ListHead on empty list"))?;
+                        self.stack.push(head);
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListHead expects List, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListTail => {
+                let list = self.pop_stack()?;
+                match list {
+                    Value::List(handle) => {
+                        let tail = handle
+                            .tail_handle()
+                            .ok_or_else(|| RuntimeError::new("ListTail on empty list"))?;
+                        self.stack.push(Value::List(tail));
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListTail expects List, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListFromItems(n) => {
+                let mut elems = Vec::with_capacity(n as usize);
+                for _ in 0..n {
+                    elems.push(self.pop_stack()?);
+                }
+                elems.reverse();
+                self.stack.push(Value::List(ListHandle::from_items(elems)));
             }
 
             // Struct / Tagged
@@ -912,6 +986,57 @@ impl VM {
                     kind: template.kind.clone(),
                     message,
                     location,
+                })));
+            }
+            Opcode::MakeErrorLiteral(kind_idx, message_idx) => {
+                let kind = match self.bytecode.constants.get(kind_idx as usize) {
+                    Some(Constant::Str(s)) => s.clone(),
+                    Some(other) => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErrorLiteral kind expects String constant, got {:?}",
+                            other
+                        )))
+                    }
+                    None => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErrorLiteral kind index out of bounds: {}",
+                            kind_idx
+                        )))
+                    }
+                };
+                let message = match self.bytecode.constants.get(message_idx as usize) {
+                    Some(Constant::Str(s)) => s.clone(),
+                    Some(other) => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErrorLiteral message expects String constant, got {:?}",
+                            other
+                        )))
+                    }
+                    None => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErrorLiteral message index out of bounds: {}",
+                            message_idx
+                        )))
+                    }
+                };
+                let (line, column) = self
+                    .source()
+                    .map(|source| line_column_for_offset(source, 0))
+                    .unwrap_or((0, 0));
+                self.stack.push(Value::Error(Box::new(RichError {
+                    kind,
+                    message,
+                    location: Location {
+                        file: self
+                            .source_file()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "<repl>".to_string()),
+                        func: "<pattern>".into(),
+                        line,
+                        column,
+                        span_start: 0,
+                        span_end: 0,
+                    },
                 })));
             }
 

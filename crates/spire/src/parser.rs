@@ -130,6 +130,14 @@ impl Parser {
             _ => {}
         }
 
+        if matches!(self.peek(), Token::LBrack) {
+            let save = self.pos;
+            if let Ok(stmt) = self.parse_list_safebind_stmt() {
+                return Ok(stmt);
+            }
+            self.pos = save;
+        }
+
         let expr = self.parse_expr()?;
         if matches!(self.peek(), Token::Semicolon) {
             let semi = self.advance().span.clone();
@@ -165,6 +173,24 @@ impl Parser {
 
     fn parse_expr(&mut self) -> Result<Ast, ParseError> {
         self.parse_binop_expr(0)
+    }
+
+    fn parse_list_safebind_stmt(&mut self) -> Result<Ast, ParseError> {
+        let pat = self.parse_list_bind_pattern()?;
+        if !matches!(self.peek(), Token::SafeBind) {
+            return Err(ParseError::syntax(
+                "List destructuring is currently supported in `=?` pattern position",
+                self.peek_span(),
+            ));
+        }
+        self.advance();
+        let rhs = self.parse_expr()?;
+        self.ensure_non_associative_assignment(&rhs)?;
+        let span = Span {
+            start: pattern_span(&pat).start,
+            end: rhs.span().end,
+        };
+        Ok(Ast::SafeBind(span, pat, Box::new(rhs)))
     }
 
     // ── Binary operators with precedence climbing ──
@@ -312,32 +338,8 @@ impl Parser {
                 }
             }
 
-            // List literal: [expr, ...]
-            Token::LBrack => {
-                self.advance();
-                self.skip_newlines();
-                let mut elems = Vec::new();
-                if !matches!(self.peek(), Token::RBrack) {
-                    elems.push(self.parse_expr()?);
-                    while matches!(self.peek(), Token::Comma) {
-                        self.advance();
-                        self.skip_newlines();
-                        if matches!(self.peek(), Token::RBrack) {
-                            break;
-                        }
-                        elems.push(self.parse_expr()?);
-                    }
-                }
-                self.skip_newlines();
-                let end_span = self.expect(&Token::RBrack)?;
-                Ok(Ast::List(
-                    Span {
-                        start: sp.start,
-                        end: end_span.end,
-                    },
-                    elems,
-                ))
-            }
+            // List expression: [], [a, b, c], [head, ..tail]
+            Token::LBrack => self.parse_list_expr(sp),
 
             // Parenthesized expression
             Token::LParen => {
@@ -603,6 +605,143 @@ impl Parser {
             ))
         } else {
             Ok(expr)
+        }
+    }
+
+    fn parse_list_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
+        self.expect(&Token::LBrack)?;
+        self.skip_newlines();
+
+        if matches!(self.peek(), Token::RBrack) {
+            let end = self.expect(&Token::RBrack)?;
+            return Ok(Ast::ListNil(Span {
+                start: sp.start,
+                end: end.end,
+            }));
+        }
+
+        let first = self.parse_expr()?;
+        self.skip_newlines();
+        if matches!(self.peek(), Token::Comma) {
+            self.advance();
+            self.skip_newlines();
+            if matches!(self.peek(), Token::DotDot) {
+                self.advance();
+                self.skip_newlines();
+                let tail = self.parse_expr()?;
+                self.skip_newlines();
+                let end = self.expect(&Token::RBrack)?;
+                return Ok(Ast::ListCons(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    Box::new(first),
+                    Box::new(tail),
+                ));
+            }
+
+            let mut elems = vec![first];
+            elems.push(self.parse_expr()?);
+            while matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                if matches!(self.peek(), Token::RBrack) {
+                    break;
+                }
+                elems.push(self.parse_expr()?);
+            }
+            self.skip_newlines();
+            let end = self.expect(&Token::RBrack)?;
+            return Ok(Ast::ListLiteral(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                elems,
+            ));
+        }
+
+        let end = self.expect(&Token::RBrack)?;
+        Ok(Ast::ListLiteral(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            vec![first],
+        ))
+    }
+
+    fn parse_list_bind_pattern(&mut self) -> Result<AstPattern, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::LBrack)?;
+        self.skip_newlines();
+        if matches!(self.peek(), Token::RBrack) {
+            let end = self.expect(&Token::RBrack)?;
+            return Ok(AstPattern::ListNil(Span {
+                start: sp.start,
+                end: end.end,
+            }));
+        }
+
+        let first = self.parse_bind_pattern_atom()?;
+        self.skip_newlines();
+        let end = if matches!(self.peek(), Token::Comma) {
+            self.advance();
+            self.skip_newlines();
+            if matches!(self.peek(), Token::DotDot) {
+                self.advance();
+                self.skip_newlines();
+                let tail = self.parse_bind_pattern_atom()?;
+                self.skip_newlines();
+                let end = self.expect(&Token::RBrack)?;
+                return Ok(AstPattern::ListCons(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    Box::new(first),
+                    Box::new(tail),
+                ));
+            }
+
+            let mut items = vec![first];
+            items.push(self.parse_bind_pattern_atom()?);
+            while matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                if matches!(self.peek(), Token::RBrack) {
+                    break;
+                }
+                items.push(self.parse_bind_pattern_atom()?);
+            }
+            self.skip_newlines();
+            let end = self.expect(&Token::RBrack)?;
+            return Ok(fixed_bind_list_pattern(sp.start, end.end, items));
+        } else {
+            self.expect(&Token::RBrack)?
+        };
+
+        Ok(fixed_bind_list_pattern(sp.start, end.end, vec![first]))
+    }
+
+    fn parse_bind_pattern_atom(&mut self) -> Result<AstPattern, ParseError> {
+        let sp = self.peek_span();
+        match self.peek().clone() {
+            Token::Ident(name) if name == "_" => {
+                self.advance();
+                Ok(AstPattern::Wildcard(sp))
+            }
+            Token::Ident(name) => {
+                self.advance();
+                Ok(AstPattern::Var(sp, name))
+            }
+            Token::LBrack => self.parse_list_bind_pattern(),
+            Token::Eof => Err(ParseError::incomplete("list pattern", sp)),
+            _ => Err(ParseError::syntax(
+                "List patterns only support identifiers, `_`, and nested list patterns",
+                sp,
+            )),
         }
     }
 
@@ -1104,6 +1243,7 @@ impl Parser {
     fn parse_match_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
+            Token::LBrack => self.parse_match_list_pattern(),
             Token::Ident(name) if name == "_" => {
                 self.advance();
                 Ok(AstMatchPattern::Wildcard(sp))
@@ -1170,6 +1310,105 @@ impl Parser {
                 format!("Expected match pattern, got {:?}", self.peek()),
                 sp,
             )),
+        }
+    }
+
+    fn parse_match_list_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::LBrack)?;
+        self.skip_newlines();
+        if matches!(self.peek(), Token::RBrack) {
+            let end = self.expect(&Token::RBrack)?;
+            return Ok(AstMatchPattern::ListNil(Span {
+                start: sp.start,
+                end: end.end,
+            }));
+        }
+
+        let first = self.parse_match_list_item_pattern()?;
+        self.skip_newlines();
+        let end = if matches!(self.peek(), Token::Comma) {
+            self.advance();
+            self.skip_newlines();
+            if matches!(self.peek(), Token::DotDot) {
+                self.advance();
+                self.skip_newlines();
+                let tail = self.parse_match_list_item_pattern()?;
+                self.skip_newlines();
+                let end = self.expect(&Token::RBrack)?;
+                return Ok(AstMatchPattern::ListCons(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    Box::new(first),
+                    Box::new(tail),
+                ));
+            }
+
+            let mut items = vec![first];
+            items.push(self.parse_match_list_item_pattern()?);
+            while matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                if matches!(self.peek(), Token::RBrack) {
+                    break;
+                }
+                items.push(self.parse_match_list_item_pattern()?);
+            }
+            self.skip_newlines();
+            let end = self.expect(&Token::RBrack)?;
+            return Ok(fixed_match_list_pattern(sp.start, end.end, items));
+        } else {
+            self.expect(&Token::RBrack)?
+        };
+
+        Ok(fixed_match_list_pattern(sp.start, end.end, vec![first]))
+    }
+
+    fn parse_match_list_item_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
+        let sp = self.peek_span();
+        match self.peek().clone() {
+            Token::Ident(name) if name == "_" => {
+                self.advance();
+                Ok(AstMatchPattern::Wildcard(sp))
+            }
+            Token::Ident(name) => {
+                self.advance();
+                if name == "Ok" || name == "Err" {
+                    self.expect(&Token::LParen)?;
+                    let (inner_name, _) = self.expect_ident()?;
+                    let end = self.expect(&Token::RParen)?;
+                    Ok(AstMatchPattern::Constructor(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        name,
+                        Some(inner_name),
+                    ))
+                } else {
+                    Ok(AstMatchPattern::Binding(sp, name))
+                }
+            }
+            Token::LBrack => self.parse_match_list_pattern(),
+            Token::True => {
+                self.advance();
+                Ok(AstMatchPattern::BoolLit(sp, true))
+            }
+            Token::False => {
+                self.advance();
+                Ok(AstMatchPattern::BoolLit(sp, false))
+            }
+            Token::Int(n) => {
+                self.advance();
+                Ok(AstMatchPattern::IntLit(sp, n))
+            }
+            Token::Str(s) => {
+                self.advance();
+                Ok(AstMatchPattern::StrLit(sp, s))
+            }
+            _ => Err(ParseError::syntax("Invalid list pattern item", sp)),
         }
     }
 
@@ -1281,6 +1520,32 @@ fn shift_span(span: Span, delta: usize) -> Span {
     }
 }
 
+fn pattern_span(pat: &AstPattern) -> &Span {
+    match pat {
+        AstPattern::Var(span, _)
+        | AstPattern::Annotated(span, _, _)
+        | AstPattern::Wildcard(span)
+        | AstPattern::ListNil(span)
+        | AstPattern::ListCons(span, _, _) => span,
+    }
+}
+
+fn fixed_bind_list_pattern(start: usize, end: usize, items: Vec<AstPattern>) -> AstPattern {
+    let span = Span { start, end };
+    items.into_iter().rev().fold(
+        AstPattern::ListNil(span.clone()),
+        |tail, head| AstPattern::ListCons(span.clone(), Box::new(head), Box::new(tail)),
+    )
+}
+
+fn fixed_match_list_pattern(start: usize, end: usize, items: Vec<AstMatchPattern>) -> AstMatchPattern {
+    let span = Span { start, end };
+    items.into_iter().rev().fold(
+        AstMatchPattern::ListNil(span.clone()),
+        |tail, head| AstMatchPattern::ListCons(span.clone(), Box::new(head), Box::new(tail)),
+    )
+}
+
 fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
     match ty {
         AstTy::Named(span, name) => AstTy::Named(shift_span(span, delta), name),
@@ -1308,6 +1573,12 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
             AstPattern::Annotated(shift_span(span, delta), name, shift_ast_ty(ty, delta))
         }
         AstPattern::Wildcard(span) => AstPattern::Wildcard(shift_span(span, delta)),
+        AstPattern::ListNil(span) => AstPattern::ListNil(shift_span(span, delta)),
+        AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(
+            shift_span(span, delta),
+            Box::new(shift_pattern(*head, delta)),
+            Box::new(shift_pattern(*tail, delta)),
+        ),
     }
 }
 
@@ -1321,6 +1592,7 @@ fn shift_fun_param(param: FunParam, delta: usize) -> FunParam {
 
 fn shift_match_pattern(pat: AstMatchPattern, delta: usize) -> AstMatchPattern {
     match pat {
+        AstMatchPattern::Binding(span, name) => AstMatchPattern::Binding(shift_span(span, delta), name),
         AstMatchPattern::Wildcard(span) => AstMatchPattern::Wildcard(shift_span(span, delta)),
         AstMatchPattern::BoolLit(span, b) => AstMatchPattern::BoolLit(shift_span(span, delta), b),
         AstMatchPattern::IntLit(span, n) => AstMatchPattern::IntLit(shift_span(span, delta), n),
@@ -1328,6 +1600,12 @@ fn shift_match_pattern(pat: AstMatchPattern, delta: usize) -> AstMatchPattern {
         AstMatchPattern::Constructor(span, ctor, inner) => {
             AstMatchPattern::Constructor(shift_span(span, delta), ctor, inner)
         }
+        AstMatchPattern::ListNil(span) => AstMatchPattern::ListNil(shift_span(span, delta)),
+        AstMatchPattern::ListCons(span, head, tail) => AstMatchPattern::ListCons(
+            shift_span(span, delta),
+            Box::new(shift_match_pattern(*head, delta)),
+            Box::new(shift_match_pattern(*tail, delta)),
+        ),
     }
 }
 
@@ -1372,7 +1650,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*left, delta)),
             Box::new(shift_ast_span(*right, delta)),
         ),
-        Ast::List(span, elems) => Ast::List(
+        Ast::ListNil(span) => Ast::ListNil(shift_span(span, delta)),
+        Ast::ListCons(span, head, tail) => Ast::ListCons(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*head, delta)),
+            Box::new(shift_ast_span(*tail, delta)),
+        ),
+        Ast::ListLiteral(span, elems) => Ast::ListLiteral(
             shift_span(span, delta),
             elems
                 .into_iter()
@@ -1509,7 +1793,9 @@ impl Ast {
             | Ast::Bind(s, _, _)
             | Ast::SafeBind(s, _, _)
             | Ast::BinOp(s, _, _, _)
-            | Ast::List(s, _)
+            | Ast::ListNil(s)
+            | Ast::ListCons(s, _, _)
+            | Ast::ListLiteral(s, _)
             | Ast::InterpolatedStr(s, _)
             | Ast::Match(s, _, _)
             | Ast::FieldAccess(s, _, _)
@@ -1702,8 +1988,8 @@ def noop() {()}"#,
         let ast = parse("nums = [1, 2, 3]").unwrap();
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
-                Ast::List(_, elems) => assert_eq!(elems.len(), 3),
-                _ => panic!("Expected List"),
+                Ast::ListLiteral(_, elems) => assert_eq!(elems.len(), 3),
+                _ => panic!("Expected ListLiteral"),
             },
             _ => panic!("Expected Bind"),
         }
@@ -1715,9 +2001,41 @@ def noop() {()}"#,
         match &ast[0] {
             Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::ListOf(_, inner)), rhs) => {
                 assert!(matches!(inner.as_ref(), AstTy::Named(_, ref n) if n == "Int"));
-                assert!(matches!(rhs.as_ref(), Ast::List(_, elems) if elems.is_empty()));
+                assert!(matches!(rhs.as_ref(), Ast::ListNil(_)));
             }
             _ => panic!("Expected annotated Bind with empty List"),
+        }
+    }
+
+    #[test]
+    fn test_list_cons_expr() {
+        let ast = parse("nums = [1, ..tail]").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::ListCons(_, head, tail) => {
+                    assert!(matches!(head.as_ref(), Ast::Lit(_, Lit::Int(1))));
+                    assert!(matches!(tail.as_ref(), Ast::Var(_, name) if name == "tail"));
+                }
+                _ => panic!("Expected ListCons"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_list_pattern_safebind() {
+        let ast = parse("[head, ..tail] =? value").unwrap();
+        match &ast[0] {
+            Ast::SafeBind(_, pattern, rhs) => {
+                assert!(matches!(
+                    pattern,
+                    AstPattern::ListCons(_, head, tail)
+                        if matches!(head.as_ref(), AstPattern::Var(_, name) if name == "head")
+                        && matches!(tail.as_ref(), AstPattern::Var(_, name) if name == "tail")
+                ));
+                assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+            }
+            _ => panic!("Expected SafeBind"),
         }
     }
 

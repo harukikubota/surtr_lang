@@ -195,6 +195,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "!=" => Some(Token::BangEq),
                 "<=" => Some(Token::LtEq),
                 ">=" => Some(Token::GtEq),
+                ".." => Some(Token::DotDot),
                 "=>" => Some(Token::FatArrow),
                 "->" => Some(Token::Arrow),
                 _ => None,

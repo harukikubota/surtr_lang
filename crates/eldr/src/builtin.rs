@@ -243,7 +243,7 @@ mod tests {
         let lines = source
             .lines()
             .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .filter(|line| line.starts_with("@builtin "))
             .collect::<Vec<_>>();
 
         assert_eq!(lines.len(), BUILTIN_METAS.len());

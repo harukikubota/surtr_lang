@@ -49,6 +49,7 @@ pub enum Token {
     Comma,     // ,
     Colon,     // :
     Dot,       // .
+    DotDot,    // ..
     FatArrow,  // =>
     Arrow,     // ->
     Semicolon, // ;

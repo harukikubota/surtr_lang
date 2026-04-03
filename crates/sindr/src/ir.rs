@@ -57,6 +57,12 @@ pub enum Opcode {
     // List
     ListNew(u32),
     ListEmpty,
+    ListNil,
+    ListCons,
+    ListIsEmpty,
+    ListHead,
+    ListTail,
+    ListFromItems(u32),
 
     // Struct / Tagged
     StructNew(u32),
@@ -71,6 +77,7 @@ pub enum Opcode {
     CaptureClosure(u8),
     CapturePartial(u8),
     MakeError(u32),
+    MakeErrorLiteral(u32, u32),
     CallClosure(u8, u32, u32),
 
     // Control flow

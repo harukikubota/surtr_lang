@@ -32,8 +32,14 @@ pub enum Resolved {
     /// Binary operation
     BinOp(Span, BinOp, Box<Resolved>, Box<Resolved>),
 
-    /// List literal
-    List(Span, Vec<Resolved>),
+    /// Empty list literal
+    ListNil(Span),
+
+    /// Cons-style list construction
+    ListCons(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Fixed list literal
+    ListLiteral(Span, Vec<Resolved>),
 
     /// Interpolated string
     InterpolatedStr(Span, Vec<ResolvedInterpolatedPart>),
@@ -102,11 +108,14 @@ pub enum ResolvedPattern {
     Var(ResolvedId),
     Annotated(ResolvedId, AstTy),
     Wildcard(Span),
+    ListNil(Span),
+    ListCons(Box<ResolvedPattern>, Box<ResolvedPattern>),
 }
 
 /// Match pattern (resolved).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedMatchPattern {
+    Binding(ResolvedId),
     /// `_`
     Wildcard(Span),
     /// `True` / `False`
@@ -117,6 +126,10 @@ pub enum ResolvedMatchPattern {
     StrLit(Span, String),
     /// `Ok(var)` / `Err(var)` — constructor tag resolved
     Constructor(Span, ResolvedId, Option<ResolvedId>),
+    /// `[]`
+    ListNil(Span),
+    /// `[head, ..tail]`
+    ListCons(Box<ResolvedMatchPattern>, Box<ResolvedMatchPattern>),
 }
 
 /// Record literal argument (resolved).
