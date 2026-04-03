@@ -1,0 +1,3 @@
+print(to_string(double(21)))
+
+def double(x: Int) -> Int { x * 2 }

@@ -281,6 +281,16 @@ bad = &compose(inc(1))"#,
         );
     }
 
+    #[test]
+    fn function_forward_reference_succeeds() {
+        assert_output(
+            r#"print(to_string(double(21)))
+
+def double(x: Int) -> Int { x * 2 }"#,
+            &["42"],
+        );
+    }
+
     // Structs and records
 
     #[test]
@@ -317,6 +327,29 @@ print(to_string(point.x))"#,
 point2 = Point(y: 5.0, x: 3.0)
 print(to_string(point2.x))"#,
             &["3.0"],
+        );
+    }
+
+    #[test]
+    fn struct_record_forward_references_and_type_annotation_succeed() {
+        assert_output(
+            r#"user: User = make_user("alice")
+print(to_string(user.age))
+
+point = Point(y: 9.5, x: 3.0)
+print(to_string(point.x))
+
+def make_user(name: String) -> User {
+  User { name: name, age: 30 }
+}
+
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+defrecord Point(x: Float, y: Float)"#,
+            &["30", "3.0"],
         );
     }
 
@@ -847,6 +880,26 @@ match err1 {
   Err(e)   => print("got error"),
 }"#;
         assert_output(source, &["got error"]);
+    }
+
+    #[test]
+    fn deferror_forward_reference_in_result_signature_succeeds() {
+        assert_output(
+            r#"ret: Result<Int> = load()
+match ret {
+  Ok(val) => print("ok"),
+  Err(e)  => print("err"),
+}
+
+def load() -> Result<Int, NotFound> {
+  Err(NotFound("/api"))
+}
+
+deferror NotFound(path: String) {
+  "Not Found: #{path}"
+}"#,
+            &["err"],
+        );
     }
 
     #[test]
