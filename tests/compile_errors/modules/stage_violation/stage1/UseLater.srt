@@ -1,0 +1,5 @@
+import Later::later_value;
+
+def use_later() -> Int {
+  later_value()
+}

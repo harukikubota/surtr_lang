@@ -173,7 +173,6 @@ fn parse_program_with_builtin_prelude(
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
 
-    let mut ast = Vec::new();
     let mut staged_module_asts = Vec::with_capacity(compile_sources.module_stages.len());
     for stage in &compile_sources.module_stages {
         let mut stage_ast = Vec::with_capacity(stage.len());
@@ -194,7 +193,6 @@ fn parse_program_with_builtin_prelude(
                     return Err(1);
                 }
             };
-            ast.extend(module_ast.iter().cloned());
             stage_ast.push(sigil::StagedModuleAst {
                 module_path: module.module_path.clone(),
                 ast: module_ast,
@@ -204,7 +202,7 @@ fn parse_program_with_builtin_prelude(
     }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
-    let mut user_ast = match spire::parse_with_context(
+    let user_ast = match spire::parse_with_context(
         user_source,
         spire::ParserContext::script(user_source_id.0),
     ) {
@@ -220,8 +218,7 @@ fn parse_program_with_builtin_prelude(
         }
     };
 
-    ast.append(&mut user_ast);
-    Ok((staged_module_asts, ast))
+    Ok((staged_module_asts, user_ast))
 }
 
 fn compile_source(
@@ -232,20 +229,24 @@ fn compile_source(
     let user_source = sources.source(user_source_id).unwrap_or("");
 
     // Phase 1: Spire — parse
-    let (module_stages, ast) = parse_program_with_builtin_prelude(compile_sources)?;
+    let (module_stages, user_ast) = parse_program_with_builtin_prelude(compile_sources)?;
 
     // Issue 6: precollect declaration index from staged modules before body resolution.
-    if let Err(e) = sigil::precollect_declaration_index(&module_stages) {
-        diagnostics::report_error_by_id(
-            sources,
-            user_source_id,
-            diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-        );
-        return Err(1);
-    }
+    let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
+        Ok(index) => index,
+        Err(e) => {
+            diagnostics::report_error_by_id(
+                sources,
+                user_source_id,
+                diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+            );
+            return Err(1);
+        }
+    };
 
     // Phase 2: Sigil — resolve names
-    let resolved = match sigil::resolve(ast) {
+    let resolved = match sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index)
+    {
         Ok(r) => r,
         Err(e) => {
             diagnostics::report_error_by_id(

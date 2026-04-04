@@ -1,0 +1,3 @@
+def later_value() -> Int {
+  1
+}

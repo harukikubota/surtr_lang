@@ -1,0 +1,3 @@
+import UseLater::use_later;
+
+print(to_string(use_later()))

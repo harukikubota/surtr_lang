@@ -28,6 +28,48 @@ pub fn resolve(ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
     resolver.resolve_program(ast)
 }
 
+pub fn resolve_staged_program(
+    module_stages: &[Vec<StagedModuleAst>],
+    user_ast: Vec<Ast>,
+    declaration_index: &DeclarationIndex,
+) -> Result<Vec<Resolved>, ResolveError> {
+    let declaration_uids = assign_declaration_uids(declaration_index);
+    let global_scope = build_global_scope(declaration_index, &declaration_uids);
+    let mut resolved = Vec::new();
+
+    for (stage_index, stage) in module_stages.iter().enumerate() {
+        for module in stage {
+            let scope = build_module_scope(
+                &global_scope,
+                declaration_index,
+                &declaration_uids,
+                &module.ast,
+                Some(module.module_path.as_str()),
+                stage_index,
+            )?;
+            let mut resolver = Resolver::with_scope(scope);
+            resolver.current_module_path = Some(module.module_path.clone());
+            resolver.declaration_uids = declaration_uids.clone();
+            resolver.allow_top_level_shadowing = true;
+            resolved.extend(resolver.resolve_program(module.ast.clone())?);
+        }
+    }
+
+    let user_scope = build_module_scope(
+        &global_scope,
+        declaration_index,
+        &declaration_uids,
+        &user_ast,
+        None,
+        module_stages.len(),
+    )?;
+    let mut user_resolver = Resolver::with_scope(user_scope);
+    user_resolver.declaration_uids = declaration_uids;
+    user_resolver.allow_top_level_shadowing = true;
+    resolved.extend(user_resolver.resolve_program(user_ast)?);
+    Ok(resolved)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
     pub module_path: String,
@@ -52,6 +94,243 @@ pub struct DeclarationEntry {
 }
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
+
+fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
+    let mut scope = initialize_scope();
+    let mut declaration_uids = HashMap::with_capacity(index.len());
+    for fq_name in index.keys() {
+        declaration_uids.insert(fq_name.clone(), scope.reserve_id());
+    }
+    declaration_uids
+}
+
+fn build_global_scope(index: &DeclarationIndex, declaration_uids: &HashMap<String, u32>) -> Scope {
+    let mut scope = initialize_scope();
+    for fq_name in index.keys() {
+        if let Some(uid) = declaration_uids.get(fq_name) {
+            scope.define_with_id(fq_name, *uid);
+        }
+    }
+    scope
+}
+
+fn build_module_scope(
+    global_scope: &Scope,
+    declaration_index: &DeclarationIndex,
+    declaration_uids: &HashMap<String, u32>,
+    stmts: &[Ast],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
+) -> Result<Scope, ResolveError> {
+    let mut scope = global_scope.clone();
+
+    for auto_import in AUTO_IMPORT_MODULES {
+        if current_module_path == Some(*auto_import) {
+            continue;
+        }
+        import_module_into_scope(
+            &mut scope,
+            declaration_index,
+            declaration_uids,
+            auto_import,
+            current_stage_index,
+            true,
+            Span { start: 0, end: 0 },
+        )?;
+    }
+
+    for stmt in stmts {
+        if let Ast::Import(span, path, spec) = stmt {
+            apply_import_to_scope(
+                &mut scope,
+                declaration_index,
+                declaration_uids,
+                current_stage_index,
+                path,
+                spec,
+                span.clone(),
+            )?;
+        }
+    }
+
+    if let Some(module_path) = current_module_path {
+        for entry in declaration_index.values() {
+            if entry.module_path == module_path {
+                if let Some(uid) = declaration_uids.get(&entry.fq_name) {
+                    scope.define_with_id(&entry.name, *uid);
+                }
+            }
+        }
+    }
+
+    Ok(scope)
+}
+
+fn apply_import_to_scope(
+    scope: &mut Scope,
+    declaration_index: &DeclarationIndex,
+    declaration_uids: &HashMap<String, u32>,
+    current_stage_index: usize,
+    path: &spire::ast::AstPath,
+    spec: &spire::ast::ImportSpec,
+    span: Span,
+) -> Result<(), ResolveError> {
+    let module_name = path.segments.join("::");
+    match spec {
+        spire::ast::ImportSpec::All => import_module_into_scope(
+            scope,
+            declaration_index,
+            declaration_uids,
+            &module_name,
+            current_stage_index,
+            false,
+            span,
+        ),
+        spire::ast::ImportSpec::Single(name) => {
+            import_single_into_scope(
+                scope,
+                declaration_index,
+                declaration_uids,
+                &module_name,
+                name,
+                current_stage_index,
+                span,
+            )
+        }
+        spire::ast::ImportSpec::List(names) => {
+            for name in names {
+                import_single_into_scope(
+                    scope,
+                    declaration_index,
+                    declaration_uids,
+                    &module_name,
+                    name,
+                    current_stage_index,
+                    span.clone(),
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn import_module_into_scope(
+    scope: &mut Scope,
+    declaration_index: &DeclarationIndex,
+    declaration_uids: &HashMap<String, u32>,
+    module_name: &str,
+    current_stage_index: usize,
+    auto_import: bool,
+    span: Span,
+) -> Result<(), ResolveError> {
+    let mut imported_any = false;
+    let mut blocked_by_stage = false;
+    for entry in declaration_index.values() {
+        if entry.module_path != module_name {
+            continue;
+        }
+        if entry.stage_index >= current_stage_index {
+            blocked_by_stage = true;
+            continue;
+        }
+        let uid = declaration_uids[&entry.fq_name];
+        bind_import_name(scope, &entry.name, uid, module_name, auto_import, span.clone())?;
+        imported_any = true;
+    }
+
+    if imported_any {
+        Ok(())
+    } else if blocked_by_stage {
+        Err(ResolveError {
+            message: format!(
+                "Import target `{}` is not available in the current stage",
+                module_name
+            ),
+            span,
+        })
+    } else {
+        Err(ResolveError {
+            message: format!("Unknown module import: {}", module_name),
+            span,
+        })
+    }
+}
+
+fn import_single_into_scope(
+    scope: &mut Scope,
+    declaration_index: &DeclarationIndex,
+    declaration_uids: &HashMap<String, u32>,
+    module_name: &str,
+    name: &str,
+    current_stage_index: usize,
+    span: Span,
+) -> Result<(), ResolveError> {
+    let fq_name = format!("{}::{}", module_name, name);
+    let Some(entry) = declaration_index.get(&fq_name) else {
+        let module_exists = declaration_index
+            .values()
+            .any(|entry| entry.module_path == module_name);
+        return Err(ResolveError {
+            message: if module_exists {
+                format!("Unknown import member: {}", fq_name)
+            } else {
+                format!("Unknown module import: {}", module_name)
+            },
+            span,
+        });
+    };
+
+    if entry.stage_index >= current_stage_index {
+        return Err(ResolveError {
+            message: format!(
+                "Import target `{}` is not available in the current stage",
+                fq_name
+            ),
+            span,
+        });
+    }
+
+    bind_import_name(
+        scope,
+        &entry.name,
+        declaration_uids[&entry.fq_name],
+        module_name,
+        false,
+        span,
+    )
+}
+
+fn bind_import_name(
+    scope: &mut Scope,
+    short_name: &str,
+    uid: u32,
+    module_name: &str,
+    auto_import: bool,
+    span: Span,
+) -> Result<(), ResolveError> {
+    if let Some(existing_uid) = scope.lookup(short_name) {
+        if existing_uid == uid {
+            return Ok(());
+        }
+        return Err(ResolveError {
+            message: if auto_import {
+                format!(
+                    "Auto-import conflict for `{}` from module `{}`",
+                    short_name, module_name
+                )
+            } else {
+                format!(
+                    "Import conflict for `{}` from module `{}`",
+                    short_name, module_name
+                )
+            },
+            span,
+        });
+    }
+
+    scope.define_with_id(short_name, uid);
+    Ok(())
+}
 
 /// Precollect global declaration index from staged module ASTs.
 ///
@@ -154,6 +433,9 @@ struct Resolver {
     scope: Scope,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
+    declaration_uids: HashMap<String, u32>,
+    current_module_path: Option<String>,
+    allow_top_level_shadowing: bool,
 }
 
 impl Resolver {
@@ -161,6 +443,9 @@ impl Resolver {
         Self {
             scope: initialize_scope(),
             predeclared_ids: HashMap::new(),
+            declaration_uids: HashMap::new(),
+            current_module_path: None,
+            allow_top_level_shadowing: false,
         }
     }
 
@@ -168,6 +453,9 @@ impl Resolver {
         Self {
             scope,
             predeclared_ids: HashMap::new(),
+            declaration_uids: HashMap::new(),
+            current_module_path: None,
+            allow_top_level_shadowing: false,
         }
     }
 
@@ -235,14 +523,27 @@ impl Resolver {
         for stmt in stmts {
             match stmt {
                 Ast::Def(span, name, _, _, _) => {
-                    if self.scope.lookup(name).is_some() || !declared_in_batch.insert(name.clone())
-                    {
+                    if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
                         });
                     }
-                    let uid = self.scope.reserve_id();
+                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                    let uid = self
+                        .current_module_path
+                        .as_deref()
+                        .and_then(|module_path| {
+                            self.declaration_uids
+                                .get(&format!("{}::{}", module_path, name))
+                                .copied()
+                        })
+                        .unwrap_or_else(|| self.scope.reserve_id());
                     self.predeclared_ids
                         .entry(name.clone())
                         .or_default()
@@ -273,14 +574,27 @@ impl Resolver {
                 Ast::StructDef(span, name, _)
                 | Ast::RecordDef(span, name, _)
                 | Ast::DeferrorDef(span, name, _, _) => {
-                    if self.scope.lookup(name).is_some() || !declared_in_batch.insert(name.clone())
-                    {
+                    if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
                         });
                     }
-                    let uid = self.scope.reserve_id();
+                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                    let uid = self
+                        .current_module_path
+                        .as_deref()
+                        .and_then(|module_path| {
+                            self.declaration_uids
+                                .get(&format!("{}::{}", module_path, name))
+                                .copied()
+                        })
+                        .unwrap_or_else(|| self.scope.reserve_id());
                     self.predeclared_ids
                         .entry(name.clone())
                         .or_default()
@@ -317,13 +631,21 @@ impl Resolver {
                     },
                 ))
             }
-            Ast::Path(span, path) => Err(ResolveError {
-                message: format!(
-                    "Qualified path resolution is not implemented yet: {}",
-                    path.segments.join("::")
-                ),
-                span,
-            }),
+            Ast::Path(span, path) => {
+                let name = path.segments.join("::");
+                let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
+                    message: format!("Undefined variable: {}", name),
+                    span: span.clone(),
+                })?;
+                Ok(Resolved::Var(
+                    span.clone(),
+                    ResolvedId {
+                        name,
+                        unique_id: uid,
+                        span,
+                    },
+                ))
+            }
 
             Ast::App(span, func, args) => {
                 // Check for `if` special form

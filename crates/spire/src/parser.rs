@@ -754,6 +754,76 @@ impl Parser {
         name: Symbol,
         name_span: Span,
     ) -> Result<Ast, ParseError> {
+        let mut path_segments = vec![name.clone()];
+        let mut path_end = name_span.end;
+        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+            self.consume_path_separator()?;
+            let (seg, seg_span) = self.expect_ident()?;
+            path_end = seg_span.end;
+            path_segments.push(seg);
+        }
+
+        let path_ast = if path_segments.len() > 1 {
+            Some(Ast::Path(
+                Span {
+                    start: name_span.start,
+                    end: path_end,
+                },
+                AstPath {
+                    span: Span {
+                        start: name_span.start,
+                        end: path_end,
+                    },
+                    segments: path_segments.clone(),
+                },
+            ))
+        } else {
+            None
+        };
+
+        if let Some(path_expr) = path_ast {
+            if matches!(self.peek(), Token::LParen) {
+                self.advance();
+                self.skip_newlines();
+                let mut args = Vec::new();
+                if !matches!(self.peek(), Token::RParen) {
+                    args.push(self.parse_record_lit_arg()?);
+                    while matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                        args.push(self.parse_record_lit_arg()?);
+                    }
+                }
+                self.skip_newlines();
+                let end_span = self.expect(&Token::RParen)?;
+                return Ok(Ast::App(
+                    Span {
+                        start: name_span.start,
+                        end: end_span.end,
+                    },
+                    Box::new(path_expr),
+                    args,
+                ));
+            }
+
+            if matches!(self.peek(), Token::Unit) {
+                let end_span = self.advance().span.clone();
+                return Ok(Ast::App(
+                    Span {
+                        start: name_span.start,
+                        end: end_span.end,
+                    },
+                    Box::new(path_expr),
+                    Vec::new(),
+                ));
+            }
+
+            return Ok(path_expr);
+        }
+
         let is_uppercase = name
             .chars()
             .next()
@@ -938,7 +1008,7 @@ impl Parser {
             let save = self.pos;
             let _name_span = self.peek_span();
             self.advance();
-            if matches!(self.peek(), Token::Colon) {
+            if matches!(self.peek(), Token::Colon) && !self.has_path_separator() {
                 self.advance();
                 let val = self.parse_non_assignment_expr()?;
                 return Ok(RecordLitArg::Named(name, val));

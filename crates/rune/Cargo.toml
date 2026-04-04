@@ -38,3 +38,7 @@ path = "../../tests/integration/repl.rs"
 [[test]]
 name = "language_features"
 path = "../../tests/integration/language_features.rs"
+
+[[test]]
+name = "module_import_fixtures"
+path = "../../tests/integration/module_import_fixtures.rs"
