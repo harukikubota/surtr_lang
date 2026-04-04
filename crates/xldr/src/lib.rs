@@ -14,9 +14,14 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper};
 use sindr::builtin::BUILTIN_METAS;
 
-const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";
-const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
-const REPL_MODULE_NAME: &str = "REPL";
+mod loader;
+
+pub use loader::{
+    collect_compile_sources, collect_compile_sources_with_module_file_stages,
+    collect_compile_sources_with_module_stages, collect_compile_sources_with_modules,
+    CompileSources, LoadError, ModuleInput, StagedModule,
+};
+
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +130,7 @@ enum ReplOutcome {
 struct ReplEngine {
     sources: SourceRegistry,
     builtin_source_id: SourceId,
+    builtin_module_path: Option<String>,
     repl_source_id: SourceId,
     sigil_session: sigil::SigilSession,
     scar_session: scar::ScarSession,
@@ -137,16 +143,15 @@ struct ReplEngine {
 }
 
 impl ReplEngine {
-    fn new() -> Self {
-        let mut sources = SourceRegistry::new();
-        let builtin_source_id = sources.register(BUILTIN_PRELUDE_FILE, BUILTIN_PRELUDE_SOURCE);
-        let repl_source_id = sources.register(REPL_MODULE_NAME, "");
+    fn new() -> Result<Self, LoadError> {
+        let repl_sources = loader::collect_repl_sources()?;
         let forge_session = forge::ForgeSession::new();
         let vm = eldr::VM::new_interactive(forge_session.type_registry());
         let mut engine = Self {
-            sources,
-            builtin_source_id,
-            repl_source_id,
+            sources: repl_sources.sources,
+            builtin_source_id: repl_sources.builtin_source_id,
+            builtin_module_path: repl_sources.builtin_module_path,
+            repl_source_id: repl_sources.repl_source_id,
             sigil_session: sigil::SigilSession::new(),
             scar_session: scar::ScarSession::new(),
             forge_session,
@@ -161,7 +166,7 @@ impl ReplEngine {
                 .collect(),
         };
         engine.bootstrap_builtins();
-        engine
+        Ok(engine)
     }
 
     fn bootstrap_builtins(&mut self) {
@@ -172,7 +177,10 @@ impl ReplEngine {
             .to_string();
         let ast = match spire::parse_with_context(
             &builtin_source,
-            spire::ParserContext::module(self.builtin_source_id.0, None),
+            spire::ParserContext::module(
+                self.builtin_source_id.0,
+                self.builtin_module_path.clone(),
+            ),
         ) {
             Ok(ast) => ast,
             Err(e) => {
@@ -489,7 +497,10 @@ pub fn repl_command(options: ReplOptions) -> Result<(), i32> {
         print_banner(options.banner);
     }
 
-    let mut engine = ReplEngine::new();
+    let mut engine = ReplEngine::new().map_err(|e| {
+        eprintln!("Error initializing source loader: {}", e);
+        1
+    })?;
 
     if io::stdin().is_terminal() {
         let mut editor: Editor<ReplHelper, DefaultHistory> = Editor::new().map_err(|e| {

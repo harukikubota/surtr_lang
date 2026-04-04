@@ -9,6 +9,8 @@ use crate::error::ResolveError;
 use crate::resolved::*;
 use crate::scope::Scope;
 
+const AUTO_IMPORT_MODULES: &[&str] = &["bootstrap"];
+
 fn initialize_scope() -> Scope {
     let mut scope = Scope::new();
     let dummy = Span { start: 0, end: 0 };
@@ -103,13 +105,44 @@ impl Resolver {
     }
 
     fn resolve_program(&mut self, stmts: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
+        self.validate_auto_import_conflicts(&stmts)?;
         self.predeclare_functions(&stmts)?;
         let mut resolved = Vec::new();
         for stmt in stmts {
+            if matches!(stmt, Ast::Import(_, _, _)) {
+                // `import` declarations are consumed by resolver-side module/import handling.
+                // Until full module resolution lands, they are intentionally no-op here.
+                continue;
+            }
             resolved.push(self.resolve_node(stmt)?);
         }
         self.predeclared_ids.clear();
         Ok(resolved)
+    }
+
+    fn validate_auto_import_conflicts(&self, stmts: &[Ast]) -> Result<(), ResolveError> {
+        for stmt in stmts {
+            match stmt {
+                Ast::Import(span, path, _) => {
+                    let module_name = path.segments.join("::");
+                    if AUTO_IMPORT_MODULES
+                        .iter()
+                        .any(|auto| auto == &module_name.as_str())
+                    {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Duplicate import: `{}` is auto-imported and cannot be explicitly imported",
+                                module_name
+                            ),
+                            span: span.clone(),
+                        });
+                    }
+                }
+                Ast::Defmod(_, _, body) => self.validate_auto_import_conflicts(body)?,
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn predeclare_functions(&mut self, stmts: &[Ast]) -> Result<(), ResolveError> {
@@ -1567,5 +1600,43 @@ match value {
             },
             _ => panic!("Expected Bind"),
         }
+    }
+
+    #[test]
+    fn test_explicit_auto_import_is_rejected() {
+        let err = parse_and_resolve(
+            r#"import bootstrap;
+print("ok")"#,
+        )
+        .expect_err("explicit auto-import must fail");
+        assert!(err.message.contains("Duplicate import"));
+        assert!(err.message.contains("bootstrap"));
+    }
+
+    #[test]
+    fn test_capture_prefers_shadowed_local_function_name() {
+        let resolved = parse_and_resolve(
+            r#"print = {|x| x}
+captured = &print"#,
+        )
+        .expect("shadowing + capture should resolve");
+
+        let local_print_id = match &resolved[0] {
+            Resolved::Bind(_, ResolvedPattern::Var(id), _) => id.unique_id,
+            _ => panic!("Expected local print binding"),
+        };
+
+        let captured_target_id = match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Capture(_, target, _) => match target.as_ref() {
+                    Resolved::Var(_, id) => id.unique_id,
+                    _ => panic!("Expected captured var target"),
+                },
+                _ => panic!("Expected capture expression"),
+            },
+            _ => panic!("Expected captured binding"),
+        };
+
+        assert_eq!(captured_target_id, local_print_id);
     }
 }

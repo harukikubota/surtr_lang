@@ -3,12 +3,9 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
-use diagnostics::{SourceId, SourceRegistry};
 use forge::bytecode::populate_error_template_lines;
 mod dump;
 
-const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";
-const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
 const RUNE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
@@ -100,9 +97,17 @@ fn run_source_file(file_path: &str) -> Result<(), i32> {
         }
     };
 
-    let (sources, user_source_id, builtin_source_id) = register_compile_sources(file_path, &source);
-    let bytecode = compile_source(&sources, user_source_id, builtin_source_id)?;
-    execute_bytecode(bytecode, sources.owned_context(user_source_id))
+    let compile_sources = xldr::collect_compile_sources(file_path, &source).map_err(|e| {
+        eprintln!("Error collecting compile sources: {}", e);
+        1
+    })?;
+    let bytecode = compile_source(&compile_sources)?;
+    execute_bytecode(
+        bytecode,
+        compile_sources
+            .sources
+            .owned_context(compile_sources.user_source_id),
+    )
 }
 
 fn run_eldr_file(file_path: &str) -> Result<(), i32> {
@@ -134,8 +139,11 @@ fn build_command(input_srt: &str, output_eldr: Option<&str>) -> Result<(), i32> 
         }
     };
 
-    let (sources, user_source_id, builtin_source_id) = register_compile_sources(input_srt, &source);
-    let bytecode = compile_source(&sources, user_source_id, builtin_source_id)?;
+    let compile_sources = xldr::collect_compile_sources(input_srt, &source).map_err(|e| {
+        eprintln!("Error collecting compile sources: {}", e);
+        1
+    })?;
+    let bytecode = compile_source(&compile_sources)?;
     let bytes = match bytecode.encode() {
         Ok(b) => b,
         Err(e) => {
@@ -159,36 +167,34 @@ fn default_output_path(input_srt: &str) -> String {
     path.with_extension("eldr").to_string_lossy().into_owned()
 }
 
-fn register_compile_sources(file_path: &str, source: &str) -> (SourceRegistry, SourceId, SourceId) {
-    let mut sources = SourceRegistry::new();
-    let user_source_id = sources.register(file_path, source);
-    let builtin_source_id = sources.register(BUILTIN_PRELUDE_FILE, BUILTIN_PRELUDE_SOURCE);
-    (sources, user_source_id, builtin_source_id)
-}
-
 fn parse_program_with_builtin_prelude(
-    sources: &SourceRegistry,
-    user_source_id: SourceId,
-    builtin_source_id: SourceId,
+    compile_sources: &xldr::CompileSources,
 ) -> Result<Vec<spire::ast::Ast>, i32> {
-    let builtin_source = sources
-        .source(builtin_source_id)
-        .unwrap_or(BUILTIN_PRELUDE_SOURCE);
-    let mut ast = match spire::parse_with_context(
-        builtin_source,
-        spire::ParserContext::module(builtin_source_id.0, None),
-    ) {
-        Ok(a) => a,
-        Err(e) => {
-            let message = e.message();
-            diagnostics::report_error_by_id(
-                sources,
-                builtin_source_id,
-                diagnostics::simple_error("ParseError", message, e.span().clone(), None),
-            );
-            return Err(1);
+    let sources = &compile_sources.sources;
+    let user_source_id = compile_sources.user_source_id;
+
+    let mut ast = Vec::new();
+    for stage in &compile_sources.module_stages {
+        for module in stage {
+            let module_source = sources.source(module.source_id).unwrap_or("");
+            let mut module_ast = match spire::parse_with_context(
+                module_source,
+                spire::ParserContext::module(module.source_id.0, Some(module.module_path.clone())),
+            ) {
+                Ok(a) => a,
+                Err(e) => {
+                    let message = e.message();
+                    diagnostics::report_error_by_id(
+                        sources,
+                        module.source_id,
+                        diagnostics::simple_error("ParseError", message, e.span().clone(), None),
+                    );
+                    return Err(1);
+                }
+            };
+            ast.append(&mut module_ast);
         }
-    };
+    }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
     let mut user_ast = match spire::parse_with_context(
@@ -212,14 +218,14 @@ fn parse_program_with_builtin_prelude(
 }
 
 fn compile_source(
-    sources: &SourceRegistry,
-    user_source_id: SourceId,
-    builtin_source_id: SourceId,
+    compile_sources: &xldr::CompileSources,
 ) -> Result<forge::bytecode::Bytecode, i32> {
+    let sources = &compile_sources.sources;
+    let user_source_id = compile_sources.user_source_id;
     let user_source = sources.source(user_source_id).unwrap_or("");
 
     // Phase 1: Spire — parse
-    let ast = parse_program_with_builtin_prelude(sources, user_source_id, builtin_source_id)?;
+    let ast = parse_program_with_builtin_prelude(compile_sources)?;
 
     // Phase 2: Sigil — resolve names
     let resolved = match sigil::resolve(ast) {
