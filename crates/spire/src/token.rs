@@ -63,6 +63,8 @@ pub enum Token {
 
     // ── Keywords ──
     Def,
+    Defmod,
+    Import,
     /// Generic annotator token: `@@builtin`, `@@foo`, ...
     Annotator(String),
     Defstruct,

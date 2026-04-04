@@ -203,6 +203,13 @@ impl Resolver {
                     },
                 ))
             }
+            Ast::Path(span, path) => Err(ResolveError {
+                message: format!(
+                    "Qualified path resolution is not implemented yet: {}",
+                    path.segments.join("::")
+                ),
+                span,
+            }),
 
             Ast::App(span, func, args) => {
                 // Check for `if` special form
@@ -450,6 +457,14 @@ impl Resolver {
                 };
                 Ok(Resolved::BuiltinDecl(span, rid, resolved_params, ret_ty))
             }
+            Ast::Defmod(span, name, _) => Err(ResolveError {
+                message: format!("Module resolution is not implemented yet: {}", name),
+                span,
+            }),
+            Ast::Import(span, _, _) => Err(ResolveError {
+                message: "Import resolution is not implemented yet".to_string(),
+                span,
+            }),
 
             Ast::Closure(span, params, body) => {
                 let mut closure_scope = self.scope.clone();

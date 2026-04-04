@@ -190,6 +190,21 @@ impl Parser {
         )
     }
 
+    fn has_path_separator(&self) -> bool {
+        matches!(self.peek(), Token::Colon) && matches!(self.peek_n(1), Some(Token::Colon))
+    }
+
+    fn consume_path_separator(&mut self) -> Result<Span, ParseError> {
+        if !self.has_path_separator() {
+            return Err(ParseError::syntax("Expected `::`", self.peek_span()));
+        }
+        let start = self.peek_span().start;
+        self.advance();
+        let end = self.peek_span().end;
+        self.advance();
+        Ok(Span { start, end })
+    }
+
     // ── Program ──
 
     fn parse_program(&mut self) -> Result<Vec<Ast>, ParseError> {
@@ -217,6 +232,8 @@ impl Parser {
                 self.peek(),
                 Token::Annotator(_)
                     | Token::Def
+                    | Token::Defmod
+                    | Token::Import
                     | Token::Defstruct
                     | Token::Defrecord
                     | Token::Deferror
@@ -232,6 +249,8 @@ impl Parser {
         let stmt = match self.peek() {
             Token::Annotator(_) => self.parse_annotated_decl()?,
             Token::Def => self.parse_def()?,
+            Token::Defmod => self.parse_defmod()?,
+            Token::Import => self.parse_import()?,
             Token::Defstruct => self.parse_struct_def()?,
             Token::Defrecord => self.parse_record_def()?,
             Token::Deferror => self.parse_deferror_def()?,
@@ -277,7 +296,7 @@ impl Parser {
     fn validate_stmt_by_context(&self, stmt: &Ast) -> Result<(), ParseError> {
         if self.context.level == DeclLevel::Top
             && self.context.unit_kind == CompileUnitKind::Module
-            && !Self::is_top_level_declaration(stmt)
+            && !Self::is_module_top_level_stmt(stmt)
         {
             return Err(ParseError::syntax(
                 "Top-level expressions are not allowed in module compile units",
@@ -287,15 +306,178 @@ impl Parser {
         Ok(())
     }
 
-    fn is_top_level_declaration(ast: &Ast) -> bool {
+    fn is_module_top_level_stmt(ast: &Ast) -> bool {
         matches!(
             ast,
-            Ast::Def(_, _, _, _, _)
+            Ast::Import(_, _, _)
+                | Ast::Def(_, _, _, _, _)
                 | Ast::StructDef(_, _, _)
                 | Ast::RecordDef(_, _, _)
                 | Ast::DeferrorDef(_, _, _, _)
                 | Ast::BuiltinDecl(_, _, _, _)
         )
+    }
+
+    fn parse_module_body_stmts(
+        &mut self,
+        module_path: Option<String>,
+    ) -> Result<Vec<Ast>, ParseError> {
+        let prev_context = self.context.clone();
+        self.context.level = DeclLevel::Top;
+        self.context.unit_kind = CompileUnitKind::Module;
+        self.context.module_path = module_path;
+
+        let result = (|| {
+            let mut stmts = Vec::new();
+            self.skip_newlines();
+
+            while !matches!(self.peek(), Token::RBrace) {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete("}", self.peek_span()));
+                }
+                let stmt = self.parse_stmt()?;
+                self.ensure_stmt_boundary(&stmt, true)?;
+                stmts.push(stmt);
+                while matches!(self.peek(), Token::Newline) {
+                    self.advance();
+                }
+            }
+
+            Ok(stmts)
+        })();
+
+        self.context = prev_context;
+        result
+    }
+
+    fn parse_import_selector_list(&mut self) -> Result<(Vec<Symbol>, Span), ParseError> {
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut names = Vec::new();
+        loop {
+            if matches!(self.peek(), Token::RBrace) {
+                break;
+            }
+            let (name, _span) = self.expect_ident()?;
+            names.push(name);
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                if matches!(self.peek(), Token::RBrace) {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+
+        if names.is_empty() {
+            return Err(ParseError::syntax(
+                "Import list requires at least one symbol",
+                self.peek_span(),
+            ));
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok((names, end))
+    }
+
+    fn parse_import(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Import)?;
+        let (first_seg, first_span) = self.expect_ident()?;
+        let path_start = first_span.start;
+        let mut qualified = vec![(first_seg, first_span)];
+        let mut saw_separator = false;
+
+        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+            saw_separator = true;
+            self.consume_path_separator()?;
+            let (seg, seg_span) = self.expect_ident()?;
+            qualified.push((seg, seg_span));
+        }
+
+        let (module_segments, module_end, spec, mut stmt_end) =
+            if self.has_path_separator() && matches!(self.peek_n(2), Some(Token::LBrace)) {
+                self.consume_path_separator()?;
+                let (names, end) = self.parse_import_selector_list()?;
+                (
+                    qualified.iter().map(|(name, _)| name.clone()).collect(),
+                    qualified.last().expect("non-empty path").1.end,
+                    ImportSpec::List(names),
+                    end.end,
+                )
+            } else if self.has_path_separator() {
+                return Err(ParseError::syntax(
+                    "Expected identifier or `{` after `::` in import",
+                    self.peek_span(),
+                ));
+            } else if saw_separator {
+                let (name, selected_span) = qualified
+                    .pop()
+                    .expect("qualified import with separator has at least 2 segments");
+                (
+                    qualified.iter().map(|(module, _)| module.clone()).collect(),
+                    qualified.last().expect("module path is non-empty").1.end,
+                    ImportSpec::Single(name),
+                    selected_span.end,
+                )
+            } else {
+                (
+                    qualified.iter().map(|(name, _)| name.clone()).collect(),
+                    qualified.last().expect("non-empty path").1.end,
+                    ImportSpec::All,
+                    qualified.last().expect("non-empty path").1.end,
+                )
+            };
+
+        if matches!(self.peek(), Token::Semicolon) {
+            stmt_end = self.advance().span.end;
+        }
+
+        let path = AstPath {
+            span: Span {
+                start: path_start,
+                end: module_end,
+            },
+            segments: module_segments,
+        };
+
+        Ok(Ast::Import(
+            Span {
+                start: sp.start,
+                end: stmt_end,
+            },
+            path,
+            spec,
+        ))
+    }
+
+    fn parse_defmod(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        if self.context.unit_kind == CompileUnitKind::Module {
+            return Err(ParseError::syntax(
+                "Nested module declarations are not allowed",
+                sp,
+            ));
+        }
+        self.expect(&Token::Defmod)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        let body = self.parse_module_body_stmts(Some(name.clone()))?;
+        let end = self.expect(&Token::RBrace)?;
+
+        Ok(Ast::Defmod(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            name,
+            body,
+        ))
     }
 
     fn parse_block_stmts(&mut self) -> Result<Vec<Ast>, ParseError> {
@@ -2030,10 +2212,18 @@ fn shift_record_lit_arg(arg: RecordLitArg, delta: usize) -> RecordLitArg {
     }
 }
 
+fn shift_ast_path(path: AstPath, delta: usize) -> AstPath {
+    AstPath {
+        span: shift_span(path.span, delta),
+        segments: path.segments,
+    }
+}
+
 fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
     match ast {
         Ast::Lit(span, lit) => Ast::Lit(shift_span(span, delta), lit),
         Ast::Var(span, name) => Ast::Var(shift_span(span, delta), name),
+        Ast::Path(span, path) => Ast::Path(shift_span(span, delta), shift_ast_path(path, delta)),
         Ast::App(span, func, args) => Ast::App(
             shift_span(span, delta),
             Box::new(shift_ast_span(*func, delta)),
@@ -2172,6 +2362,14 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
         ),
+        Ast::Defmod(span, name, body) => Ast::Defmod(
+            shift_span(span, delta),
+            name,
+            body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
+        ),
+        Ast::Import(span, path, spec) => {
+            Ast::Import(shift_span(span, delta), shift_ast_path(path, delta), spec)
+        }
         Ast::Closure(span, params, body) => Ast::Closure(
             shift_span(span, delta),
             params
@@ -2202,6 +2400,7 @@ impl Ast {
         match self {
             Ast::Lit(s, _)
             | Ast::Var(s, _)
+            | Ast::Path(s, _)
             | Ast::App(s, _, _)
             | Ast::Block(s, _)
             | Ast::Bind(s, _, _)
@@ -2220,6 +2419,8 @@ impl Ast {
             | Ast::DeferrorDef(s, _, _, _)
             | Ast::Def(s, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _)
+            | Ast::Defmod(s, _, _)
+            | Ast::Import(s, _, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
             | Ast::Semi(s, _) => s,
@@ -2908,6 +3109,78 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_defmod_parses_module_body() {
+        let ast = parse(
+            r#"defmod Kernel {
+  def add(x: Int, y: Int) -> Int { x + y }
+}"#,
+        )
+        .expect("defmod should parse");
+
+        match ast.as_slice() {
+            [Ast::Defmod(_, name, body)] => {
+                assert_eq!(name, "Kernel");
+                assert!(matches!(body.as_slice(), [Ast::Def(_, _, _, _, _)]));
+            }
+            _ => panic!("Expected single defmod declaration"),
+        }
+    }
+
+    #[test]
+    fn test_import_three_forms_parse() {
+        let ast = parse(
+            r#"import Kernel;
+import Kernel::add;
+import Kernel::{add, sub};"#,
+        )
+        .expect("imports should parse");
+
+        assert!(matches!(
+            ast[0],
+            Ast::Import(_, AstPath { ref segments, .. }, ImportSpec::All)
+                if segments.as_slice() == ["Kernel"]
+        ));
+        assert!(matches!(
+            ast[1],
+            Ast::Import(_, AstPath { ref segments, .. }, ImportSpec::Single(ref name))
+                if segments.as_slice() == ["Kernel"] && name == "add"
+        ));
+        assert!(matches!(
+            ast[2],
+            Ast::Import(_, AstPath { ref segments, .. }, ImportSpec::List(ref names))
+                if segments.as_slice() == ["Kernel"] && names.as_slice() == ["add", "sub"]
+        ));
+    }
+
+    #[test]
+    fn test_nested_defmod_is_rejected() {
+        let err = parse(
+            r#"defmod Outer {
+  defmod Inner {
+    def run() -> Unit { () }
+  }
+}"#,
+        )
+        .expect_err("nested defmod must be rejected");
+        assert!(err
+            .message()
+            .contains("Nested module declarations are not allowed"));
+    }
+
+    #[test]
+    fn test_defmod_body_rejects_top_level_expression() {
+        let err = parse(
+            r#"defmod Kernel {
+  x = 42
+}"#,
+        )
+        .expect_err("module body should reject top-level expressions");
+        assert!(err
+            .message()
+            .contains("Top-level expressions are not allowed in module compile units"));
+    }
+
+    #[test]
     fn test_module_compile_unit_rejects_top_level_bind() {
         let err = parse_with_context(
             "x = 42",
@@ -2927,6 +3200,20 @@ def noop() {()}"#,
         )
         .expect("module compile unit should accept declarations");
         assert!(matches!(ast.as_slice(), [Ast::Def(_, _, _, _, _)]));
+    }
+
+    #[test]
+    fn test_module_compile_unit_accepts_import() {
+        let ast = parse_with_context(
+            "import Kernel::add;",
+            ParserContext::module(1, Some("Kernel".to_string())),
+        )
+        .expect("module compile unit should accept import declarations");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(name))]
+                if segments.as_slice() == ["Kernel"] && name == "add"
+        ));
     }
 
     #[test]

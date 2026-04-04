@@ -142,6 +142,24 @@ pub enum InterpolatedPart {
     Expr(Box<Ast>),
 }
 
+/// Qualified path: `Mod`, `Mod::Type`, `Mod::fun`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AstPath {
+    pub span: Span,
+    pub segments: Vec<Symbol>,
+}
+
+/// Import selector.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportSpec {
+    /// `import Mod;`
+    All,
+    /// `import Mod::fun1;`
+    Single(Symbol),
+    /// `import Mod::{fun1, fun2};`
+    List(Vec<Symbol>),
+}
+
 // ── AST ──
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,6 +169,9 @@ pub enum Ast {
 
     /// Variable reference: `x`, `print`
     Var(Span, Symbol),
+
+    /// Qualified path reference: `Kernel::add`
+    Path(Span, AstPath),
 
     /// Function application: `print("hello")`, `to_string(42)`, `add(y: 2, x: 1)`
     App(Span, Box<Ast>, Vec<RecordLitArg>),
@@ -206,6 +227,12 @@ pub enum Ast {
     /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>),
 
+    /// Module declaration: `defmod Kernel { ... }`
+    Defmod(Span, Symbol, Vec<Ast>),
+
+    /// Import declaration
+    Import(Span, AstPath, ImportSpec),
+
     /// Closure literal: `{|x, y| expr}` / `{|| expr}`
     Closure(Span, Vec<ClosureParam>, Box<Ast>),
 
@@ -214,4 +241,48 @@ pub enum Ast {
 
     /// Semicolon — explicit Unit coercion marker (wraps the discarded expr)
     Semi(Span, Box<Ast>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Ast, AstPath, ImportSpec, Lit, Span};
+
+    #[test]
+    fn import_forms_are_distinct_in_ast() {
+        let span = Span { start: 0, end: 12 };
+        let mod_path = AstPath {
+            span: span.clone(),
+            segments: vec!["Kernel".to_string()],
+        };
+        let all = Ast::Import(span.clone(), mod_path.clone(), ImportSpec::All);
+        let single = Ast::Import(
+            span.clone(),
+            mod_path.clone(),
+            ImportSpec::Single("add".to_string()),
+        );
+        let list = Ast::Import(
+            span.clone(),
+            mod_path,
+            ImportSpec::List(vec!["add".to_string(), "sub".to_string()]),
+        );
+
+        assert!(matches!(all, Ast::Import(_, _, ImportSpec::All)));
+        assert!(matches!(single, Ast::Import(_, _, ImportSpec::Single(_))));
+        assert!(matches!(list, Ast::Import(_, _, ImportSpec::List(_))));
+    }
+
+    #[test]
+    fn defmod_keeps_body_nodes() {
+        let span = Span { start: 0, end: 20 };
+        let body = vec![Ast::Lit(span.clone(), Lit::Int(1))];
+        let node = Ast::Defmod(span, "Kernel".to_string(), body.clone());
+
+        match node {
+            Ast::Defmod(_, name, inner) => {
+                assert_eq!(name, "Kernel");
+                assert_eq!(inner, body);
+            }
+            _ => panic!("expected defmod"),
+        }
+    }
 }

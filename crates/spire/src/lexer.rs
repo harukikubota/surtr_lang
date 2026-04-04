@@ -180,6 +180,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "True" => Token::True,
                 "False" => Token::False,
                 "def" => Token::Def,
+                "defmod" => Token::Defmod,
+                "import" => Token::Import,
                 "defstruct" => Token::Defstruct,
                 "defrecord" => Token::Defrecord,
                 "deferror" => Token::Deferror,
@@ -324,6 +326,18 @@ mod tests {
     fn test_def_keyword() {
         let tokens = tokenize("def noop() {()}").unwrap();
         assert!(matches!(tokens[0].token, Token::Def));
+    }
+
+    #[test]
+    fn test_defmod_keyword() {
+        let tokens = tokenize("defmod Kernel { def add() -> Unit { () } }").unwrap();
+        assert!(matches!(tokens[0].token, Token::Defmod));
+    }
+
+    #[test]
+    fn test_import_keyword() {
+        let tokens = tokenize("import Kernel::add").unwrap();
+        assert!(matches!(tokens[0].token, Token::Import));
     }
 
     #[test]
