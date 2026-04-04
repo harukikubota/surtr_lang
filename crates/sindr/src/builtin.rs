@@ -47,6 +47,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 1,
         sig_str: "(Error) -> Unit",
     },
+    BuiltinMeta {
+        name: "set_exit_code",
+        builtin_id: 6,
+        arity: 1,
+        sig_str: "(Int) -> Unit",
+    },
 ];
 
 pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {

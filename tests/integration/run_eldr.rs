@@ -262,3 +262,93 @@ fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn run_source_main_set_exit_code_updates_process_status_and_keeps_running() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_main_set_exit_code");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def main() -> Result<()> {
+  set_exit_code(7)
+  print("still running")
+  Ok(())
+}
+
+main()
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "expected exit code 7\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "still running\n",
+        "expected evaluation to continue after set_exit_code"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+        "expected no stderr output"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_main_err_overrides_set_exit_code_with_runtime_error_exit() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_main_err_overrides_exit_code");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"deferror Boom { "boom" }
+
+def main() -> Result<()> {
+  set_exit_code(7)
+  Err(Boom)
+}
+
+main()
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected Err(main()) to force exit code 1\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Boom"),
+        "expected runtime diagnostic for Boom, got:\n{}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}

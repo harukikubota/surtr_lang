@@ -307,7 +307,11 @@ impl From<LegacyBytecode> for Bytecode {
             num_locals: value.num_locals,
             type_registry: value.type_registry,
             error_templates: value.error_templates,
-            functions: value.functions.into_iter().map(FunctionEntry::from).collect(),
+            functions: value
+                .functions
+                .into_iter()
+                .map(FunctionEntry::from)
+                .collect(),
             source_map: None,
         }
     }

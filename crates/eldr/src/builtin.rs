@@ -31,6 +31,9 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_eprint,
     },
+    BuiltinImpl {
+        func: builtin_set_exit_code,
+    },
 ];
 
 const _: () = {
@@ -163,6 +166,16 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
             }
         }
     }
+    Ok(Value::Unit)
+}
+
+fn builtin_set_exit_code(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Int(code) = args[0] else {
+        return Err(RuntimeError::new("set_exit_code expects Int"));
+    };
+    let exit_code = i32::try_from(code)
+        .map_err(|_| RuntimeError::new(format!("set_exit_code out of range for i32: {}", code)))?;
+    vm.set_exit_code(exit_code);
     Ok(Value::Unit)
 }
 

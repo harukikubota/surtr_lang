@@ -157,9 +157,8 @@ fn collect_module_input_stages(case_dir: &Path) -> Vec<Vec<ModuleInput>> {
                     })
                     .map(|path| ModuleInput {
                         file_name: path.to_string_lossy().into_owned(),
-                        source: fs::read_to_string(&path).unwrap_or_else(|e| {
-                            panic!("failed to read {}: {}", path.display(), e)
-                        }),
+                        source: fs::read_to_string(&path)
+                            .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e)),
                         module_path: module_path_from_fixture_file(&path),
                     })
                     .collect::<Vec<_>>()
@@ -185,11 +184,7 @@ fn parse_program_with_loader(
             )
             .map_err(|e| {
                 let file_name = sources.file_name(module.source_id).unwrap_or("<unknown>");
-                format!(
-                    "phase=parse; file={}; message={}",
-                    file_name,
-                    e.message()
-                )
+                format!("phase=parse; file={}; message={}", file_name, e.message())
             })?;
             stage_ast.push(sigil::StagedModuleAst {
                 module_path: module.module_path.clone(),
@@ -200,14 +195,12 @@ fn parse_program_with_loader(
     }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
-    let user_ast = spire::parse_with_context(
-        user_source,
-        spire::ParserContext::script(user_source_id.0),
-    )
-    .map_err(|e| {
-        let file_name = sources.file_name(user_source_id).unwrap_or("<unknown>");
-        format!("phase=parse; file={}; message={}", file_name, e.message())
-    })?;
+    let user_ast =
+        spire::parse_with_context(user_source, spire::ParserContext::script(user_source_id.0))
+            .map_err(|e| {
+                let file_name = sources.file_name(user_source_id).unwrap_or("<unknown>");
+                format!("phase=parse; file={}; message={}", file_name, e.message())
+            })?;
 
     Ok((staged_module_asts, user_ast))
 }
@@ -226,8 +219,8 @@ fn compile_multi_source_case(case_dir: &Path) -> Result<forge::bytecode::Bytecod
     .map_err(|e| format!("phase=load; message={}", e))?;
 
     let (module_asts, user_ast) = parse_program_with_loader(&compile_sources)?;
-    let declaration_index =
-        sigil::precollect_declaration_index(&module_asts).map_err(|e| format!("phase=resolve; message={}", e))?;
+    let declaration_index = sigil::precollect_declaration_index(&module_asts)
+        .map_err(|e| format!("phase=resolve; message={}", e))?;
 
     let resolved = sigil::resolve_staged_program(&module_asts, user_ast, &declaration_index)
         .map_err(|e| format!("phase=resolve; message={}", e))?;
@@ -356,7 +349,9 @@ fn dump_includes_qualified_function_names_for_module_defined_functions() {
         .as_array()
         .expect("bytecode.functions must be an array");
     assert!(
-        functions.iter().any(|entry| entry["qualified_name"] == "Kernel::add"),
+        functions
+            .iter()
+            .any(|entry| entry["qualified_name"] == "Kernel::add"),
         "expected dump to include qualified_name=Kernel::add, got:\n{}",
         String::from_utf8_lossy(&dump.stdout)
     );

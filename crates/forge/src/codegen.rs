@@ -592,7 +592,7 @@ impl Codegen {
     // ── Program ──
 
     fn emit_program(&mut self, stmts: Vec<TypedNode>) -> Result<(), CodegenError> {
-        self.emit_program_with_functions(stmts, true)
+        self.emit_program_with_functions(stmts, false)
     }
 
     fn emit_program_chunk(&mut self, stmts: Vec<TypedNode>) -> Result<(), CodegenError> {

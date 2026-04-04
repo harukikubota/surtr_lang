@@ -35,6 +35,10 @@ pub struct VM {
     pub output: Option<Vec<String>>,
     /// Captured stderr (for testing). `None` = print to real stderr.
     pub error_output: Option<Vec<String>>,
+    /// Process exit code requested by the running program.
+    exit_code: i32,
+    /// Last value produced by full-program or chunk execution.
+    last_result: Option<Value>,
 }
 
 impl VM {
@@ -54,6 +58,8 @@ impl VM {
             source_file: None,
             output: None,
             error_output: None,
+            exit_code: 0,
+            last_result: None,
         }
     }
 
@@ -183,6 +189,18 @@ impl VM {
         self.bytecode.type_registry.clone()
     }
 
+    pub fn exit_code(&self) -> i32 {
+        self.exit_code
+    }
+
+    pub fn set_exit_code(&mut self, exit_code: i32) {
+        self.exit_code = exit_code;
+    }
+
+    pub fn last_value(&self) -> Option<&Value> {
+        self.last_result.as_ref()
+    }
+
     /// Read a local slot value (used by REPL display logic).
     pub fn get_local(&self, slot: u32) -> Option<Value> {
         self.frames
@@ -193,6 +211,7 @@ impl VM {
     /// Execute the loaded bytecode (`run` mode expects `Halt`).
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         self.verify_loaded_bytecode()?;
+        self.last_result = None;
         loop {
             if self.pc >= self.bytecode.opcodes.len() {
                 return Err(RuntimeError::new("PC out of bounds"));
@@ -205,6 +224,7 @@ impl VM {
             self.pc = next_pc;
 
             if halted {
+                self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
                 return Ok(());
             }
         }
@@ -294,6 +314,7 @@ impl VM {
         }
 
         let result = self.stack.pop().unwrap_or(Value::Unit);
+        self.last_result = Some(result.clone());
         self.stack.clear();
         Ok(result)
     }

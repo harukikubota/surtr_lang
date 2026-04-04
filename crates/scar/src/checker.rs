@@ -100,6 +100,11 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
             params: vec![Ty::Error],
             ret: Box::new(Ty::Unit),
         },
+        "set_exit_code" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Unit),
+        },
         _ => Ty::BuiltinFunc {
             name: meta.name.into(),
             params: vec![Ty::Unit; meta.arity as usize],
@@ -160,6 +165,7 @@ impl Default for ScarSession {
 struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
+    current_function_name: Option<String>,
     user_func_params: HashMap<u32, Vec<String>>,
     substitutions: HashMap<u32, Ty>,
 }
@@ -169,6 +175,7 @@ impl Checker {
         Self {
             env: initialize_env(),
             function_return_ty: None,
+            current_function_name: None,
             user_func_params: HashMap::new(),
             substitutions: HashMap::new(),
         }
@@ -178,6 +185,7 @@ impl Checker {
         Self {
             env,
             function_return_ty: None,
+            current_function_name: None,
             user_func_params,
             substitutions: HashMap::new(),
         }
@@ -1566,6 +1574,18 @@ impl Checker {
                     }
                 }
 
+                if name == "set_exit_code" && self.current_function_name.as_deref() != Some("main")
+                {
+                    return Err(TypeError {
+                        message: "set_exit_code can only be used inside main".into(),
+                        span: span.clone(),
+                        hint: Some(
+                            "Use set_exit_code(code) from main() -> Result<()> and finish with Ok(()) or Err(error)."
+                                .into(),
+                        ),
+                    });
+                }
+
                 Ok(TypedNode {
                     ty: self.resolve_ty(ret),
                     span: span.clone(),
@@ -2666,8 +2686,20 @@ impl Checker {
             None => Ty::Unit,
         };
 
+        if id.name == "main" && !Self::is_main_result_unit_ty(&expected_ret) {
+            return Err(TypeError {
+                message: "main must declare return type Result<()>".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Define main as `def main(...) -> Result<()> { ... }` and return Ok(()) or Err(error)."
+                        .into(),
+                ),
+            });
+        }
+
         let mut body_checker = Checker::with_env_and_params(fun_env, self.user_func_params.clone());
         body_checker.function_return_ty = Some(expected_ret.clone());
+        body_checker.current_function_name = Some(id.name.clone());
         let typed_body = body_checker.check_node(body)?;
 
         self.env.next_tyvar = self.env.next_tyvar.max(body_checker.env.next_tyvar);
@@ -2720,6 +2752,14 @@ impl Checker {
                 Box::new(typed_body),
             ),
         })
+    }
+
+    fn is_main_result_unit_ty(ty: &Ty) -> bool {
+        matches!(
+            ty,
+            Ty::Result(ok, err)
+                if matches!(ok.as_ref(), Ty::Unit) && matches!(err.as_ref(), Ty::Error)
+        )
     }
 
     // ── Struct/Record/Deferror definitions (stubs for step 7+) ──

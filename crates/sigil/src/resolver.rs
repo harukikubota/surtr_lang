@@ -186,17 +186,15 @@ fn apply_import_to_scope(
             false,
             span,
         ),
-        spire::ast::ImportSpec::Single(name) => {
-            import_single_into_scope(
-                scope,
-                declaration_index,
-                declaration_uids,
-                &module_name,
-                name,
-                current_stage_index,
-                span,
-            )
-        }
+        spire::ast::ImportSpec::Single(name) => import_single_into_scope(
+            scope,
+            declaration_index,
+            declaration_uids,
+            &module_name,
+            name,
+            current_stage_index,
+            span,
+        ),
         spire::ast::ImportSpec::List(names) => {
             for name in names {
                 import_single_into_scope(
@@ -234,7 +232,14 @@ fn import_module_into_scope(
             continue;
         }
         let uid = declaration_uids[&entry.fq_name];
-        bind_import_name(scope, &entry.name, uid, module_name, auto_import, span.clone())?;
+        bind_import_name(
+            scope,
+            &entry.name,
+            uid,
+            module_name,
+            auto_import,
+            span.clone(),
+        )?;
         imported_any = true;
     }
 
@@ -1544,7 +1549,8 @@ deferror Oops(reason: String) { reason }"#,
             ),
         }]];
 
-        let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+        let index =
+            precollect_declaration_index(&module_stages).expect("precollect should succeed");
         assert!(index.contains_key("Bootstrap::to_int"));
         assert!(index.contains_key("Bootstrap::Pair"));
         assert!(index.contains_key("Bootstrap::Oops"));
@@ -1565,7 +1571,9 @@ deferror Oops(reason: String) { reason }"#,
 
         let err = precollect_declaration_index(&module_stages)
             .expect_err("duplicate fully-qualified declaration must fail");
-        assert!(err.message.contains("Duplicate fully-qualified declaration: Std::Math::add"));
+        assert!(err
+            .message
+            .contains("Duplicate fully-qualified declaration: Std::Math::add"));
     }
 
     #[test]
@@ -1606,7 +1614,8 @@ deferror Oops(reason: String) { reason }"#,
             }],
         ];
 
-        let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+        let index =
+            precollect_declaration_index(&module_stages).expect("precollect should succeed");
         assert_eq!(index["Bootstrap::NoneError"].stage_index, 0);
         assert_eq!(index["Std::Math::add"].stage_index, 1);
         assert_eq!(index["User::Main::main"].stage_index, 2);

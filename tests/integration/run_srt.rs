@@ -37,7 +37,8 @@ fn collect_files_with_extension(root: &Path, ext: &str) -> Vec<PathBuf> {
 
 fn is_multi_source_module_fixture(path: &Path) -> bool {
     let normalized = path.to_string_lossy().replace('\\', "/");
-    normalized.contains("/tests/spec/modules/") || normalized.contains("/tests/compile_errors/modules/")
+    normalized.contains("/tests/spec/modules/")
+        || normalized.contains("/tests/compile_errors/modules/")
 }
 
 fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, String> {

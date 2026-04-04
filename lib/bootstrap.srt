@@ -4,6 +4,7 @@
 @@builtin def safe_div(a: $A, b: $A) -> Result<$A>
 @@builtin def safe_mod(a: Int, b: Int) -> Result<Int>
 @@builtin def eprint(err: Error) -> Unit
+@@builtin def set_exit_code(code: Int) -> Unit
 
 deferror NoneError { "None Value." }
 

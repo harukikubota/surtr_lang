@@ -1330,6 +1330,17 @@ impl Parser {
             ));
         }
 
+        if matches!(self.peek(), Token::Unit) {
+            let end = self.advance().span.clone();
+            return Ok(AstTy::Named(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                "Unit".to_string(),
+            ));
+        }
+
         // Named type, possibly with type args: Result<Int> or Result<Int, Error>
         let (name, _) = self.expect_ident()?;
 
@@ -2860,6 +2871,17 @@ def noop() {()}"#,
                 assert!(matches!(ok_ty.as_ref(), AstTy::Named(_, ref n) if n == "Int"));
             }
             _ => panic!("Expected annotated Bind with Result type"),
+        }
+    }
+
+    #[test]
+    fn test_result_unit_type_annotation_uses_unit_token() {
+        let ast = parse("def main() -> Result<()> { Ok(()) }").unwrap();
+        match &ast[0] {
+            Ast::Def(_, _, _, Some(AstTy::ResultOf(_, ok_ty, None)), _) => {
+                assert!(matches!(ok_ty.as_ref(), AstTy::Named(_, ref n) if n == "Unit"));
+            }
+            _ => panic!("Expected def with Result<()> return type"),
         }
     }
 

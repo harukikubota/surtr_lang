@@ -1,0 +1,2 @@
+phase: typecheck
+contains: set_exit_code can only be used inside main

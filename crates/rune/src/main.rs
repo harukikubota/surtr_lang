@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
+use eldr::value::Value;
 use forge::bytecode::populate_error_template_lines;
 mod dump;
 
@@ -308,7 +309,56 @@ fn execute_bytecode(
         return Err(1);
     }
 
-    Ok(())
+    if report_final_result_error_if_any(&vm) {
+        return Err(1);
+    }
+
+    match vm.exit_code() {
+        0 => Ok(()),
+        code => Err(code),
+    }
+}
+
+fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
+    match vm.last_value() {
+        Some(Value::Tagged { tag: 1, fields }) => {
+            if let Some(err_value) = fields.first() {
+                report_error_value(vm, err_value);
+            } else {
+                eprintln!("Error: InvalidResult: missing Err payload");
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn report_error_value(vm: &eldr::VM, value: &Value) {
+    match value {
+        Value::Error(rich) => {
+            let start = rich.location.span_start as usize;
+            let mut end = rich.location.span_end as usize;
+            if end <= start {
+                end = start.saturating_add(1);
+            }
+            match (vm.source(), vm.source_file()) {
+                (Some(source), Some(file_name)) => diagnostics::report_error(
+                    file_name,
+                    source,
+                    diagnostics::simple_error(
+                        rich.kind.clone(),
+                        rich.message.clone(),
+                        spire::ast::Span { start, end },
+                        None,
+                    ),
+                ),
+                _ => eprintln!("Error: {}: {}", rich.kind, rich.message),
+            }
+        }
+        other => {
+            eprintln!("Error: {}", eldr::builtin::inspect_value(vm, other));
+        }
+    }
 }
 
 #[cfg(test)]
