@@ -417,6 +417,15 @@ impl Checker {
             }
 
             Resolved::Bind(span, pat, rhs) => {
+                if Self::contains_result_test_pattern(pat) {
+                    return Err(TypeError {
+                        message: "Result destructuring patterns must use `=?`, not `=`".into(),
+                        span: span.clone(),
+                        hint: Some(
+                            "Use `=?` for `Ok(...)` / nested Result pattern matching.".into(),
+                        ),
+                    });
+                }
                 let typed_rhs = if let (
                     ResolvedPattern::Annotated(_, ast_ty),
                     Resolved::Closure(cspan, params, captures, body),
@@ -589,6 +598,23 @@ impl Checker {
             pat,
             ResolvedPattern::ListNil(_) | ResolvedPattern::ListCons(_, _)
         )
+    }
+
+    fn contains_result_test_pattern(pat: &ResolvedPattern) -> bool {
+        match pat {
+            ResolvedPattern::Constructor(_, _) => true,
+            ResolvedPattern::As(inner, _, _) => Self::contains_result_test_pattern(inner),
+            ResolvedPattern::ListCons(head, tail) => {
+                Self::contains_result_test_pattern(head) || Self::contains_result_test_pattern(tail)
+            }
+            ResolvedPattern::Var(_)
+            | ResolvedPattern::Annotated(_, _)
+            | ResolvedPattern::Wildcard(_)
+            | ResolvedPattern::ListNil(_)
+            | ResolvedPattern::IntLit(_, _)
+            | ResolvedPattern::StrLit(_, _)
+            | ResolvedPattern::BoolLit(_, _) => false,
+        }
     }
 
     // ── Helpers ──
@@ -1161,6 +1187,11 @@ impl Checker {
     fn resolve_typed_pattern(&self, pattern: TypedPattern) -> TypedPattern {
         match pattern {
             TypedPattern::Var(ty, id) => TypedPattern::Var(self.resolve_ty(&ty), id),
+            TypedPattern::As(ty, inner, id) => TypedPattern::As(
+                self.resolve_ty(&ty),
+                Box::new(self.resolve_typed_pattern(*inner)),
+                id,
+            ),
             TypedPattern::Wildcard(ty) => TypedPattern::Wildcard(self.resolve_ty(&ty)),
             TypedPattern::ListNil(ty) => TypedPattern::ListNil(self.resolve_ty(&ty)),
             TypedPattern::ListCons(ty, head, tail) => TypedPattern::ListCons(
@@ -1266,6 +1297,32 @@ impl Checker {
                 }
                 let expected = self.resolve_ty(&expected);
                 Ok((TypedPattern::Var(expected.clone(), id.clone()), expected))
+            }
+            ResolvedPattern::As(inner, alias, alias_ty) => {
+                let (typed_inner, inner_ty) = self.check_pattern(inner, rhs_ty, span)?;
+                let alias_bind_ty = if let Some(ast_ty) = alias_ty {
+                    let expected =
+                        self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                    if !self.types_compatible(&expected, &inner_ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "expected {}, got {}",
+                                self.ty_name(&expected),
+                                self.ty_name(&inner_ty)
+                            ),
+                            span: alias.span.clone(),
+                            hint: None,
+                        });
+                    }
+                    self.resolve_ty(&expected)
+                } else {
+                    self.resolve_ty(&inner_ty)
+                };
+
+                Ok((
+                    TypedPattern::As(alias_bind_ty, Box::new(typed_inner), alias.clone()),
+                    inner_ty,
+                ))
             }
             ResolvedPattern::Wildcard(_wspan) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
@@ -1397,6 +1454,10 @@ impl Checker {
             TypedPattern::Var(_, id) => {
                 self.env.bind_var(id.unique_id, rhs_ty.clone());
             }
+            TypedPattern::As(alias_ty, inner, id) => {
+                self.env.bind_var(id.unique_id, alias_ty.clone());
+                self.bind_typed_pattern(inner, rhs_ty);
+            }
             TypedPattern::Wildcard(_)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
@@ -1432,6 +1493,9 @@ impl Checker {
             TypedPattern::ListCons(_, head, tail) => {
                 self.collect_pattern_result_error_types(head, out);
                 self.collect_pattern_result_error_types(tail, out);
+            }
+            TypedPattern::As(_, inner, _) => {
+                self.collect_pattern_result_error_types(inner, out);
             }
             TypedPattern::Var(_, _)
             | TypedPattern::Wildcard(_)

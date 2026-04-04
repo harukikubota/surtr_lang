@@ -71,6 +71,8 @@ pub enum AstPattern {
     BoolLit(Span, bool),
     /// `Ok(inner)` in safe-bind patterns
     Constructor(Span, Symbol, Box<AstPattern>),
+    /// `inner @ alias` / `inner @ alias: Ty`
+    As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
 }
 
 // ── Match patterns ──

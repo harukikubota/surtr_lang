@@ -114,6 +114,7 @@ pub enum ResolvedPattern {
     StrLit(Span, String),
     BoolLit(Span, bool),
     Constructor(ResolvedId, Box<ResolvedPattern>),
+    As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
 }
 
 /// Match pattern (resolved).

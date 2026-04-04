@@ -155,9 +155,9 @@ impl Parser {
             _ => {}
         }
 
-        if self.is_pattern_safebind_stmt_start() {
+        if self.is_pattern_bind_stmt_start() {
             let save = self.pos;
-            if let Ok(stmt) = self.parse_pattern_safebind_stmt() {
+            if let Ok(stmt) = self.parse_pattern_bind_stmt() {
                 if matches!(self.peek(), Token::Semicolon) {
                     let semi = self.advance().span.clone();
                     let span = Span {
@@ -209,11 +209,12 @@ impl Parser {
         self.parse_binop_expr(0)
     }
 
-    fn parse_pattern_safebind_stmt(&mut self) -> Result<Ast, ParseError> {
-        let pat = self.parse_bind_pattern_atom()?;
-        if !matches!(self.peek(), Token::SafeBind) {
+    fn parse_pattern_bind_stmt(&mut self) -> Result<Ast, ParseError> {
+        let pat = self.parse_bind_pattern()?;
+        let assign_tok = self.peek().clone();
+        if !matches!(assign_tok, Token::Bind | Token::SafeBind) {
             return Err(ParseError::syntax(
-                "Pattern destructuring is currently supported in `=?` pattern position",
+                "Pattern destructuring requires assignment operator (`=` or `=?`)",
                 self.peek_span(),
             ));
         }
@@ -224,10 +225,14 @@ impl Parser {
             start: pattern_span(&pat).start,
             end: rhs.span().end,
         };
-        Ok(Ast::SafeBind(span, pat, Box::new(rhs)))
+        Ok(match assign_tok {
+            Token::Bind => Ast::Bind(span, pat, Box::new(rhs)),
+            Token::SafeBind => Ast::SafeBind(span, pat, Box::new(rhs)),
+            _ => unreachable!("validated assignment token"),
+        })
     }
 
-    fn is_pattern_safebind_stmt_start(&self) -> bool {
+    fn is_pattern_bind_stmt_start(&self) -> bool {
         matches!(
             self.peek(),
             Token::LBrack
@@ -731,7 +736,7 @@ impl Parser {
             }));
         }
 
-        let first = self.parse_bind_pattern_atom()?;
+        let first = self.parse_bind_pattern()?;
         self.skip_newlines();
         let end = if matches!(self.peek(), Token::Comma) {
             self.advance();
@@ -739,7 +744,7 @@ impl Parser {
             if matches!(self.peek(), Token::DotDot) {
                 self.advance();
                 self.skip_newlines();
-                let tail = self.parse_bind_pattern_atom()?;
+                let tail = self.parse_bind_pattern()?;
                 self.skip_newlines();
                 let end = self.expect(&Token::RBrack)?;
                 return Ok(AstPattern::ListCons(
@@ -753,14 +758,14 @@ impl Parser {
             }
 
             let mut items = vec![first];
-            items.push(self.parse_bind_pattern_atom()?);
+            items.push(self.parse_bind_pattern()?);
             while matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
                 if matches!(self.peek(), Token::RBrack) {
                     break;
                 }
-                items.push(self.parse_bind_pattern_atom()?);
+                items.push(self.parse_bind_pattern()?);
             }
             self.skip_newlines();
             let end = self.expect(&Token::RBrack)?;
@@ -770,6 +775,37 @@ impl Parser {
         };
 
         Ok(fixed_bind_list_pattern(sp.start, end.end, vec![first]))
+    }
+
+    fn parse_bind_pattern(&mut self) -> Result<AstPattern, ParseError> {
+        let mut pat = self.parse_bind_pattern_atom()?;
+        loop {
+            self.skip_newlines();
+            if !matches!(self.peek(), Token::At) {
+                break;
+            }
+            self.advance(); // '@'
+            self.skip_newlines();
+            let (alias, alias_span) = self.expect_ident()?;
+            self.skip_newlines();
+            let alias_ty = if matches!(self.peek(), Token::Colon) {
+                self.advance();
+                self.skip_newlines();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+            let end = alias_ty
+                .as_ref()
+                .map(|ty| ast_ty_span(ty).end)
+                .unwrap_or(alias_span.end);
+            let span = Span {
+                start: pattern_span(&pat).start,
+                end,
+            };
+            pat = AstPattern::As(span, Box::new(pat), alias, alias_ty);
+        }
+        Ok(pat)
     }
 
     fn parse_bind_pattern_atom(&mut self) -> Result<AstPattern, ParseError> {
@@ -833,7 +869,7 @@ impl Parser {
                             self.peek_span(),
                         ));
                     }
-                    let inner = self.parse_bind_pattern_atom()?;
+                    let inner = self.parse_bind_pattern()?;
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
                         return Err(ParseError::syntax(
@@ -857,7 +893,7 @@ impl Parser {
             Token::LBrack => self.parse_list_bind_pattern(),
             Token::Eof => Err(ParseError::incomplete("list pattern", sp)),
             _ => Err(ParseError::syntax(
-                "Pattern supports identifiers, literals, `_`, list patterns, and nested `Ok(...)` patterns",
+                "Pattern supports identifiers, literals, `_`, list patterns, nested `Ok(...)` patterns, and `pattern @ alias`",
                 sp,
             )),
         }
@@ -1740,6 +1776,15 @@ fn shift_span(span: Span, delta: usize) -> Span {
     }
 }
 
+fn ast_ty_span(ty: &AstTy) -> &Span {
+    match ty {
+        AstTy::Named(span, _)
+        | AstTy::ListOf(span, _)
+        | AstTy::ResultOf(span, _, _)
+        | AstTy::Func(span, _, _) => span,
+    }
+}
+
 fn pattern_span(pat: &AstPattern) -> &Span {
     match pat {
         AstPattern::Var(span, _)
@@ -1750,7 +1795,8 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::IntLit(span, _)
         | AstPattern::StrLit(span, _)
         | AstPattern::BoolLit(span, _)
-        | AstPattern::Constructor(span, _, _) => span,
+        | AstPattern::Constructor(span, _, _)
+        | AstPattern::As(span, _, _, _) => span,
     }
 }
 
@@ -1818,6 +1864,12 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
             shift_span(span, delta),
             name,
             Box::new(shift_pattern(*inner, delta)),
+        ),
+        AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
+            shift_span(span, delta),
+            Box::new(shift_pattern(*inner, delta)),
+            alias,
+            alias_ty.map(|ty| shift_ast_ty(ty, delta)),
         ),
     }
 }
@@ -2194,8 +2246,7 @@ def noop() {()}"#,
 
     #[test]
     fn test_builtin_decl_with_body_is_error() {
-        let err =
-            parse("@@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
+        let err = parse("@@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
         assert!(err.message().contains("must not have a function body"));
     }
 
@@ -2285,6 +2336,67 @@ def noop() {()}"#,
                 assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
             }
             _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
+    fn test_as_pattern_safebind_with_annotation() {
+        let ast = parse("[head, ..tail] @ list_dup: List<Int> =? value").unwrap();
+        match &ast[0] {
+            Ast::SafeBind(_, pattern, rhs) => {
+                assert!(matches!(
+                    pattern,
+                    AstPattern::As(_, inner, alias, Some(AstTy::ListOf(_, elem)))
+                        if alias == "list_dup"
+                        && matches!(elem.as_ref(), AstTy::Named(_, name) if name == "Int")
+                        && matches!(inner.as_ref(), AstPattern::ListCons(_, _, _))
+                ));
+                assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+            }
+            _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
+    fn test_nested_as_pattern_safebind() {
+        let ast = parse("[head, .. [e2, ..tail] @ tail_dup] @ list_dup =? value").unwrap();
+        match &ast[0] {
+            Ast::SafeBind(_, pattern, rhs) => {
+                assert!(matches!(
+                    pattern,
+                    AstPattern::As(_, outer_inner, outer_alias, None)
+                        if outer_alias == "list_dup"
+                        && matches!(
+                            outer_inner.as_ref(),
+                            AstPattern::ListCons(_, _, tail_pattern)
+                                if matches!(
+                                    tail_pattern.as_ref(),
+                                    AstPattern::As(_, inner_list, inner_alias, None)
+                                        if inner_alias == "tail_dup"
+                                        && matches!(inner_list.as_ref(), AstPattern::ListCons(_, _, _))
+                                )
+                        )
+                ));
+                assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+            }
+            _ => panic!("Expected SafeBind"),
+        }
+    }
+
+    #[test]
+    fn test_as_pattern_bind() {
+        let ast = parse("[head, ..tail] @ list_dup = list").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, pattern, rhs) => {
+                assert!(matches!(
+                    pattern,
+                    AstPattern::As(_, inner, alias, None)
+                        if alias == "list_dup"
+                        && matches!(inner.as_ref(), AstPattern::ListCons(_, _, _))
+                ));
+                assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "list"));
+            }
+            _ => panic!("Expected Bind"),
         }
     }
 

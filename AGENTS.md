@@ -138,7 +138,7 @@ Forge は `GetField(idx)` を emit するだけでよい。
 
 - `def`（関数定義）・クロージャ・ラムダ
 - `|>` パイプライン
-- `@builtin` 構文・`builtin.srt`
+- `@@builtin` 構文・`builtin.srt`
 - `.eldr` ファイル出力
 - `MakeFrame` / `PopFrame` / `Return` Opcode
 - 名前付き引数（`defrecord` を除く）

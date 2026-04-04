@@ -619,31 +619,52 @@ impl Resolver {
     }
 
     fn resolve_pattern(&mut self, pat: AstPattern) -> Result<ResolvedPattern, ResolveError> {
+        let mut seen = HashMap::<String, Span>::new();
+        self.resolve_pattern_inner(pat, &mut seen)
+    }
+
+    fn define_pattern_binding(
+        &mut self,
+        name: String,
+        span: Span,
+        seen: &mut HashMap<String, Span>,
+    ) -> Result<ResolvedId, ResolveError> {
+        if let Some(prev_span) = seen.get(&name) {
+            return Err(ResolveError {
+                message: format!("Duplicate binding in pattern: {}", name),
+                span: Span {
+                    start: prev_span.start,
+                    end: span.end,
+                },
+            });
+        }
+        seen.insert(name.clone(), span.clone());
+        let uid = self.scope.define(&name, span.clone());
+        Ok(ResolvedId {
+            name,
+            unique_id: uid,
+            span,
+        })
+    }
+
+    fn resolve_pattern_inner(
+        &mut self,
+        pat: AstPattern,
+        seen: &mut HashMap<String, Span>,
+    ) -> Result<ResolvedPattern, ResolveError> {
         match pat {
-            AstPattern::Var(span, name) => {
-                let uid = self.scope.define(&name, span.clone());
-                Ok(ResolvedPattern::Var(ResolvedId {
-                    name,
-                    unique_id: uid,
-                    span,
-                }))
-            }
-            AstPattern::Annotated(span, name, ty) => {
-                let uid = self.scope.define(&name, span.clone());
-                Ok(ResolvedPattern::Annotated(
-                    ResolvedId {
-                        name,
-                        unique_id: uid,
-                        span,
-                    },
-                    ty,
-                ))
-            }
+            AstPattern::Var(span, name) => Ok(ResolvedPattern::Var(
+                self.define_pattern_binding(name, span, seen)?,
+            )),
+            AstPattern::Annotated(span, name, ty) => Ok(ResolvedPattern::Annotated(
+                self.define_pattern_binding(name, span, seen)?,
+                ty,
+            )),
             AstPattern::Wildcard(span) => Ok(ResolvedPattern::Wildcard(span)),
             AstPattern::ListNil(span) => Ok(ResolvedPattern::ListNil(span)),
             AstPattern::ListCons(_, head, tail) => Ok(ResolvedPattern::ListCons(
-                Box::new(self.resolve_pattern(*head)?),
-                Box::new(self.resolve_pattern(*tail)?),
+                Box::new(self.resolve_pattern_inner(*head, seen)?),
+                Box::new(self.resolve_pattern_inner(*tail, seen)?),
             )),
             AstPattern::IntLit(span, n) => Ok(ResolvedPattern::IntLit(span, n)),
             AstPattern::StrLit(span, s) => Ok(ResolvedPattern::StrLit(span, s)),
@@ -659,7 +680,16 @@ impl Resolver {
                         unique_id: ctor_uid,
                         span,
                     },
-                    Box::new(self.resolve_pattern(*inner)?),
+                    Box::new(self.resolve_pattern_inner(*inner, seen)?),
+                ))
+            }
+            AstPattern::As(span, inner, alias, alias_ty) => {
+                let resolved_inner = self.resolve_pattern_inner(*inner, seen)?;
+                let alias_id = self.define_pattern_binding(alias, span, seen)?;
+                Ok(ResolvedPattern::As(
+                    Box::new(resolved_inner),
+                    alias_id,
+                    alias_ty,
                 ))
             }
         }
@@ -984,6 +1014,10 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
             bound.insert(id.unique_id);
         }
         ResolvedPattern::Constructor(_, inner) => {
+            collect_bind_pattern_bindings(inner, bound);
+        }
+        ResolvedPattern::As(inner, id, _) => {
+            bound.insert(id.unique_id);
             collect_bind_pattern_bindings(inner, bound);
         }
         ResolvedPattern::ListCons(head, tail) => {
@@ -1381,8 +1415,16 @@ g = &print(1)"#,
 
     #[test]
     fn test_safebind_constructor_pattern_resolution() {
-        let resolved = parse_and_resolve("Ok(num) =? value").unwrap();
+        let resolved = parse_and_resolve(
+            r#"value: Result<Result<Int>> = Ok(Ok(1))
+Ok(num) =? value"#,
+        )
+        .unwrap();
         match &resolved[0] {
+            Resolved::Bind(_, _, _) => {}
+            _ => panic!("Expected prelude bind"),
+        }
+        match &resolved[1] {
             Resolved::SafeBind(_, ResolvedPattern::Constructor(ctor, inner), rhs) => {
                 assert_eq!(ctor.name, "Ok");
                 assert!(matches!(inner.as_ref(), ResolvedPattern::Var(id) if id.name == "num"));
@@ -1394,8 +1436,16 @@ g = &print(1)"#,
 
     #[test]
     fn test_safebind_list_with_constructor_literal_pattern_resolution() {
-        let resolved = parse_and_resolve("[Ok(1), ..tail] =? lr").unwrap();
+        let resolved = parse_and_resolve(
+            r#"lr: Result<List<Result<Int>>> = Ok([Ok(1), Ok(2)])
+[Ok(1), ..tail] =? lr"#,
+        )
+        .unwrap();
         match &resolved[0] {
+            Resolved::Bind(_, _, _) => {}
+            _ => panic!("Expected prelude bind"),
+        }
+        match &resolved[1] {
             Resolved::SafeBind(_, ResolvedPattern::ListCons(head, tail), rhs) => {
                 assert!(matches!(
                     head.as_ref(),
@@ -1408,6 +1458,33 @@ g = &print(1)"#,
             }
             _ => panic!("Expected SafeBind list constructor pattern"),
         }
+    }
+
+    #[test]
+    fn test_as_pattern_resolution() {
+        let resolved = parse_and_resolve(
+            r#"value: Result<List<Int>> = Ok([1, 2, 3])
+[head, ..tail] @ list_dup: List<Int> =? value"#,
+        )
+        .unwrap();
+        match &resolved[1] {
+            Resolved::SafeBind(_, ResolvedPattern::As(inner, alias, Some(_)), rhs) => {
+                assert_eq!(alias.name, "list_dup");
+                assert!(matches!(inner.as_ref(), ResolvedPattern::ListCons(_, _)));
+                assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
+            }
+            _ => panic!("Expected SafeBind with as-pattern"),
+        }
+    }
+
+    #[test]
+    fn test_duplicate_binding_in_pattern_is_error() {
+        let err = parse_and_resolve(
+            r#"value: Result<List<Int>> = Ok([1, 2, 3])
+[head, ..tail] @ head =? value"#,
+        )
+        .expect_err("duplicate pattern binding should fail");
+        assert!(err.message.contains("Duplicate binding in pattern: head"));
     }
 
     #[test]

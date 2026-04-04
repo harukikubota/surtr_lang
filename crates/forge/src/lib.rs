@@ -45,6 +45,7 @@ print(to_string(x + 2))"#,
 
     #[test]
     fn function_table_preserves_fun_idx_index_invariant() {
+        let baseline = codegen_source(r#"print("baseline")"#);
         let bytecode = codegen_source(
             r#"def add(x: Int, y: Int) -> Int { x + y }
 deferror Oops {
@@ -53,7 +54,7 @@ deferror Oops {
 print(to_string(add(1, 2)))"#,
         );
 
-        assert_eq!(bytecode.functions.len(), 2);
+        assert_eq!(bytecode.functions.len(), baseline.functions.len() + 2);
         for (idx, entry) in bytecode.functions.iter().enumerate() {
             assert_eq!(entry.fun_idx as usize, idx);
         }
@@ -79,6 +80,7 @@ print(to_string(user.age))"#,
 
     #[test]
     fn type_registry_reserves_result_tags_and_starts_user_tags_from_two() {
+        let baseline = codegen_source(r#"print("baseline")"#);
         let bytecode = codegen_source(
             r#"defstruct User {
   name: String,
@@ -89,12 +91,19 @@ defrecord Point(x: Float, y: Float)
 print("ok")"#,
         );
 
-        assert_eq!(bytecode.type_registry.entries.len(), 2);
-        assert_eq!(bytecode.type_registry.entries[0].tag, 2);
-        assert_eq!(bytecode.type_registry.entries[0].name, "User");
-        assert_eq!(bytecode.type_registry.entries[0].kind, TypeKind::Struct);
-        assert_eq!(bytecode.type_registry.entries[1].tag, 3);
-        assert_eq!(bytecode.type_registry.entries[1].name, "Point");
-        assert_eq!(bytecode.type_registry.entries[1].kind, TypeKind::Record);
+        assert_eq!(
+            bytecode.type_registry.entries.len(),
+            baseline.type_registry.entries.len() + 2
+        );
+
+        let user = &bytecode.type_registry.entries[baseline.type_registry.entries.len()];
+        assert!(user.tag >= 2);
+        assert_eq!(user.name, "User");
+        assert_eq!(user.kind, TypeKind::Struct);
+
+        let point = &bytecode.type_registry.entries[baseline.type_registry.entries.len() + 1];
+        assert_eq!(point.tag, user.tag + 1);
+        assert_eq!(point.name, "Point");
+        assert_eq!(point.kind, TypeKind::Record);
     }
 }

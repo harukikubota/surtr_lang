@@ -861,7 +861,10 @@ print("after")"#,
 
     #[test]
     fn plain_bind_rejects_result_test_pattern() {
-        assert_compile_error("Ok(num) = Ok(1)", "Expected newline or `;`");
+        assert_compile_error(
+            "Ok(num) = Ok(1)",
+            "Result destructuring patterns must use `=?`, not `=`",
+        );
     }
 
     // Errors

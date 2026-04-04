@@ -70,6 +70,7 @@ pub enum TypedInterpolatedPart {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedPattern {
     Var(Ty, ResolvedId),
+    As(Ty, Box<TypedPattern>, ResolvedId),
     Wildcard(Ty),
     ListNil(Ty),
     ListCons(Ty, Box<TypedPattern>, Box<TypedPattern>),

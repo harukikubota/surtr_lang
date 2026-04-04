@@ -315,6 +315,16 @@ fn collect_pattern_binding_infos(
                 });
             }
         }
+        TypedPattern::As(ty, inner, id) => {
+            if let Some(slot_id) = slot_map.get(&id.unique_id) {
+                out.push(BindingInfo {
+                    name: id.name.clone(),
+                    ty: ty_to_string(ty),
+                    slot_id: *slot_id,
+                });
+            }
+            collect_pattern_binding_infos(inner, slot_map, out);
+        }
         TypedPattern::Wildcard(_)
         | TypedPattern::ListNil(_)
         | TypedPattern::IntLit(_, _)
@@ -792,7 +802,26 @@ impl Codegen {
 
             TypedInner::Bind(pat, rhs) => {
                 self.emit_node(rhs)?;
-                self.emit_bind_pattern_store_from_stack(pat)?;
+                let payload_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(payload_slot));
+
+                let fail_label = self.fresh_label();
+                self.emit_pattern_test_from_local_for_bind(
+                    pat,
+                    payload_slot,
+                    fail_label,
+                    &rhs.span,
+                )?;
+                self.emit_pattern_bind_from_local(pat, payload_slot)?;
+
+                let success_label = self.fresh_label();
+                self.emit_jump(success_label);
+
+                self.patch_label(fail_label);
+                self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+
+                self.patch_label(success_label);
                 // Bind produces Unit
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -1303,6 +1332,7 @@ impl Codegen {
     ) -> Option<Vec<&'a TypedPattern>> {
         fn walk<'a>(pat: &'a TypedPattern, out: &mut Vec<&'a TypedPattern>) -> bool {
             match pat {
+                TypedPattern::As(_, inner, _) => walk(inner.as_ref(), out),
                 TypedPattern::ListNil(_) => true,
                 TypedPattern::ListCons(_, head, tail) => {
                     out.push(head.as_ref());
@@ -1364,33 +1394,6 @@ impl Codegen {
         Ok(current_slot)
     }
 
-    fn emit_bind_pattern_store_from_stack(
-        &mut self,
-        pat: &TypedPattern,
-    ) -> Result<(), CodegenError> {
-        match pat {
-            TypedPattern::Var(_, id) => {
-                let slot = self.alloc_slot(id.unique_id);
-                self.emit(Opcode::StoreLocal(slot));
-            }
-            TypedPattern::Wildcard(_)
-            | TypedPattern::IntLit(_, _)
-            | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => {
-                self.emit(Opcode::Pop);
-            }
-            TypedPattern::ListNil(_)
-            | TypedPattern::ListCons(_, _, _)
-            | TypedPattern::ResultOk(_, _) => {
-                let slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::StoreLocal(slot));
-                self.emit_pattern_bind_from_local(pat, slot)?;
-            }
-        }
-        Ok(())
-    }
-
     fn emit_pattern_test_from_local(
         &mut self,
         pat: &TypedPattern,
@@ -1398,8 +1401,38 @@ impl Codegen {
         fail_label: Label,
         err_span: &Span,
     ) -> Result<(), CodegenError> {
+        self.emit_pattern_test_from_local_with_mode(pat, slot, fail_label, err_span, true)
+    }
+
+    fn emit_pattern_test_from_local_for_bind(
+        &mut self,
+        pat: &TypedPattern,
+        slot: u32,
+        fail_label: Label,
+        err_span: &Span,
+    ) -> Result<(), CodegenError> {
+        self.emit_pattern_test_from_local_with_mode(pat, slot, fail_label, err_span, false)
+    }
+
+    fn emit_pattern_test_from_local_with_mode(
+        &mut self,
+        pat: &TypedPattern,
+        slot: u32,
+        fail_label: Label,
+        err_span: &Span,
+        propagate_result_error: bool,
+    ) -> Result<(), CodegenError> {
         match pat {
             TypedPattern::Var(_, _) | TypedPattern::Wildcard(_) => {}
+            TypedPattern::As(_, inner, _) => {
+                self.emit_pattern_test_from_local_with_mode(
+                    inner,
+                    slot,
+                    fail_label,
+                    err_span,
+                    propagate_result_error,
+                )?;
+            }
             TypedPattern::IntLit(_, n) => {
                 self.emit(Opcode::LoadLocal(slot));
                 let n_const = self.add_constant(Constant::Int(*n));
@@ -1436,33 +1469,56 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::ListHead);
                 self.emit(Opcode::StoreLocal(head_slot));
-                self.emit_pattern_test_from_local(head, head_slot, fail_label, err_span)?;
+                self.emit_pattern_test_from_local_with_mode(
+                    head,
+                    head_slot,
+                    fail_label,
+                    err_span,
+                    propagate_result_error,
+                )?;
 
                 let tail_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::ListTail);
                 self.emit(Opcode::StoreLocal(tail_slot));
-                self.emit_pattern_test_from_local(tail, tail_slot, fail_label, err_span)?;
+                self.emit_pattern_test_from_local_with_mode(
+                    tail,
+                    tail_slot,
+                    fail_label,
+                    err_span,
+                    propagate_result_error,
+                )?;
             }
             TypedPattern::ResultOk(_, inner) => {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::GetTag);
-                let err_tag = self.add_constant(Constant::Int(1));
-                self.emit(Opcode::LoadConst(err_tag));
+                let expected_tag = if propagate_result_error { 1 } else { 0 };
+                let tag_const = self.add_constant(Constant::Int(expected_tag));
+                self.emit(Opcode::LoadConst(tag_const));
                 self.emit(Opcode::EqInt);
 
-                let inner_ok = self.fresh_label();
-                self.emit_jump_if_false(inner_ok);
-                self.emit_propagate_result_from_local(slot, err_span.clone())?;
-                self.patch_label(inner_ok);
+                if propagate_result_error {
+                    let inner_ok = self.fresh_label();
+                    self.emit_jump_if_false(inner_ok);
+                    self.emit_propagate_result_from_local(slot, err_span.clone())?;
+                    self.patch_label(inner_ok);
+                } else {
+                    self.emit_jump_if_false(fail_label);
+                }
 
                 let inner_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::GetField(0));
                 self.emit(Opcode::StoreLocal(inner_slot));
-                self.emit_pattern_test_from_local(inner, inner_slot, fail_label, err_span)?;
+                self.emit_pattern_test_from_local_with_mode(
+                    inner,
+                    inner_slot,
+                    fail_label,
+                    err_span,
+                    propagate_result_error,
+                )?;
             }
         }
         Ok(())
@@ -1478,6 +1534,12 @@ impl Codegen {
                 let bind_slot = self.alloc_slot(id.unique_id);
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::StoreLocal(bind_slot));
+            }
+            TypedPattern::As(_, inner, id) => {
+                let bind_slot = self.alloc_slot(id.unique_id);
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::StoreLocal(bind_slot));
+                self.emit_pattern_bind_from_local(inner, slot)?;
             }
             TypedPattern::Wildcard(_)
             | TypedPattern::ListNil(_)
