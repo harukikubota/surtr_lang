@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
+use diagnostics::{SourceId, SourceRegistry};
 use forge::bytecode::populate_error_template_lines;
 mod dump;
 
@@ -99,8 +100,9 @@ fn run_source_file(file_path: &str) -> Result<(), i32> {
         }
     };
 
-    let bytecode = compile_source(&source, file_path)?;
-    execute_bytecode(bytecode, Some((source, file_path.to_string())))
+    let (sources, user_source_id, builtin_source_id) = register_compile_sources(file_path, &source);
+    let bytecode = compile_source(&sources, user_source_id, builtin_source_id)?;
+    execute_bytecode(bytecode, sources.owned_context(user_source_id))
 }
 
 fn run_eldr_file(file_path: &str) -> Result<(), i32> {
@@ -132,7 +134,8 @@ fn build_command(input_srt: &str, output_eldr: Option<&str>) -> Result<(), i32> 
         }
     };
 
-    let bytecode = compile_source(&source, input_srt)?;
+    let (sources, user_source_id, builtin_source_id) = register_compile_sources(input_srt, &source);
+    let bytecode = compile_source(&sources, user_source_id, builtin_source_id)?;
     let bytes = match bytecode.encode() {
         Ok(b) => b,
         Err(e) => {
@@ -156,30 +159,48 @@ fn default_output_path(input_srt: &str) -> String {
     path.with_extension("eldr").to_string_lossy().into_owned()
 }
 
+fn register_compile_sources(file_path: &str, source: &str) -> (SourceRegistry, SourceId, SourceId) {
+    let mut sources = SourceRegistry::new();
+    let user_source_id = sources.register(file_path, source);
+    let builtin_source_id = sources.register(BUILTIN_PRELUDE_FILE, BUILTIN_PRELUDE_SOURCE);
+    (sources, user_source_id, builtin_source_id)
+}
+
 fn parse_program_with_builtin_prelude(
-    source: &str,
-    file_path: &str,
+    sources: &SourceRegistry,
+    user_source_id: SourceId,
+    builtin_source_id: SourceId,
 ) -> Result<Vec<spire::ast::Ast>, i32> {
-    let mut ast = match spire::parse(BUILTIN_PRELUDE_SOURCE) {
+    let builtin_source = sources
+        .source(builtin_source_id)
+        .unwrap_or(BUILTIN_PRELUDE_SOURCE);
+    let mut ast = match spire::parse_with_context(
+        builtin_source,
+        spire::ParserContext::module(builtin_source_id.0, None),
+    ) {
         Ok(a) => a,
         Err(e) => {
             let message = e.message();
-            diagnostics::report_error(
-                BUILTIN_PRELUDE_FILE,
-                BUILTIN_PRELUDE_SOURCE,
+            diagnostics::report_error_by_id(
+                sources,
+                builtin_source_id,
                 diagnostics::simple_error("ParseError", message, e.span().clone(), None),
             );
             return Err(1);
         }
     };
 
-    let mut user_ast = match spire::parse(source) {
+    let user_source = sources.source(user_source_id).unwrap_or("");
+    let mut user_ast = match spire::parse_with_context(
+        user_source,
+        spire::ParserContext::script(user_source_id.0),
+    ) {
         Ok(a) => a,
         Err(e) => {
             let message = e.message();
-            diagnostics::report_error(
-                file_path,
-                source,
+            diagnostics::report_error_by_id(
+                sources,
+                user_source_id,
                 diagnostics::simple_error("ParseError", message, e.span().clone(), None),
             );
             return Err(1);
@@ -190,17 +211,23 @@ fn parse_program_with_builtin_prelude(
     Ok(ast)
 }
 
-fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Bytecode, i32> {
+fn compile_source(
+    sources: &SourceRegistry,
+    user_source_id: SourceId,
+    builtin_source_id: SourceId,
+) -> Result<forge::bytecode::Bytecode, i32> {
+    let user_source = sources.source(user_source_id).unwrap_or("");
+
     // Phase 1: Spire — parse
-    let ast = parse_program_with_builtin_prelude(source, file_path)?;
+    let ast = parse_program_with_builtin_prelude(sources, user_source_id, builtin_source_id)?;
 
     // Phase 2: Sigil — resolve names
     let resolved = match sigil::resolve(ast) {
         Ok(r) => r,
         Err(e) => {
-            diagnostics::report_error(
-                file_path,
-                source,
+            diagnostics::report_error_by_id(
+                sources,
+                user_source_id,
                 diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
             );
             return Err(1);
@@ -211,7 +238,11 @@ fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Byte
     let typed = match scar::typecheck(resolved) {
         Ok(t) => t,
         Err(e) => {
-            diagnostics::report_error(file_path, source, diagnostics::type_error_spec(source, &e));
+            diagnostics::report_error_by_id(
+                sources,
+                user_source_id,
+                diagnostics::type_error_spec_by_id(sources, user_source_id, &e),
+            );
             return Err(1);
         }
     };
@@ -220,16 +251,16 @@ fn compile_source(source: &str, file_path: &str) -> Result<forge::bytecode::Byte
     let mut bytecode = match forge::codegen(typed) {
         Ok(b) => b,
         Err(e) => {
-            diagnostics::report_error(
-                file_path,
-                source,
+            diagnostics::report_error_by_id(
+                sources,
+                user_source_id,
                 diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
             );
             return Err(1);
         }
     };
 
-    populate_error_template_lines(&mut bytecode.error_templates, source);
+    populate_error_template_lines(&mut bytecode.error_templates, user_source);
 
     Ok(bytecode)
 }

@@ -3,21 +3,87 @@ use crate::error::ParseError;
 use crate::lexer::tokenize;
 use crate::token::{Spanned, Token};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclLevel {
+    Top,
+    Expr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompileUnitKind {
+    Script,
+    Module,
+    Repl,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParserContext {
+    pub level: DeclLevel,
+    pub unit_kind: CompileUnitKind,
+    pub source_id: u32,
+    pub module_path: Option<String>,
+}
+
+impl Default for ParserContext {
+    fn default() -> Self {
+        Self::script(0)
+    }
+}
+
+impl ParserContext {
+    pub fn script(source_id: u32) -> Self {
+        Self {
+            level: DeclLevel::Top,
+            unit_kind: CompileUnitKind::Script,
+            source_id,
+            module_path: None,
+        }
+    }
+
+    pub fn module(source_id: u32, module_path: Option<String>) -> Self {
+        Self {
+            level: DeclLevel::Top,
+            unit_kind: CompileUnitKind::Module,
+            source_id,
+            module_path,
+        }
+    }
+
+    pub fn repl(source_id: u32) -> Self {
+        Self {
+            level: DeclLevel::Top,
+            unit_kind: CompileUnitKind::Repl,
+            source_id,
+            module_path: None,
+        }
+    }
+}
+
 /// Parse Surtr source text into an abstract syntax tree.
 pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
+    parse_with_context(source, ParserContext::default())
+}
+
+/// Parse Surtr source text with explicit compile-unit context.
+pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
-    let mut parser = Parser::new(tokens);
+    let mut parser = Parser::new(tokens, context);
     parser.parse_program()
 }
 
 struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
+    context: ParserContext,
 }
 
 impl Parser {
-    fn new(tokens: Vec<Spanned<Token>>) -> Self {
-        Self { tokens, pos: 0 }
+    fn new(tokens: Vec<Spanned<Token>>, context: ParserContext) -> Self {
+        Self {
+            tokens,
+            pos: 0,
+            context,
+        }
     }
 
     // ── Helpers ──
@@ -127,6 +193,7 @@ impl Parser {
     // ── Program ──
 
     fn parse_program(&mut self) -> Result<Vec<Ast>, ParseError> {
+        self.context.level = DeclLevel::Top;
         let mut stmts = Vec::new();
         self.skip_newlines();
         while !matches!(self.peek(), Token::Eof) {
@@ -145,62 +212,115 @@ impl Parser {
     fn parse_stmt(&mut self) -> Result<Ast, ParseError> {
         self.skip_newlines();
 
-        // Data definitions
-        match self.peek() {
-            Token::Annotator(_) => return self.parse_annotated_decl(),
-            Token::Def => return self.parse_def(),
-            Token::Defstruct => return self.parse_struct_def(),
-            Token::Defrecord => return self.parse_record_def(),
-            Token::Deferror => return self.parse_deferror_def(),
-            _ => {}
+        if self.context.level == DeclLevel::Expr
+            && matches!(
+                self.peek(),
+                Token::Annotator(_)
+                    | Token::Def
+                    | Token::Defstruct
+                    | Token::Defrecord
+                    | Token::Deferror
+            )
+        {
+            return Err(ParseError::syntax(
+                "Declarations are only allowed at the top level",
+                self.peek_span(),
+            ));
         }
 
-        if self.is_pattern_bind_stmt_start() {
-            let save = self.pos;
-            if let Ok(stmt) = self.parse_pattern_bind_stmt() {
+        // Data definitions
+        let stmt = match self.peek() {
+            Token::Annotator(_) => self.parse_annotated_decl()?,
+            Token::Def => self.parse_def()?,
+            Token::Defstruct => self.parse_struct_def()?,
+            Token::Defrecord => self.parse_record_def()?,
+            Token::Deferror => self.parse_deferror_def()?,
+            _ => {
+                if self.is_pattern_bind_stmt_start() {
+                    let save = self.pos;
+                    if let Ok(stmt) = self.parse_pattern_bind_stmt() {
+                        if matches!(self.peek(), Token::Semicolon) {
+                            let semi = self.advance().span.clone();
+                            let span = Span {
+                                start: stmt.span().start,
+                                end: semi.end,
+                            };
+                            let wrapped = Ast::Semi(span, Box::new(stmt));
+                            self.validate_stmt_by_context(&wrapped)?;
+                            return Ok(wrapped);
+                        }
+                        self.validate_stmt_by_context(&stmt)?;
+                        return Ok(stmt);
+                    }
+                    self.pos = save;
+                }
+
+                let expr = self.parse_expr()?;
                 if matches!(self.peek(), Token::Semicolon) {
                     let semi = self.advance().span.clone();
                     let span = Span {
-                        start: stmt.span().start,
+                        start: expr.span().start,
                         end: semi.end,
                     };
-                    return Ok(Ast::Semi(span, Box::new(stmt)));
+                    Ast::Semi(span, Box::new(expr))
+                } else {
+                    expr
                 }
-                return Ok(stmt);
             }
-            self.pos = save;
-        }
+        };
 
-        let expr = self.parse_expr()?;
-        if matches!(self.peek(), Token::Semicolon) {
-            let semi = self.advance().span.clone();
-            let span = Span {
-                start: expr.span().start,
-                end: semi.end,
-            };
-            Ok(Ast::Semi(span, Box::new(expr)))
-        } else {
-            Ok(expr)
+        self.validate_stmt_by_context(&stmt)?;
+
+        Ok(stmt)
+    }
+
+    fn validate_stmt_by_context(&self, stmt: &Ast) -> Result<(), ParseError> {
+        if self.context.level == DeclLevel::Top
+            && self.context.unit_kind == CompileUnitKind::Module
+            && !Self::is_top_level_declaration(stmt)
+        {
+            return Err(ParseError::syntax(
+                "Top-level expressions are not allowed in module compile units",
+                stmt.span().clone(),
+            ));
         }
+        Ok(())
+    }
+
+    fn is_top_level_declaration(ast: &Ast) -> bool {
+        matches!(
+            ast,
+            Ast::Def(_, _, _, _, _)
+                | Ast::StructDef(_, _, _)
+                | Ast::RecordDef(_, _, _)
+                | Ast::DeferrorDef(_, _, _, _)
+                | Ast::BuiltinDecl(_, _, _, _)
+        )
     }
 
     fn parse_block_stmts(&mut self) -> Result<Vec<Ast>, ParseError> {
-        let mut stmts = Vec::new();
-        self.skip_newlines();
+        let prev_level = self.context.level;
+        self.context.level = DeclLevel::Expr;
+        let result = (|| {
+            let mut stmts = Vec::new();
+            self.skip_newlines();
 
-        while !matches!(self.peek(), Token::RBrace) {
-            if matches!(self.peek(), Token::Eof) {
-                return Err(ParseError::incomplete("}", self.peek_span()));
+            while !matches!(self.peek(), Token::RBrace) {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete("}", self.peek_span()));
+                }
+                let stmt = self.parse_stmt()?;
+                self.ensure_stmt_boundary(&stmt, true)?;
+                stmts.push(stmt);
+                while matches!(self.peek(), Token::Newline) {
+                    self.advance();
+                }
             }
-            let stmt = self.parse_stmt()?;
-            self.ensure_stmt_boundary(&stmt, true)?;
-            stmts.push(stmt);
-            while matches!(self.peek(), Token::Newline) {
-                self.advance();
-            }
-        }
 
-        Ok(stmts)
+            Ok(stmts)
+        })();
+        self.context.level = prev_level;
+        result
     }
 
     // ── Expression (entry point — handles binding at top level) ──
@@ -2785,6 +2905,41 @@ def noop() {()}"#,
         assert!(err
             .message()
             .contains("remove this test when CamelCase patterns are implemented"));
+    }
+
+    #[test]
+    fn test_module_compile_unit_rejects_top_level_bind() {
+        let err = parse_with_context(
+            "x = 42",
+            ParserContext::module(1, Some("Kernel".to_string())),
+        )
+        .expect_err("module compile unit should reject top-level binding");
+        assert!(err
+            .message()
+            .contains("Top-level expressions are not allowed in module compile units"));
+    }
+
+    #[test]
+    fn test_module_compile_unit_accepts_top_level_def() {
+        let ast = parse_with_context(
+            "def add(x: Int, y: Int) -> Int { x + y }",
+            ParserContext::module(1, Some("Kernel".to_string())),
+        )
+        .expect("module compile unit should accept declarations");
+        assert!(matches!(ast.as_slice(), [Ast::Def(_, _, _, _, _)]));
+    }
+
+    #[test]
+    fn test_declaration_inside_function_body_is_rejected() {
+        let err = parse(
+            r#"def outer() -> Unit {
+  def inner() -> Unit { () }
+}"#,
+        )
+        .expect_err("declaration inside expression level should be rejected");
+        assert!(err
+            .message()
+            .contains("Declarations are only allowed at the top level"));
     }
 
     #[test]

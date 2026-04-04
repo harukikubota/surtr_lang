@@ -3,6 +3,67 @@ use scar::error::TypeError;
 use spire::ast::Span;
 use std::io::{self, Write};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SourceId(pub u32);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceEntry {
+    pub id: SourceId,
+    pub file_name: String,
+    pub source: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SourceRegistry {
+    entries: Vec<SourceEntry>,
+}
+
+impl SourceRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(
+        &mut self,
+        file_name: impl Into<String>,
+        source: impl Into<String>,
+    ) -> SourceId {
+        let id = SourceId(self.entries.len() as u32);
+        self.entries.push(SourceEntry {
+            id,
+            file_name: file_name.into(),
+            source: source.into(),
+        });
+        id
+    }
+
+    pub fn get(&self, source_id: SourceId) -> Option<&SourceEntry> {
+        self.entries.get(source_id.0 as usize)
+    }
+
+    pub fn file_name(&self, source_id: SourceId) -> Option<&str> {
+        self.get(source_id).map(|entry| entry.file_name.as_str())
+    }
+
+    pub fn source(&self, source_id: SourceId) -> Option<&str> {
+        self.get(source_id).map(|entry| entry.source.as_str())
+    }
+
+    pub fn update_source(&mut self, source_id: SourceId, source: impl Into<String>) -> bool {
+        if let Some(entry) = self.entries.get_mut(source_id.0 as usize) {
+            entry.source = source.into();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn owned_context(&self, source_id: SourceId) -> Option<(String, String)> {
+        self.get(source_id)
+            .map(|entry| (entry.source.clone(), entry.file_name.clone()))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DiagnosticSpec {
     pub kind: String,
@@ -55,12 +116,28 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
     spec
 }
 
+pub fn type_error_spec_by_id(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    error: &TypeError,
+) -> DiagnosticSpec {
+    type_error_spec(sources.source(source_id).unwrap_or(""), error)
+}
+
 pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
     let report = build_report(file_name, &spec);
 
     if let Err(err) = report.eprint((file_name, Source::from(source))) {
         let mut stderr = io::stderr().lock();
         let _ = write_fallback_diagnostic(&mut stderr, file_name, &spec, &err);
+    }
+}
+
+pub fn report_error_by_id(sources: &SourceRegistry, source_id: SourceId, spec: DiagnosticSpec) {
+    if let Some(entry) = sources.get(source_id) {
+        report_error(&entry.file_name, &entry.source, spec);
+    } else {
+        report_error("<unknown>", "", spec);
     }
 }
 
@@ -640,5 +717,29 @@ mod tests {
         .expect_err("failing writer should propagate io error");
 
         assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn source_registry_registers_and_updates_entries() {
+        let mut sources = SourceRegistry::new();
+        let src_id = sources.register("main.srt", "x = 1");
+
+        assert_eq!(sources.file_name(src_id), Some("main.srt"));
+        assert_eq!(sources.source(src_id), Some("x = 1"));
+
+        assert!(sources.update_source(src_id, "x = 2"));
+        assert_eq!(sources.source(src_id), Some("x = 2"));
+    }
+
+    #[test]
+    fn source_registry_returns_owned_context() {
+        let mut sources = SourceRegistry::new();
+        let src_id = sources.register("script.srt", "print(\"ok\")");
+
+        let context = sources
+            .owned_context(src_id)
+            .expect("registered source should exist");
+        assert_eq!(context.0, "print(\"ok\")");
+        assert_eq!(context.1, "script.srt");
     }
 }

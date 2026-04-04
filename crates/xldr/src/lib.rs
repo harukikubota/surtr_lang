@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::io::{self, IsTerminal, Write};
 
+use diagnostics::{SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
 use eldr::value::Value;
 use forge::bytecode::populate_error_template_lines;
@@ -122,6 +123,9 @@ enum ReplOutcome {
 }
 
 struct ReplEngine {
+    sources: SourceRegistry,
+    builtin_source_id: SourceId,
+    repl_source_id: SourceId,
     sigil_session: sigil::SigilSession,
     scar_session: scar::ScarSession,
     forge_session: forge::ForgeSession,
@@ -134,9 +138,15 @@ struct ReplEngine {
 
 impl ReplEngine {
     fn new() -> Self {
+        let mut sources = SourceRegistry::new();
+        let builtin_source_id = sources.register(BUILTIN_PRELUDE_FILE, BUILTIN_PRELUDE_SOURCE);
+        let repl_source_id = sources.register(REPL_MODULE_NAME, "");
         let forge_session = forge::ForgeSession::new();
         let vm = eldr::VM::new_interactive(forge_session.type_registry());
         let mut engine = Self {
+            sources,
+            builtin_source_id,
+            repl_source_id,
             sigil_session: sigil::SigilSession::new(),
             scar_session: scar::ScarSession::new(),
             forge_session,
@@ -155,12 +165,20 @@ impl ReplEngine {
     }
 
     fn bootstrap_builtins(&mut self) {
-        let ast = match spire::parse(BUILTIN_PRELUDE_SOURCE) {
+        let builtin_source = self
+            .sources
+            .source(self.builtin_source_id)
+            .unwrap_or("")
+            .to_string();
+        let ast = match spire::parse_with_context(
+            &builtin_source,
+            spire::ParserContext::module(self.builtin_source_id.0, None),
+        ) {
             Ok(ast) => ast,
             Err(e) => {
-                diagnostics::report_error(
-                    BUILTIN_PRELUDE_FILE,
-                    BUILTIN_PRELUDE_SOURCE,
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.builtin_source_id,
                     diagnostics::simple_error("ParseError", e.message(), e.span().clone(), None),
                 );
                 return;
@@ -174,9 +192,9 @@ impl ReplEngine {
         let resolved = match self.sigil_session.resolve(ast) {
             Ok(r) => r,
             Err(e) => {
-                diagnostics::report_error(
-                    BUILTIN_PRELUDE_FILE,
-                    BUILTIN_PRELUDE_SOURCE,
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.builtin_source_id,
                     diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
                 );
                 return;
@@ -186,10 +204,10 @@ impl ReplEngine {
         let typed = match self.scar_session.typecheck(resolved) {
             Ok(t) => t,
             Err(e) => {
-                diagnostics::report_error(
-                    BUILTIN_PRELUDE_FILE,
-                    BUILTIN_PRELUDE_SOURCE,
-                    diagnostics::type_error_spec(BUILTIN_PRELUDE_SOURCE, &e),
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.builtin_source_id,
+                    diagnostics::type_error_spec_by_id(&self.sources, self.builtin_source_id, &e),
                 );
                 return;
             }
@@ -198,20 +216,19 @@ impl ReplEngine {
         let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
-                diagnostics::report_error(
-                    BUILTIN_PRELUDE_FILE,
-                    BUILTIN_PRELUDE_SOURCE,
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.builtin_source_id,
                     diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
                 );
                 return;
             }
         };
 
-        populate_error_template_lines(&mut chunk.error_templates, BUILTIN_PRELUDE_SOURCE);
-        self.vm.set_source(
-            BUILTIN_PRELUDE_SOURCE.to_string(),
-            BUILTIN_PRELUDE_FILE.to_string(),
-        );
+        populate_error_template_lines(&mut chunk.error_templates, &builtin_source);
+        if let Some((source, file_name)) = self.sources.owned_context(self.builtin_source_id) {
+            self.vm.set_source(source, file_name);
+        }
 
         if let Err(e) = self.vm.push_atomic(chunk) {
             eldr::report_runtime_error(
@@ -262,17 +279,22 @@ impl ReplEngine {
 
         self.pending.push_str(line);
         self.pending.push('\n');
+        self.sources
+            .update_source(self.repl_source_id, self.pending.clone());
 
-        let ast = match spire::parse(&self.pending) {
+        let ast = match spire::parse_with_context(
+            &self.pending,
+            spire::ParserContext::repl(self.repl_source_id.0),
+        ) {
             Ok(ast) => ast,
             Err(e) if e.is_incomplete() => {
                 return ReplOutcome::Continue;
             }
             Err(e) => {
                 let message = e.message();
-                diagnostics::report_error(
-                    REPL_MODULE_NAME,
-                    &self.pending,
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.repl_source_id,
                     diagnostics::simple_error("ParseError", message, e.span().clone(), None),
                 );
                 self.pending.clear();
@@ -296,9 +318,9 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                diagnostics::report_error(
-                    REPL_MODULE_NAME,
-                    &self.pending,
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.repl_source_id,
                     diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
                 );
                 self.pending.clear();
@@ -313,10 +335,10 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                diagnostics::report_error(
-                    REPL_MODULE_NAME,
-                    &self.pending,
-                    diagnostics::type_error_spec(&self.pending, &e),
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &e),
                 );
                 self.pending.clear();
                 self.bump_line(None);
@@ -330,9 +352,9 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                diagnostics::report_error(
-                    REPL_MODULE_NAME,
-                    &self.pending,
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.repl_source_id,
                     diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
                 );
                 self.pending.clear();
@@ -341,9 +363,12 @@ impl ReplEngine {
             }
         };
 
-        populate_error_template_lines(&mut chunk.error_templates, &self.pending);
-        self.vm
-            .set_source(self.pending.clone(), REPL_MODULE_NAME.to_string());
+        if let Some(repl_source) = self.sources.source(self.repl_source_id) {
+            populate_error_template_lines(&mut chunk.error_templates, repl_source);
+        }
+        if let Some((source, file_name)) = self.sources.owned_context(self.repl_source_id) {
+            self.vm.set_source(source, file_name);
+        }
 
         match self.vm.push_atomic(chunk) {
             Ok(value) => {
@@ -431,9 +456,9 @@ impl ReplEngine {
                 if end <= start {
                     end = start.saturating_add(1);
                 }
-                diagnostics::report_error(
-                    REPL_MODULE_NAME,
-                    &self.pending,
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.repl_source_id,
                     diagnostics::simple_error(
                         rich.kind.clone(),
                         rich.message.clone(),
