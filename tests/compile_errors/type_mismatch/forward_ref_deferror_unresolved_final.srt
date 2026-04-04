@@ -1,0 +1,5 @@
+def load() -> Result<Int, NotFound> {
+  Ok(1)
+}
+
+ret: Result<Int> = load()
