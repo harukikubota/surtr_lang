@@ -169,15 +169,17 @@ fn default_output_path(input_srt: &str) -> String {
 
 fn parse_program_with_builtin_prelude(
     compile_sources: &xldr::CompileSources,
-) -> Result<Vec<spire::ast::Ast>, i32> {
+) -> Result<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>), i32> {
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
 
     let mut ast = Vec::new();
+    let mut staged_module_asts = Vec::with_capacity(compile_sources.module_stages.len());
     for stage in &compile_sources.module_stages {
+        let mut stage_ast = Vec::with_capacity(stage.len());
         for module in stage {
             let module_source = sources.source(module.source_id).unwrap_or("");
-            let mut module_ast = match spire::parse_with_context(
+            let module_ast = match spire::parse_with_context(
                 module_source,
                 spire::ParserContext::module(module.source_id.0, Some(module.module_path.clone())),
             ) {
@@ -192,8 +194,13 @@ fn parse_program_with_builtin_prelude(
                     return Err(1);
                 }
             };
-            ast.append(&mut module_ast);
+            ast.extend(module_ast.iter().cloned());
+            stage_ast.push(sigil::StagedModuleAst {
+                module_path: module.module_path.clone(),
+                ast: module_ast,
+            });
         }
+        staged_module_asts.push(stage_ast);
     }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
@@ -214,7 +221,7 @@ fn parse_program_with_builtin_prelude(
     };
 
     ast.append(&mut user_ast);
-    Ok(ast)
+    Ok((staged_module_asts, ast))
 }
 
 fn compile_source(
@@ -225,7 +232,17 @@ fn compile_source(
     let user_source = sources.source(user_source_id).unwrap_or("");
 
     // Phase 1: Spire — parse
-    let ast = parse_program_with_builtin_prelude(compile_sources)?;
+    let (module_stages, ast) = parse_program_with_builtin_prelude(compile_sources)?;
+
+    // Issue 6: precollect declaration index from staged modules before body resolution.
+    if let Err(e) = sigil::precollect_declaration_index(&module_stages) {
+        diagnostics::report_error_by_id(
+            sources,
+            user_source_id,
+            diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+        );
+        return Err(1);
+    }
 
     // Phase 2: Sigil — resolve names
     let resolved = match sigil::resolve(ast) {

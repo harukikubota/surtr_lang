@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{Ast, AstPattern, BinOp, ClosureParam, FunParam, Lit, RecordLitArg, Span};
@@ -26,6 +26,87 @@ fn initialize_scope() -> Scope {
 pub fn resolve(ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
     let mut resolver = Resolver::new();
     resolver.resolve_program(ast)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StagedModuleAst {
+    pub module_path: String,
+    pub ast: Vec<Ast>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclarationKind {
+    Def,
+    Struct,
+    Record,
+    Deferror,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeclarationEntry {
+    pub module_path: String,
+    pub name: String,
+    pub fq_name: String,
+    pub kind: DeclarationKind,
+    pub stage_index: usize,
+}
+
+pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
+
+/// Precollect global declaration index from staged module ASTs.
+///
+/// The index key is fully-qualified name `ModulePath::Name`.
+/// Only declaration forms covered by Issue 6 are collected:
+/// `def`, `defstruct`, `defrecord`, `deferror`.
+pub fn precollect_declaration_index(
+    module_stages: &[Vec<StagedModuleAst>],
+) -> Result<DeclarationIndex, ResolveError> {
+    let mut index = DeclarationIndex::new();
+
+    for (stage_index, stage) in module_stages.iter().enumerate() {
+        for module in stage {
+            for stmt in &module.ast {
+                let (span, name, kind) = match stmt {
+                    Ast::Def(span, name, _, _, _) => (span, name.as_str(), DeclarationKind::Def),
+                    Ast::StructDef(span, name, _) => (span, name.as_str(), DeclarationKind::Struct),
+                    Ast::RecordDef(span, name, _) => (span, name.as_str(), DeclarationKind::Record),
+                    Ast::DeferrorDef(span, name, _, _) => {
+                        (span, name.as_str(), DeclarationKind::Deferror)
+                    }
+                    _ => continue,
+                };
+
+                let fq_name = if module.module_path.is_empty() {
+                    name.to_string()
+                } else {
+                    format!("{}::{}", module.module_path, name)
+                };
+
+                if let Some(prev) = index.get(&fq_name) {
+                    return Err(ResolveError {
+                        message: format!(
+                            "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
+                            fq_name, prev.stage_index, prev.module_path
+                        ),
+                        span: span.clone(),
+                    });
+                }
+
+                index.insert(
+                    fq_name.clone(),
+                    DeclarationEntry {
+                        module_path: module.module_path.clone(),
+                        name: name.to_string(),
+                        fq_name,
+                        kind,
+                        stage_index,
+                    },
+                );
+            }
+        }
+    }
+
+    Ok(index)
 }
 
 #[derive(Debug, Clone)]
@@ -1084,9 +1165,97 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
 mod tests {
     use super::*;
 
+    fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
+        spire::parse_with_context(
+            src,
+            spire::ParserContext::module(1, Some(module_path.to_string())),
+        )
+        .expect("module source should parse")
+    }
+
     fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
         let ast = spire::parse(src).expect("parse failed");
         resolve(ast)
+    }
+
+    #[test]
+    fn test_precollect_declaration_index_succeeds_without_body_resolution() {
+        let module_stages = vec![vec![StagedModuleAst {
+            module_path: "Bootstrap".to_string(),
+            ast: parse_module_ast(
+                r#"def to_int(x: String) -> Int { unknown_name }
+defrecord Pair(left: Int, right: Int)
+deferror Oops(reason: String) { reason }"#,
+                "Bootstrap",
+            ),
+        }]];
+
+        let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+        assert!(index.contains_key("Bootstrap::to_int"));
+        assert!(index.contains_key("Bootstrap::Pair"));
+        assert!(index.contains_key("Bootstrap::Oops"));
+    }
+
+    #[test]
+    fn test_precollect_declaration_index_rejects_duplicate_fully_qualified_name() {
+        let module_stages = vec![vec![
+            StagedModuleAst {
+                module_path: "Std::Math".to_string(),
+                ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Std::Math"),
+            },
+            StagedModuleAst {
+                module_path: "Std::Math".to_string(),
+                ast: parse_module_ast(r#"def add(a: Int, b: Int) -> Int { a + b }"#, "Std::Math"),
+            },
+        ]];
+
+        let err = precollect_declaration_index(&module_stages)
+            .expect_err("duplicate fully-qualified declaration must fail");
+        assert!(err.message.contains("Duplicate fully-qualified declaration: Std::Math::add"));
+    }
+
+    #[test]
+    fn test_precollect_declaration_index_is_deterministic_when_stage_input_order_changes() {
+        let mod_a = StagedModuleAst {
+            module_path: "Std::A".to_string(),
+            ast: parse_module_ast(r#"def same(x: Int) -> Int { x }"#, "Std::A"),
+        };
+        let mod_b = StagedModuleAst {
+            module_path: "Std::B".to_string(),
+            ast: parse_module_ast(r#"def same(x: Int) -> Int { x }"#, "Std::B"),
+        };
+
+        let index_first =
+            precollect_declaration_index(&[vec![mod_a.clone(), mod_b.clone()]]).unwrap();
+        let index_swapped =
+            precollect_declaration_index(&[vec![mod_b.clone(), mod_a.clone()]]).unwrap();
+
+        assert_eq!(index_first, index_swapped);
+        assert!(index_first.contains_key("Std::A::same"));
+        assert!(index_first.contains_key("Std::B::same"));
+    }
+
+    #[test]
+    fn test_precollect_declaration_index_tracks_bootstrap_std_user_stage_split() {
+        let module_stages = vec![
+            vec![StagedModuleAst {
+                module_path: "Bootstrap".to_string(),
+                ast: parse_module_ast(r#"deferror NoneError { "none" }"#, "Bootstrap"),
+            }],
+            vec![StagedModuleAst {
+                module_path: "Std::Math".to_string(),
+                ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Std::Math"),
+            }],
+            vec![StagedModuleAst {
+                module_path: "User::Main".to_string(),
+                ast: parse_module_ast(r#"def main() -> Int { 1 }"#, "User::Main"),
+            }],
+        ];
+
+        let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+        assert_eq!(index["Bootstrap::NoneError"].stage_index, 0);
+        assert_eq!(index["Std::Math::add"].stage_index, 1);
+        assert_eq!(index["User::Main::main"].stage_index, 2);
     }
 
     #[test]
