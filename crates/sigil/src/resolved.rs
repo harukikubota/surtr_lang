@@ -4,6 +4,7 @@ use spire::ast::{AstTy, BinOp, Lit, Span, Symbol};
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedId {
     pub name: Symbol,
+    pub qualified_name: Option<Symbol>,
     pub unique_id: u32,
     pub span: Span,
 }

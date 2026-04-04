@@ -1393,6 +1393,7 @@ mod tests {
             entry_pc: 3,
             num_locals: 1,
             arity: 1,
+            qualified_name: None,
         }];
 
         VM::new(bytecode).run().expect("run should succeed");
@@ -1415,6 +1416,7 @@ mod tests {
             entry_pc: 1,
             num_locals: 0,
             arity: 0,
+            qualified_name: None,
         }];
 
         let err = VM::new(bytecode).run().expect_err("must fail");
@@ -1704,6 +1706,7 @@ mod tests {
             entry_pc: 0,
             num_locals: 0,
             arity: 0,
+            qualified_name: None,
         }];
 
         let err = VM::new(bytecode).run().expect_err("must fail");

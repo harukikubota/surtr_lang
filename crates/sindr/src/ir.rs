@@ -153,6 +153,7 @@ pub struct FunctionEntry {
     pub entry_pc: u32,
     pub num_locals: u32,
     pub arity: u8,
+    pub qualified_name: Option<String>,
 }
 
 /// Constant pool entry.
@@ -275,7 +276,27 @@ struct LegacyBytecode {
     num_locals: usize,
     type_registry: TypeRegistry,
     error_templates: Vec<ErrTemplate>,
-    functions: Vec<FunctionEntry>,
+    functions: Vec<LegacyFunctionEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct LegacyFunctionEntry {
+    fun_idx: u32,
+    entry_pc: u32,
+    num_locals: u32,
+    arity: u8,
+}
+
+impl From<LegacyFunctionEntry> for FunctionEntry {
+    fn from(value: LegacyFunctionEntry) -> Self {
+        Self {
+            fun_idx: value.fun_idx,
+            entry_pc: value.entry_pc,
+            num_locals: value.num_locals,
+            arity: value.arity,
+            qualified_name: None,
+        }
+    }
 }
 
 impl From<LegacyBytecode> for Bytecode {
@@ -286,7 +307,7 @@ impl From<LegacyBytecode> for Bytecode {
             num_locals: value.num_locals,
             type_registry: value.type_registry,
             error_templates: value.error_templates,
-            functions: value.functions,
+            functions: value.functions.into_iter().map(FunctionEntry::from).collect(),
             source_map: None,
         }
     }
@@ -438,7 +459,8 @@ fn align4(len: usize) -> usize {
 mod tests {
     use super::{
         line_column_for_offset, populate_error_template_lines, Bytecode, BytecodeFormatError,
-        Constant, ErrTemplate, FunctionEntry, LegacyBytecode, Opcode, OpcodeSource, SourceMap,
+        Constant, ErrTemplate, FunctionEntry, LegacyBytecode, LegacyFunctionEntry, Opcode,
+        OpcodeSource, SourceMap,
     };
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
 
@@ -474,6 +496,7 @@ mod tests {
                 entry_pc: 1,
                 num_locals: 0,
                 arity: 0,
+                qualified_name: Some("Main::entry".to_string()),
             }],
             source_map,
         }
@@ -526,7 +549,12 @@ mod tests {
             num_locals: 0,
             type_registry: sample_registry(),
             error_templates: Vec::new(),
-            functions: Vec::new(),
+            functions: vec![LegacyFunctionEntry {
+                fun_idx: 0,
+                entry_pc: 1,
+                num_locals: 0,
+                arity: 0,
+            }],
         };
 
         let payload = bincode::serialize(&legacy).expect("legacy payload encode should succeed");
@@ -546,6 +574,7 @@ mod tests {
         let decoded = Bytecode::decode(&bytes).expect("legacy decode should succeed");
         assert_eq!(decoded.source_map, None);
         assert_eq!(decoded.constants, vec![Constant::Int(7)]);
+        assert_eq!(decoded.functions[0].qualified_name, None);
     }
 
     #[test]

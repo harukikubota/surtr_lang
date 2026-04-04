@@ -1,6 +1,10 @@
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::Value;
 use xldr::{collect_compile_sources_with_module_stages, CompileSources, ModuleInput};
 
 fn repo_root() -> PathBuf {
@@ -12,6 +16,36 @@ fn repo_root() -> PathBuf {
 
 fn normalize_text(text: &str) -> String {
     text.replace("\r\n", "\n").trim_end().to_string()
+}
+
+fn surtr_bin() -> String {
+    if let Ok(path) = env::var("CARGO_BIN_EXE_surtr") {
+        return path;
+    }
+
+    let mut path = env::current_exe().expect("failed to locate current test executable");
+    path.pop();
+    path.pop();
+    path.push("surtr");
+    if cfg!(windows) {
+        path.set_extension("exe");
+    }
+    assert!(
+        path.exists(),
+        "surtr binary not found at {}",
+        path.display()
+    );
+    path.to_string_lossy().into_owned()
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after unix epoch")
+        .as_nanos();
+    let dir = env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), nanos));
+    fs::create_dir_all(&dir).expect("failed to create temp dir");
+    dir
 }
 
 #[derive(Debug)]
@@ -288,4 +322,44 @@ fn module_compile_error_fixtures_match_expectations_via_loader() {
             }
         }
     }
+}
+
+#[test]
+fn dump_includes_qualified_function_names_for_module_defined_functions() {
+    let case_dir = repo_root().join("tests/spec/modules/qualified_name_without_import");
+    let bytecode = compile_multi_source_case(&case_dir)
+        .unwrap_or_else(|e| panic!("pipeline failed for {}: {}", case_dir.display(), e));
+
+    let temp = unique_temp_dir("surtr_dump_module_qualified_names");
+    let eldr_path = temp.join("module_sample.eldr");
+    let bytes = bytecode.encode().expect("encode should succeed");
+    fs::write(&eldr_path, bytes).expect("failed to write eldr file");
+
+    let dump = Command::new(surtr_bin())
+        .args([
+            "dump",
+            eldr_path.to_str().expect("eldr path must be utf-8"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    let functions = json["bytecode"]["functions"]
+        .as_array()
+        .expect("bytecode.functions must be an array");
+    assert!(
+        functions.iter().any(|entry| entry["qualified_name"] == "Kernel::add"),
+        "expected dump to include qualified_name=Kernel::add, got:\n{}",
+        String::from_utf8_lossy(&dump.stdout)
+    );
+
+    let _ = fs::remove_dir_all(temp);
 }

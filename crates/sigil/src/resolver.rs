@@ -463,6 +463,13 @@ impl Resolver {
         self.scope
     }
 
+    fn qualify_current_declaration_name(&self, name: &str) -> String {
+        match self.current_module_path.as_deref() {
+            Some(module_path) if !module_path.is_empty() => format!("{}::{}", module_path, name),
+            _ => name.to_string(),
+        }
+    }
+
     fn with_child_scope<T>(
         &mut self,
         f: impl FnOnce(&mut Resolver) -> Result<T, ResolveError>,
@@ -626,6 +633,7 @@ impl Resolver {
                     span.clone(),
                     ResolvedId {
                         name,
+                        qualified_name: None,
                         unique_id: uid,
                         span,
                     },
@@ -640,6 +648,7 @@ impl Resolver {
                 Ok(Resolved::Var(
                     span.clone(),
                     ResolvedId {
+                        qualified_name: Some(name.clone()),
                         name,
                         unique_id: uid,
                         span,
@@ -757,8 +766,10 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
+                let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
+                    qualified_name: Some(qualified_name),
                     unique_id: uid,
                     span: span.clone(),
                 };
@@ -780,8 +791,10 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
+                let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
+                    qualified_name: Some(qualified_name),
                     unique_id: uid,
                     span: span.clone(),
                 };
@@ -803,8 +816,10 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
+                let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
+                    qualified_name: Some(qualified_name),
                     unique_id: uid,
                     span: span.clone(),
                 };
@@ -815,6 +830,7 @@ impl Resolver {
                     rfields.push(ResolvedField {
                         id: Some(ResolvedId {
                             name: f.name.clone(),
+                            qualified_name: None,
                             unique_id: uid,
                             span: f.span.clone(),
                         }),
@@ -852,8 +868,10 @@ impl Resolver {
 
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
                 self.scope.define_with_id(&name, fun_uid);
+                let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
+                    qualified_name: Some(qualified_name),
                     unique_id: fun_uid,
                     span: span.clone(),
                 };
@@ -886,8 +904,10 @@ impl Resolver {
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 self.scope.advance_next_id_to(decl_resolver.scope.next_id());
                 self.scope.define_with_id(&name, builtin_uid);
+                let qualified_name = name.clone();
                 let rid = ResolvedId {
                     name,
+                    qualified_name: Some(qualified_name),
                     unique_id: builtin_uid,
                     span: span.clone(),
                 };
@@ -910,6 +930,7 @@ impl Resolver {
                     resolved_params.push(ResolvedClosureParam {
                         id: ResolvedId {
                             name: param.name,
+                            qualified_name: None,
                             unique_id: uid,
                             span: param.span,
                         },
@@ -950,6 +971,7 @@ impl Resolver {
                 })?;
                 let rid = ResolvedId {
                     name: type_name,
+                    qualified_name: None,
                     unique_id: uid,
                     span: span.clone(),
                 };
@@ -967,6 +989,7 @@ impl Resolver {
                 })?;
                 let rid = ResolvedId {
                     name: type_name,
+                    qualified_name: None,
                     unique_id: uid,
                     span: span.clone(),
                 };
@@ -1007,6 +1030,7 @@ impl Resolver {
         Ok(ResolvedFunParam {
             id: ResolvedId {
                 name: param.name,
+                qualified_name: None,
                 unique_id: uid,
                 span: param.span,
             },
@@ -1093,6 +1117,7 @@ impl Resolver {
         let uid = self.scope.define(&name, span.clone());
         Ok(ResolvedId {
             name,
+            qualified_name: None,
             unique_id: uid,
             span,
         })
@@ -1128,6 +1153,7 @@ impl Resolver {
                 Ok(ResolvedPattern::Constructor(
                     ResolvedId {
                         name: ctor_name,
+                        qualified_name: None,
                         unique_id: ctor_uid,
                         span,
                     },
@@ -1158,6 +1184,7 @@ impl Resolver {
                 Ok((
                     ResolvedMatchPattern::Binding(ResolvedId {
                         name,
+                        qualified_name: None,
                         unique_id: uid,
                         span,
                     }),
@@ -1187,6 +1214,7 @@ impl Resolver {
                 })?;
                 let ctor_id = ResolvedId {
                     name: ctor_name,
+                    qualified_name: None,
                     unique_id: ctor_uid,
                     span: span.clone(),
                 };
@@ -1195,6 +1223,7 @@ impl Resolver {
                         let uid = child.scope.define(&name, span.clone());
                         Some(ResolvedId {
                             name,
+                            qualified_name: None,
                             unique_id: uid,
                             span: span.clone(),
                         })
@@ -1232,6 +1261,7 @@ impl Resolver {
                 let uid = self.scope.define(&name, span.clone());
                 Ok(ResolvedMatchPattern::Binding(ResolvedId {
                     name,
+                    qualified_name: None,
                     unique_id: uid,
                     span,
                 }))
@@ -1253,6 +1283,7 @@ impl Resolver {
                 })?;
                 let ctor_id = ResolvedId {
                     name: ctor_name,
+                    qualified_name: None,
                     unique_id: ctor_uid,
                     span: span.clone(),
                 };
@@ -1261,6 +1292,7 @@ impl Resolver {
                         let uid = self.scope.define(&name, span.clone());
                         Some(ResolvedId {
                             name,
+                            qualified_name: None,
                             unique_id: uid,
                             span,
                         })

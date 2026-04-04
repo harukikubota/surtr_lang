@@ -526,6 +526,7 @@ impl Codegen {
             entry_pc,
             num_locals: self.state.next_slot,
             arity: total_arity as u8,
+            qualified_name: None,
         });
 
         self.state.slot_map = saved_slot_map;
@@ -711,6 +712,7 @@ impl Codegen {
             entry_pc,
             num_locals,
             arity: params.len() as u8,
+            qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
         });
         self.state.next_fun_idx = self.state.next_fun_idx.max(*fun_idx + 1);
 
@@ -771,6 +773,7 @@ impl Codegen {
             entry_pc,
             num_locals,
             arity: params.len() as u8,
+            qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
         });
         self.state
             .error_ctor_funs
