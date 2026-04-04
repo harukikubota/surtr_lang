@@ -10,6 +10,7 @@ pub use checker::{typecheck, ScarCheckpoint, ScarSession};
 mod tests {
     use super::typecheck;
     use crate::typed::TypedInner;
+    use crate::typed::TypedNode;
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
 
@@ -18,6 +19,11 @@ mod tests {
         let mut user_ast = spire::parse(source).expect("source should parse");
         ast.append(&mut user_ast);
         sigil::resolve(ast).expect("source should resolve")
+    }
+
+    fn typecheck_with_builtin_prelude(source: &str) -> Vec<TypedNode> {
+        let resolved = resolve_with_builtin_prelude(source);
+        typecheck(resolved).expect("source should typecheck")
     }
 
     #[test]
@@ -156,5 +162,41 @@ deferror NotFound {
         assert!(typed
             .iter()
             .any(|node| matches!(node.node, TypedInner::DeferrorDef(_, _, _, _, _))));
+    }
+
+    #[test]
+    fn forward_reference_type_tags_are_deterministic_across_runs() {
+        let source = r#"user: User = User { name: "alice", age: 30 }
+pair = Pair(first: 1, second: "two")
+ret: Result<Int> = Err(NotFound("404"))
+
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+defrecord Pair(first: Int, second: String)
+
+deferror NotFound(code: String) {
+  "missing #{code}"
+}"#;
+
+        let first = typecheck_with_builtin_prelude(source);
+        let second = typecheck_with_builtin_prelude(source);
+
+        fn collect_type_tags(nodes: &[TypedNode]) -> Vec<(String, u32)> {
+            nodes
+                .iter()
+                .filter_map(|node| match &node.node {
+                    TypedInner::StructDef(tag, name, _) | TypedInner::RecordDef(tag, name, _) => {
+                        Some((name.clone(), *tag))
+                    }
+                    TypedInner::DeferrorDef(tag, _, id, _, _) => Some((id.name.clone(), *tag)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        assert_eq!(collect_type_tags(&first), collect_type_tags(&second));
     }
 }

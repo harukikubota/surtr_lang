@@ -1234,6 +1234,50 @@ deferror PageNotFound(html: String) {
     }
 
     #[test]
+    fn test_forward_reference_unique_ids_are_deterministic_across_runs() {
+        let source = r#"result = build_user("alice")
+point = Point(1, 2)
+err = NotFound("404")
+
+def build_user(name: String) -> String { name }
+defrecord Point(x: Int, y: Int)
+deferror NotFound(code: String) {
+  "missing #{code}"
+}"#;
+
+        let first = parse_and_resolve(source).unwrap();
+        let second = parse_and_resolve(source).unwrap();
+
+        fn collect_top_level_ids(nodes: &[Resolved]) -> Vec<u32> {
+            nodes
+                .iter()
+                .flat_map(|node| match node {
+                    Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                        Resolved::App(_, func, _) => match func.as_ref() {
+                            Resolved::Var(_, id) => vec![id.unique_id],
+                            _ => Vec::new(),
+                        },
+                        Resolved::ConstructorCall(_, id, _) | Resolved::StructLit(_, id, _) => {
+                            vec![id.unique_id]
+                        }
+                        _ => Vec::new(),
+                    },
+                    Resolved::Def(_, id, _, _, _)
+                    | Resolved::RecordDef(_, id, _)
+                    | Resolved::StructDef(_, id, _)
+                    | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
+                    _ => Vec::new(),
+                })
+                .collect()
+        }
+
+        assert_eq!(
+            collect_top_level_ids(&first),
+            collect_top_level_ids(&second)
+        );
+    }
+
+    #[test]
     fn test_unresolved_forward_constructor_is_error() {
         let result = parse_and_resolve(r#"value = MissingType(1)"#);
         let err = result.expect_err("unknown forward constructor must fail");
