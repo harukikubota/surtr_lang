@@ -204,8 +204,8 @@ mod tests {
 
     fn parse_builtin_decl(line: &str) -> (&str, u8, String) {
         let rest = line
-            .strip_prefix("@builtin def ")
-            .expect("builtin line must start with @builtin def");
+            .strip_prefix("@@builtin def ")
+            .expect("builtin line must start with @@builtin def");
         let (name, after_name) = rest
             .split_once('(')
             .expect("builtin declaration must include params");
@@ -243,7 +243,7 @@ mod tests {
         let lines = source
             .lines()
             .map(str::trim)
-            .filter(|line| line.starts_with("@builtin "))
+            .filter(|line| line.starts_with("@@builtin "))
             .collect::<Vec<_>>();
 
         assert_eq!(lines.len(), BUILTIN_METAS.len());

@@ -48,6 +48,7 @@ pub enum Token {
     // ── Punctuation ──
     Comma,     // ,
     Colon,     // :
+    At,        // @
     Dot,       // .
     DotDot,    // ..
     FatArrow,  // =>
@@ -62,7 +63,8 @@ pub enum Token {
 
     // ── Keywords ──
     Def,
-    AtBuiltin, // @builtin
+    /// Generic annotator token: `@@builtin`, `@@foo`, ...
+    Annotator(String),
     Defstruct,
     Defrecord,
     Deferror,

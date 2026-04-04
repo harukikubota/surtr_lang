@@ -147,7 +147,7 @@ impl Parser {
 
         // Data definitions
         match self.peek() {
-            Token::AtBuiltin => return self.parse_builtin_decl(),
+            Token::Annotator(_) => return self.parse_annotated_decl(),
             Token::Def => return self.parse_def(),
             Token::Defstruct => return self.parse_struct_def(),
             Token::Defrecord => return self.parse_record_def(),
@@ -1264,10 +1264,32 @@ impl Parser {
         Ok((sp, name, params, ret_ty))
     }
 
-    fn parse_builtin_decl(&mut self) -> Result<Ast, ParseError> {
-        let sp = self.peek_span();
-        self.expect(&Token::AtBuiltin)?;
+    fn parse_annotated_decl(&mut self) -> Result<Ast, ParseError> {
+        let (annotator, annotator_span) = match self.peek().clone() {
+            Token::Annotator(name) => {
+                let span = self.peek_span();
+                self.advance();
+                (name, span)
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "Expected annotator declaration",
+                    self.peek_span(),
+                ));
+            }
+        };
+
         self.skip_newlines();
+        match annotator.as_str() {
+            "builtin" => self.parse_builtin_decl(annotator_span),
+            _ => Err(ParseError::syntax(
+                format!("Unknown annotator: @@{}", annotator),
+                annotator_span,
+            )),
+        }
+    }
+
+    fn parse_builtin_decl(&mut self, sp: Span) -> Result<Ast, ParseError> {
         let (_def_span, name, params, ret_ty) = self.parse_def_signature()?;
 
         let mut lookahead = self.pos;
@@ -1283,7 +1305,7 @@ impl Parser {
             Some(Token::LBrace)
         ) {
             return Err(ParseError::syntax(
-                "@builtin declaration must not have a function body",
+                "@@builtin declaration must not have a function body",
                 self.tokens[lookahead].span.clone(),
             ));
         }
@@ -2155,7 +2177,7 @@ def noop() {()}"#,
 
     #[test]
     fn test_builtin_decl() {
-        let ast = parse("@builtin def to_string(a: $A) -> String").unwrap();
+        let ast = parse("@@builtin def to_string(a: $A) -> String").unwrap();
         match &ast[0] {
             Ast::BuiltinDecl(_, name, params, ret_ty) => {
                 assert_eq!(name, "to_string");
@@ -2172,8 +2194,15 @@ def noop() {()}"#,
 
     #[test]
     fn test_builtin_decl_with_body_is_error() {
-        let err = parse("@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
+        let err =
+            parse("@@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
         assert!(err.message().contains("must not have a function body"));
+    }
+
+    #[test]
+    fn test_unknown_annotator_is_error() {
+        let err = parse("@@memo def f()").expect_err("error");
+        assert!(err.message().contains("Unknown annotator: @@memo"));
     }
 
     #[test]

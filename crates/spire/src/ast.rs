@@ -201,7 +201,7 @@ pub enum Ast {
     /// Function definition: `def add(x: Int, y: Int) -> Int { x + y }`
     Def(Span, Symbol, Vec<FunParam>, Option<AstTy>, Box<Ast>),
 
-    /// Builtin declaration: `@builtin def print(a: String) -> Unit`
+    /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>),
 
     /// Closure literal: `{|x, y| expr}` / `{|| expr}`

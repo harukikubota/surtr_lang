@@ -1033,7 +1033,7 @@ mod tests {
 
     #[test]
     fn test_builtin_decl_resolution() {
-        let resolved = parse_and_resolve("@builtin def print(a: String) -> Unit").unwrap();
+        let resolved = parse_and_resolve("@@builtin def print(a: String) -> Unit").unwrap();
         match &resolved[0] {
             Resolved::BuiltinDecl(_, id, params, ret_ty) => {
                 assert_eq!(id.name, "print");

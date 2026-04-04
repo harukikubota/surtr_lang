@@ -38,28 +38,36 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
-        // Attribute keyword (currently only @builtin)
+        // Annotator: @@builtin, @@foo, ...
         if c == '@' {
             let start = i;
-            i += 1; // skip '@'
-            let name_start = i;
-            while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            let name: String = chars[name_start..i].iter().collect();
-            let token = match name.as_str() {
-                "builtin" => Token::AtBuiltin,
-                _ => {
+            if i + 1 < len && chars[i + 1] == '@' {
+                i += 2; // skip '@@'
+                let name_start = i;
+                while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+                let name: String = chars[name_start..i].iter().collect();
+                if name.is_empty() {
                     return Err(ParseError::syntax(
-                        format!("Unknown attribute: @{}", name),
+                        "Expected annotator name after '@@'",
                         Span { start, end: i },
                     ));
                 }
-            };
+                tokens.push(Spanned {
+                    token: Token::Annotator(name),
+                    span: Span { start, end: i },
+                });
+                continue;
+            }
             tokens.push(Spanned {
-                token,
-                span: Span { start, end: i },
+                token: Token::At,
+                span: Span {
+                    start,
+                    end: start + 1,
+                },
             });
+            i += 1;
             continue;
         }
 
@@ -319,9 +327,28 @@ mod tests {
     }
 
     #[test]
-    fn test_at_builtin_keyword() {
-        let tokens = tokenize("@builtin def print(a: String) -> Unit").unwrap();
-        assert!(matches!(tokens[0].token, Token::AtBuiltin));
+    fn test_at_builtin_annotator_token() {
+        let tokens = tokenize("@@builtin def print(a: String) -> Unit").unwrap();
+        assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "builtin"));
+    }
+
+    #[test]
+    fn test_custom_annotator_token() {
+        let tokens = tokenize("@@memo def f()").unwrap();
+        assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "memo"));
+    }
+
+    #[test]
+    fn test_invalid_empty_annotator_name() {
+        let err = tokenize("@@ def f()").expect_err("expected lexer error");
+        assert!(err.message().contains("Expected annotator name after '@@'"));
+    }
+
+    #[test]
+    fn test_single_at_token() {
+        let tokens = tokenize("@x").unwrap();
+        assert!(matches!(tokens[0].token, Token::At));
+        assert!(matches!(tokens[1].token, Token::Ident(ref s) if s == "x"));
     }
 
     #[test]
