@@ -12,7 +12,7 @@ mod tests {
     use crate::typed::TypedInner;
     use crate::typed::TypedNode;
 
-    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
+    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
 
     fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
         let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE).expect("builtin prelude should parse");

@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn builtin_srt_and_builtin_meta_are_aligned() {
-        let source = include_str!("../../../lib/builtin.srt");
+        let source = include_str!("../../../lib/bootstrap.srt");
         let lines = source
             .lines()
             .map(str::trim)

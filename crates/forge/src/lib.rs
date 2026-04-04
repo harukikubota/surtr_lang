@@ -14,7 +14,7 @@ mod tests {
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
 
-    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
+    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
 
     fn typed_with_builtin_prelude(source: &str) -> Vec<scar::typed::TypedNode> {
         let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE).expect("builtin prelude should parse");

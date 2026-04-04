@@ -9,7 +9,7 @@ use crate::error::ResolveError;
 use crate::resolved::*;
 use crate::scope::Scope;
 
-const AUTO_IMPORT_MODULES: &[&str] = &["bootstrap"];
+const AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap"];
 
 fn initialize_scope() -> Scope {
     let mut scope = Scope::new();
@@ -1605,12 +1605,12 @@ match value {
     #[test]
     fn test_explicit_auto_import_is_rejected() {
         let err = parse_and_resolve(
-            r#"import bootstrap;
+            r#"import Bootstrap;
 print("ok")"#,
         )
         .expect_err("explicit auto-import must fail");
         assert!(err.message.contains("Duplicate import"));
-        assert!(err.message.contains("bootstrap"));
+        assert!(err.message.contains("Bootstrap"));
     }
 
     #[test]

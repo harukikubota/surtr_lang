@@ -4,9 +4,9 @@ use std::fs;
 use diagnostics::{SourceId, SourceRegistry};
 use spire::CompileUnitKind;
 
-const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";
-const BUILTIN_PRELUDE_MODULE_PATH: &str = "bootstrap";
-const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
+const BUILTIN_PRELUDE_FILE: &str = "bootstrap.srt";
+const BUILTIN_PRELUDE_MODULE_PATH: &str = "Bootstrap";
+const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
 const REPL_MODULE_NAME: &str = "REPL";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

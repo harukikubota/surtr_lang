@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../lib/builtin.srt");
+const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../lib/bootstrap.srt");
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -37,7 +37,7 @@ fn collect_files_with_extension(root: &Path, ext: &str) -> Vec<PathBuf> {
 
 fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, String> {
     let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE)
-        .map_err(|e| format!("phase=parse; message=Parse (builtin.srt): {}", e))?;
+        .map_err(|e| format!("phase=parse; message=Parse (bootstrap.srt): {}", e))?;
     let mut user_ast =
         spire::parse(source).map_err(|e| format!("phase=parse; message=Parse: {}", e))?;
     ast.append(&mut user_ast);

@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod e2e {
-    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../lib/builtin.srt");
+    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../lib/bootstrap.srt");
 
     fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, String> {
         let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE)
-            .map_err(|e| format!("Parse (builtin.srt): {}", e))?;
+            .map_err(|e| format!("Parse (bootstrap.srt): {}", e))?;
         let mut user_ast = spire::parse(source).map_err(|e| format!("Parse: {}", e))?;
         ast.append(&mut user_ast);
         Ok(ast)
