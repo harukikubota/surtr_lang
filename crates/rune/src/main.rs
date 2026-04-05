@@ -98,10 +98,11 @@ fn run_source_file(file_path: &str) -> Result<(), i32> {
         }
     };
 
-    let compile_sources = xldr::collect_compile_sources(file_path, &source).map_err(|e| {
-        eprintln!("Error collecting compile sources: {}", e);
+    let module_sources = xldr::collect_module_sources_with_module_stages(&[]).map_err(|e| {
+        eprintln!("Error collecting module sources: {}", e);
         1
     })?;
+    let compile_sources = xldr::compose_script_compile_sources(file_path, &source, module_sources);
     let bytecode = compile_source(&compile_sources)?;
     execute_bytecode(
         bytecode,
@@ -140,10 +141,11 @@ fn build_command(input_srt: &str, output_eldr: Option<&str>) -> Result<(), i32> 
         }
     };
 
-    let compile_sources = xldr::collect_compile_sources(input_srt, &source).map_err(|e| {
-        eprintln!("Error collecting compile sources: {}", e);
+    let module_sources = xldr::collect_module_sources_with_module_stages(&[]).map_err(|e| {
+        eprintln!("Error collecting module sources: {}", e);
         1
     })?;
+    let compile_sources = xldr::compose_script_compile_sources(input_srt, &source, module_sources);
     let bytecode = compile_source(&compile_sources)?;
     let bytes = match bytecode.encode() {
         Ok(b) => b,
@@ -170,6 +172,7 @@ fn default_output_path(input_srt: &str) -> String {
 
 fn parse_program_with_builtin_prelude(
     compile_sources: &xldr::CompileSources,
+    compile_unit_kind: spire::CompileUnitKind,
 ) -> Result<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>), i32> {
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
@@ -181,7 +184,12 @@ fn parse_program_with_builtin_prelude(
             let module_source = sources.source(module.source_id).unwrap_or("");
             let module_ast = match spire::parse_with_context(
                 module_source,
-                spire::ParserContext::module(module.source_id.0, Some(module.module_path.clone())),
+                spire::ParserContext::module(module.source_id.0, Some(module.module_path.clone()))
+                    .with_rules(xldr::derive_source_rules(
+                        compile_unit_kind,
+                        module.source_kind,
+                        None,
+                    )),
             ) {
                 Ok(a) => a,
                 Err(e) => {
@@ -205,7 +213,11 @@ fn parse_program_with_builtin_prelude(
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = match spire::parse_with_context(
         user_source,
-        spire::ParserContext::script(user_source_id.0),
+        spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
+            compile_unit_kind,
+            xldr::SourceKind::Script,
+            None,
+        )),
     ) {
         Ok(a) => a,
         Err(e) => {
@@ -225,12 +237,14 @@ fn parse_program_with_builtin_prelude(
 fn compile_source(
     compile_sources: &xldr::CompileSources,
 ) -> Result<forge::bytecode::Bytecode, i32> {
+    let compile_unit_kind = spire::CompileUnitKind::Script;
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
     let user_source = sources.source(user_source_id).unwrap_or("");
 
     // Phase 1: Spire — parse
-    let (module_stages, user_ast) = parse_program_with_builtin_prelude(compile_sources)?;
+    let (module_stages, user_ast) =
+        parse_program_with_builtin_prelude(compile_sources, compile_unit_kind)?;
 
     // Issue 6: precollect declaration index from staged modules before body resolution.
     let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
@@ -246,8 +260,12 @@ fn compile_source(
     };
 
     // Phase 2: Sigil — resolve names
-    let resolved = match sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index)
-    {
+    let resolved = match sigil::resolve_staged_program(
+        &module_stages,
+        user_ast,
+        &declaration_index,
+        Some(compile_sources.user_module_path.clone()),
+    ) {
         Ok(r) => r,
         Err(e) => {
             diagnostics::report_error_by_id(
@@ -260,7 +278,16 @@ fn compile_source(
     };
 
     // Phase 3: Scar — type check
-    let typed = match scar::typecheck(resolved) {
+    let typed = match scar::typecheck_with_context(
+        resolved,
+        scar::TypecheckContext {
+            source_rules: xldr::derive_source_rules(
+                compile_unit_kind,
+                xldr::SourceKind::Script,
+                None,
+            ),
+        },
+    ) {
         Ok(t) => t,
         Err(e) => {
             diagnostics::report_error_by_id(

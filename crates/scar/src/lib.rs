@@ -4,13 +4,16 @@ pub mod error;
 pub mod typed;
 pub mod types;
 
-pub use checker::{typecheck, ScarCheckpoint, ScarSession};
+pub use checker::{
+    typecheck, typecheck_with_context, ScarCheckpoint, ScarSession, TypecheckContext,
+};
 
 #[cfg(test)]
 mod tests {
-    use super::typecheck;
+    use super::{typecheck, typecheck_with_context, TypecheckContext};
     use crate::typed::TypedInner;
     use crate::typed::TypedNode;
+    use spire::{EntryPoint, SetExitCodePolicy, SourceRules};
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
 
@@ -24,6 +27,14 @@ mod tests {
     fn typecheck_with_builtin_prelude(source: &str) -> Vec<TypedNode> {
         let resolved = resolve_with_builtin_prelude(source);
         typecheck(resolved).expect("source should typecheck")
+    }
+
+    fn typecheck_with_rules(
+        source: &str,
+        source_rules: SourceRules,
+    ) -> Result<Vec<TypedNode>, crate::error::TypeError> {
+        let resolved = resolve_with_builtin_prelude(source);
+        typecheck_with_context(resolved, TypecheckContext { source_rules })
     }
 
     #[test]
@@ -198,5 +209,53 @@ deferror NotFound(code: String) {
         }
 
         assert_eq!(collect_type_tags(&first), collect_type_tags(&second));
+    }
+
+    #[test]
+    fn set_exit_code_is_allowed_in_script_rules() {
+        let typed =
+            typecheck_with_rules("set_exit_code(9)", SourceRules::script()).expect("must pass");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::App(_, _))
+        ));
+    }
+
+    #[test]
+    fn set_exit_code_is_forbidden_in_repl_chunk_rules() {
+        let err = typecheck_with_rules("set_exit_code(9)", SourceRules::repl_chunk())
+            .expect_err("must fail");
+        assert!(err.message.contains("forbidden by source policy"));
+    }
+
+    #[test]
+    fn set_exit_code_entry_only_policy_allows_only_entrypoint_function() {
+        let entrypoint = EntryPoint::qualified("main");
+        let rules = SourceRules::module()
+            .with_set_exit_code_policy(SetExitCodePolicy::EntryOnly, Some(&entrypoint));
+
+        let ok = typecheck_with_rules(
+            r#"def main() -> Result<()> {
+  set_exit_code(7)
+  Ok(())
+}"#,
+            rules.clone(),
+        )
+        .expect("entrypoint body should allow set_exit_code");
+        assert!(matches!(
+            ok.iter()
+                .find(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _))),
+            Some(_)
+        ));
+
+        let err = typecheck_with_rules(
+            r#"def helper() -> Result<()> {
+  set_exit_code(7)
+  Ok(())
+}"#,
+            rules,
+        )
+        .expect_err("non-entrypoint function must fail");
+        assert!(err.message.contains("only allowed inside entrypoint"));
     }
 }

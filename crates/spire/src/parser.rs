@@ -18,11 +18,142 @@ pub enum CompileUnitKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryPoint {
+    pub qualified_symbol: String,
+}
+
+impl EntryPoint {
+    pub fn qualified(qualified_symbol: impl Into<String>) -> Self {
+        Self {
+            qualified_symbol: qualified_symbol.into(),
+        }
+    }
+
+    pub fn script_short_name(
+        short_name: impl AsRef<str>,
+        pseudo_module_path: impl AsRef<str>,
+    ) -> Self {
+        Self::qualified(format!(
+            "{}::{}",
+            pseudo_module_path.as_ref(),
+            short_name.as_ref()
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetExitCodePolicy {
+    Forbidden,
+    Anywhere,
+    EntryOnly,
+}
+
+impl SetExitCodePolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Forbidden => "Forbidden",
+            Self::Anywhere => "Anywhere",
+            Self::EntryOnly => "EntryOnly",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopLevelDeclKind {
+    Def,
+    Defmod,
+    Import,
+    StructDef,
+    RecordDef,
+    DeferrorDef,
+    BuiltinDecl,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TopLevelDeclPolicy {
+    Any,
+    Only(Vec<TopLevelDeclKind>),
+}
+
+impl TopLevelDeclPolicy {
+    fn allows(&self, kind: TopLevelDeclKind) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Only(allowed) => allowed.contains(&kind),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRules {
+    pub allow_top_level_expr: bool,
+    pub allowed_top_level_decl_kinds: TopLevelDeclPolicy,
+    pub set_exit_code_policy: SetExitCodePolicy,
+    pub normalized_entrypoint: Option<String>,
+}
+
+impl SourceRules {
+    pub fn script() -> Self {
+        Self {
+            allow_top_level_expr: true,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+            set_exit_code_policy: SetExitCodePolicy::Anywhere,
+            normalized_entrypoint: Some("main".to_string()),
+        }
+    }
+
+    pub fn module() -> Self {
+        Self {
+            allow_top_level_expr: false,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Import,
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::StructDef,
+                TopLevelDeclKind::RecordDef,
+                TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::BuiltinDecl,
+            ]),
+            set_exit_code_policy: SetExitCodePolicy::Forbidden,
+            normalized_entrypoint: None,
+        }
+    }
+
+    pub fn repl_chunk() -> Self {
+        Self {
+            allow_top_level_expr: true,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+            set_exit_code_policy: SetExitCodePolicy::Forbidden,
+            normalized_entrypoint: None,
+        }
+    }
+
+    pub fn project() -> Self {
+        Self {
+            allow_top_level_expr: true,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+            set_exit_code_policy: SetExitCodePolicy::Forbidden,
+            normalized_entrypoint: None,
+        }
+    }
+
+    pub fn with_set_exit_code_policy(
+        mut self,
+        policy: SetExitCodePolicy,
+        entrypoint: Option<&EntryPoint>,
+    ) -> Self {
+        self.set_exit_code_policy = policy;
+        self.normalized_entrypoint = entrypoint.map(|entry| entry.qualified_symbol.clone());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserContext {
     pub level: DeclLevel,
     pub unit_kind: CompileUnitKind,
     pub source_id: u32,
     pub module_path: Option<String>,
+    pub source_rules: SourceRules,
 }
 
 impl Default for ParserContext {
@@ -38,6 +169,7 @@ impl ParserContext {
             unit_kind: CompileUnitKind::Script,
             source_id,
             module_path: None,
+            source_rules: SourceRules::script(),
         }
     }
 
@@ -47,6 +179,7 @@ impl ParserContext {
             unit_kind: CompileUnitKind::Module,
             source_id,
             module_path,
+            source_rules: SourceRules::module(),
         }
     }
 
@@ -56,6 +189,7 @@ impl ParserContext {
             unit_kind: CompileUnitKind::Repl,
             source_id,
             module_path: None,
+            source_rules: SourceRules::repl_chunk(),
         }
     }
 
@@ -65,7 +199,13 @@ impl ParserContext {
             unit_kind: CompileUnitKind::Project,
             source_id,
             module_path: None,
+            source_rules: SourceRules::project(),
         }
+    }
+
+    pub fn with_rules(mut self, source_rules: SourceRules) -> Self {
+        self.source_rules = source_rules;
+        self
     }
 }
 
@@ -304,28 +444,42 @@ impl Parser {
     }
 
     fn validate_stmt_by_context(&self, stmt: &Ast) -> Result<(), ParseError> {
-        if self.context.level == DeclLevel::Top
-            && self.context.unit_kind == CompileUnitKind::Module
-            && !Self::is_module_top_level_stmt(stmt)
-        {
-            return Err(ParseError::syntax(
-                "Top-level expressions are not allowed in module compile units",
-                stmt.span().clone(),
-            ));
+        if self.context.level == DeclLevel::Top {
+            if let Some(kind) = Self::top_level_decl_kind(stmt) {
+                if !self
+                    .context
+                    .source_rules
+                    .allowed_top_level_decl_kinds
+                    .allows(kind)
+                {
+                    return Err(ParseError::syntax(
+                        "This top-level declaration is not allowed in the current source policy",
+                        stmt.span().clone(),
+                    ));
+                }
+            } else if !self.context.source_rules.allow_top_level_expr {
+                let message = if self.context.unit_kind == CompileUnitKind::Module {
+                    "Top-level expressions are not allowed in module compile units"
+                } else {
+                    "Top-level expressions are not allowed in this source context"
+                };
+                return Err(ParseError::syntax(message, stmt.span().clone()));
+            }
         }
         Ok(())
     }
 
-    fn is_module_top_level_stmt(ast: &Ast) -> bool {
-        matches!(
-            ast,
-            Ast::Import(_, _, _)
-                | Ast::Def(_, _, _, _, _)
-                | Ast::StructDef(_, _, _)
-                | Ast::RecordDef(_, _, _)
-                | Ast::DeferrorDef(_, _, _, _)
-                | Ast::BuiltinDecl(_, _, _, _)
-        )
+    fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
+        match ast {
+            Ast::Def(_, _, _, _, _) => Some(TopLevelDeclKind::Def),
+            Ast::Defmod(_, _, _) => Some(TopLevelDeclKind::Defmod),
+            Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
+            Ast::StructDef(_, _, _) => Some(TopLevelDeclKind::StructDef),
+            Ast::RecordDef(_, _, _) => Some(TopLevelDeclKind::RecordDef),
+            Ast::DeferrorDef(_, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
+            Ast::BuiltinDecl(_, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
+            _ => None,
+        }
     }
 
     fn parse_module_body_stmts(
@@ -336,6 +490,7 @@ impl Parser {
         self.context.level = DeclLevel::Top;
         self.context.unit_kind = CompileUnitKind::Module;
         self.context.module_path = module_path;
+        self.context.source_rules = SourceRules::module();
 
         let result = (|| {
             let mut stmts = Vec::new();

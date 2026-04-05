@@ -32,6 +32,7 @@ pub fn resolve_staged_program(
     module_stages: &[Vec<StagedModuleAst>],
     user_ast: Vec<Ast>,
     declaration_index: &DeclarationIndex,
+    user_module_path: Option<String>,
 ) -> Result<Vec<Resolved>, ResolveError> {
     let declaration_uids = assign_declaration_uids(declaration_index);
     let global_scope = build_global_scope(declaration_index, &declaration_uids);
@@ -60,11 +61,12 @@ pub fn resolve_staged_program(
         declaration_index,
         &declaration_uids,
         &user_ast,
-        None,
+        user_module_path.as_deref(),
         module_stages.len(),
     )?;
     let mut user_resolver = Resolver::with_scope(user_scope);
     user_resolver.declaration_uids = declaration_uids;
+    user_resolver.current_module_path = user_module_path;
     user_resolver.allow_top_level_shadowing = true;
     resolved.extend(user_resolver.resolve_program(user_ast)?);
     Ok(resolved)
@@ -401,17 +403,27 @@ pub struct SigilCheckpoint {
 #[derive(Debug, Clone)]
 pub struct SigilSession {
     scope: Scope,
+    current_module_path: Option<String>,
 }
 
 impl SigilSession {
     pub fn new() -> Self {
         Self {
             scope: initialize_scope(),
+            current_module_path: None,
+        }
+    }
+
+    pub fn with_module_path(current_module_path: Option<String>) -> Self {
+        Self {
+            scope: initialize_scope(),
+            current_module_path,
         }
     }
 
     pub fn resolve(&mut self, ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
         let mut resolver = Resolver::with_scope(self.scope.clone());
+        resolver.current_module_path = self.current_module_path.clone();
         let resolved = resolver.resolve_program(ast)?;
         self.scope = resolver.into_scope();
         Ok(resolved)

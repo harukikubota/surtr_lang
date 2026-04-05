@@ -7,6 +7,8 @@ const BUILTIN_PRELUDE_FILE: &str = "bootstrap.srt";
 const BUILTIN_PRELUDE_MODULE_PATH: &str = "Bootstrap";
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
 const REPL_MODULE_NAME: &str = "REPL";
+const SCRIPT_PSEUDO_MODULE_PREFIX: &str = "__Script";
+const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
@@ -68,6 +70,40 @@ impl SourceDescriptor {
             module_path: None,
         }
     }
+}
+
+fn sanitize_module_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for ch in segment.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let collapsed = out.trim_matches('_');
+    if collapsed.is_empty() {
+        "_".to_string()
+    } else {
+        collapsed.to_string()
+    }
+}
+
+pub fn script_pseudo_module_path(file_name: &str) -> String {
+    let normalized = file_name.replace('\\', "/");
+    let mut body = normalized.trim().trim_start_matches("./").to_string();
+    if let Some(stripped) = body.strip_suffix(".srt") {
+        body = stripped.to_string();
+    }
+    let mut segments = body
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(sanitize_module_segment)
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        segments.push("Main".to_string());
+    }
+    format!("{}::{}", SCRIPT_PSEUDO_MODULE_PREFIX, segments.join("::"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,9 +243,19 @@ pub struct StagedModule {
 }
 
 #[derive(Debug, Clone)]
+pub struct ModuleSources {
+    pub sources: SourceRegistry,
+    pub builtin_source_id: SourceId,
+    pub builtin_module_path: Option<String>,
+    pub module_source_ids: Vec<SourceId>,
+    pub module_stages: Vec<Vec<StagedModule>>,
+}
+
+#[derive(Debug, Clone)]
 pub struct CompileSources {
     pub sources: SourceRegistry,
     pub user_source_id: SourceId,
+    pub user_module_path: String,
     pub builtin_source_id: SourceId,
     pub builtin_module_path: Option<String>,
     pub module_source_ids: Vec<SourceId>,
@@ -220,7 +266,12 @@ pub fn collect_compile_sources(
     user_file_name: &str,
     user_source: &str,
 ) -> Result<CompileSources, LoadError> {
-    collect_compile_sources_with_module_stages(user_file_name, user_source, &[])
+    let module_sources = collect_module_sources_with_module_stages(&[])?;
+    Ok(compose_script_compile_sources(
+        user_file_name,
+        user_source,
+        module_sources,
+    ))
 }
 
 pub fn collect_compile_sources_with_modules(
@@ -228,14 +279,12 @@ pub fn collect_compile_sources_with_modules(
     user_source: &str,
     module_inputs: &[ModuleInput],
 ) -> Result<CompileSources, LoadError> {
-    if module_inputs.is_empty() {
-        return collect_compile_sources_with_module_stages(user_file_name, user_source, &[]);
-    }
-    collect_compile_sources_with_module_stages(
+    let module_sources = collect_module_sources_with_modules(module_inputs)?;
+    Ok(compose_script_compile_sources(
         user_file_name,
         user_source,
-        &[module_inputs.to_vec()],
-    )
+        module_sources,
+    ))
 }
 
 pub fn collect_compile_sources_with_module_stages(
@@ -243,6 +292,26 @@ pub fn collect_compile_sources_with_module_stages(
     user_source: &str,
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<CompileSources, LoadError> {
+    let module_sources = collect_module_sources_with_module_stages(module_input_stages)?;
+    Ok(compose_script_compile_sources(
+        user_file_name,
+        user_source,
+        module_sources,
+    ))
+}
+
+pub fn collect_module_sources_with_modules(
+    module_inputs: &[ModuleInput],
+) -> Result<ModuleSources, LoadError> {
+    if module_inputs.is_empty() {
+        return collect_module_sources_with_module_stages(&[]);
+    }
+    collect_module_sources_with_module_stages(&[module_inputs.to_vec()])
+}
+
+pub fn collect_module_sources_with_module_stages(
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ModuleSources, LoadError> {
     let mut stage_specs = vec![vec![SourceDescriptor::std_module(
         BUILTIN_PRELUDE_FILE,
         BUILTIN_PRELUDE_SOURCE,
@@ -261,7 +330,7 @@ pub fn collect_compile_sources_with_module_stages(
         stage_specs.push(specs);
     }
 
-    let mut flattened_specs = vec![SourceDescriptor::script(user_file_name, user_source)];
+    let mut flattened_specs = Vec::new();
     for stage in &stage_specs {
         for spec in stage {
             flattened_specs.push(spec.clone());
@@ -269,9 +338,8 @@ pub fn collect_compile_sources_with_module_stages(
     }
 
     let collected = collect_sources(&flattened_specs)?;
-    let user = &collected.bindings[0];
 
-    let mut idx = 1;
+    let mut idx = 0;
     let mut module_stages = Vec::with_capacity(stage_specs.len());
     for stage in &stage_specs {
         let mut stage_bindings = Vec::with_capacity(stage.len());
@@ -298,9 +366,8 @@ pub fn collect_compile_sources_with_module_stages(
         .flat_map(|stage| stage.iter().map(|entry| entry.source_id))
         .collect();
 
-    Ok(CompileSources {
+    Ok(ModuleSources {
         sources: collected.sources,
-        user_source_id: user.source_id,
         builtin_source_id: builtin.source_id,
         builtin_module_path: Some(builtin.module_path.clone()),
         module_source_ids,
@@ -308,11 +375,39 @@ pub fn collect_compile_sources_with_module_stages(
     })
 }
 
+pub fn compose_script_compile_sources(
+    user_file_name: &str,
+    user_source: &str,
+    mut module_sources: ModuleSources,
+) -> CompileSources {
+    let user_source_id = module_sources.sources.register(user_file_name, user_source);
+    CompileSources {
+        sources: module_sources.sources,
+        user_source_id,
+        user_module_path: script_pseudo_module_path(user_file_name),
+        builtin_source_id: module_sources.builtin_source_id,
+        builtin_module_path: module_sources.builtin_module_path,
+        module_source_ids: module_sources.module_source_ids,
+        module_stages: module_sources.module_stages,
+    }
+}
+
 pub fn collect_compile_sources_with_module_file_stages(
     user_file_name: &str,
     user_source: &str,
     module_file_stages: &[Vec<String>],
 ) -> Result<CompileSources, LoadError> {
+    let module_sources = collect_module_sources_with_module_file_stages(module_file_stages)?;
+    Ok(compose_script_compile_sources(
+        user_file_name,
+        user_source,
+        module_sources,
+    ))
+}
+
+pub fn collect_module_sources_with_module_file_stages(
+    module_file_stages: &[Vec<String>],
+) -> Result<ModuleSources, LoadError> {
     let mut module_input_stages = Vec::with_capacity(module_file_stages.len());
     for stage in module_file_stages {
         let mut stage_inputs = Vec::with_capacity(stage.len());
@@ -336,7 +431,7 @@ pub fn collect_compile_sources_with_module_file_stages(
         module_input_stages.push(stage_inputs);
     }
 
-    collect_compile_sources_with_module_stages(user_file_name, user_source, &module_input_stages)
+    collect_module_sources_with_module_stages(&module_input_stages)
 }
 
 fn module_path_from_file_name(file_name: &str) -> Option<String> {
@@ -363,6 +458,7 @@ pub(crate) struct ReplSources {
     pub(crate) builtin_source_id: SourceId,
     pub(crate) builtin_module_path: Option<String>,
     pub(crate) repl_source_id: SourceId,
+    pub(crate) repl_module_path: String,
 }
 
 pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
@@ -383,6 +479,7 @@ pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
         builtin_source_id: builtin.source_id,
         builtin_module_path: builtin.module_path.clone(),
         repl_source_id: repl.source_id,
+        repl_module_path: REPL_PSEUDO_MODULE_PATH.to_string(),
     })
 }
 

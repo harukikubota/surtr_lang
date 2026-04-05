@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use sigil::resolved::*;
 use sindr::builtin::{builtin_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS};
 use spire::ast::{AstTy, BinOp, Lit, Span};
+use spire::{SetExitCodePolicy, SourceRules};
 
 use crate::env::{TypeEnv, TypeKind};
 use crate::error::TypeError;
@@ -20,8 +21,28 @@ enum TypeSyntaxContext {
 
 /// Type-check the resolved AST, producing a fully typed tree.
 pub fn typecheck(resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
-    let mut checker = Checker::new();
+    typecheck_with_context(resolved, TypecheckContext::default())
+}
+
+pub fn typecheck_with_context(
+    resolved: Vec<Resolved>,
+    context: TypecheckContext,
+) -> Result<Vec<TypedNode>, TypeError> {
+    let mut checker = Checker::new(context);
     checker.check_program(resolved)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypecheckContext {
+    pub source_rules: SourceRules,
+}
+
+impl Default for TypecheckContext {
+    fn default() -> Self {
+        Self {
+            source_rules: SourceRules::script(),
+        }
+    }
 }
 
 fn initialize_env() -> TypeEnv {
@@ -134,8 +155,16 @@ impl ScarSession {
     }
 
     pub fn typecheck(&mut self, resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
+        self.typecheck_with_context(resolved, TypecheckContext::default())
+    }
+
+    pub fn typecheck_with_context(
+        &mut self,
+        resolved: Vec<Resolved>,
+        context: TypecheckContext,
+    ) -> Result<Vec<TypedNode>, TypeError> {
         let mut checker =
-            Checker::with_env_and_params(self.env.clone(), self.user_func_params.clone());
+            Checker::with_env_and_params(self.env.clone(), self.user_func_params.clone(), context);
         let typed = checker.check_program(resolved)?;
         let (env, user_func_params) = checker.into_parts();
         self.env = env;
@@ -165,29 +194,36 @@ impl Default for ScarSession {
 struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
-    current_function_name: Option<String>,
+    current_function_symbol: Option<String>,
     user_func_params: HashMap<u32, Vec<String>>,
     substitutions: HashMap<u32, Ty>,
+    source_rules: SourceRules,
 }
 
 impl Checker {
-    fn new() -> Self {
+    fn new(context: TypecheckContext) -> Self {
         Self {
             env: initialize_env(),
             function_return_ty: None,
-            current_function_name: None,
+            current_function_symbol: None,
             user_func_params: HashMap::new(),
             substitutions: HashMap::new(),
+            source_rules: context.source_rules,
         }
     }
 
-    fn with_env_and_params(env: TypeEnv, user_func_params: HashMap<u32, Vec<String>>) -> Self {
+    fn with_env_and_params(
+        env: TypeEnv,
+        user_func_params: HashMap<u32, Vec<String>>,
+        context: TypecheckContext,
+    ) -> Self {
         Self {
             env,
             function_return_ty: None,
-            current_function_name: None,
+            current_function_symbol: None,
             user_func_params,
             substitutions: HashMap::new(),
+            source_rules: context.source_rules,
         }
     }
 
@@ -1574,16 +1610,52 @@ impl Checker {
                     }
                 }
 
-                if name == "set_exit_code" && self.current_function_name.as_deref() != Some("main")
-                {
-                    return Err(TypeError {
-                        message: "set_exit_code can only be used inside main".into(),
-                        span: span.clone(),
-                        hint: Some(
-                            "Use set_exit_code(code) from main() -> Result<()> and finish with Ok(()) or Err(error)."
-                                .into(),
-                        ),
-                    });
+                if name == "set_exit_code" {
+                    match self.source_rules.set_exit_code_policy {
+                        SetExitCodePolicy::Anywhere => {}
+                        SetExitCodePolicy::Forbidden => {
+                            return Err(TypeError {
+                                message: format!(
+                                    "set_exit_code is forbidden by source policy ({})",
+                                    self.source_rules.set_exit_code_policy.as_str()
+                                ),
+                                span: span.clone(),
+                                hint: Some(
+                                    "This source kind does not allow set_exit_code. Use Result-based failure handling instead."
+                                        .into(),
+                                ),
+                            });
+                        }
+                        SetExitCodePolicy::EntryOnly => {
+                            let Some(entrypoint) = self.source_rules.normalized_entrypoint.as_ref()
+                            else {
+                                return Err(TypeError {
+                                    message:
+                                        "set_exit_code requires a normalized entrypoint but none was provided".into(),
+                                    span: span.clone(),
+                                    hint: Some(
+                                        "Configure an entrypoint, or avoid set_exit_code in this compile unit."
+                                            .into(),
+                                    ),
+                                });
+                            };
+                            if self.current_function_symbol.as_deref() != Some(entrypoint.as_str())
+                            {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "set_exit_code is only allowed inside entrypoint `{}` (policy: {})",
+                                        entrypoint,
+                                        self.source_rules.set_exit_code_policy.as_str()
+                                    ),
+                                    span: span.clone(),
+                                    hint: Some(
+                                        "Move set_exit_code into the configured entrypoint function."
+                                            .into(),
+                                    ),
+                                });
+                            }
+                        }
+                    }
                 }
 
                 Ok(TypedNode {
@@ -1812,7 +1884,13 @@ impl Checker {
             }
         }
 
-        let mut body_checker = Checker::with_env_and_params(fun_env, self.user_func_params.clone());
+        let mut body_checker = Checker::with_env_and_params(
+            fun_env,
+            self.user_func_params.clone(),
+            TypecheckContext {
+                source_rules: self.source_rules.clone(),
+            },
+        );
         if let Some(Ty::Func(_, expected_ret)) = expected {
             body_checker.function_return_ty = Some(expected_ret.as_ref().clone());
         }
@@ -2686,20 +2764,57 @@ impl Checker {
             None => Ty::Unit,
         };
 
-        if id.name == "main" && !Self::is_main_result_unit_ty(&expected_ret) {
-            return Err(TypeError {
-                message: "main must declare return type Result<()>".into(),
-                span: span.clone(),
-                hint: Some(
-                    "Define main as `def main(...) -> Result<()> { ... }` and return Ok(()) or Err(error)."
-                        .into(),
-                ),
-            });
+        let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
+        let is_entrypoint = self
+            .source_rules
+            .normalized_entrypoint
+            .as_deref()
+            .is_some_and(|entry| entry == current_symbol);
+        if is_entrypoint {
+            if !params.is_empty() {
+                return Err(TypeError {
+                    message: format!(
+                        "entrypoint `{}` must have signature () -> Result<()>",
+                        current_symbol
+                    ),
+                    span: span.clone(),
+                    hint: Some("Remove entrypoint parameters and return Result<()>.".into()),
+                });
+            }
+            if !Self::is_main_result_unit_ty(&expected_ret) {
+                let legacy_main = current_symbol == "main"
+                    && self
+                        .source_rules
+                        .normalized_entrypoint
+                        .as_deref()
+                        .is_some_and(|entry| entry == "main");
+                return Err(TypeError {
+                    message: if legacy_main {
+                        "main must declare return type Result<()>".into()
+                    } else {
+                        format!(
+                            "entrypoint `{}` must declare return type Result<()>",
+                            current_symbol
+                        )
+                    },
+                    span: span.clone(),
+                    hint: Some(
+                        "Define entrypoint as `def <name>() -> Result<()> { ... }` and return Ok(()) or Err(error)."
+                            .into(),
+                    ),
+                });
+            }
         }
 
-        let mut body_checker = Checker::with_env_and_params(fun_env, self.user_func_params.clone());
+        let mut body_checker = Checker::with_env_and_params(
+            fun_env,
+            self.user_func_params.clone(),
+            TypecheckContext {
+                source_rules: self.source_rules.clone(),
+            },
+        );
         body_checker.function_return_ty = Some(expected_ret.clone());
-        body_checker.current_function_name = Some(id.name.clone());
+        body_checker.current_function_symbol = Some(current_symbol);
         let typed_body = body_checker.check_node(body)?;
 
         self.env.next_tyvar = self.env.next_tyvar.max(body_checker.env.next_tyvar);
@@ -3213,8 +3328,13 @@ impl Checker {
         for (ty, resolved_id) in &ty_fields {
             show_env.bind_var(resolved_id.unique_id, ty.clone());
         }
-        let mut show_checker =
-            Checker::with_env_and_params(show_env, self.user_func_params.clone());
+        let mut show_checker = Checker::with_env_and_params(
+            show_env,
+            self.user_func_params.clone(),
+            TypecheckContext {
+                source_rules: self.source_rules.clone(),
+            },
+        );
         show_checker.function_return_ty = Some(Ty::Str);
         let typed_show = show_checker
             .check_node(show_expr)

@@ -19,8 +19,36 @@ mod loader;
 pub use loader::{
     collect_compile_sources, collect_compile_sources_with_module_file_stages,
     collect_compile_sources_with_module_stages, collect_compile_sources_with_modules,
-    CompileSources, LoadError, ModuleInput, SourceDescriptor, SourceKind, StagedModule,
+    collect_module_sources_with_module_file_stages, collect_module_sources_with_module_stages,
+    collect_module_sources_with_modules, compose_script_compile_sources, script_pseudo_module_path,
+    CompileSources, LoadError, ModuleInput, ModuleSources, SourceDescriptor, SourceKind,
+    StagedModule,
 };
+
+pub fn derive_source_rules(
+    compile_unit_kind: spire::CompileUnitKind,
+    source_kind: SourceKind,
+    entrypoint: Option<&spire::EntryPoint>,
+) -> spire::SourceRules {
+    let base = match source_kind {
+        SourceKind::Script => spire::SourceRules::script(),
+        SourceKind::Module | SourceKind::StdModule => spire::SourceRules::module(),
+        SourceKind::ReplChunk => spire::SourceRules::repl_chunk(),
+    };
+
+    let policy = match source_kind {
+        SourceKind::Script => spire::SetExitCodePolicy::Anywhere,
+        SourceKind::ReplChunk => spire::SetExitCodePolicy::Forbidden,
+        SourceKind::Module | SourceKind::StdModule
+            if compile_unit_kind == spire::CompileUnitKind::Project =>
+        {
+            spire::SetExitCodePolicy::EntryOnly
+        }
+        SourceKind::Module | SourceKind::StdModule => spire::SetExitCodePolicy::Forbidden,
+    };
+
+    base.with_set_exit_code_policy(policy, entrypoint)
+}
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -152,7 +180,9 @@ impl ReplEngine {
             builtin_source_id: repl_sources.builtin_source_id,
             builtin_module_path: repl_sources.builtin_module_path,
             repl_source_id: repl_sources.repl_source_id,
-            sigil_session: sigil::SigilSession::new(),
+            sigil_session: sigil::SigilSession::with_module_path(Some(
+                repl_sources.repl_module_path,
+            )),
             scar_session: scar::ScarSession::new(),
             forge_session,
             vm,
@@ -180,7 +210,12 @@ impl ReplEngine {
             spire::ParserContext::module(
                 self.builtin_source_id.0,
                 self.builtin_module_path.clone(),
-            ),
+            )
+            .with_rules(derive_source_rules(
+                spire::CompileUnitKind::Repl,
+                SourceKind::StdModule,
+                None,
+            )),
         ) {
             Ok(ast) => ast,
             Err(e) => {
@@ -209,7 +244,16 @@ impl ReplEngine {
             }
         };
 
-        let typed = match self.scar_session.typecheck(resolved) {
+        let typed = match self.scar_session.typecheck_with_context(
+            resolved,
+            scar::TypecheckContext {
+                source_rules: derive_source_rules(
+                    spire::CompileUnitKind::Repl,
+                    SourceKind::StdModule,
+                    None,
+                ),
+            },
+        ) {
             Ok(t) => t,
             Err(e) => {
                 diagnostics::report_error_by_id(
@@ -292,7 +336,11 @@ impl ReplEngine {
 
         let ast = match spire::parse_with_context(
             &self.pending,
-            spire::ParserContext::repl(self.repl_source_id.0),
+            spire::ParserContext::repl(self.repl_source_id.0).with_rules(derive_source_rules(
+                spire::CompileUnitKind::Repl,
+                SourceKind::ReplChunk,
+                None,
+            )),
         ) {
             Ok(ast) => ast,
             Err(e) if e.is_incomplete() => {
@@ -337,7 +385,16 @@ impl ReplEngine {
             }
         };
 
-        let typed = match self.scar_session.typecheck(resolved) {
+        let typed = match self.scar_session.typecheck_with_context(
+            resolved,
+            scar::TypecheckContext {
+                source_rules: derive_source_rules(
+                    spire::CompileUnitKind::Repl,
+                    SourceKind::ReplChunk,
+                    None,
+                ),
+            },
+        ) {
             Ok(t) => t,
             Err(e) => {
                 self.sigil_session.rollback(sigil_cp);
@@ -401,6 +458,8 @@ impl ReplEngine {
                     self.vm.runtime_error_location(),
                 );
                 self.bump_line(None);
+                self.pending.clear();
+                return ReplOutcome::Exit;
             }
         }
 
