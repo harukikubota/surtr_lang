@@ -180,7 +180,12 @@ fn parse_program_with_loader(
             let module_source = sources.source(module.source_id).unwrap_or("");
             let module_ast = spire::parse_with_context(
                 module_source,
-                spire::ParserContext::module(module.source_id.0, Some(module.module_path.clone())),
+                spire::ParserContext::module(module.source_id.0, Some(module.module_path.clone()))
+                    .with_rules(xldr::derive_source_rules(
+                        spire::CompileUnitKind::Script,
+                        module.source_kind,
+                        None,
+                    )),
             )
             .map_err(|e| {
                 let file_name = sources.file_name(module.source_id).unwrap_or("<unknown>");
@@ -195,12 +200,18 @@ fn parse_program_with_loader(
     }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
-    let user_ast =
-        spire::parse_with_context(user_source, spire::ParserContext::script(user_source_id.0))
-            .map_err(|e| {
-                let file_name = sources.file_name(user_source_id).unwrap_or("<unknown>");
-                format!("phase=parse; file={}; message={}", file_name, e.message())
-            })?;
+    let user_ast = spire::parse_with_context(
+        user_source,
+        spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
+            spire::CompileUnitKind::Script,
+            xldr::SourceKind::Script,
+            None,
+        )),
+    )
+    .map_err(|e| {
+        let file_name = sources.file_name(user_source_id).unwrap_or("<unknown>");
+        format!("phase=parse; file={}; message={}", file_name, e.message())
+    })?;
 
     Ok((staged_module_asts, user_ast))
 }
@@ -222,9 +233,24 @@ fn compile_multi_source_case(case_dir: &Path) -> Result<forge::bytecode::Bytecod
     let declaration_index = sigil::precollect_declaration_index(&module_asts)
         .map_err(|e| format!("phase=resolve; message={}", e))?;
 
-    let resolved = sigil::resolve_staged_program(&module_asts, user_ast, &declaration_index)
-        .map_err(|e| format!("phase=resolve; message={}", e))?;
-    let typed = scar::typecheck(resolved).map_err(|e| format!("phase=typecheck; message={}", e))?;
+    let resolved = sigil::resolve_staged_program(
+        &module_asts,
+        user_ast,
+        &declaration_index,
+        Some(compile_sources.user_module_path.clone()),
+    )
+    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    let typed = scar::typecheck_with_context(
+        resolved,
+        scar::TypecheckContext {
+            source_rules: xldr::derive_source_rules(
+                spire::CompileUnitKind::Script,
+                xldr::SourceKind::Script,
+                None,
+            ),
+        },
+    )
+    .map_err(|e| format!("phase=typecheck; message={}", e))?;
     forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))
 }
 

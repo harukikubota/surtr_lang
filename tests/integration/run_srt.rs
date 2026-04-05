@@ -53,7 +53,13 @@ fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, Stri
 fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
     let ast = parse_with_builtin_prelude(source)?;
     let resolved = sigil::resolve(ast).map_err(|e| format!("phase=resolve; message={}", e))?;
-    let typed = scar::typecheck(resolved).map_err(|e| format!("phase=typecheck; message={}", e))?;
+    let typed = scar::typecheck_with_context(
+        resolved,
+        scar::TypecheckContext {
+            source_rules: spire::SourceRules::script(),
+        },
+    )
+    .map_err(|e| format!("phase=typecheck; message={}", e))?;
     forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))
 }
 
