@@ -115,6 +115,49 @@ impl ForgeSession {
         self.state.type_registry.clone()
     }
 
+    /// Restore a `ForgeSession` from an already-executed `Bytecode`.
+    ///
+    /// This is used when the TUI (or REPL) loads a pre-compiled `.eldr` file.
+    /// The restored session can generate new REPL chunks that append on top of
+    /// the loaded bytecode.  It cannot recover `slot_map` (let-binding
+    /// unique_id → slot), so previous REPL local variables are not accessible
+    /// by name in new input.  Function definitions and the type registry are
+    /// fully restored.
+    pub fn from_bytecode(bytecode: &sindr::ir::Bytecode) -> Self {
+        let next_fun_idx = bytecode
+            .functions
+            .iter()
+            .map(|f| f.fun_idx + 1)
+            .max()
+            .unwrap_or(0);
+
+        // Reconstruct error_ctor_funs: ErrTemplate.kind → (fun_idx, num_params).
+        let mut error_ctor_funs = HashMap::new();
+        for template in &bytecode.error_templates {
+            if let Some(fun_entry) = bytecode
+                .functions
+                .iter()
+                .find(|f| f.qualified_name.as_deref() == Some(&template.kind))
+            {
+                error_ctor_funs
+                    .insert(template.kind.clone(), (fun_entry.fun_idx, template.num_params));
+            }
+        }
+
+        Self {
+            state: CodegenState {
+                constants: bytecode.constants.clone(),
+                slot_map: HashMap::new(),
+                next_slot: bytecode.num_locals as u32,
+                next_fun_idx,
+                type_registry: bytecode.type_registry.clone(),
+                error_templates: bytecode.error_templates.clone(),
+                functions: bytecode.functions.clone(),
+                error_ctor_funs,
+            },
+        }
+    }
+
     pub fn codegen_chunk(
         &mut self,
         typed: Vec<TypedNode>,

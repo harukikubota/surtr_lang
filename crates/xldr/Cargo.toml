@@ -13,3 +13,5 @@ forge = { path = "../forge" }
 eldr = { path = "../eldr" }
 sindr = { path = "../sindr" }
 rustyline = "13"
+ratatui = "0.29"
+crossterm = "0.28"

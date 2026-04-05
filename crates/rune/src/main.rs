@@ -27,7 +27,7 @@ fn main() {
         }
         Some("run") => parse_run_options(&args[2..])
             .and_then(|options| run_command(options, ExecutionEnv::Dev)),
-        Some("repl") => parse_repl_options(&args[2..]).and_then(xldr::repl_command),
+        Some("repl") => parse_repl_options(&args[2..]).and_then(xldr::cli_command),
         Some("build") => {
             if !(3..=4).contains(&args.len()) {
                 print_usage();
@@ -44,6 +44,12 @@ fn main() {
             } else {
                 dump::dump_command(&args[2], &args[3..])
             }
+        }
+        Some("tui") => {
+            let options = xldr::tui::TuiOptions {
+                eldr_path: args.get(2).cloned(),
+            };
+            xldr::tui::run_command(options)
         }
         _ => {
             print_usage();
@@ -64,6 +70,7 @@ fn print_usage() {
     eprintln!("  surtr repl [--quiet] [--banner] [--version]");
     eprintln!("  surtr build <file.srt> [output.eldr]");
     eprintln!("  surtr dump <file.eldr|entry.srt> [--format json] [--entry <name>]");
+    eprintln!("  surtr tui [file.eldr]");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

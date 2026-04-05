@@ -20,6 +20,7 @@ use spire::ast::{Ast, ImportSpec, Span};
 use spire::token::Token;
 
 mod loader;
+pub mod tui;
 
 pub use loader::{
     collect_module_sources_with_module_file_stages, collect_module_sources_with_module_stages,
@@ -431,6 +432,24 @@ fn collect_repl_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
 const REPL_AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel"];
 
+/// Error returned when loading a `.eldr` file into a REPL engine.
+#[derive(Debug)]
+pub enum EldrLoadError {
+    /// Binary format error (bad magic, truncation, decode failure, etc.).
+    Format(sindr::ir::BytecodeFormatError),
+    /// Source / module loader error.
+    Load(LoadError),
+}
+
+impl std::fmt::Display for EldrLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EldrLoadError::Format(e) => write!(f, "eldr format error: {}", e),
+            EldrLoadError::Load(e) => write!(f, "loader error: {}", e),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BannerMode {
     Light,
@@ -529,7 +548,7 @@ impl Completer for ReplHelper {
     }
 }
 
-enum ReplOutcome {
+pub enum ReplOutcome {
     Continue,
     Exit,
 }
@@ -554,6 +573,7 @@ struct ReplEngine {
     pending: String,
     next_line: usize,
     results: Vec<Option<Value>>,
+    result_metas: Vec<Option<forge::ChunkMeta>>,
     symbols: BTreeSet<String>,
 }
 
@@ -583,6 +603,7 @@ impl ReplEngine {
             pending: String::new(),
             next_line: 1,
             results: Vec::new(),
+            result_metas: Vec::new(),
             symbols: ["Ok", "Err"]
                 .into_iter()
                 .map(str::to_string)
@@ -590,6 +611,70 @@ impl ReplEngine {
                 .collect(),
         };
         engine.bootstrap_std_modules();
+        Ok(engine)
+    }
+
+    /// Initialise a REPL engine from an existing `.eldr` bytecode payload.
+    ///
+    /// The VM is seeded with the compiled bytecode from the file, so all
+    /// function definitions in the image are already resident.  Standard-
+    /// library sigil / scar context is bootstrapped from source (no re-
+    /// execution needed) so that new REPL chunks can reference stdlib symbols.
+    ///
+    /// Limitation: user-defined functions in the `.eldr` that are beyond the
+    /// standard library are present in the VM but are not visible to sigil name
+    /// resolution.  New REPL input that calls them will therefore fail to
+    /// resolve.  Full restoration requires the compile-time type context, which
+    /// will be addressed when `--debug=full` span / type metadata is added.
+    pub fn from_eldr(bytes: &[u8]) -> Result<Self, EldrLoadError> {
+        let bytecode = sindr::ir::Bytecode::decode(bytes)
+            .map_err(EldrLoadError::Format)?;
+
+        let std_module_inputs =
+            collect_repl_std_module_inputs().map_err(EldrLoadError::Load)?;
+        let repl_sources = if std_module_inputs.is_empty() {
+            loader::collect_repl_sources()
+        } else {
+            loader::collect_repl_sources_with_std_module_stages(&[std_module_inputs])
+        }
+        .map_err(EldrLoadError::Load)?;
+
+        let forge_session = forge::ForgeSession::from_bytecode(&bytecode);
+        let vm = eldr::VM::new(bytecode);
+
+        // Populate completion symbols from the pre-loaded function table.
+        let mut symbols: BTreeSet<String> = ["Ok", "Err"]
+            .into_iter()
+            .map(str::to_string)
+            .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+            .collect();
+        for entry in vm.bytecode().functions.iter() {
+            if let Some(name) = &entry.qualified_name {
+                symbols.insert(name.clone());
+            }
+        }
+
+        let mut engine = Self {
+            sources: repl_sources.sources,
+            builtin_source_id: repl_sources.builtin_source_id,
+            module_stages: repl_sources.module_stages,
+            declaration_index: Default::default(),
+            repl_source_id: repl_sources.repl_source_id,
+            repl_module_path: repl_sources.repl_module_path.clone(),
+            sigil_session: sigil::SigilSession::with_module_path(Some(
+                repl_sources.repl_module_path,
+            )),
+            scar_session: scar::ScarSession::new(),
+            forge_session,
+            vm,
+            pending: String::new(),
+            next_line: 1,
+            results: Vec::new(),
+            result_metas: Vec::new(),
+            symbols,
+        };
+        // Set up sigil / scar scope for stdlib without re-executing bytecode.
+        engine.bootstrap_std_modules_scope_only();
         Ok(engine)
     }
 
@@ -748,6 +833,124 @@ impl ReplEngine {
         for name in &meta.function_defs {
             self.symbols.insert(name.clone());
         }
+    }
+
+    /// Bootstrap stdlib sigil / scar context WITHOUT re-executing bytecode.
+    ///
+    /// Used when loading a `.eldr` image: the VM already contains compiled
+    /// stdlib code, so we only need the name-resolution and type-checking
+    /// context that sigil and scar provide.  Forge codegen and vm.push_atomic
+    /// are intentionally skipped.
+    fn bootstrap_std_modules_scope_only(&mut self) {
+        let module_stages = match parse_module_stages_from_sources(
+            &self.sources,
+            &self.module_stages,
+            spire::CompileUnitKind::Repl,
+        ) {
+            Ok(stages) => stages,
+            Err(e) => {
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    e.source_id,
+                    diagnostics::simple_error("ParseError", e.message(), e.span(), None),
+                );
+                return;
+            }
+        };
+
+        if module_stages.iter().all(|stage| stage.is_empty()) {
+            return;
+        }
+
+        let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
+            Ok(index) => index,
+            Err(e) => {
+                let sid = find_source_id_for_span(
+                    &self.sources,
+                    &self.module_stages,
+                    &e.span,
+                    self.builtin_source_id,
+                );
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    sid,
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                );
+                return;
+            }
+        };
+        self.declaration_index = declaration_index.clone();
+
+        let resolved = match sigil::resolve_staged_program(
+            &module_stages,
+            Vec::new(),
+            &declaration_index,
+            None,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                let sid = find_source_id_for_span(
+                    &self.sources,
+                    &self.module_stages,
+                    &e.span,
+                    self.builtin_source_id,
+                );
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    sid,
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                );
+                return;
+            }
+        };
+
+        // Type-check to populate scar session; discard typed nodes (no codegen).
+        if let Err(e) = self.scar_session.typecheck_with_context(
+            resolved,
+            scar::TypecheckContext {
+                source_rules: derive_source_rules(
+                    spire::CompileUnitKind::Repl,
+                    SourceKind::StdModule,
+                    None,
+                ),
+            },
+        ) {
+            let sid = find_source_id_for_span(
+                &self.sources,
+                &self.module_stages,
+                &e.span,
+                self.builtin_source_id,
+            );
+            diagnostics::report_error_by_id(
+                &self.sources,
+                sid,
+                diagnostics::type_error_spec_by_id(&self.sources, sid, &e),
+            );
+            return;
+        }
+
+        let scope = match sigil::build_scope_for_module(
+            &module_stages,
+            Some(&self.repl_module_path),
+            module_stages.len(),
+        ) {
+            Ok(scope) => scope,
+            Err(e) => {
+                let sid = find_source_id_for_span(
+                    &self.sources,
+                    &self.module_stages,
+                    &e.span,
+                    self.builtin_source_id,
+                );
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    sid,
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                );
+                return;
+            }
+        };
+        self.sigil_session.replace_scope(scope);
     }
 
     fn bind_import_name(
@@ -925,8 +1128,61 @@ impl ReplEngine {
         Ok(result)
     }
 
-    fn completion_symbols(&self) -> Vec<String> {
+    pub fn completion_symbols(&self) -> Vec<String> {
         self.symbols.iter().cloned().collect()
+    }
+
+    /// Number of evaluated results (for TUI display).
+    pub fn result_count(&self) -> usize {
+        self.results.len()
+    }
+
+    /// Get the value at a result index (for TUI display).
+    pub fn result_value(&self, idx: usize) -> Option<&Value> {
+        self.results.get(idx)?.as_ref()
+    }
+
+    /// Format the display lines for result `idx`, mirroring `display_repl_result`.
+    ///
+    /// Returns binding lines (`name: Type = value`), type-def names, or the
+    /// inspected value string.  Returns an empty vec when there is nothing to show.
+    pub fn format_result_lines(&self, idx: usize) -> Vec<String> {
+        let value = self.results.get(idx).and_then(|v| v.as_ref());
+        let meta = self.result_metas.get(idx).and_then(|m| m.as_ref());
+
+        if let Some(v) = value {
+            if !matches!(v, Value::Unit) {
+                return vec![inspect_value(&self.vm, v)];
+            }
+        }
+
+        if let Some(meta) = meta {
+            if !meta.bindings.is_empty() {
+                return meta
+                    .bindings
+                    .iter()
+                    .filter_map(|b| {
+                        let val = self.vm.get_local(b.slot_id)?;
+                        Some(format!(
+                            "{}: {} = {}",
+                            b.name,
+                            b.ty,
+                            inspect_value(&self.vm, &val)
+                        ))
+                    })
+                    .collect();
+            }
+            if !meta.type_defs.is_empty() {
+                return meta.type_defs.iter().map(|t| t.name.clone()).collect();
+            }
+        }
+
+        vec![]
+    }
+
+    /// Read-only access to the VM (for TUI value display).
+    pub fn vm(&self) -> &eldr::VM {
+        &self.vm
     }
 
     fn prompt(&self) -> String {
@@ -937,7 +1193,7 @@ impl ReplEngine {
         }
     }
 
-    fn handle_line(&mut self, line: &str) -> ReplOutcome {
+    pub fn handle_line(&mut self, line: &str) -> ReplOutcome {
         if self.pending.is_empty() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -950,9 +1206,13 @@ impl ReplEngine {
                 self.handle_value_recall(rest.trim());
                 return ReplOutcome::Continue;
             }
+            if let Some(rest) = trimmed.strip_prefix(":save") {
+                self.handle_save(rest.trim());
+                return ReplOutcome::Continue;
+            }
             if trimmed.starts_with(':') {
                 eprintln!("Unknown REPL command: {}", trimmed);
-                self.bump_line(None);
+                self.bump_line(None, None);
                 return ReplOutcome::Continue;
             }
         }
@@ -982,7 +1242,7 @@ impl ReplEngine {
                     diagnostics::simple_error("ParseError", message, e.span().clone(), None),
                 );
                 self.pending.clear();
-                self.bump_line(None);
+                self.bump_line(None, None);
                 return ReplOutcome::Continue;
             }
         };
@@ -1008,7 +1268,7 @@ impl ReplEngine {
                     diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
                 );
                 self.pending.clear();
-                self.bump_line(None);
+                self.bump_line(None, None);
                 return ReplOutcome::Continue;
             }
         };
@@ -1025,7 +1285,7 @@ impl ReplEngine {
                     diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
                 );
                 self.pending.clear();
-                self.bump_line(None);
+                self.bump_line(None, None);
                 return ReplOutcome::Continue;
             }
         };
@@ -1051,7 +1311,7 @@ impl ReplEngine {
                     diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &e),
                 );
                 self.pending.clear();
-                self.bump_line(None);
+                self.bump_line(None, None);
                 return ReplOutcome::Continue;
             }
         };
@@ -1068,7 +1328,7 @@ impl ReplEngine {
                     diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
                 );
                 self.pending.clear();
-                self.bump_line(None);
+                self.bump_line(None, None);
                 return ReplOutcome::Continue;
             }
         };
@@ -1083,7 +1343,7 @@ impl ReplEngine {
         match self.vm.push_atomic(chunk) {
             Ok(value) => {
                 if self.report_main_result_error_if_any(&value) {
-                    self.bump_line(None);
+                    self.bump_line(None, None);
                 } else {
                     display_repl_result(&self.vm, value.clone(), &meta);
                     if import_only {
@@ -1100,7 +1360,7 @@ impl ReplEngine {
                     for name in &meta.function_defs {
                         self.symbols.insert(name.clone());
                     }
-                    self.bump_line(Some(value));
+                    self.bump_line(Some(value), Some(meta.clone()));
                 }
             }
             Err(e) => {
@@ -1112,7 +1372,7 @@ impl ReplEngine {
                     self.vm.source_file(),
                     self.vm.runtime_error_location(),
                 );
-                self.bump_line(None);
+                self.bump_line(None, None);
                 self.pending.clear();
                 return ReplOutcome::Exit;
             }
@@ -1122,10 +1382,36 @@ impl ReplEngine {
         ReplOutcome::Continue
     }
 
+    fn handle_save(&mut self, arg: &str) {
+        if arg.is_empty() {
+            eprintln!("Usage: :save <path.eldr>");
+            return;
+        }
+
+        let path = if arg.ends_with(".eldr") {
+            arg.to_string()
+        } else {
+            format!("{}.eldr", arg)
+        };
+
+        let bytecode = self.vm.snapshot_bytecode();
+        let bytes = match bytecode.encode() {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Error encoding bytecode: {}", e);
+                return;
+            }
+        };
+        match fs::write(&path, bytes) {
+            Ok(()) => println!("> saved to {}", path),
+            Err(e) => eprintln!("Error writing {}: {}", path, e),
+        }
+    }
+
     fn handle_value_recall(&mut self, arg: &str) {
         if arg.is_empty() {
             eprintln!("Usage: :v <line>");
-            self.bump_line(None);
+            self.bump_line(None, None);
             return;
         }
 
@@ -1133,25 +1419,25 @@ impl ReplEngine {
             Ok(n) if n > 0 => n,
             _ => {
                 eprintln!("Invalid line number for :v: {}", arg);
-                self.bump_line(None);
+                self.bump_line(None, None);
                 return;
             }
         };
 
         if line_num > self.results.len() {
             eprintln!("No such line: {}", line_num);
-            self.bump_line(None);
+            self.bump_line(None, None);
             return;
         }
 
         match self.results[line_num - 1].clone() {
             Some(value) => {
                 println!("> {}", inspect_value(&self.vm, &value));
-                self.bump_line(Some(value));
+                self.bump_line(Some(value), None);
             }
             None => {
                 eprintln!("Line {} has no value", line_num);
-                self.bump_line(None);
+                self.bump_line(None, None);
             }
         }
     }
@@ -1198,13 +1484,15 @@ impl ReplEngine {
         }
     }
 
-    fn bump_line(&mut self, value: Option<Value>) {
+    fn bump_line(&mut self, value: Option<Value>, meta: Option<forge::ChunkMeta>) {
         self.results.push(value);
+        self.result_metas.push(meta);
         self.next_line += 1;
     }
 }
 
-pub fn repl_command(options: ReplOptions) -> Result<(), i32> {
+/// Text-mode REPL (CLI). Formerly `repl_command`.
+pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
     if options.version {
         println!("xldr {}", XLDR_VERSION);
         return Ok(());

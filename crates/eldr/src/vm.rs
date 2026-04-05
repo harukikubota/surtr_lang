@@ -189,6 +189,28 @@ impl VM {
         self.bytecode.type_registry.clone()
     }
 
+    /// Read-only access to the accumulated bytecode.
+    pub fn bytecode(&self) -> &Bytecode {
+        &self.bytecode
+    }
+
+    /// Snapshot the current accumulated bytecode as a serialisable `Bytecode`.
+    ///
+    /// In interactive/REPL mode the VM grows its local frame dynamically, so
+    /// `self.bytecode.num_locals` (initialised to 0) does not reflect the
+    /// actual frame size.  This method returns a corrected clone suitable for
+    /// `Bytecode::encode()`.
+    pub fn snapshot_bytecode(&self) -> Bytecode {
+        let actual_num_locals = self
+            .frames
+            .first()
+            .map(|f| f.locals.len())
+            .unwrap_or(0);
+        let mut bc = self.bytecode.clone();
+        bc.num_locals = actual_num_locals;
+        bc
+    }
+
     pub fn exit_code(&self) -> i32 {
         self.exit_code
     }
