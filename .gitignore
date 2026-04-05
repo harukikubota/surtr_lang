@@ -1,9 +1,4 @@
 /target
-/doc/*
-!/doc/*.md
-!/doc/*.txt
-!/doc/site/
-!/doc/site/**
 
 /lib/script
 
