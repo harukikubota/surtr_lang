@@ -1,0 +1,3 @@
+import Bootstrap::NoneError;
+
+print("ok")

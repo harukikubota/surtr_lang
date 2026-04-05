@@ -107,6 +107,25 @@ impl SourceRules {
     }
 
     pub fn module_source() -> Self {
+        Self::module_source_without_builtin()
+    }
+
+    pub fn module_source_without_builtin() -> Self {
+        Self {
+            allow_top_level_expr: false,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::Import,
+                TopLevelDeclKind::StructDef,
+                TopLevelDeclKind::RecordDef,
+                TopLevelDeclKind::DeferrorDef,
+            ]),
+            set_exit_code_policy: SetExitCodePolicy::Forbidden,
+            normalized_entrypoint: None,
+        }
+    }
+
+    pub fn std_module() -> Self {
         Self {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
@@ -3503,6 +3522,28 @@ import Kernel::{add, sub};"#,
         assert!(err
             .message()
             .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
+    fn test_module_compile_unit_rejects_builtin_decl() {
+        let err = parse_with_context(
+            "@@builtin def print(a: String) -> Unit",
+            ParserContext::module(1, None),
+        )
+        .expect_err("user module compile unit should reject builtin declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
+    fn test_std_module_compile_unit_accepts_builtin_decl() {
+        let ast = parse_with_context(
+            "@@builtin def print(a: String) -> Unit",
+            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("std module compile unit should accept builtin declarations");
+        assert!(matches!(ast.as_slice(), [Ast::BuiltinDecl(_, _, _, _)]));
     }
 
     #[test]

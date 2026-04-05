@@ -73,6 +73,45 @@ fn build_uses_default_eldr_output_path() {
 }
 
 #[test]
+fn build_produces_identical_bytecode_for_same_input() {
+    let temp = unique_temp_dir("surtr_step1_deterministic_build");
+    let source_path = temp.join("deterministic.srt");
+    let first_eldr_path = temp.join("first.eldr");
+    let second_eldr_path = temp.join("second.eldr");
+
+    write_source(
+        &source_path,
+        r#"nums = [1, 2, 3]
+print(inspect(nums))
+print(to_string(10 + 20))"#,
+    );
+
+    let bin = surtr_bin();
+    for eldr_path in [&first_eldr_path, &second_eldr_path] {
+        let build = Command::new(&bin)
+            .args([
+                "build",
+                source_path.to_str().expect("source path must be utf-8"),
+                eldr_path.to_str().expect("eldr path must be utf-8"),
+            ])
+            .output()
+            .expect("failed to run build command");
+        assert!(
+            build.status.success(),
+            "build failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr)
+        );
+    }
+
+    let first = fs::read(&first_eldr_path).expect("failed to read first build output");
+    let second = fs::read(&second_eldr_path).expect("failed to read second build output");
+    assert_eq!(first, second, "same input should produce identical .eldr bytes");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn dump_outputs_valid_json_for_jq() {
     let temp = unique_temp_dir("surtr_dump_json");
     let source_path = temp.join("dump_sample.srt");

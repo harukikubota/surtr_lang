@@ -125,6 +125,7 @@ fn build_module_scope(
     current_stage_index: usize,
 ) -> Result<Scope, ResolveError> {
     let mut scope = global_scope.clone();
+    let mut import_state = ImportState::default();
 
     for auto_import in AUTO_IMPORT_MODULES {
         if current_module_path == Some(*auto_import) {
@@ -137,6 +138,7 @@ fn build_module_scope(
             auto_import,
             current_stage_index,
             true,
+            &mut import_state,
             Span { start: 0, end: 0 },
         )?;
     }
@@ -150,6 +152,7 @@ fn build_module_scope(
                 current_stage_index,
                 path,
                 spec,
+                &mut import_state,
                 span.clone(),
             )?;
         }
@@ -175,6 +178,7 @@ fn apply_import_to_scope(
     current_stage_index: usize,
     path: &spire::ast::AstPath,
     spec: &spire::ast::ImportSpec,
+    import_state: &mut ImportState,
     span: Span,
 ) -> Result<(), ResolveError> {
     let module_name = path.segments.join("::");
@@ -186,6 +190,7 @@ fn apply_import_to_scope(
             &module_name,
             current_stage_index,
             false,
+            import_state,
             span,
         ),
         spire::ast::ImportSpec::Single(name) => import_single_into_scope(
@@ -195,6 +200,7 @@ fn apply_import_to_scope(
             &module_name,
             name,
             current_stage_index,
+            import_state,
             span,
         ),
         spire::ast::ImportSpec::List(names) => {
@@ -206,6 +212,7 @@ fn apply_import_to_scope(
                     &module_name,
                     name,
                     current_stage_index,
+                    import_state,
                     span.clone(),
                 )?;
             }
@@ -221,8 +228,12 @@ fn import_module_into_scope(
     module_name: &str,
     current_stage_index: usize,
     auto_import: bool,
+    import_state: &mut ImportState,
     span: Span,
 ) -> Result<(), ResolveError> {
+    if !auto_import {
+        import_state.record_module_import(module_name, &span)?;
+    }
     let mut imported_any = false;
     let mut blocked_by_stage = false;
     for entry in declaration_index.values() {
@@ -270,8 +281,11 @@ fn import_single_into_scope(
     module_name: &str,
     name: &str,
     current_stage_index: usize,
+    import_state: &mut ImportState,
     span: Span,
 ) -> Result<(), ResolveError> {
+    import_state.record_member_import(module_name, name, &span)?;
+
     let fq_name = format!("{}::{}", module_name, name);
     let Some(entry) = declaration_index.get(&fq_name) else {
         let module_exists = declaration_index
@@ -337,6 +351,47 @@ fn bind_import_name(
 
     scope.define_with_id(short_name, uid);
     Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+struct ImportState {
+    imported_modules: HashSet<String>,
+    imported_members: HashSet<(String, String)>,
+}
+
+impl ImportState {
+    fn record_module_import(&mut self, module_name: &str, span: &Span) -> Result<(), ResolveError> {
+        if self.imported_modules.contains(module_name)
+            || self
+                .imported_members
+                .iter()
+                .any(|(module, _)| module == module_name)
+        {
+            return Err(ResolveError {
+                message: format!("Duplicate import: {}", module_name),
+                span: span.clone(),
+            });
+        }
+        self.imported_modules.insert(module_name.to_string());
+        Ok(())
+    }
+
+    fn record_member_import(
+        &mut self,
+        module_name: &str,
+        name: &str,
+        span: &Span,
+    ) -> Result<(), ResolveError> {
+        let member = (module_name.to_string(), name.to_string());
+        if self.imported_modules.contains(module_name) || self.imported_members.contains(&member) {
+            return Err(ResolveError {
+                message: format!("Duplicate import: {}::{}", module_name, name),
+                span: span.clone(),
+            });
+        }
+        self.imported_members.insert(member);
+        Ok(())
+    }
 }
 
 /// Precollect global declaration index from staged module ASTs.
@@ -1546,6 +1601,26 @@ mod tests {
         resolve(ast)
     }
 
+    fn resolve_user_with_modules(
+        user_src: &str,
+        module_stages: &[Vec<StagedModuleAst>],
+    ) -> Result<Vec<Resolved>, ResolveError> {
+        let user_ast = spire::parse(user_src).expect("user script should parse");
+        let mut full_stages = vec![vec![StagedModuleAst {
+            module_path: "Bootstrap".to_string(),
+            ast: parse_module_ast(r#"deferror NoneError { "none" }"#, "Bootstrap"),
+        }]];
+        full_stages.extend(module_stages.iter().cloned());
+        let declaration_index =
+            precollect_declaration_index(&full_stages).expect("precollect should succeed");
+        resolve_staged_program(
+            &full_stages,
+            user_ast,
+            &declaration_index,
+            Some("__Script::fixture".to_string()),
+        )
+    }
+
     #[test]
     fn test_precollect_declaration_index_succeeds_without_body_resolution() {
         let module_stages = vec![vec![StagedModuleAst {
@@ -2152,6 +2227,102 @@ print("ok")"#,
         .expect_err("explicit auto-import must fail");
         assert!(err.message.contains("Duplicate import"));
         assert!(err.message.contains("Bootstrap"));
+    }
+
+    #[test]
+    fn test_duplicate_module_import_is_rejected() {
+        let module_stages = vec![vec![StagedModuleAst {
+            module_path: "Kernel".to_string(),
+            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+        }]];
+
+        let err = resolve_user_with_modules(
+            r#"import Kernel;
+import Kernel;
+print(to_string(add(1, 2)))"#,
+            &module_stages,
+        )
+        .expect_err("duplicate module import must fail");
+        assert!(
+            err.message.contains("Duplicate import"),
+            "actual error: {}",
+            err.message
+        );
+        assert!(err.message.contains("Kernel"), "actual error: {}", err.message);
+    }
+
+    #[test]
+    fn test_duplicate_module_then_member_import_is_rejected() {
+        let module_stages = vec![vec![StagedModuleAst {
+            module_path: "Kernel".to_string(),
+            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+        }]];
+
+        let err = resolve_user_with_modules(
+            r#"import Kernel;
+import Kernel::add;
+print(to_string(add(1, 2)))"#,
+            &module_stages,
+        )
+        .expect_err("module followed by member import must fail");
+        assert!(
+            err.message.contains("Duplicate import"),
+            "actual error: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("Kernel::add"),
+            "actual error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_duplicate_member_then_module_import_is_rejected() {
+        let module_stages = vec![vec![StagedModuleAst {
+            module_path: "Kernel".to_string(),
+            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+        }]];
+
+        let err = resolve_user_with_modules(
+            r#"import Kernel::add;
+import Kernel;
+print(to_string(add(1, 2)))"#,
+            &module_stages,
+        )
+        .expect_err("member followed by module import must fail");
+        assert!(
+            err.message.contains("Duplicate import"),
+            "actual error: {}",
+            err.message
+        );
+        assert!(err.message.contains("Kernel"), "actual error: {}", err.message);
+    }
+
+    #[test]
+    fn test_duplicate_member_import_is_rejected() {
+        let module_stages = vec![vec![StagedModuleAst {
+            module_path: "Kernel".to_string(),
+            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+        }]];
+
+        let err = resolve_user_with_modules(
+            r#"import Kernel::add;
+import Kernel::add;
+print(to_string(add(1, 2)))"#,
+            &module_stages,
+        )
+        .expect_err("duplicate member import must fail");
+        assert!(
+            err.message.contains("Duplicate import"),
+            "actual error: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("Kernel::add"),
+            "actual error: {}",
+            err.message
+        );
     }
 
     #[test]

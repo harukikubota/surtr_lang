@@ -81,7 +81,8 @@ pub fn derive_source_rules(
 ) -> spire::SourceRules {
     let base = match source_kind {
         SourceKind::Script => spire::SourceRules::script(),
-        SourceKind::Module | SourceKind::StdModule => spire::SourceRules::module(),
+        SourceKind::Module => spire::SourceRules::module(),
+        SourceKind::StdModule => spire::SourceRules::std_module(),
         SourceKind::ReplChunk => spire::SourceRules::repl_chunk(),
     };
 
