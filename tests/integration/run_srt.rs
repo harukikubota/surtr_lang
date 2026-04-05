@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../lib/bootstrap.srt");
+mod support;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -41,34 +41,12 @@ fn is_multi_source_module_fixture(path: &Path) -> bool {
         || normalized.contains("/tests/compile_errors/modules/")
 }
 
-fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, String> {
-    let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE)
-        .map_err(|e| format!("phase=parse; message=Parse (bootstrap.srt): {}", e))?;
-    let mut user_ast =
-        spire::parse(source).map_err(|e| format!("phase=parse; message=Parse: {}", e))?;
-    ast.append(&mut user_ast);
-    Ok(ast)
-}
-
 fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
-    let ast = parse_with_builtin_prelude(source)?;
-    let resolved = sigil::resolve(ast).map_err(|e| format!("phase=resolve; message={}", e))?;
-    let typed = scar::typecheck_with_context(
-        resolved,
-        scar::TypecheckContext {
-            source_rules: spire::SourceRules::script(),
-        },
-    )
-    .map_err(|e| format!("phase=typecheck; message={}", e))?;
-    forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))
+    support::compile_script("fixture.srt", source)
 }
 
 fn run_surtr(source: &str) -> Result<Vec<String>, String> {
-    let bytecode = compile_surtr(source)?;
-    let mut vm = eldr::VM::new(bytecode).with_output_capture();
-    vm.run()
-        .map_err(|e| format!("phase=runtime; message={}", e))?;
-    Ok(vm.output.unwrap_or_default())
+    support::run_script("fixture.srt", source)
 }
 
 fn normalize_text(text: &str) -> String {

@@ -129,6 +129,14 @@ StdModV1 導入後の API 形状に合わせ、旧 API を使っている呼び�
 - 破壊的変更が利用箇所ごとに追跡できる
 - テストが旧 API への偶然依存で通っていない
 
+#### 整理結果メモ（2026-04-05）
+
+- `xldr` の script と module 収集を再結合する互換 wrapper（`collect_compile_sources*`）は削除し、`collect_module_sources_*` + `compose_script_compile_sources` に統一する
+- `rune` の `run` / `build` / `dump` は標準モジュール収集を明示 helper へ集約し、旧 helper 名や builtin prelude 前提の呼称を残さない
+- integration テストの単一ファイル compile は `bootstrap.srt` の直結ではなく、実運用と同じ compile source 経路を通す
+- multi-source fixture も `collect_module_sources_with_module_stages` と script 合成を明示し、script source を Loader 互換 API に混ぜない
+- crate 単体の unit test で残る `bootstrap.srt` 直読は、crate 単独の parse/resolve/typecheck/codegen API を局所検証する目的に限定する
+
 ---
 
 ### Task 2: テスト拡充

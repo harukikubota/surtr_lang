@@ -1,38 +1,15 @@
+mod support;
+
 #[cfg(test)]
 mod e2e {
-    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../lib/bootstrap.srt");
-
-    fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, String> {
-        let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE)
-            .map_err(|e| format!("Parse (bootstrap.srt): {}", e))?;
-        let mut user_ast = spire::parse(source).map_err(|e| format!("Parse: {}", e))?;
-        ast.append(&mut user_ast);
-        Ok(ast)
-    }
+    use super::support;
 
     fn run_surtr(source: &str) -> Result<Vec<String>, String> {
-        let ast = parse_with_builtin_prelude(source)?;
-        let resolved = sigil::resolve(ast).map_err(|e| format!("Resolve: {}", e))?;
-        let typed = scar::typecheck(resolved).map_err(|e| format!("Typecheck: {}", e))?;
-        let bytecode = forge::codegen(typed).map_err(|e| format!("Codegen: {}", e))?;
-        let mut vm = eldr::VM::new(bytecode).with_output_capture();
-        vm.run().map_err(|e| format!("Runtime: {}", e))?;
-        Ok(vm.output.unwrap_or_default())
+        support::run_script("language_features.srt", source)
     }
 
     fn run_surtr_with_stderr(source: &str) -> Result<(Vec<String>, Vec<String>), String> {
-        let ast = parse_with_builtin_prelude(source)?;
-        let resolved = sigil::resolve(ast).map_err(|e| format!("Resolve: {}", e))?;
-        let typed = scar::typecheck(resolved).map_err(|e| format!("Typecheck: {}", e))?;
-        let bytecode = forge::codegen(typed).map_err(|e| format!("Codegen: {}", e))?;
-        let mut vm = eldr::VM::new(bytecode)
-            .with_output_capture()
-            .with_error_capture();
-        vm.run().map_err(|e| format!("Runtime: {}", e))?;
-        Ok((
-            vm.output.unwrap_or_default(),
-            vm.error_output.unwrap_or_default(),
-        ))
+        support::run_script_with_stderr("language_features.srt", source)
     }
 
     fn assert_output(source: &str, expected: &[&str]) {

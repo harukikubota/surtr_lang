@@ -1,2 +1,0 @@
-phase: typecheck
-contains: main must declare return type Result<()>

@@ -185,15 +185,8 @@ fn run_source_file(file_path: &str, cli_entry: Option<&str>) -> Result<(), i32> 
         }
     };
 
-    let module_sources = xldr::collect_module_sources_with_module_stages(&[]).map_err(|e| {
-        eprintln!("Error collecting module sources: {}", e);
-        1
-    })?;
-    let compile_sources = xldr::compose_script_compile_sources(
-        file_path,
-        &compile_plan.source_for_parse,
-        module_sources,
-    );
+    let compile_sources =
+        collect_default_script_compile_sources(file_path, &compile_plan.source_for_parse)?;
     let bytecode = compile_source(&compile_sources, &compile_plan)?;
     execute_bytecode(
         bytecode,
@@ -232,20 +225,13 @@ fn build_command(input_srt: &str, output_eldr: Option<&str>) -> Result<(), i32> 
         }
     };
 
-    let module_sources = xldr::collect_module_sources_with_module_stages(&[]).map_err(|e| {
-        eprintln!("Error collecting module sources: {}", e);
-        1
-    })?;
     let compile_plan = ScriptCompilePlan {
         source_for_parse: source,
         selected_entry_name: None,
         normalized_entrypoint: None,
     };
-    let compile_sources = xldr::compose_script_compile_sources(
-        input_srt,
-        &compile_plan.source_for_parse,
-        module_sources,
-    );
+    let compile_sources =
+        collect_default_script_compile_sources(input_srt, &compile_plan.source_for_parse)?;
     let bytecode = compile_source(&compile_sources, &compile_plan)?;
     let bytes = match bytecode.encode() {
         Ok(b) => b,
@@ -270,7 +256,22 @@ fn default_output_path(input_srt: &str) -> String {
     path.with_extension("eldr").to_string_lossy().into_owned()
 }
 
-fn parse_program_with_builtin_prelude(
+fn collect_default_script_compile_sources(
+    file_path: &str,
+    source: &str,
+) -> Result<xldr::CompileSources, i32> {
+    let module_sources = xldr::collect_module_sources_with_module_stages(&[]).map_err(|e| {
+        eprintln!("Error collecting module sources: {}", e);
+        1
+    })?;
+    Ok(xldr::compose_script_compile_sources(
+        file_path,
+        source,
+        module_sources,
+    ))
+}
+
+fn parse_program_with_module_sources(
     compile_sources: &xldr::CompileSources,
     compile_unit_kind: spire::CompileUnitKind,
     entrypoint: Option<&spire::EntryPoint>,
@@ -324,7 +325,7 @@ fn compile_source(
     let user_source = sources.source(user_source_id).unwrap_or("");
 
     // Phase 1: Spire — parse
-    let (module_stages, mut user_ast) = parse_program_with_builtin_prelude(
+    let (module_stages, mut user_ast) = parse_program_with_module_sources(
         compile_sources,
         compile_unit_kind,
         compile_plan.normalized_entrypoint.as_ref(),

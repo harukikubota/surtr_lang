@@ -17,8 +17,6 @@ use sindr::builtin::BUILTIN_METAS;
 mod loader;
 
 pub use loader::{
-    collect_compile_sources, collect_compile_sources_with_module_file_stages,
-    collect_compile_sources_with_module_stages, collect_compile_sources_with_modules,
     collect_module_sources_with_module_file_stages, collect_module_sources_with_module_stages,
     collect_module_sources_with_modules, compose_script_compile_sources, script_pseudo_module_path,
     CompileSources, LoadError, ModuleInput, ModuleSources, SourceDescriptor, SourceKind,
@@ -887,23 +885,21 @@ defmod B {
 
     #[test]
     fn parse_module_stages_detects_duplicate_defmod_paths() {
-        let compile_sources = collect_compile_sources_with_module_stages(
-            "entry.srt",
-            "print(\"hi\")",
-            &[vec![
-                ModuleInput {
-                    file_name: "a.srt".into(),
-                    source: "defmod Shared { def a() -> Int { 1 } }".into(),
-                    module_path: "A".into(),
-                },
-                ModuleInput {
-                    file_name: "b.srt".into(),
-                    source: "defmod Shared { def b() -> Int { 2 } }".into(),
-                    module_path: "B".into(),
-                },
-            ]],
-        )
-        .expect("source collection should succeed");
+        let module_sources = collect_module_sources_with_module_stages(&[vec![
+            ModuleInput {
+                file_name: "a.srt".into(),
+                source: "defmod Shared { def a() -> Int { 1 } }".into(),
+                module_path: "A".into(),
+            },
+            ModuleInput {
+                file_name: "b.srt".into(),
+                source: "defmod Shared { def b() -> Int { 2 } }".into(),
+                module_path: "B".into(),
+            },
+        ]])
+        .expect("module collection should succeed");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
 
         let err = parse_module_stages_from_compile_sources(
             &compile_sources,

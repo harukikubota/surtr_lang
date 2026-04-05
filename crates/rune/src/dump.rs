@@ -106,15 +106,8 @@ fn dump_entry_source_as_json(file_path: &str, cli_entry: Option<&str>) -> Result
         }
     };
 
-    let module_sources = xldr::collect_module_sources_with_module_stages(&[]).map_err(|e| {
-        eprintln!("Error collecting module sources: {}", e);
-        1
-    })?;
-    let compile_sources = xldr::compose_script_compile_sources(
-        file_path,
-        &compile_plan.source_for_parse,
-        module_sources,
-    );
+    let compile_sources =
+        super::collect_default_script_compile_sources(file_path, &compile_plan.source_for_parse)?;
     let bytecode = super::compile_source(&compile_sources, &compile_plan)?;
     let bytes = match bytecode.encode() {
         Ok(b) => b,

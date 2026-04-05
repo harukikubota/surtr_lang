@@ -247,44 +247,6 @@ pub struct CompileSources {
     pub module_stages: Vec<Vec<StagedModule>>,
 }
 
-pub fn collect_compile_sources(
-    user_file_name: &str,
-    user_source: &str,
-) -> Result<CompileSources, LoadError> {
-    let module_sources = collect_module_sources_with_module_stages(&[])?;
-    Ok(compose_script_compile_sources(
-        user_file_name,
-        user_source,
-        module_sources,
-    ))
-}
-
-pub fn collect_compile_sources_with_modules(
-    user_file_name: &str,
-    user_source: &str,
-    module_inputs: &[ModuleInput],
-) -> Result<CompileSources, LoadError> {
-    let module_sources = collect_module_sources_with_modules(module_inputs)?;
-    Ok(compose_script_compile_sources(
-        user_file_name,
-        user_source,
-        module_sources,
-    ))
-}
-
-pub fn collect_compile_sources_with_module_stages(
-    user_file_name: &str,
-    user_source: &str,
-    module_input_stages: &[Vec<ModuleInput>],
-) -> Result<CompileSources, LoadError> {
-    let module_sources = collect_module_sources_with_module_stages(module_input_stages)?;
-    Ok(compose_script_compile_sources(
-        user_file_name,
-        user_source,
-        module_sources,
-    ))
-}
-
 pub fn collect_module_sources_with_modules(
     module_inputs: &[ModuleInput],
 ) -> Result<ModuleSources, LoadError> {
@@ -375,19 +337,6 @@ pub fn compose_script_compile_sources(
         module_source_ids: module_sources.module_source_ids,
         module_stages: module_sources.module_stages,
     }
-}
-
-pub fn collect_compile_sources_with_module_file_stages(
-    user_file_name: &str,
-    user_source: &str,
-    module_file_stages: &[Vec<String>],
-) -> Result<CompileSources, LoadError> {
-    let module_sources = collect_module_sources_with_module_file_stages(module_file_stages)?;
-    Ok(compose_script_compile_sources(
-        user_file_name,
-        user_source,
-        module_sources,
-    ))
 }
 
 pub fn collect_module_sources_with_module_file_stages(
@@ -504,8 +453,9 @@ mod tests {
 
     #[test]
     fn compile_sources_register_user_and_builtin() {
-        let loaded = collect_compile_sources("main.srt", "print(\"hi\")")
-            .expect("compile source collection should succeed");
+        let module_sources =
+            collect_module_sources_with_module_stages(&[]).expect("module collection must succeed");
+        let loaded = compose_script_compile_sources("main.srt", "print(\"hi\")", module_sources);
 
         assert_eq!(
             loaded.sources.file_name(loaded.user_source_id),
@@ -557,30 +507,27 @@ mod tests {
 
     #[test]
     fn compile_sources_preserves_stage_order() {
-        let loaded = collect_compile_sources_with_module_stages(
-            "main.srt",
-            "print(\"hi\")",
-            &[
-                vec![ModuleInput {
-                    file_name: "std/math.srt".into(),
-                    source: "defmod Std::Math {}".into(),
-                    module_path: "Std::Math".into(),
-                }],
-                vec![
-                    ModuleInput {
-                        file_name: "std/string.srt".into(),
-                        source: "defmod Std::String {}".into(),
-                        module_path: "Std::String".into(),
-                    },
-                    ModuleInput {
-                        file_name: "std/list.srt".into(),
-                        source: "defmod Std::List {}".into(),
-                        module_path: "Std::List".into(),
-                    },
-                ],
+        let module_sources = collect_module_sources_with_module_stages(&[
+            vec![ModuleInput {
+                file_name: "std/math.srt".into(),
+                source: "defmod Std::Math {}".into(),
+                module_path: "Std::Math".into(),
+            }],
+            vec![
+                ModuleInput {
+                    file_name: "std/string.srt".into(),
+                    source: "defmod Std::String {}".into(),
+                    module_path: "Std::String".into(),
+                },
+                ModuleInput {
+                    file_name: "std/list.srt".into(),
+                    source: "defmod Std::List {}".into(),
+                    module_path: "Std::List".into(),
+                },
             ],
-        )
-        .expect("staged compile source collection should succeed");
+        ])
+        .expect("staged module collection should succeed");
+        let loaded = compose_script_compile_sources("main.srt", "print(\"hi\")", module_sources);
 
         assert_eq!(loaded.module_stages.len(), 3);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap

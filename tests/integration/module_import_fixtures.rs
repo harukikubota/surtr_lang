@@ -5,7 +5,10 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
-use xldr::{collect_compile_sources_with_module_stages, CompileSources, ModuleInput};
+use xldr::{
+    collect_module_sources_with_module_stages, compose_script_compile_sources, CompileSources,
+    ModuleInput,
+};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -204,12 +207,13 @@ fn compile_multi_source_case(case_dir: &Path) -> Result<forge::bytecode::Bytecod
         .unwrap_or_else(|e| panic!("failed to read {}: {}", entry_path.display(), e));
     let module_stages = collect_module_input_stages(case_dir);
 
-    let compile_sources = collect_compile_sources_with_module_stages(
+    let module_sources = collect_module_sources_with_module_stages(&module_stages)
+        .map_err(|e| format!("phase=load; message={}", e))?;
+    let compile_sources = compose_script_compile_sources(
         &entry_path.to_string_lossy(),
         &entry_source,
-        &module_stages,
-    )
-    .map_err(|e| format!("phase=load; message={}", e))?;
+        module_sources,
+    );
 
     let (module_asts, user_ast) = parse_program_with_loader(&compile_sources)?;
     let declaration_index = sigil::precollect_declaration_index(&module_asts)
