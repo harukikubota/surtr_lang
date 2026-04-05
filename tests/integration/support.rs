@@ -65,8 +65,13 @@ fn collect_repo_std_modules() -> Result<Vec<xldr::ModuleInput>, String> {
         return Ok(Vec::new());
     }
 
-    let entries = fs::read_dir(&lib_dir)
-        .map_err(|e| format!("phase=load; message=failed to read `{}`: {}", lib_dir.display(), e))?;
+    let entries = fs::read_dir(&lib_dir).map_err(|e| {
+        format!(
+            "phase=load; message=failed to read `{}`: {}",
+            lib_dir.display(),
+            e
+        )
+    })?;
     let mut files = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
@@ -84,7 +89,11 @@ fn collect_repo_std_modules() -> Result<Vec<xldr::ModuleInput>, String> {
     let mut modules = Vec::new();
     for path in files {
         let source = fs::read_to_string(&path).map_err(|e| {
-            format!("phase=load; message=failed to read `{}`: {}", path.display(), e)
+            format!(
+                "phase=load; message=failed to read `{}`: {}",
+                path.display(),
+                e
+            )
         })?;
         let module_path = derive_primary_module_path(&source)
             .filter(|s| !s.is_empty())

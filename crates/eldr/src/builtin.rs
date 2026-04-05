@@ -185,8 +185,9 @@ fn builtin_shl(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("shl expects (Int, Int)"));
     };
-    let amount = u32::try_from(*bits)
-        .map_err(|_| RuntimeError::new(format!("shl shift amount must be non-negative: {}", bits)))?;
+    let amount = u32::try_from(*bits).map_err(|_| {
+        RuntimeError::new(format!("shl shift amount must be non-negative: {}", bits))
+    })?;
     let shifted = value
         .checked_shl(amount)
         .ok_or_else(|| RuntimeError::new(format!("shl shift amount out of range: {}", bits)))?;
@@ -197,8 +198,9 @@ fn builtin_shr(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("shr expects (Int, Int)"));
     };
-    let amount = u32::try_from(*bits)
-        .map_err(|_| RuntimeError::new(format!("shr shift amount must be non-negative: {}", bits)))?;
+    let amount = u32::try_from(*bits).map_err(|_| {
+        RuntimeError::new(format!("shr shift amount must be non-negative: {}", bits))
+    })?;
     let shifted = value
         .checked_shr(amount)
         .ok_or_else(|| RuntimeError::new(format!("shr shift amount out of range: {}", bits)))?;
