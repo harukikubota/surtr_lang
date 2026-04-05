@@ -13,6 +13,7 @@ use rustyline::history::DefaultHistory;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper};
 use sindr::builtin::BUILTIN_METAS;
+use spire::token::Token;
 
 mod loader;
 
@@ -103,6 +104,52 @@ pub fn derive_source_rules(
     base.with_set_exit_code_policy(policy, entrypoint)
 }
 
+fn erase_non_newline_span(chars: &mut [char], start: usize, end: usize) {
+    let len = chars.len();
+    let capped_end = end.min(len);
+    let capped_start = start.min(len);
+    for ch in chars.iter_mut().take(capped_end).skip(capped_start) {
+        if *ch != '\n' {
+            *ch = ' ';
+        }
+    }
+}
+
+/// Strip `@@test <expr>` annotations while preserving source span offsets.
+///
+/// The parser does not need to process `@@test` in normal compilation flows.
+/// Replacing characters with spaces keeps diagnostics line/column stable.
+pub fn strip_test_annotations(source: &str) -> String {
+    let tokens = match spire::lexer::tokenize(source) {
+        Ok(tokens) => tokens,
+        Err(_) => return source.to_string(),
+    };
+
+    let mut chars = source.chars().collect::<Vec<_>>();
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if let Token::Annotator(name) = &tokens[i].token {
+            if name == "test" {
+                let mut j = i + 1;
+                while j < tokens.len() && !matches!(tokens[j].token, Token::Newline | Token::Eof) {
+                    j += 1;
+                }
+                let end = if j > i + 1 {
+                    tokens[j - 1].span.end
+                } else {
+                    tokens[i].span.end
+                };
+                erase_non_newline_span(&mut chars, tokens[i].span.start, end);
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    chars.into_iter().collect::<String>()
+}
+
 pub fn lower_module_source_ast(
     ast: Vec<spire::ast::Ast>,
     fallback_module_path: Option<&str>,
@@ -167,9 +214,10 @@ fn parse_module_stages_from_sources(
     for stage in module_stages {
         let mut stage_ast = Vec::new();
         for module in stage {
-            let module_source = sources.source(module.source_id).unwrap_or("");
+            let raw_module_source = sources.source(module.source_id).unwrap_or("");
+            let module_source = strip_test_annotations(raw_module_source);
             let parsed = spire::parse_with_context(
-                module_source,
+                &module_source,
                 spire::ParserContext::module(module.source_id.0, None).with_rules(
                     derive_source_rules(compile_unit_kind, module.source_kind, None),
                 ),
@@ -949,5 +997,22 @@ defmod B {
             err.kind,
             ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Shared"
         ));
+    }
+
+    #[test]
+    fn strip_test_annotations_replaces_annotated_line_with_spaces() {
+        let source =
+            "defmod M {\n  @@test add(1, 2) == 3\n  def add(x: Int, y: Int) -> Int { x + y }\n}\n";
+        let stripped = strip_test_annotations(source);
+
+        assert!(!stripped.contains("@@test"));
+        assert!(stripped.contains("def add(x: Int, y: Int) -> Int { x + y }"));
+        assert_eq!(source.lines().count(), stripped.lines().count());
+    }
+
+    #[test]
+    fn strip_test_annotations_is_noop_without_annotations() {
+        let source = "defmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}\n";
+        assert_eq!(strip_test_annotations(source), source);
     }
 }
