@@ -332,6 +332,55 @@ fn derive_primary_module_path(source: &str) -> Option<String> {
     None
 }
 
+/// Find the source_id most likely to own `span`.
+///
+/// Strategy: among all staged modules whose source fully contains the span,
+/// prefer those where the character at `span.start` is not ASCII whitespace
+/// (i.e., the span points to actual code rather than incidental whitespace),
+/// then pick the shortest qualifying source.  This correctly handles cases
+/// where a short module (e.g. kernel.srt) has a coincidental span-in-range
+/// while the real owner is a slightly longer module (e.g. list.srt) whose
+/// code starts at that offset.
+fn find_source_id_for_span(
+    sources: &SourceRegistry,
+    module_stages: &[Vec<loader::StagedModule>],
+    span: &Span,
+    fallback: SourceId,
+) -> SourceId {
+    let mut best_code: Option<(SourceId, usize)> = None; // non-whitespace at span.start
+    let mut best_any: Option<(SourceId, usize)> = None; // fallback: any spanning source
+    for stage in module_stages {
+        for module in stage {
+            if let Some(source) = sources.source(module.source_id) {
+                let chars: Vec<char> = source.chars().collect();
+                let len = chars.len();
+                if len < span.end {
+                    continue;
+                }
+                let is_code = chars
+                    .get(span.start)
+                    .map_or(false, |ch| !ch.is_ascii_whitespace());
+                if is_code {
+                    match best_code {
+                        None => best_code = Some((module.source_id, len)),
+                        Some((_, bl)) if len < bl => best_code = Some((module.source_id, len)),
+                        _ => {}
+                    }
+                }
+                match best_any {
+                    None => best_any = Some((module.source_id, len)),
+                    Some((_, bl)) if len < bl => best_any = Some((module.source_id, len)),
+                    _ => {}
+                }
+            }
+        }
+    }
+    best_code
+        .or(best_any)
+        .map(|(id, _)| id)
+        .unwrap_or(fallback)
+}
+
 fn collect_repl_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
     let lib_dir = Path::new("lib");
     if !lib_dir.exists() {
@@ -568,9 +617,15 @@ impl ReplEngine {
         let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
             Ok(index) => index,
             Err(e) => {
+                let sid = find_source_id_for_span(
+                    &self.sources,
+                    &self.module_stages,
+                    &e.span,
+                    self.builtin_source_id,
+                );
                 diagnostics::report_error_by_id(
                     &self.sources,
-                    self.builtin_source_id,
+                    sid,
                     diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
                 );
                 return;
@@ -586,9 +641,15 @@ impl ReplEngine {
         ) {
             Ok(r) => r,
             Err(e) => {
+                let sid = find_source_id_for_span(
+                    &self.sources,
+                    &self.module_stages,
+                    &e.span,
+                    self.builtin_source_id,
+                );
                 diagnostics::report_error_by_id(
                     &self.sources,
-                    self.builtin_source_id,
+                    sid,
                     diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
                 );
                 return;
@@ -607,10 +668,16 @@ impl ReplEngine {
         ) {
             Ok(t) => t,
             Err(e) => {
+                let sid = find_source_id_for_span(
+                    &self.sources,
+                    &self.module_stages,
+                    &e.span,
+                    self.builtin_source_id,
+                );
                 diagnostics::report_error_by_id(
                     &self.sources,
-                    self.builtin_source_id,
-                    diagnostics::type_error_spec_by_id(&self.sources, self.builtin_source_id, &e),
+                    sid,
+                    diagnostics::type_error_spec_by_id(&self.sources, sid, &e),
                 );
                 return;
             }
@@ -619,9 +686,15 @@ impl ReplEngine {
         let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
+                let sid = find_source_id_for_span(
+                    &self.sources,
+                    &self.module_stages,
+                    &e.span,
+                    self.builtin_source_id,
+                );
                 diagnostics::report_error_by_id(
                     &self.sources,
-                    self.builtin_source_id,
+                    sid,
                     diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
                 );
                 return;
@@ -656,9 +729,15 @@ impl ReplEngine {
         ) {
             Ok(scope) => scope,
             Err(e) => {
+                let sid = find_source_id_for_span(
+                    &self.sources,
+                    &self.module_stages,
+                    &e.span,
+                    self.builtin_source_id,
+                );
                 diagnostics::report_error_by_id(
                     &self.sources,
-                    self.builtin_source_id,
+                    sid,
                     diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
                 );
                 return;
