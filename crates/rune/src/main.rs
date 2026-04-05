@@ -11,6 +11,12 @@ mod dump;
 
 const RUNE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionEnv {
+    Dev,
+    Test,
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -19,16 +25,19 @@ fn main() {
             println!("surtr {}", RUNE_VERSION);
             Ok(())
         }
-        Some("run") => parse_run_options(&args[2..]).and_then(run_command),
+        Some("run") => parse_run_options(&args[2..]).and_then(|options| {
+            run_command(options, ExecutionEnv::Dev)
+        }),
         Some("repl") => parse_repl_options(&args[2..]).and_then(xldr::repl_command),
         Some("build") => {
             if !(3..=4).contains(&args.len()) {
                 print_usage();
                 Err(1)
             } else {
-                build_command(&args[2], args.get(3).map(String::as_str))
+                build_command(&args[2], args.get(3).map(String::as_str), ExecutionEnv::Dev)
             }
         }
+        Some("test") => parse_test_options(&args[2..]).and_then(test_command),
         Some("dump") => {
             if args.len() < 3 {
                 print_usage();
@@ -52,6 +61,7 @@ fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  surtr --version");
     eprintln!("  surtr run <file.srt|file.eldr> [--entry <name>]");
+    eprintln!("  surtr test [selector]");
     eprintln!("  surtr repl [--quiet] [--banner] [--version]");
     eprintln!("  surtr build <file.srt> [output.eldr]");
     eprintln!("  surtr dump <file.eldr|entry.srt> [--format json] [--entry <name>]");
@@ -61,6 +71,11 @@ fn print_usage() {
 struct RunOptions {
     file_path: String,
     entry: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TestOptions {
+    selector: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,7 +161,18 @@ fn parse_run_options(args: &[String]) -> Result<RunOptions, i32> {
     Ok(RunOptions { file_path, entry })
 }
 
-fn run_command(options: RunOptions) -> Result<(), i32> {
+fn parse_test_options(args: &[String]) -> Result<TestOptions, i32> {
+    if args.len() > 1 {
+        eprintln!("test: too many arguments");
+        print_usage();
+        return Err(1);
+    }
+
+    let selector = args.first().cloned();
+    Ok(TestOptions { selector })
+}
+
+fn run_command(options: RunOptions, _env: ExecutionEnv) -> Result<(), i32> {
     if options.file_path.ends_with(".eldr") {
         if options.entry.is_some() {
             eprintln!("run: --entry is only supported for .srt input");
@@ -156,6 +182,12 @@ fn run_command(options: RunOptions) -> Result<(), i32> {
     } else {
         run_source_file(&options.file_path, options.entry.as_deref())
     }
+}
+
+fn test_command(_options: TestOptions) -> Result<(), i32> {
+    let _env = ExecutionEnv::Test;
+    eprintln!("test: command is not implemented yet");
+    Err(1)
 }
 
 fn run_source_file(file_path: &str, cli_entry: Option<&str>) -> Result<(), i32> {
@@ -216,7 +248,7 @@ fn run_eldr_file(file_path: &str) -> Result<(), i32> {
     execute_bytecode(bytecode, None)
 }
 
-fn build_command(input_srt: &str, output_eldr: Option<&str>) -> Result<(), i32> {
+fn build_command(input_srt: &str, output_eldr: Option<&str>, _env: ExecutionEnv) -> Result<(), i32> {
     let source = match fs::read_to_string(input_srt) {
         Ok(s) => s,
         Err(e) => {
@@ -598,8 +630,8 @@ fn report_error_value(vm: &eldr::VM, value: &Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_entrypoint_annotations, parse_run_options, populate_error_template_lines,
-        prepare_script_compile_plan,
+        collect_entrypoint_annotations, parse_run_options, parse_test_options,
+        populate_error_template_lines, prepare_script_compile_plan,
     };
     use forge::bytecode::{line_column_for_offset, ErrTemplate};
 
@@ -665,5 +697,15 @@ mod tests {
                 .map(|e| e.qualified_symbol.as_str()),
             Some("__Script::sample::manual")
         );
+    }
+
+    #[test]
+    fn test_options_accept_selector_or_empty() {
+        let with_selector = parse_test_options(&["Kernel::add".to_string()])
+            .expect("selector should parse");
+        assert_eq!(with_selector.selector.as_deref(), Some("Kernel::add"));
+
+        let without_selector = parse_test_options(&[]).expect("empty selector should parse");
+        assert_eq!(without_selector.selector, None);
     }
 }
