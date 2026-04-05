@@ -2,32 +2,39 @@ use std::collections::HashMap;
 use std::fs;
 
 use diagnostics::{SourceId, SourceRegistry};
-use spire::CompileUnitKind;
 
 const BUILTIN_PRELUDE_FILE: &str = "bootstrap.srt";
 const BUILTIN_PRELUDE_MODULE_PATH: &str = "Bootstrap";
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
 const REPL_MODULE_NAME: &str = "REPL";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SourceSpec {
-    file_name: String,
-    source: String,
-    unit_kind: CompileUnitKind,
-    module_path: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    Script,
+    Module,
+    StdModule,
+    ReplChunk,
 }
 
-impl SourceSpec {
-    fn script(file_name: impl Into<String>, source: impl Into<String>) -> Self {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceDescriptor {
+    pub file_name: String,
+    pub source: String,
+    pub kind: SourceKind,
+    pub module_path: Option<String>,
+}
+
+impl SourceDescriptor {
+    pub fn script(file_name: impl Into<String>, source: impl Into<String>) -> Self {
         Self {
             file_name: file_name.into(),
             source: source.into(),
-            unit_kind: CompileUnitKind::Script,
+            kind: SourceKind::Script,
             module_path: None,
         }
     }
 
-    fn module(
+    pub fn module(
         file_name: impl Into<String>,
         source: impl Into<String>,
         module_path: impl Into<String>,
@@ -35,16 +42,29 @@ impl SourceSpec {
         Self {
             file_name: file_name.into(),
             source: source.into(),
-            unit_kind: CompileUnitKind::Module,
+            kind: SourceKind::Module,
             module_path: Some(module_path.into()),
         }
     }
 
-    fn repl(file_name: impl Into<String>, source: impl Into<String>) -> Self {
+    pub fn std_module(
+        file_name: impl Into<String>,
+        source: impl Into<String>,
+        module_path: impl Into<String>,
+    ) -> Self {
         Self {
             file_name: file_name.into(),
             source: source.into(),
-            unit_kind: CompileUnitKind::Repl,
+            kind: SourceKind::StdModule,
+            module_path: Some(module_path.into()),
+        }
+    }
+
+    pub fn repl_chunk(file_name: impl Into<String>, source: impl Into<String>) -> Self {
+        Self {
+            file_name: file_name.into(),
+            source: source.into(),
+            kind: SourceKind::ReplChunk,
             module_path: None,
         }
     }
@@ -53,6 +73,7 @@ impl SourceSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SourceBinding {
     source_id: SourceId,
+    kind: SourceKind,
     module_path: Option<String>,
 }
 
@@ -108,10 +129,10 @@ struct CollectedSources {
     bindings: Vec<SourceBinding>,
 }
 
-fn collect_sources(specs: &[SourceSpec]) -> Result<CollectedSources, LoadError> {
+fn collect_sources(specs: &[SourceDescriptor]) -> Result<CollectedSources, LoadError> {
     let mut sources = SourceRegistry::new();
     let mut bindings = Vec::with_capacity(specs.len());
-    let mut by_file: HashMap<String, (SourceId, String, CompileUnitKind, Option<String>)> =
+    let mut by_file: HashMap<String, (SourceId, String, SourceKind, Option<String>)> =
         HashMap::new();
     let mut by_module: HashMap<String, String> = HashMap::new();
 
@@ -120,11 +141,12 @@ fn collect_sources(specs: &[SourceSpec]) -> Result<CollectedSources, LoadError> 
             by_file.get(&spec.file_name)
         {
             if existing_source == &spec.source
-                && existing_kind == &spec.unit_kind
+                && existing_kind == &spec.kind
                 && existing_module == &spec.module_path
             {
                 bindings.push(SourceBinding {
                     source_id: *source_id,
+                    kind: spec.kind,
                     module_path: spec.module_path.clone(),
                 });
                 continue;
@@ -151,7 +173,7 @@ fn collect_sources(specs: &[SourceSpec]) -> Result<CollectedSources, LoadError> 
             (
                 source_id,
                 spec.source.clone(),
-                spec.unit_kind,
+                spec.kind,
                 spec.module_path.clone(),
             ),
         );
@@ -162,6 +184,7 @@ fn collect_sources(specs: &[SourceSpec]) -> Result<CollectedSources, LoadError> 
 
         bindings.push(SourceBinding {
             source_id,
+            kind: spec.kind,
             module_path: spec.module_path.clone(),
         });
     }
@@ -180,6 +203,7 @@ pub struct ModuleInput {
 pub struct StagedModule {
     pub source_id: SourceId,
     pub module_path: String,
+    pub source_kind: SourceKind,
 }
 
 #[derive(Debug, Clone)]
@@ -219,7 +243,7 @@ pub fn collect_compile_sources_with_module_stages(
     user_source: &str,
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<CompileSources, LoadError> {
-    let mut stage_specs = vec![vec![SourceSpec::module(
+    let mut stage_specs = vec![vec![SourceDescriptor::std_module(
         BUILTIN_PRELUDE_FILE,
         BUILTIN_PRELUDE_SOURCE,
         BUILTIN_PRELUDE_MODULE_PATH,
@@ -228,7 +252,7 @@ pub fn collect_compile_sources_with_module_stages(
     for stage in module_input_stages {
         let mut specs = Vec::with_capacity(stage.len());
         for module in stage {
-            specs.push(SourceSpec::module(
+            specs.push(SourceDescriptor::module(
                 module.file_name.clone(),
                 module.source.clone(),
                 module.module_path.clone(),
@@ -237,7 +261,7 @@ pub fn collect_compile_sources_with_module_stages(
         stage_specs.push(specs);
     }
 
-    let mut flattened_specs = vec![SourceSpec::script(user_file_name, user_source)];
+    let mut flattened_specs = vec![SourceDescriptor::script(user_file_name, user_source)];
     for stage in &stage_specs {
         for spec in stage {
             flattened_specs.push(spec.clone());
@@ -257,6 +281,7 @@ pub fn collect_compile_sources_with_module_stages(
             stage_bindings.push(StagedModule {
                 source_id: binding.source_id,
                 module_path: binding.module_path.clone().unwrap_or_default(),
+                source_kind: binding.kind,
             });
         }
         module_stages.push(stage_bindings);
@@ -342,12 +367,12 @@ pub(crate) struct ReplSources {
 
 pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
     let specs = vec![
-        SourceSpec::module(
+        SourceDescriptor::std_module(
             BUILTIN_PRELUDE_FILE,
             BUILTIN_PRELUDE_SOURCE,
             BUILTIN_PRELUDE_MODULE_PATH,
         ),
-        SourceSpec::repl(REPL_MODULE_NAME, ""),
+        SourceDescriptor::repl_chunk(REPL_MODULE_NAME, ""),
     ];
     let collected = collect_sources(&specs)?;
     let builtin = &collected.bindings[0];
@@ -368,8 +393,8 @@ mod tests {
     #[test]
     fn duplicate_source_is_registered_once() {
         let specs = vec![
-            SourceSpec::module("a.srt", "defmod A {}", "A"),
-            SourceSpec::module("a.srt", "defmod A {}", "A"),
+            SourceDescriptor::module("a.srt", "defmod A {}", "A"),
+            SourceDescriptor::module("a.srt", "defmod A {}", "A"),
         ];
 
         let collected = collect_sources(&specs).expect("loader should deduplicate same source");
@@ -386,8 +411,8 @@ mod tests {
     #[test]
     fn duplicate_module_path_returns_error() {
         let specs = vec![
-            SourceSpec::module("a.srt", "defmod A {}", "Std::Math"),
-            SourceSpec::module("b.srt", "defmod B {}", "Std::Math"),
+            SourceDescriptor::module("a.srt", "defmod A {}", "Std::Math"),
+            SourceDescriptor::module("b.srt", "defmod B {}", "Std::Math"),
         ];
 
         let err = collect_sources(&specs).expect_err("duplicate module path must fail");
@@ -420,20 +445,33 @@ mod tests {
     }
 
     #[test]
-    fn same_file_with_different_compile_unit_kind_conflicts() {
+    fn same_file_with_different_source_kind_conflicts() {
         let specs = vec![
-            SourceSpec::script("main.srt", "print(\"hi\")"),
-            SourceSpec {
+            SourceDescriptor::script("main.srt", "print(\"hi\")"),
+            SourceDescriptor {
                 file_name: "main.srt".into(),
                 source: "print(\"hi\")".into(),
-                unit_kind: CompileUnitKind::Project,
+                kind: SourceKind::ReplChunk,
                 module_path: None,
             },
         ];
 
-        let err = collect_sources(&specs).expect_err("different compile unit kinds must conflict");
+        let err = collect_sources(&specs).expect_err("different source kinds must conflict");
         assert!(
             matches!(err, LoadError::ConflictingSource { file_name } if file_name == "main.srt")
+        );
+    }
+
+    #[test]
+    fn same_file_module_and_std_module_conflicts() {
+        let specs = vec![
+            SourceDescriptor::module("bootstrap.srt", "defmod Bootstrap {}", "Bootstrap"),
+            SourceDescriptor::std_module("bootstrap.srt", "defmod Bootstrap {}", "Bootstrap"),
+        ];
+
+        let err = collect_sources(&specs).expect_err("module and std module must not alias");
+        assert!(
+            matches!(err, LoadError::ConflictingSource { file_name } if file_name == "bootstrap.srt")
         );
     }
 
@@ -472,6 +510,13 @@ mod tests {
             loaded.module_stages[0][0].source_id,
             loaded.builtin_source_id
         );
+        assert_eq!(
+            loaded.module_stages[0][0].source_kind,
+            SourceKind::StdModule
+        );
+        assert_eq!(loaded.module_stages[1][0].source_kind, SourceKind::Module);
+        assert_eq!(loaded.module_stages[2][0].source_kind, SourceKind::Module);
+        assert_eq!(loaded.module_stages[2][1].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[1][0].module_path, "Std::Math");
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::String");
         assert_eq!(loaded.module_stages[2][1].module_path, "Std::List");

@@ -19,7 +19,7 @@ mod loader;
 pub use loader::{
     collect_compile_sources, collect_compile_sources_with_module_file_stages,
     collect_compile_sources_with_module_stages, collect_compile_sources_with_modules,
-    CompileSources, LoadError, ModuleInput, StagedModule,
+    CompileSources, LoadError, ModuleInput, SourceDescriptor, SourceKind, StagedModule,
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
