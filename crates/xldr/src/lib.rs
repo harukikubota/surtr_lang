@@ -1,5 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
+use std::fs;
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 
 use diagnostics::{SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
@@ -12,7 +14,9 @@ use rustyline::hint::{Hinter, HistoryHinter};
 use rustyline::history::DefaultHistory;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper};
+use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
+use spire::ast::{Ast, ImportSpec, Span};
 use spire::token::Token;
 
 mod loader;
@@ -275,7 +279,108 @@ pub fn parse_module_stages_from_compile_sources(
     )
 }
 
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn module_path_from_file_name(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
+fn derive_primary_module_path(source: &str) -> Option<String> {
+    let tokens = spire::lexer::tokenize(source).ok()?;
+    for (idx, spanned) in tokens.iter().enumerate() {
+        if !matches!(spanned.token, Token::Defmod) {
+            continue;
+        }
+
+        let mut j = idx + 1;
+        while matches!(tokens.get(j).map(|t| &t.token), Some(Token::Newline)) {
+            j += 1;
+        }
+
+        let mut segments = Vec::new();
+        match tokens.get(j).map(|sp| &sp.token) {
+            Some(Token::Ident(name)) => {
+                segments.push(name.clone());
+                j += 1;
+            }
+            _ => return None,
+        }
+
+        while matches!(tokens.get(j).map(|t| &t.token), Some(Token::Colon))
+            && matches!(tokens.get(j + 1).map(|t| &t.token), Some(Token::Colon))
+        {
+            j += 2;
+            match tokens.get(j).map(|sp| &sp.token) {
+                Some(Token::Ident(name)) => {
+                    segments.push(name.clone());
+                    j += 1;
+                }
+                _ => return None,
+            }
+        }
+
+        if !segments.is_empty() {
+            return Some(segments.join("::"));
+        }
+    }
+
+    None
+}
+
+fn collect_repl_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
+    let lib_dir = Path::new("lib");
+    if !lib_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let entries = fs::read_dir(lib_dir).map_err(|e| LoadError::SourceReadFailed {
+        file_name: display_path(lib_dir),
+        message: e.to_string(),
+    })?;
+
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "srt")
+        {
+            files.push(path);
+        }
+    }
+    files.sort();
+
+    let mut module_inputs = Vec::new();
+    for path in files {
+        let file_name = display_path(&path);
+        let source = fs::read_to_string(&path).map_err(|e| LoadError::SourceReadFailed {
+            file_name: file_name.clone(),
+            message: e.to_string(),
+        })?;
+        let module_path = derive_primary_module_path(&source)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| module_path_from_file_name(&path));
+        if REPL_AUTO_IMPORT_MODULES.contains(&module_path.as_str()) {
+            continue;
+        }
+        module_inputs.push(ModuleInput {
+            file_name,
+            source,
+            module_path,
+        });
+    }
+    Ok(module_inputs)
+}
+
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
+const REPL_AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BannerMode {
@@ -380,10 +485,17 @@ enum ReplOutcome {
     Exit,
 }
 
+#[derive(Debug, Default)]
+struct ReplImportResult {
+    imported_symbols: Vec<String>,
+    success_labels: Vec<String>,
+}
+
 struct ReplEngine {
     sources: SourceRegistry,
     builtin_source_id: SourceId,
     module_stages: Vec<Vec<StagedModule>>,
+    declaration_index: sigil::DeclarationIndex,
     repl_source_id: SourceId,
     repl_module_path: String,
     sigil_session: sigil::SigilSession,
@@ -398,13 +510,19 @@ struct ReplEngine {
 
 impl ReplEngine {
     fn new() -> Result<Self, LoadError> {
-        let repl_sources = loader::collect_repl_sources()?;
+        let std_module_inputs = collect_repl_std_module_inputs()?;
+        let repl_sources = if std_module_inputs.is_empty() {
+            loader::collect_repl_sources()?
+        } else {
+            loader::collect_repl_sources_with_std_module_stages(&[std_module_inputs])?
+        };
         let forge_session = forge::ForgeSession::new();
         let vm = eldr::VM::new_interactive(forge_session.type_registry());
         let mut engine = Self {
             sources: repl_sources.sources,
             builtin_source_id: repl_sources.builtin_source_id,
             module_stages: repl_sources.module_stages,
+            declaration_index: Default::default(),
             repl_source_id: repl_sources.repl_source_id,
             repl_module_path: repl_sources.repl_module_path.clone(),
             sigil_session: sigil::SigilSession::with_module_path(Some(
@@ -458,6 +576,7 @@ impl ReplEngine {
                 return;
             }
         };
+        self.declaration_index = declaration_index.clone();
 
         let resolved = match sigil::resolve_staged_program(
             &module_stages,
@@ -552,6 +671,181 @@ impl ReplEngine {
         }
     }
 
+    fn bind_import_name(
+        &mut self,
+        short_name: &str,
+        uid: u32,
+        module_name: &str,
+        span: &Span,
+        imported_symbols: &mut Vec<String>,
+    ) -> Result<(), ResolveError> {
+        if let Some(existing_uid) = self.sigil_session.lookup_uid(short_name) {
+            if existing_uid == uid {
+                return Ok(());
+            }
+            return Err(ResolveError {
+                message: format!(
+                    "Import conflict for `{}` from module `{}`",
+                    short_name, module_name
+                ),
+                span: span.clone(),
+            });
+        }
+
+        self.sigil_session.define_with_id(short_name, uid);
+        if !imported_symbols.iter().any(|name| name == short_name) {
+            imported_symbols.push(short_name.to_string());
+        }
+        Ok(())
+    }
+
+    fn import_module_all(
+        &mut self,
+        module_name: &str,
+        span: &Span,
+        imported_symbols: &mut Vec<String>,
+    ) -> Result<(), ResolveError> {
+        let mut imported_any = false;
+        let mut blocked_by_stage = false;
+        let current_stage_index = self.module_stages.len();
+        let entries = self
+            .declaration_index
+            .values()
+            .filter(|entry| entry.module_path == module_name)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for entry in entries {
+            if entry.stage_index >= current_stage_index {
+                blocked_by_stage = true;
+                continue;
+            }
+            let Some(uid) = self.sigil_session.lookup_uid(&entry.fq_name) else {
+                blocked_by_stage = true;
+                continue;
+            };
+            self.bind_import_name(&entry.name, uid, module_name, span, imported_symbols)?;
+            imported_any = true;
+        }
+
+        if imported_any {
+            Ok(())
+        } else if blocked_by_stage {
+            Err(ResolveError {
+                message: format!(
+                    "Import target `{}` is not available in the current stage",
+                    module_name
+                ),
+                span: span.clone(),
+            })
+        } else {
+            Err(ResolveError {
+                message: format!("Unknown module import: {}", module_name),
+                span: span.clone(),
+            })
+        }
+    }
+
+    fn import_module_member(
+        &mut self,
+        module_name: &str,
+        name: &str,
+        span: &Span,
+        imported_symbols: &mut Vec<String>,
+    ) -> Result<(), ResolveError> {
+        let fq_name = format!("{}::{}", module_name, name);
+        let Some(entry) = self.declaration_index.get(&fq_name) else {
+            let module_exists = self
+                .declaration_index
+                .values()
+                .any(|entry| entry.module_path == module_name);
+            return Err(ResolveError {
+                message: if module_exists {
+                    format!("Unknown import member: {}", fq_name)
+                } else {
+                    format!("Unknown module import: {}", module_name)
+                },
+                span: span.clone(),
+            });
+        };
+
+        if entry.stage_index >= self.module_stages.len() {
+            return Err(ResolveError {
+                message: format!(
+                    "Import target `{}` is not available in the current stage",
+                    fq_name
+                ),
+                span: span.clone(),
+            });
+        }
+
+        let uid = self
+            .sigil_session
+            .lookup_uid(&entry.fq_name)
+            .ok_or_else(|| ResolveError {
+                message: format!(
+                    "Import target `{}` is not available in the current stage",
+                    fq_name
+                ),
+                span: span.clone(),
+            })?;
+        self.bind_import_name(name, uid, module_name, span, imported_symbols)
+    }
+
+    fn apply_repl_imports(&mut self, ast: &[Ast]) -> Result<ReplImportResult, ResolveError> {
+        let mut result = ReplImportResult::default();
+        for stmt in ast {
+            let Ast::Import(span, path, spec) = stmt else {
+                continue;
+            };
+            let module_name = path.segments.join("::");
+            if REPL_AUTO_IMPORT_MODULES
+                .iter()
+                .any(|auto| auto == &module_name.as_str())
+            {
+                return Err(ResolveError {
+                    message: format!(
+                        "Duplicate import: `{}` is auto-imported and cannot be explicitly imported",
+                        module_name
+                    ),
+                    span: span.clone(),
+                });
+            }
+
+            match spec {
+                ImportSpec::All => {
+                    self.import_module_all(&module_name, span, &mut result.imported_symbols)?;
+                    result.success_labels.push(module_name);
+                }
+                ImportSpec::Single(name) => {
+                    self.import_module_member(
+                        &module_name,
+                        name,
+                        span,
+                        &mut result.imported_symbols,
+                    )?;
+                    result
+                        .success_labels
+                        .push(format!("{}::{}", module_name, name));
+                }
+                ImportSpec::List(names) => {
+                    for name in names {
+                        self.import_module_member(
+                            &module_name,
+                            name,
+                            span,
+                            &mut result.imported_symbols,
+                        )?;
+                        result
+                            .success_labels
+                            .push(format!("{}::{}", module_name, name));
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+
     fn completion_symbols(&self) -> Vec<String> {
         self.symbols.iter().cloned().collect()
     }
@@ -619,9 +913,26 @@ impl ReplEngine {
             return ReplOutcome::Continue;
         }
 
+        let import_only = ast.iter().all(|stmt| matches!(stmt, Ast::Import(_, _, _)));
         let sigil_cp = self.sigil_session.checkpoint();
         let scar_cp = self.scar_session.checkpoint();
         let forge_cp = self.forge_session.checkpoint();
+        let import_result = match self.apply_repl_imports(&ast) {
+            Ok(result) => result,
+            Err(e) => {
+                self.sigil_session.rollback(sigil_cp);
+                self.scar_session.rollback(scar_cp);
+                self.forge_session.rollback(forge_cp);
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                );
+                self.pending.clear();
+                self.bump_line(None);
+                return ReplOutcome::Continue;
+            }
+        };
 
         let resolved = match self.sigil_session.resolve(ast) {
             Ok(r) => r,
@@ -696,6 +1007,14 @@ impl ReplEngine {
                     self.bump_line(None);
                 } else {
                     display_repl_result(&self.vm, value.clone(), &meta);
+                    if import_only {
+                        for label in &import_result.success_labels {
+                            println!("> imported {}", label);
+                        }
+                    }
+                    for imported in &import_result.imported_symbols {
+                        self.symbols.insert(imported.clone());
+                    }
                     for b in &meta.bindings {
                         self.symbols.insert(b.name.clone());
                     }

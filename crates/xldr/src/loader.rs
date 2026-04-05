@@ -485,8 +485,14 @@ pub(crate) struct ReplSources {
     pub(crate) repl_module_path: String,
 }
 
-pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
-    let mut module_sources = collect_module_sources_with_module_stages(&[])?;
+pub(crate) fn collect_repl_sources_with_std_module_stages(
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ReplSources, LoadError> {
+    let mut module_sources = if module_input_stages.is_empty() {
+        collect_module_sources_with_module_stages(&[])?
+    } else {
+        collect_module_sources_with_std_module_stages(module_input_stages)?
+    };
     let repl_source_id = module_sources.sources.register(REPL_MODULE_NAME, "");
 
     Ok(ReplSources {
@@ -496,6 +502,10 @@ pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
         repl_source_id,
         repl_module_path: REPL_PSEUDO_MODULE_PATH.to_string(),
     })
+}
+
+pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
+    collect_repl_sources_with_std_module_stages(&[])
 }
 
 #[cfg(test)]

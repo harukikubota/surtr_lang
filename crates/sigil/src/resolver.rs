@@ -533,6 +533,14 @@ impl SigilSession {
     pub fn replace_scope(&mut self, scope: Scope) {
         self.scope = scope;
     }
+
+    pub fn lookup_uid(&self, name: &str) -> Option<u32> {
+        self.scope.lookup(name)
+    }
+
+    pub fn define_with_id(&mut self, name: &str, id: u32) {
+        self.scope.define_with_id(name, id);
+    }
 }
 
 impl Default for SigilSession {
@@ -1689,10 +1697,7 @@ deferror Oops(reason: String) { reason }"#,
     fn test_precollect_builtin_decl_in_module() {
         let module_stages = vec![vec![StagedModuleAst {
             module_path: "Int".to_string(),
-            ast: parse_module_ast(
-                r#"@@builtin def shl(value: Int, bits: Int) -> Int"#,
-                "Int",
-            ),
+            ast: parse_module_ast(r#"@@builtin def shl(value: Int, bits: Int) -> Int"#, "Int"),
         }]];
 
         let index =
@@ -1810,10 +1815,7 @@ deferror Oops(reason: String) { reason }"#,
     fn test_module_builtin_can_be_resolved_by_qualified_name() {
         let module_stages = vec![vec![StagedModuleAst {
             module_path: "Int".to_string(),
-            ast: parse_module_ast(
-                r#"@@builtin def shl(value: Int, bits: Int) -> Int"#,
-                "Int",
-            ),
+            ast: parse_module_ast(r#"@@builtin def shl(value: Int, bits: Int) -> Int"#, "Int"),
         }]];
 
         let resolved = resolve_user_with_modules("value = Int::shl(2, 3)", &module_stages)
