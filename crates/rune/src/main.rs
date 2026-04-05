@@ -5,6 +5,8 @@ use std::process;
 
 use eldr::value::Value;
 use forge::bytecode::populate_error_template_lines;
+use spire::ast::{Ast, Span};
+use spire::token::Token;
 mod dump;
 
 const RUNE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -17,14 +19,7 @@ fn main() {
             println!("surtr {}", RUNE_VERSION);
             Ok(())
         }
-        Some("run") => {
-            if args.len() != 3 {
-                print_usage();
-                Err(1)
-            } else {
-                run_command(&args[2])
-            }
-        }
+        Some("run") => parse_run_options(&args[2..]).and_then(run_command),
         Some("repl") => parse_repl_options(&args[2..]).and_then(xldr::repl_command),
         Some("build") => {
             if !(3..=4).contains(&args.len()) {
@@ -56,10 +51,44 @@ fn main() {
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  surtr --version");
-    eprintln!("  surtr run <file.srt|file.eldr>");
+    eprintln!("  surtr run <file.srt|file.eldr> [--entry <name>]");
     eprintln!("  surtr repl [--quiet] [--banner] [--version]");
     eprintln!("  surtr build <file.srt> [output.eldr]");
     eprintln!("  surtr dump <file.eldr> [--format json]");
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RunOptions {
+    file_path: String,
+    entry: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScriptCompilePlan {
+    source_for_parse: String,
+    selected_entry_name: Option<String>,
+    normalized_entrypoint: Option<spire::EntryPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct EntryAnnotation {
+    name: String,
+    span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ScriptPlanError {
+    message: String,
+    span: Span,
+}
+
+impl ScriptPlanError {
+    fn new(message: impl Into<String>, span: Span) -> Self {
+        Self {
+            message: message.into(),
+            span,
+        }
+    }
 }
 
 fn parse_repl_options(args: &[String]) -> Result<xldr::ReplOptions, i32> {
@@ -81,15 +110,55 @@ fn parse_repl_options(args: &[String]) -> Result<xldr::ReplOptions, i32> {
     Ok(options)
 }
 
-fn run_command(file_path: &str) -> Result<(), i32> {
-    if file_path.ends_with(".eldr") {
-        run_eldr_file(file_path)
+fn parse_run_options(args: &[String]) -> Result<RunOptions, i32> {
+    if args.is_empty() {
+        print_usage();
+        return Err(1);
+    }
+
+    let file_path = args[0].clone();
+    let mut entry = None;
+    let mut i = 1usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--entry" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("run: missing value for --entry");
+                    print_usage();
+                    return Err(1);
+                }
+                if entry.is_some() {
+                    eprintln!("run: --entry may only be specified once");
+                    return Err(1);
+                }
+                entry = Some(args[i].clone());
+            }
+            other => {
+                eprintln!("run: unknown option '{}'", other);
+                print_usage();
+                return Err(1);
+            }
+        }
+        i += 1;
+    }
+
+    Ok(RunOptions { file_path, entry })
+}
+
+fn run_command(options: RunOptions) -> Result<(), i32> {
+    if options.file_path.ends_with(".eldr") {
+        if options.entry.is_some() {
+            eprintln!("run: --entry is only supported for .srt input");
+            return Err(1);
+        }
+        run_eldr_file(&options.file_path)
     } else {
-        run_source_file(file_path)
+        run_source_file(&options.file_path, options.entry.as_deref())
     }
 }
 
-fn run_source_file(file_path: &str) -> Result<(), i32> {
+fn run_source_file(file_path: &str, cli_entry: Option<&str>) -> Result<(), i32> {
     let source = match fs::read_to_string(file_path) {
         Ok(s) => s,
         Err(e) => {
@@ -98,12 +167,30 @@ fn run_source_file(file_path: &str) -> Result<(), i32> {
         }
     };
 
+    let compile_plan = match prepare_script_compile_plan(file_path, &source, cli_entry) {
+        Ok(plan) => plan,
+        Err(e) => {
+            let mut sources = diagnostics::SourceRegistry::new();
+            let source_id = sources.register(file_path, source.clone());
+            diagnostics::report_error_by_id(
+                &sources,
+                source_id,
+                diagnostics::simple_error("ParseError", &e.message, e.span, None),
+            );
+            return Err(1);
+        }
+    };
+
     let module_sources = xldr::collect_module_sources_with_module_stages(&[]).map_err(|e| {
         eprintln!("Error collecting module sources: {}", e);
         1
     })?;
-    let compile_sources = xldr::compose_script_compile_sources(file_path, &source, module_sources);
-    let bytecode = compile_source(&compile_sources)?;
+    let compile_sources = xldr::compose_script_compile_sources(
+        file_path,
+        &compile_plan.source_for_parse,
+        module_sources,
+    );
+    let bytecode = compile_source(&compile_sources, &compile_plan)?;
     execute_bytecode(
         bytecode,
         compile_sources
@@ -145,8 +232,17 @@ fn build_command(input_srt: &str, output_eldr: Option<&str>) -> Result<(), i32> 
         eprintln!("Error collecting module sources: {}", e);
         1
     })?;
-    let compile_sources = xldr::compose_script_compile_sources(input_srt, &source, module_sources);
-    let bytecode = compile_source(&compile_sources)?;
+    let compile_plan = ScriptCompilePlan {
+        source_for_parse: source,
+        selected_entry_name: None,
+        normalized_entrypoint: None,
+    };
+    let compile_sources = xldr::compose_script_compile_sources(
+        input_srt,
+        &compile_plan.source_for_parse,
+        module_sources,
+    );
+    let bytecode = compile_source(&compile_sources, &compile_plan)?;
     let bytes = match bytecode.encode() {
         Ok(b) => b,
         Err(e) => {
@@ -173,6 +269,7 @@ fn default_output_path(input_srt: &str) -> String {
 fn parse_program_with_builtin_prelude(
     compile_sources: &xldr::CompileSources,
     compile_unit_kind: spire::CompileUnitKind,
+    entrypoint: Option<&spire::EntryPoint>,
 ) -> Result<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>), i32> {
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
@@ -216,7 +313,7 @@ fn parse_program_with_builtin_prelude(
         spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
             compile_unit_kind,
             xldr::SourceKind::Script,
-            None,
+            entrypoint,
         )),
     ) {
         Ok(a) => a,
@@ -236,6 +333,7 @@ fn parse_program_with_builtin_prelude(
 
 fn compile_source(
     compile_sources: &xldr::CompileSources,
+    compile_plan: &ScriptCompilePlan,
 ) -> Result<forge::bytecode::Bytecode, i32> {
     let compile_unit_kind = spire::CompileUnitKind::Script;
     let sources = &compile_sources.sources;
@@ -243,8 +341,14 @@ fn compile_source(
     let user_source = sources.source(user_source_id).unwrap_or("");
 
     // Phase 1: Spire — parse
-    let (module_stages, user_ast) =
-        parse_program_with_builtin_prelude(compile_sources, compile_unit_kind)?;
+    let (module_stages, mut user_ast) = parse_program_with_builtin_prelude(
+        compile_sources,
+        compile_unit_kind,
+        compile_plan.normalized_entrypoint.as_ref(),
+    )?;
+    if let Some(entry_name) = compile_plan.selected_entry_name.as_deref() {
+        user_ast = rewrite_script_ast_for_entry(user_ast, entry_name);
+    }
 
     // Issue 6: precollect declaration index from staged modules before body resolution.
     let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
@@ -284,7 +388,7 @@ fn compile_source(
             source_rules: xldr::derive_source_rules(
                 compile_unit_kind,
                 xldr::SourceKind::Script,
-                None,
+                compile_plan.normalized_entrypoint.as_ref(),
             ),
         },
     ) {
@@ -315,6 +419,122 @@ fn compile_source(
     populate_error_template_lines(&mut bytecode.error_templates, user_source);
 
     Ok(bytecode)
+}
+
+fn prepare_script_compile_plan(
+    file_path: &str,
+    source: &str,
+    cli_entry: Option<&str>,
+) -> Result<ScriptCompilePlan, ScriptPlanError> {
+    let (source_for_parse, annotations) = collect_entrypoint_annotations(source)?;
+
+    if annotations.len() > 1 {
+        let second = &annotations[1];
+        return Err(ScriptPlanError::new(
+            format!(
+                "multiple @@entrypoint annotations are not allowed (already declared as `{}`)",
+                annotations[0].name
+            ),
+            second.span.clone(),
+        ));
+    }
+
+    let selected_entry_name = match cli_entry {
+        Some(name) => Some(name.to_string()),
+        None => annotations.first().map(|a| a.name.clone()),
+    };
+
+    let normalized_entrypoint = selected_entry_name.as_ref().map(|name| {
+        spire::EntryPoint::script_short_name(name, xldr::script_pseudo_module_path(file_path))
+    });
+
+    Ok(ScriptCompilePlan {
+        source_for_parse,
+        selected_entry_name,
+        normalized_entrypoint,
+    })
+}
+
+fn collect_entrypoint_annotations(
+    source: &str,
+) -> Result<(String, Vec<EntryAnnotation>), ScriptPlanError> {
+    let tokens = spire::lexer::tokenize(source)
+        .map_err(|e| ScriptPlanError::new(e.message().to_string(), e.span().clone()))?;
+    let mut chars = source.chars().collect::<Vec<_>>();
+    let mut annotations = Vec::new();
+
+    let mut i = 0usize;
+    while i < tokens.len() {
+        let token = &tokens[i];
+        if let Token::Annotator(name) = &token.token {
+            if name == "entrypoint" {
+                erase_span(&mut chars, &token.span);
+                let mut j = i + 1;
+                while j < tokens.len() && matches!(tokens[j].token, Token::Newline) {
+                    j += 1;
+                }
+                if j >= tokens.len() || !matches!(tokens[j].token, Token::Def) {
+                    return Err(ScriptPlanError::new(
+                        "@@entrypoint must annotate a function definition (`def`)",
+                        token.span.clone(),
+                    ));
+                }
+                let mut k = j + 1;
+                while k < tokens.len() && matches!(tokens[k].token, Token::Newline) {
+                    k += 1;
+                }
+                let def_name = match tokens.get(k).map(|sp| &sp.token) {
+                    Some(Token::Ident(name)) => name.clone(),
+                    _ => {
+                        return Err(ScriptPlanError::new(
+                            "@@entrypoint must target `def <name>(...)`",
+                            tokens[j].span.clone(),
+                        ));
+                    }
+                };
+                annotations.push(EntryAnnotation {
+                    name: def_name,
+                    span: token.span.clone(),
+                });
+            }
+        }
+        i += 1;
+    }
+
+    Ok((chars.into_iter().collect::<String>(), annotations))
+}
+
+fn erase_span(chars: &mut [char], span: &Span) {
+    for ch in chars.iter_mut().take(span.end).skip(span.start) {
+        if *ch != '\n' {
+            *ch = ' ';
+        }
+    }
+}
+
+fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast> {
+    let mut out = user_ast
+        .into_iter()
+        .filter(|stmt| {
+            matches!(
+                stmt,
+                Ast::Def(_, _, _, _, _)
+                    | Ast::BuiltinDecl(_, _, _, _)
+                    | Ast::StructDef(_, _, _)
+                    | Ast::RecordDef(_, _, _)
+                    | Ast::DeferrorDef(_, _, _, _)
+                    | Ast::Import(_, _, _)
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let span = Span { start: 0, end: 0 };
+    out.push(Ast::App(
+        span.clone(),
+        Box::new(Ast::Var(span, entry_name.to_string())),
+        Vec::new(),
+    ));
+    out
 }
 
 fn execute_bytecode(
@@ -390,7 +610,10 @@ fn report_error_value(vm: &eldr::VM, value: &Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::populate_error_template_lines;
+    use super::{
+        collect_entrypoint_annotations, parse_run_options, populate_error_template_lines,
+        prepare_script_compile_plan,
+    };
     use forge::bytecode::{line_column_for_offset, ErrTemplate};
 
     #[test]
@@ -418,5 +641,42 @@ mod tests {
 
         assert_eq!(templates[0].line, 2);
         assert_eq!(templates[0].column, 1);
+    }
+
+    #[test]
+    fn run_options_parses_entry() {
+        let opts = parse_run_options(&[
+            "main.srt".to_string(),
+            "--entry".to_string(),
+            "start".to_string(),
+        ])
+        .expect("run options must parse");
+        assert_eq!(opts.file_path, "main.srt");
+        assert_eq!(opts.entry.as_deref(), Some("start"));
+    }
+
+    #[test]
+    fn collect_entrypoint_annotations_strips_annotator_and_keeps_def() {
+        let source = "@@entrypoint\ndef start() -> Result<()> { Ok(()) }\n";
+        let (sanitized, annotations) =
+            collect_entrypoint_annotations(source).expect("annotation parsing must succeed");
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].name, "start");
+        assert!(sanitized.contains("def start() -> Result<()> { Ok(()) }"));
+        assert!(!sanitized.contains("@@entrypoint"));
+    }
+
+    #[test]
+    fn script_compile_plan_uses_cli_entry_over_annotation() {
+        let source = "@@entrypoint\ndef auto() -> Result<()> { Ok(()) }\n";
+        let plan = prepare_script_compile_plan("sample.srt", source, Some("manual"))
+            .expect("compile plan must succeed");
+        assert_eq!(plan.selected_entry_name.as_deref(), Some("manual"));
+        assert_eq!(
+            plan.normalized_entrypoint
+                .as_ref()
+                .map(|e| e.qualified_symbol.as_str()),
+            Some("__Script::sample::manual")
+        );
     }
 }

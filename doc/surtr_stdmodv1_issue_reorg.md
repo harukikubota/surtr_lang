@@ -40,14 +40,18 @@
 - `Issue C`（一部）
   - `C-1`: script pseudo module identity 導入
   - `C-2`: REPL pseudo module identity 導入
+  - `C-3`: CLI script 実行経路で Loader 非依存 + `--entry` 実行モード導入
+  - `C-4`: `@@entrypoint` と `CLI --entry` の優先順位実装（`CLI > @@entrypoint > top-level`）
+- `Issue D`（一部）
+  - `D-1`: script `--entry` を pseudo module qualified symbol に正規化
+  - `D-2`: script entry シグネチャ検証を entrypoint ベースへ接続
 - `Issue E`（一部）
   - `E-2`: REPL runtime error 時の終了経路整理
 
 ### 未実施（この時点）
 
 - `Issue B` の `defmod` 中心ルール完全移行
-- `Issue C` の `--entry` / `@@entrypoint` 優先順位実装
-- `Issue D` の entrypoint 正規化結果の dump 追跡
+- `Issue D` の entrypoint 正規化結果の dump 追跡（`D-3`）
 - `Issue E` の run/repl 全経路でのエラー境界最終統一
 
 補足:
@@ -959,18 +963,31 @@ annotation (`@@doc`, `@@test`, `@@entrypoint` など) は module と script で�
 
 ---
 
-### 4.10 推奨コミット分割（Issue = コミット単位）
+### 4.10 推奨コミット分割（Issue = コミット単位・実施状況反映）
 
-- `Commit-01`: `A-1`
-- `Commit-02`: `A-2`
-- `Commit-03`: `A-3`
-- `Commit-04`: `A-4`
-- `Commit-05`: `A-5`
-- `Commit-06`: `F-1`
-- `Commit-07`: `F-2`
-- `Commit-08`: `F-3`
-- `Commit-09`: `F-4`
-- `Commit-10`: `F-5`
-- `Commit-11` 以降: `B-*`, `C-*`, `D-*`, `E-*` を同様に 1タスク1コミットで進める
+- `Commit-01`: `A-1`（実施済み）
+- `Commit-02`: `A-2`（実施済み）
+- `Commit-03`: `A-3`（実施済み）
+- `Commit-04`: `A-4`（実施済み）
+- `Commit-05`: `A-5`（実施済み）
+- `Commit-06`: `F-1`（実施済み）
+- `Commit-07`: `F-2`（実施済み）
+- `Commit-08`: `F-3`（実施済み）
+- `Commit-09`: `F-4`（実施済み）
+- `Commit-10`: `F-5`（実施済み）
+- `Commit-11`: `C-3`（実施済み）
+- `Commit-12`: `C-4`（実施済み）
+- `Commit-13`: `D-1`（実施済み）
+- `Commit-14`: `D-2`（実施済み）
+- `Commit-15`: `B-1`
+- `Commit-16`: `B-2`
+- `Commit-17`: `B-3`
+- `Commit-18`: `B-4`
+- `Commit-19`: `B-5`
+- `Commit-20`: `D-3`
+- `Commit-21`: `E-1`
+- `Commit-22`: `E-3`
 
-この分割では、`A-*` と `F-*` が基盤、以降が規則強制と実行統一になる。
+補足:
+- `E-2`（REPL runtime error 時の終了経路整理）は既存コミットで実施済み。
+- 以降も原則として `1タスク = 1コミット` を維持する。

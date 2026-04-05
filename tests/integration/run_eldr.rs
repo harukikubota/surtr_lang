@@ -352,3 +352,200 @@ main()
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn run_source_cli_entry_executes_selected_function_only() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_cli_entry");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"print("top-level")
+
+def start() -> Result<()> {
+  print("start")
+  Ok(())
+}
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--entry",
+            "start",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "start\n",
+        "top-level evaluation must be skipped when --entry is provided"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_entrypoint_annotation_executes_annotated_function() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_annotation_entry");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"print("top-level")
+
+@@entrypoint
+def auto_entry() -> Result<()> {
+  print("annotated")
+  Ok(())
+}
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "annotated\n",
+        "top-level evaluation must be skipped when @@entrypoint is present"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_cli_entry_overrides_entrypoint_annotation() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_entry_precedence");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"@@entrypoint
+def auto_entry() -> Result<()> {
+  print("auto")
+  Ok(())
+}
+
+def manual_entry() -> Result<()> {
+  print("manual")
+  Ok(())
+}
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--entry",
+            "manual_entry",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "manual\n");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_duplicate_entrypoint_annotation_is_compile_error() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_duplicate_entrypoint");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"@@entrypoint
+def first() -> Result<()> { Ok(()) }
+@@entrypoint
+def second() -> Result<()> { Ok(()) }
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("multiple @@entrypoint annotations"),
+        "expected duplicate @@entrypoint error, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_entry_signature_is_checked_when_entry_selected() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_entry_signature");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def start(code: Int) -> Result<()> {
+  Ok(())
+}
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--entry",
+            "start",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("must have signature () -> Result<()>"),
+        "expected entry signature violation, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
