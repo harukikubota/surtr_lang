@@ -4,6 +4,43 @@
 
 ---
 
+## 0. 実施状況（HEAD基準）
+
+このドキュメントを起点にした実装のうち、以下は実施済み。
+
+### 実施済み（基盤）
+
+- `Issue A`
+  - `A-1`: `CompileUnitKind` 境界の明示
+  - `A-2`: `SourceKind` / `SourceDescriptor` の導入
+  - `A-3`: Loader の module/stdmodule 収集 API 分離
+  - `A-4`: script 実行入力 API の分離（module 収集と合成を分離）
+  - `A-5`: REPL 入力を `ReplChunk` として host 注入
+- `Issue F`
+  - `F-1`: `SourceRules` / `SetExitCodePolicy` の型導入
+  - `F-2`: `SourceKind + CompileUnitKind + EntryPoint` から `SourceRules` を導出
+  - `F-3`: parser context に `SourceRules` を保持し policy でトップレベル規則を判定
+  - `F-4`: typechecker へ `SourceRules` を伝播し `set_exit_code` を policy 判定へ移行
+  - `F-5`: `Script / ReplChunk / EntryOnly` のテスト追加
+- `Issue C`（一部）
+  - `C-1`: script pseudo module identity 導入
+  - `C-2`: REPL pseudo module identity 導入
+- `Issue E`（一部）
+  - `E-2`: REPL runtime error 時の終了経路整理
+
+### 未実施（この時点）
+
+- `Issue B` の `defmod` 中心ルール完全移行
+- `Issue C` の `--entry` / `@@entrypoint` 優先順位実装
+- `Issue D` の entrypoint 正規化結果の dump 追跡
+- `Issue E` の run/repl 全経路でのエラー境界最終統一
+
+補足:
+- 現時点でルートが 1 本の経路は維持し、分岐を増やしていない。
+- 既存テスト維持のための差分と基盤差分はコミットを分離する。
+
+---
+
 ## 1. 実行基盤・標準モジュール実装に必要な Issue 再編
 
 ここは **StdModV1 を進めるために先に必要なもの** だけに絞る。  
