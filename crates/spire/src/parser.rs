@@ -13,6 +13,7 @@ pub enum DeclLevel {
 pub enum CompileUnitKind {
     Script,
     Module,
+    Project,
     Repl,
 }
 
@@ -53,6 +54,15 @@ impl ParserContext {
         Self {
             level: DeclLevel::Top,
             unit_kind: CompileUnitKind::Repl,
+            source_id,
+            module_path: None,
+        }
+    }
+
+    pub fn project(source_id: u32) -> Self {
+        Self {
+            level: DeclLevel::Top,
+            unit_kind: CompileUnitKind::Project,
             source_id,
             module_path: None,
         }
@@ -3306,6 +3316,21 @@ import Kernel::{add, sub};"#,
             [Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(name))]
                 if segments.as_slice() == ["Kernel"] && name == "add"
         ));
+    }
+
+    #[test]
+    fn test_project_parser_context_sets_unit_kind() {
+        let context = ParserContext::project(7);
+        assert_eq!(context.unit_kind, CompileUnitKind::Project);
+        assert_eq!(context.source_id, 7);
+        assert_eq!(context.module_path, None);
+    }
+
+    #[test]
+    fn test_project_compile_unit_accepts_top_level_expression() {
+        let ast = parse_with_context("x = 42", ParserContext::project(1))
+            .expect("project compile unit should accept top-level expressions");
+        assert!(matches!(ast.as_slice(), [Ast::Bind(_, _, _)]));
     }
 
     #[test]

@@ -420,6 +420,24 @@ mod tests {
     }
 
     #[test]
+    fn same_file_with_different_compile_unit_kind_conflicts() {
+        let specs = vec![
+            SourceSpec::script("main.srt", "print(\"hi\")"),
+            SourceSpec {
+                file_name: "main.srt".into(),
+                source: "print(\"hi\")".into(),
+                unit_kind: CompileUnitKind::Project,
+                module_path: None,
+            },
+        ];
+
+        let err = collect_sources(&specs).expect_err("different compile unit kinds must conflict");
+        assert!(
+            matches!(err, LoadError::ConflictingSource { file_name } if file_name == "main.srt")
+        );
+    }
+
+    #[test]
     fn compile_sources_preserves_stage_order() {
         let loaded = collect_compile_sources_with_module_stages(
             "main.srt",
