@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use eldr::value::Value;
@@ -25,9 +25,8 @@ fn main() {
             println!("surtr {}", RUNE_VERSION);
             Ok(())
         }
-        Some("run") => parse_run_options(&args[2..]).and_then(|options| {
-            run_command(options, ExecutionEnv::Dev)
-        }),
+        Some("run") => parse_run_options(&args[2..])
+            .and_then(|options| run_command(options, ExecutionEnv::Dev)),
         Some("repl") => parse_repl_options(&args[2..]).and_then(xldr::repl_command),
         Some("build") => {
             if !(3..=4).contains(&args.len()) {
@@ -104,6 +103,67 @@ impl ScriptPlanError {
             span,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TestLocation {
+    file_path: String,
+    line: usize,
+    column: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TestOperator {
+    Eq,
+    Neq,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
+}
+
+impl TestOperator {
+    fn normalized_label(self) -> &'static str {
+        match self {
+            Self::Eq => "eq",
+            Self::Neq => "neq",
+            Self::Lt => "<",
+            Self::Lte => "<=",
+            Self::Gt => ">",
+            Self::Gte => ">=",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TestCase {
+    module_path: String,
+    target_def: String,
+    expr: String,
+    lhs_expr: String,
+    rhs_expr: String,
+    op: TestOperator,
+    location: TestLocation,
+}
+
+impl TestCase {
+    fn display_name(&self) -> String {
+        if self.module_path.is_empty() {
+            self.target_def.clone()
+        } else {
+            format!("{}::{}", self.module_path, self.target_def)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TestSelector {
+    All,
+    Module(String),
+    Function {
+        module_path: String,
+        function_name: String,
+    },
 }
 
 fn parse_repl_options(args: &[String]) -> Result<xldr::ReplOptions, i32> {
@@ -184,10 +244,488 @@ fn run_command(options: RunOptions, _env: ExecutionEnv) -> Result<(), i32> {
     }
 }
 
-fn test_command(_options: TestOptions) -> Result<(), i32> {
+fn parse_test_selector(raw: Option<&str>) -> TestSelector {
+    let Some(selector) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return TestSelector::All;
+    };
+
+    if let Some((module_path, function_name)) = selector.rsplit_once("::") {
+        if !module_path.is_empty() && !function_name.is_empty() {
+            return TestSelector::Function {
+                module_path: module_path.to_string(),
+                function_name: function_name.to_string(),
+            };
+        }
+    }
+
+    TestSelector::Module(selector.to_string())
+}
+
+fn test_case_matches_selector(test: &TestCase, selector: &TestSelector) -> bool {
+    match selector {
+        TestSelector::All => true,
+        TestSelector::Module(module) => &test.module_path == module,
+        TestSelector::Function {
+            module_path,
+            function_name,
+        } => &test.module_path == module_path && &test.target_def == function_name,
+    }
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn collect_lib_root_sources() -> Result<Vec<(PathBuf, String)>, String> {
+    let lib_dir = Path::new("lib");
+    let entries = fs::read_dir(lib_dir)
+        .map_err(|e| format!("test: failed to read `{}`: {}", lib_dir.display(), e))?;
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "srt")
+        {
+            files.push(path);
+        }
+    }
+    files.sort();
+
+    let mut sources = Vec::with_capacity(files.len());
+    for path in files {
+        let source = fs::read_to_string(&path)
+            .map_err(|e| format!("test: failed to read `{}`: {}", display_path(&path), e))?;
+        sources.push((path, source));
+    }
+    Ok(sources)
+}
+
+fn module_path_from_file_name(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
+fn derive_primary_module_path(source: &str) -> Option<String> {
+    let tokens = spire::lexer::tokenize(source).ok()?;
+    for (idx, spanned) in tokens.iter().enumerate() {
+        if !matches!(spanned.token, Token::Defmod) {
+            continue;
+        }
+
+        let mut j = idx + 1;
+        while matches!(tokens.get(j).map(|t| &t.token), Some(Token::Newline)) {
+            j += 1;
+        }
+
+        let mut segments = Vec::new();
+        match tokens.get(j).map(|sp| &sp.token) {
+            Some(Token::Ident(name)) => {
+                segments.push(name.clone());
+                j += 1;
+            }
+            _ => return None,
+        }
+
+        while matches!(tokens.get(j).map(|t| &t.token), Some(Token::Colon))
+            && matches!(tokens.get(j + 1).map(|t| &t.token), Some(Token::Colon))
+        {
+            j += 2;
+            match tokens.get(j).map(|sp| &sp.token) {
+                Some(Token::Ident(name)) => {
+                    segments.push(name.clone());
+                    j += 1;
+                }
+                _ => return None,
+            }
+        }
+
+        if !segments.is_empty() {
+            return Some(segments.join("::"));
+        }
+    }
+
+    None
+}
+
+fn char_to_byte_index(source: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+    source
+        .char_indices()
+        .nth(char_index)
+        .map(|(byte_idx, _)| byte_idx)
+        .unwrap_or(source.len())
+}
+
+fn slice_by_char_range(source: &str, start: usize, end: usize) -> &str {
+    let byte_start = char_to_byte_index(source, start);
+    let byte_end = char_to_byte_index(source, end);
+    &source[byte_start..byte_end]
+}
+
+fn line_column_for_char_offset(source: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1usize;
+    let mut column = 1usize;
+    for (idx, ch) in source.chars().enumerate() {
+        if idx >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}
+
+fn split_test_expression(expr: &str) -> Result<(String, String, TestOperator), String> {
+    let tokens = spire::lexer::tokenize(expr).map_err(|e| e.message().to_string())?;
+    let mut depth_paren = 0i32;
+    let mut depth_brack = 0i32;
+    let mut depth_brace = 0i32;
+    let mut found: Option<(TestOperator, Span)> = None;
+
+    for token in tokens {
+        match token.token {
+            Token::LParen => depth_paren += 1,
+            Token::RParen => depth_paren -= 1,
+            Token::LBrack => depth_brack += 1,
+            Token::RBrack => depth_brack -= 1,
+            Token::LBrace => depth_brace += 1,
+            Token::RBrace => depth_brace -= 1,
+            _ => {}
+        }
+
+        if depth_paren != 0 || depth_brack != 0 || depth_brace != 0 {
+            continue;
+        }
+
+        let op = match token.token {
+            Token::EqEq => Some(TestOperator::Eq),
+            Token::BangEq => Some(TestOperator::Neq),
+            Token::Lt => Some(TestOperator::Lt),
+            Token::LtEq => Some(TestOperator::Lte),
+            Token::Gt => Some(TestOperator::Gt),
+            Token::GtEq => Some(TestOperator::Gte),
+            _ => None,
+        };
+
+        if let Some(op) = op {
+            if found.is_some() {
+                return Err("multiple top-level comparison operators in @@test expression".into());
+            }
+            found = Some((op, token.span));
+        }
+    }
+
+    let (op, op_span) = found.ok_or_else(|| {
+        "test expression must contain one top-level comparison operator".to_string()
+    })?;
+
+    let expr_char_len = expr.chars().count();
+    let lhs = slice_by_char_range(expr, 0, op_span.start)
+        .trim()
+        .to_string();
+    let rhs = slice_by_char_range(expr, op_span.end, expr_char_len)
+        .trim()
+        .to_string();
+    if lhs.is_empty() || rhs.is_empty() {
+        return Err("test expression requires both lhs and rhs".into());
+    }
+    Ok((lhs, rhs, op))
+}
+
+fn find_def_name_for_test_chain(
+    tokens: &[spire::token::Spanned<Token>],
+    mut index: usize,
+) -> Result<String, String> {
+    loop {
+        while matches!(tokens.get(index).map(|t| &t.token), Some(Token::Newline)) {
+            index += 1;
+        }
+
+        match tokens.get(index).map(|t| &t.token) {
+            Some(Token::Annotator(name)) if name == "test" => {
+                index += 1;
+                while !matches!(
+                    tokens.get(index).map(|t| &t.token),
+                    Some(Token::Newline) | Some(Token::Eof) | None
+                ) {
+                    index += 1;
+                }
+            }
+            Some(Token::Def) => {
+                index += 1;
+                while matches!(tokens.get(index).map(|t| &t.token), Some(Token::Newline)) {
+                    index += 1;
+                }
+                if let Some(Token::Ident(name)) = tokens.get(index).map(|t| &t.token) {
+                    return Ok(name.clone());
+                }
+                return Err("@@test must target `def <name>(...)`".into());
+            }
+            _ => {
+                return Err(
+                    "@@test must be placed immediately before a function definition (`def`)".into(),
+                );
+            }
+        }
+    }
+}
+
+fn collect_test_cases_from_source(
+    file_path: &str,
+    source: &str,
+    module_path: &str,
+) -> Result<Vec<TestCase>, String> {
+    let tokens = spire::lexer::tokenize(source).map_err(|e| {
+        let (line, column) = line_column_for_char_offset(source, e.span().start);
+        format!(
+            "test: parse error in {}:{}:{}: {}",
+            file_path,
+            line,
+            column,
+            e.message()
+        )
+    })?;
+
+    let mut cases = Vec::new();
+    for (idx, token) in tokens.iter().enumerate() {
+        let Token::Annotator(name) = &token.token else {
+            continue;
+        };
+        if name != "test" {
+            continue;
+        }
+
+        let mut expr_token_end = idx + 1;
+        while !matches!(
+            tokens.get(expr_token_end).map(|t| &t.token),
+            Some(Token::Newline) | Some(Token::Eof) | None
+        ) {
+            expr_token_end += 1;
+        }
+        if expr_token_end == idx + 1 {
+            let (line, column) = line_column_for_char_offset(source, token.span.start);
+            return Err(format!(
+                "test: missing expression for @@test in {}:{}:{}",
+                file_path, line, column
+            ));
+        }
+
+        let expr_start = token.span.end;
+        let expr_end = tokens[expr_token_end - 1].span.end;
+        let expr = slice_by_char_range(source, expr_start, expr_end)
+            .trim()
+            .to_string();
+        let (lhs_expr, rhs_expr, op) = split_test_expression(&expr).map_err(|message| {
+            let (line, column) = line_column_for_char_offset(source, token.span.start);
+            format!(
+                "test: invalid @@test in {}:{}:{}: {}",
+                file_path, line, column, message
+            )
+        })?;
+        let target_def =
+            find_def_name_for_test_chain(&tokens, expr_token_end).map_err(|message| {
+                let (line, column) = line_column_for_char_offset(source, token.span.start);
+                format!(
+                    "test: invalid @@test in {}:{}:{}: {}",
+                    file_path, line, column, message
+                )
+            })?;
+        let (line, column) = line_column_for_char_offset(source, token.span.start);
+
+        cases.push(TestCase {
+            module_path: module_path.to_string(),
+            target_def,
+            expr,
+            lhs_expr,
+            rhs_expr,
+            op,
+            location: TestLocation {
+                file_path: file_path.to_string(),
+                line,
+                column,
+            },
+        });
+    }
+
+    Ok(cases)
+}
+
+fn build_expression_script_source(module_path: &str, expr: &str) -> String {
+    let mut source = String::new();
+    if !module_path.is_empty() && module_path != "Bootstrap" && module_path != "Kernel" {
+        source.push_str(&format!("import {};\n", module_path));
+    }
+    source.push_str(expr);
+    source.push('\n');
+    source
+}
+
+fn evaluate_expression(
+    module_sources: &xldr::ModuleSources,
+    module_path: &str,
+    expr: &str,
+) -> Result<(Value, String), String> {
+    let raw_script_source = build_expression_script_source(module_path, expr);
+    let source_for_parse = xldr::strip_test_annotations(&raw_script_source);
+    let compile_plan = ScriptCompilePlan {
+        source_for_parse: source_for_parse.clone(),
+        selected_entry_name: None,
+        normalized_entrypoint: None,
+    };
+    let compile_sources = xldr::compose_script_compile_sources(
+        "__surtr_test__.srt",
+        &source_for_parse,
+        module_sources.clone(),
+    );
+    let bytecode = compile_source(&compile_sources, &compile_plan)
+        .map_err(|_| "compile error while evaluating test expression".to_string())?;
+
+    let mut vm = eldr::VM::new(bytecode)
+        .with_output_capture()
+        .with_error_capture();
+    vm.run()
+        .map_err(|e| format!("runtime error while evaluating test expression: {}", e))?;
+    let value = vm.last_value().cloned().unwrap_or(Value::Unit);
+    let display = value.to_display_string(&vm.type_registry());
+    Ok((value, display))
+}
+
+fn report_test_failure(module_sources: &xldr::ModuleSources, test: &TestCase, detail: &str) {
+    println!(
+        "[FAIL] {} ({}:{}:{})",
+        test.display_name(),
+        test.location.file_path,
+        test.location.line,
+        test.location.column
+    );
+    println!("  expr: {}", test.expr);
+
+    let lhs_display = evaluate_expression(module_sources, &test.module_path, &test.lhs_expr)
+        .map(|(_, display)| display)
+        .unwrap_or_else(|e| format!("<error: {}>", e));
+    let rhs_display = evaluate_expression(module_sources, &test.module_path, &test.rhs_expr)
+        .map(|(_, display)| display)
+        .unwrap_or_else(|e| format!("<error: {}>", e));
+    println!("  lhs : {} => {}", test.lhs_expr, lhs_display);
+    println!("  rhs : {} => {}", test.rhs_expr, rhs_display);
+    println!("  op  : {}", test.op.normalized_label());
+    if !detail.is_empty() {
+        println!("  note: {}", detail);
+    }
+}
+
+fn test_command(options: TestOptions) -> Result<(), i32> {
     let _env = ExecutionEnv::Test;
-    eprintln!("test: command is not implemented yet");
-    Err(1)
+    let lib_sources = collect_lib_root_sources().map_err(|message| {
+        eprintln!("{}", message);
+        1
+    })?;
+    if lib_sources.is_empty() {
+        eprintln!("test: no `.srt` files found under `./lib`");
+        return Err(1);
+    }
+
+    let mut all_tests = Vec::new();
+    let mut module_inputs = Vec::new();
+    for (path, source) in lib_sources {
+        let file_path = display_path(&path);
+        let module_path = derive_primary_module_path(&source)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| module_path_from_file_name(&path));
+        let tests = collect_test_cases_from_source(&file_path, &source, &module_path).map_err(
+            |message| {
+                eprintln!("{}", message);
+                1
+            },
+        )?;
+        all_tests.extend(tests);
+
+        if module_path != "Bootstrap" && module_path != "Kernel" {
+            module_inputs.push(xldr::ModuleInput {
+                file_name: file_path,
+                source,
+                module_path,
+            });
+        }
+    }
+
+    if all_tests.is_empty() {
+        println!("No tests found.");
+        return Ok(());
+    }
+
+    let selector = parse_test_selector(options.selector.as_deref());
+    let selected_tests = all_tests
+        .into_iter()
+        .filter(|test| test_case_matches_selector(test, &selector))
+        .collect::<Vec<_>>();
+    if selected_tests.is_empty() {
+        println!("No tests matched selector.");
+        return Ok(());
+    }
+
+    let module_sources = if module_inputs.is_empty() {
+        xldr::collect_module_sources_with_module_stages(&[])
+    } else {
+        xldr::collect_module_sources_with_module_stages(&[module_inputs])
+    }
+    .map_err(|e| {
+        eprintln!("test: failed to collect module sources: {}", e);
+        1
+    })?;
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    for test in selected_tests {
+        match evaluate_expression(&module_sources, &test.module_path, &test.expr) {
+            Ok((Value::Bool(true), _)) => {
+                println!("[PASS] {}", test.display_name());
+                passed += 1;
+            }
+            Ok((Value::Bool(false), _)) => {
+                report_test_failure(&module_sources, &test, "");
+                failed += 1;
+            }
+            Ok((_other, display)) => {
+                report_test_failure(
+                    &module_sources,
+                    &test,
+                    &format!(
+                        "test expression must evaluate to Boolean (got `{}`)",
+                        display
+                    ),
+                );
+                failed += 1;
+            }
+            Err(message) => {
+                report_test_failure(&module_sources, &test, &message);
+                failed += 1;
+            }
+        }
+    }
+
+    let total = passed + failed;
+    println!(
+        "test result: passed={}, failed={}, total={}",
+        passed, failed, total
+    );
+
+    if failed == 0 {
+        Ok(())
+    } else {
+        Err(1)
+    }
 }
 
 fn run_source_file(file_path: &str, cli_entry: Option<&str>) -> Result<(), i32> {
@@ -248,7 +786,11 @@ fn run_eldr_file(file_path: &str) -> Result<(), i32> {
     execute_bytecode(bytecode, None)
 }
 
-fn build_command(input_srt: &str, output_eldr: Option<&str>, _env: ExecutionEnv) -> Result<(), i32> {
+fn build_command(
+    input_srt: &str,
+    output_eldr: Option<&str>,
+    _env: ExecutionEnv,
+) -> Result<(), i32> {
     let source = match fs::read_to_string(input_srt) {
         Ok(s) => s,
         Err(e) => {
@@ -442,7 +984,8 @@ fn prepare_script_compile_plan(
     source: &str,
     cli_entry: Option<&str>,
 ) -> Result<ScriptCompilePlan, ScriptPlanError> {
-    let (source_for_parse, annotations) = collect_entrypoint_annotations(source)?;
+    let source_without_tests = xldr::strip_test_annotations(source);
+    let (source_for_parse, annotations) = collect_entrypoint_annotations(&source_without_tests)?;
 
     if annotations.len() > 1 {
         let second = &annotations[1];
@@ -701,8 +1244,8 @@ mod tests {
 
     #[test]
     fn test_options_accept_selector_or_empty() {
-        let with_selector = parse_test_options(&["Kernel::add".to_string()])
-            .expect("selector should parse");
+        let with_selector =
+            parse_test_options(&["Kernel::add".to_string()]).expect("selector should parse");
         assert_eq!(with_selector.selector.as_deref(), Some("Kernel::add"));
 
         let without_selector = parse_test_options(&[]).expect("empty selector should parse");
