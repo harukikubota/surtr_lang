@@ -273,39 +273,18 @@ fn parse_program_with_builtin_prelude(
 ) -> Result<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>), i32> {
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
-
-    let mut staged_module_asts = Vec::with_capacity(compile_sources.module_stages.len());
-    for stage in &compile_sources.module_stages {
-        let mut stage_ast = Vec::with_capacity(stage.len());
-        for module in stage {
-            let module_source = sources.source(module.source_id).unwrap_or("");
-            let module_ast = match spire::parse_with_context(
-                module_source,
-                spire::ParserContext::module(module.source_id.0, Some(module.module_path.clone()))
-                    .with_rules(xldr::derive_source_rules(
-                        compile_unit_kind,
-                        module.source_kind,
-                        None,
-                    )),
-            ) {
-                Ok(a) => a,
-                Err(e) => {
-                    let message = e.message();
-                    diagnostics::report_error_by_id(
-                        sources,
-                        module.source_id,
-                        diagnostics::simple_error("ParseError", message, e.span().clone(), None),
-                    );
-                    return Err(1);
-                }
-            };
-            stage_ast.push(sigil::StagedModuleAst {
-                module_path: module.module_path.clone(),
-                ast: module_ast,
-            });
-        }
-        staged_module_asts.push(stage_ast);
-    }
+    let staged_module_asts =
+        match xldr::parse_module_stages_from_compile_sources(compile_sources, compile_unit_kind) {
+            Ok(stages) => stages,
+            Err(e) => {
+                diagnostics::report_error_by_id(
+                    sources,
+                    e.source_id,
+                    diagnostics::simple_error("ParseError", e.message(), e.span(), None),
+                );
+                return Err(1);
+            }
+        };
 
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = match spire::parse_with_context(

@@ -103,16 +103,29 @@ impl SourceRules {
     }
 
     pub fn module() -> Self {
+        Self::module_source()
+    }
+
+    pub fn module_source() -> Self {
         Self {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Defmod,
                 TopLevelDeclKind::Import,
-                TopLevelDeclKind::Def,
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::BuiltinDecl,
             ]),
+            set_exit_code_policy: SetExitCodePolicy::Forbidden,
+            normalized_entrypoint: None,
+        }
+    }
+
+    pub fn module_member() -> Self {
+        Self {
+            allow_top_level_expr: false,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![TopLevelDeclKind::Def]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
         }
@@ -179,7 +192,7 @@ impl ParserContext {
             unit_kind: CompileUnitKind::Module,
             source_id,
             module_path,
-            source_rules: SourceRules::module(),
+            source_rules: SourceRules::module_source(),
         }
     }
 
@@ -490,7 +503,7 @@ impl Parser {
         self.context.level = DeclLevel::Top;
         self.context.unit_kind = CompileUnitKind::Module;
         self.context.module_path = module_path;
-        self.context.source_rules = SourceRules::module();
+        self.context.source_rules = SourceRules::module_member();
 
         let result = (|| {
             let mut stmts = Vec::new();
@@ -622,7 +635,7 @@ impl Parser {
 
     fn parse_defmod(&mut self) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
-        if self.context.unit_kind == CompileUnitKind::Module {
+        if self.context.module_path.is_some() {
             return Err(ParseError::syntax(
                 "Nested module declarations are not allowed",
                 sp,
@@ -3439,38 +3452,57 @@ import Kernel::{add, sub};"#,
 
     #[test]
     fn test_module_compile_unit_rejects_top_level_bind() {
-        let err = parse_with_context(
-            "x = 42",
-            ParserContext::module(1, Some("Kernel".to_string())),
-        )
-        .expect_err("module compile unit should reject top-level binding");
+        let err = parse_with_context("x = 42", ParserContext::module(1, None))
+            .expect_err("module compile unit should reject top-level binding");
         assert!(err
             .message()
             .contains("Top-level expressions are not allowed in module compile units"));
     }
 
     #[test]
-    fn test_module_compile_unit_accepts_top_level_def() {
-        let ast = parse_with_context(
+    fn test_module_compile_unit_rejects_top_level_def() {
+        let err = parse_with_context(
             "def add(x: Int, y: Int) -> Int { x + y }",
-            ParserContext::module(1, Some("Kernel".to_string())),
+            ParserContext::module(1, None),
         )
-        .expect("module compile unit should accept declarations");
-        assert!(matches!(ast.as_slice(), [Ast::Def(_, _, _, _, _)]));
+        .expect_err("module compile unit should require defmod wrappers for functions");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
+    fn test_module_compile_unit_accepts_top_level_defmod() {
+        let ast = parse_with_context(
+            "defmod Kernel { def add(x: Int, y: Int) -> Int { x + y } }",
+            ParserContext::module(1, None),
+        )
+        .expect("module compile unit should accept defmod declarations");
+        assert!(matches!(ast.as_slice(), [Ast::Defmod(_, _, _)]));
     }
 
     #[test]
     fn test_module_compile_unit_accepts_import() {
-        let ast = parse_with_context(
-            "import Kernel::add;",
-            ParserContext::module(1, Some("Kernel".to_string())),
-        )
-        .expect("module compile unit should accept import declarations");
+        let ast = parse_with_context("import Kernel::add;", ParserContext::module(1, None))
+            .expect("module compile unit should accept import declarations");
         assert!(matches!(
             ast.as_slice(),
             [Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(name))]
                 if segments.as_slice() == ["Kernel"] && name == "add"
         ));
+    }
+
+    #[test]
+    fn test_defmod_body_rejects_non_function_declarations() {
+        let err = parse(
+            r#"defmod Kernel {
+  defrecord Pair(left: Int, right: Int)
+}"#,
+        )
+        .expect_err("defmod should only contain function declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
     }
 
     #[test]

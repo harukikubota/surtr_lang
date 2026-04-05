@@ -1,3 +1,5 @@
-def later_value() -> Int {
-  1
+defmod Later {
+  def later_value() -> Int {
+    1
+  }
 }

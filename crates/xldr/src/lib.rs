@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, IsTerminal, Write};
 
 use diagnostics::{SourceId, SourceRegistry};
@@ -25,6 +25,57 @@ pub use loader::{
     StagedModule,
 };
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoweredModuleAst {
+    pub module_path: String,
+    pub ast: Vec<spire::ast::Ast>,
+    pub declared_span: Option<spire::ast::Span>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModuleStageParseErrorKind {
+    Parse {
+        message: String,
+        span: spire::ast::Span,
+    },
+    DuplicateModulePath {
+        module_path: String,
+        first_file_name: String,
+        second_file_name: String,
+        span: spire::ast::Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModuleStageParseError {
+    pub source_id: SourceId,
+    pub kind: ModuleStageParseErrorKind,
+}
+
+impl ModuleStageParseError {
+    pub fn message(&self) -> String {
+        match &self.kind {
+            ModuleStageParseErrorKind::Parse { message, .. } => message.clone(),
+            ModuleStageParseErrorKind::DuplicateModulePath {
+                module_path,
+                first_file_name,
+                second_file_name,
+                ..
+            } => format!(
+                "duplicate module path `{}` in `{}` and `{}`",
+                module_path, first_file_name, second_file_name
+            ),
+        }
+    }
+
+    pub fn span(&self) -> spire::ast::Span {
+        match &self.kind {
+            ModuleStageParseErrorKind::Parse { span, .. } => span.clone(),
+            ModuleStageParseErrorKind::DuplicateModulePath { span, .. } => span.clone(),
+        }
+    }
+}
+
 pub fn derive_source_rules(
     compile_unit_kind: spire::CompileUnitKind,
     source_kind: SourceKind,
@@ -48,6 +99,125 @@ pub fn derive_source_rules(
     };
 
     base.with_set_exit_code_policy(policy, entrypoint)
+}
+
+pub fn lower_module_source_ast(
+    ast: Vec<spire::ast::Ast>,
+    fallback_module_path: Option<&str>,
+) -> Vec<LoweredModuleAst> {
+    let shared_imports = ast
+        .iter()
+        .filter_map(|stmt| match stmt {
+            spire::ast::Ast::Import(_, _, _) => Some(stmt.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut lowered = Vec::new();
+    let mut shared_non_module_defs = Vec::new();
+
+    for stmt in ast {
+        match stmt {
+            spire::ast::Ast::Defmod(span, module_path, body) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    ast: module_ast,
+                    declared_span: Some(span),
+                });
+            }
+            spire::ast::Ast::Import(_, _, _) => {}
+            spire::ast::Ast::StructDef(_, _, _)
+            | spire::ast::Ast::RecordDef(_, _, _)
+            | spire::ast::Ast::DeferrorDef(_, _, _, _)
+            | spire::ast::Ast::BuiltinDecl(_, _, _, _) => {
+                shared_non_module_defs.push(stmt);
+            }
+            _ => {
+                // Defensive fallback. Parser policy should keep this unreachable for module sources.
+                shared_non_module_defs.push(stmt);
+            }
+        }
+    }
+
+    if !shared_non_module_defs.is_empty() {
+        let mut shared_ast = shared_imports;
+        shared_ast.extend(shared_non_module_defs);
+        lowered.push(LoweredModuleAst {
+            module_path: fallback_module_path.unwrap_or_default().to_string(),
+            ast: shared_ast,
+            declared_span: None,
+        });
+    }
+
+    lowered
+}
+
+pub fn parse_module_stages_from_compile_sources(
+    compile_sources: &CompileSources,
+    compile_unit_kind: spire::CompileUnitKind,
+) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
+    let sources = &compile_sources.sources;
+    let mut staged_module_asts = Vec::with_capacity(compile_sources.module_stages.len());
+    let mut seen_module_paths: HashMap<String, String> = HashMap::new();
+
+    for stage in &compile_sources.module_stages {
+        let mut stage_ast = Vec::new();
+        for module in stage {
+            let module_source = sources.source(module.source_id).unwrap_or("");
+            let parsed = spire::parse_with_context(
+                module_source,
+                spire::ParserContext::module(module.source_id.0, None).with_rules(
+                    derive_source_rules(compile_unit_kind, module.source_kind, None),
+                ),
+            )
+            .map_err(|e| ModuleStageParseError {
+                source_id: module.source_id,
+                kind: ModuleStageParseErrorKind::Parse {
+                    message: e.message().to_string(),
+                    span: e.span().clone(),
+                },
+            })?;
+
+            let fallback_module_path = match module.source_kind {
+                SourceKind::StdModule => Some(module.module_path.as_str()),
+                SourceKind::Module => None,
+                SourceKind::Script | SourceKind::ReplChunk => None,
+            };
+
+            for lowered in lower_module_source_ast(parsed, fallback_module_path) {
+                if !lowered.module_path.is_empty() {
+                    let second_file_name = sources
+                        .file_name(module.source_id)
+                        .unwrap_or("<unknown>")
+                        .to_string();
+                    if let Some(first_file_name) = seen_module_paths.get(&lowered.module_path) {
+                        return Err(ModuleStageParseError {
+                            source_id: module.source_id,
+                            kind: ModuleStageParseErrorKind::DuplicateModulePath {
+                                module_path: lowered.module_path.clone(),
+                                first_file_name: first_file_name.clone(),
+                                second_file_name,
+                                span: lowered
+                                    .declared_span
+                                    .unwrap_or(spire::ast::Span { start: 0, end: 0 }),
+                            },
+                        });
+                    }
+                    seen_module_paths.insert(lowered.module_path.clone(), second_file_name);
+                }
+
+                stage_ast.push(sigil::StagedModuleAst {
+                    module_path: lowered.module_path,
+                    ast: lowered.ast,
+                });
+            }
+        }
+        staged_module_asts.push(stage_ast);
+    }
+
+    Ok(staged_module_asts)
 }
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -670,5 +840,74 @@ fn display_repl_result(vm: &eldr::VM, value: Value, meta: &forge::ChunkMeta) {
         for type_def in &meta.type_defs {
             println!("> {}", type_def.name);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lower_module_source_extracts_defmods_and_shared_defs() {
+        let ast = spire::parse_with_context(
+            r#"import Other::f;
+
+defmod A {
+  def fa() -> Int { 1 }
+}
+
+defrecord Pair(left: Int, right: Int)
+
+defmod B {
+  def fb() -> Int { f() }
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("module source should parse");
+
+        let lowered = lower_module_source_ast(ast, None);
+        assert_eq!(lowered.len(), 3);
+        assert_eq!(lowered[0].module_path, "A");
+        assert_eq!(lowered[1].module_path, "B");
+        assert_eq!(lowered[2].module_path, "");
+        assert!(matches!(
+            lowered[0].ast[0],
+            spire::ast::Ast::Import(_, _, spire::ast::ImportSpec::Single(_))
+        ));
+        assert!(lowered[2]
+            .ast
+            .iter()
+            .any(|stmt| matches!(stmt, spire::ast::Ast::RecordDef(_, _, _))));
+    }
+
+    #[test]
+    fn parse_module_stages_detects_duplicate_defmod_paths() {
+        let compile_sources = collect_compile_sources_with_module_stages(
+            "entry.srt",
+            "print(\"hi\")",
+            &[vec![
+                ModuleInput {
+                    file_name: "a.srt".into(),
+                    source: "defmod Shared { def a() -> Int { 1 } }".into(),
+                    module_path: "A".into(),
+                },
+                ModuleInput {
+                    file_name: "b.srt".into(),
+                    source: "defmod Shared { def b() -> Int { 2 } }".into(),
+                    module_path: "B".into(),
+                },
+            ]],
+        )
+        .expect("source collection should succeed");
+
+        let err = parse_module_stages_from_compile_sources(
+            &compile_sources,
+            spire::CompileUnitKind::Script,
+        )
+        .expect_err("duplicate defmod path must fail");
+        assert!(matches!(
+            err.kind,
+            ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Shared"
+        ));
     }
 }

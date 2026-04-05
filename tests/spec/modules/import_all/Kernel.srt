@@ -1,7 +1,9 @@
-def add(x: Int, y: Int) -> Int {
-  x + y
-}
+defmod Kernel {
+  def add(x: Int, y: Int) -> Int {
+    x + y
+  }
 
-def sub(x: Int, y: Int) -> Int {
-  x - y
+  def sub(x: Int, y: Int) -> Int {
+    x - y
+  }
 }

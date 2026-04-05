@@ -37,7 +37,13 @@
   - `F-3`: parser context に `SourceRules` を保持し policy でトップレベル規則を判定
   - `F-4`: typechecker へ `SourceRules` を伝播し `set_exit_code` を policy 判定へ移行
   - `F-5`: `Script / ReplChunk / EntryOnly` のテスト追加
-- `Issue C`（一部）
+- `Issue B`
+  - `B-1`: module source から `defmod` を抽出する lower 層を追加
+  - `B-2`: `defmod` 配下の関数のみ許可を parse / validate で強制
+  - `B-3`: module 所属関数と module 非所属定義の分離を中間表現へ反映
+  - `B-4`: duplicate module path 判定を抽出済み module 単位へ移行
+  - `B-5`: module fixture / compile-error fixture を `defmod` ベースへ移行
+- `Issue C`
   - `C-1`: script pseudo module identity 導入
   - `C-2`: REPL pseudo module identity 導入
   - `C-3`: CLI script 実行経路で Loader 非依存 + `--entry` 実行モード導入
@@ -50,7 +56,6 @@
 
 ### 未実施（この時点）
 
-- `Issue B` の `defmod` 中心ルール完全移行
 - `Issue D` の entrypoint 正規化結果の dump 追跡（`D-3`）
 - `Issue E` の run/repl 全経路でのエラー境界最終統一
 
@@ -858,14 +863,14 @@ annotation (`@@doc`, `@@test`, `@@entrypoint` など) は module と script で�
 
 ---
 
-### 4.1 推奨実装順
+### 4.1 推奨実装順（実施状況反映）
 
-1. `Issue A`
-2. `Issue F`
-3. `Issue B`
-4. `Issue C`
-5. `Issue D`
-6. `Issue E`
+1. `Issue A`（実施済み）
+2. `Issue F`（実施済み）
+3. `Issue B`（実施済み）
+4. `Issue C`（実施済み）
+5. `Issue D`（`D-3` のみ未実施）
+6. `Issue E`（`E-1` / `E-3` 未実施）
 7. `Future Issue 6`
 8. `Future Issue 7`
 9. `Future Issue 5`
@@ -877,57 +882,57 @@ annotation (`@@doc`, `@@test`, `@@entrypoint` など) は module と script で�
 
 実装ブロックとしては次の順で進める。
 
-- 第1ブロック: `Issue A -> Issue F`
-- 第2ブロック: `Issue B -> Issue C -> Issue D`
-- 第3ブロック: `Issue E -> Future Issue 6 -> Future Issue 7`
+- 第1ブロック: `Issue A -> Issue F`（実施済み）
+- 第2ブロック: `Issue B -> Issue C -> Issue D`（`D-3` が残）
+- 第3ブロック: `Issue E -> Future Issue 6 -> Future Issue 7`（`Issue E` の `E-1` / `E-3` が残）
 - 第4ブロック: `Future Issue 5 -> Future Issue 1 -> Future Issue 2`
 - 第5ブロック: `Future Issue 3 -> Future Issue 8 -> Future Issue 9`
 
 ---
 
-### 4.2 タスク分解: Issue A
+### 4.2 タスク分解: Issue A（実施済み）
 
-- `A-1`: `CompileUnitKind` を `Script / Module / Project / Repl` に拡張する（1コミット）
-- `A-2`: `SourceKind` と `SourceDescriptor` 相当を導入する（1コミット）
-- `A-3`: Loader API を module/stdmodule 専用に寄せ、script 入力を切り離す（1コミット）
-- `A-4`: script 実行入力 API を別口で導入し、run 経路を Loader 非依存にする（1コミット）
-- `A-5`: REPL 入力を `ReplChunk` として明示し、host 注入に統一する（1コミット）
-
----
-
-### 4.2.1 タスク分解: Issue F
-
-- `F-1`: `SourceRules` / `BuiltinPolicy` / `SetExitCodePolicy` の型を導入する（1コミット）
-- `F-2`: `SourceKind + CompileUnitKind + EntryPoint` から `SourceRules` を導出する（1コミット）
-- `F-3`: parser context に `SourceRules` を保持し、トップレベル規則を policy 判定へ移す（1コミット）
-- `F-4`: typechecker へ `SourceRules` を伝播し、`set_exit_code` 判定を policy 化する（1コミット）
-- `F-5`: `Script(許可) / ReplChunk(禁止) / Project entry-only` の fixture テストを追加する（1コミット）
+- `A-1`: `CompileUnitKind` を `Script / Module / Project / Repl` に拡張する（実施済み）
+- `A-2`: `SourceKind` と `SourceDescriptor` 相当を導入する（実施済み）
+- `A-3`: Loader API を module/stdmodule 専用に寄せ、script 入力を切り離す（実施済み）
+- `A-4`: script 実行入力 API を別口で導入し、run 経路を Loader 非依存にする（実施済み）
+- `A-5`: REPL 入力を `ReplChunk` として明示し、host 注入に統一する（実施済み）
 
 ---
 
-### 4.3 タスク分解: Issue B
+### 4.2.1 タスク分解: Issue F（実施済み）
 
-- `B-1`: module source から `defmod` を抽出する lower 層を追加する
-- `B-2`: `defmod` 配下は関数のみを持てることを parse / validate で強制する
-- `B-3`: module 所属関数と module 非所属定義を分離した中間表現を導入する
-- `B-4`: duplicate module path 判定を file 単位ではなく抽出済み module 単位へ変更する
-- `B-5`: module fixture と compile-error fixture を `defmod` ベースへ移行する
+- `F-1`: `SourceRules` / `SetExitCodePolicy` の型を導入する（実施済み）
+- `F-2`: `SourceKind + CompileUnitKind + EntryPoint` から `SourceRules` を導出する（実施済み）
+- `F-3`: parser context に `SourceRules` を保持し、トップレベル規則を policy 判定へ移す（実施済み）
+- `F-4`: typechecker へ `SourceRules` を伝播し、`set_exit_code` 判定を policy 化する（実施済み）
+- `F-5`: `Script(許可) / ReplChunk(禁止) / Project entry-only` の fixture テストを追加する（実施済み）
 
 ---
 
-### 4.4 タスク分解: Issue C
+### 4.3 タスク分解: Issue B（実施済み）
 
-- `C-1`: script 用 pseudo module identity を導入する
-- `C-2`: REPL 用 pseudo module identity を導入する
-- `C-3`: CLI の script 実行経路を Loader 非依存に差し替える
-- `C-4`: script `--entry` の骨格を導入する
+- `B-1`: module source から `defmod` を抽出する lower 層を追加する（実施済み）
+- `B-2`: `defmod` 配下は関数のみを持てることを parse / validate で強制する（実施済み）
+- `B-3`: module 所属関数と module 非所属定義を分離した中間表現を導入する（実施済み）
+- `B-4`: duplicate module path 判定を file 単位ではなく抽出済み module 単位へ変更する（実施済み）
+- `B-5`: module fixture と compile-error fixture を `defmod` ベースへ移行する（実施済み）
+
+---
+
+### 4.4 タスク分解: Issue C（実施済み）
+
+- `C-1`: script 用 pseudo module identity を導入する（実施済み）
+- `C-2`: REPL 用 pseudo module identity を導入する（実施済み）
+- `C-3`: CLI の script 実行経路を Loader 非依存に差し替える（実施済み）
+- `C-4`: script `--entry` の骨格を導入する（実施済み）
 
 ---
 
 ### 4.5 タスク分解: Issue D
 
-- `D-1`: `EntryPoint` 型を導入し、script / module / project entry を同一表現へ正規化する
-- `D-2`: entry 関数のシグネチャ検証を `main` 特別扱いから entrypoint 検証へ移す
+- `D-1`: `EntryPoint` 型を導入し、script / module / project entry を同一表現へ正規化する（実施済み）
+- `D-2`: entry 関数のシグネチャ検証を `main` 特別扱いから entrypoint 検証へ移す（実施済み）
 - `D-3`: dump / debug で entrypoint 正規化結果を追跡できるメタデータを追加する
 
 ---
@@ -935,7 +940,7 @@ annotation (`@@doc`, `@@test`, `@@entrypoint` など) は module と script で�
 ### 4.6 タスク分解: Issue E
 
 - `E-1`: `compile error` と `runtime error` の終了経路を run / repl で整理する
-- `E-2`: REPL の runtime error を継続ではなく終了に変更する
+- `E-2`: REPL の runtime error を継続ではなく終了に変更する（実施済み）
 - `E-3`: `Result::Err` の表示経路を run / repl で共通化し、runtime error と混ざらないようにする
 
 ---
@@ -975,19 +980,22 @@ annotation (`@@doc`, `@@test`, `@@entrypoint` など) は module と script で�
 - `Commit-08`: `F-3`（実施済み）
 - `Commit-09`: `F-4`（実施済み）
 - `Commit-10`: `F-5`（実施済み）
-- `Commit-11`: `C-3`（実施済み）
-- `Commit-12`: `C-4`（実施済み）
-- `Commit-13`: `D-1`（実施済み）
-- `Commit-14`: `D-2`（実施済み）
-- `Commit-15`: `B-1`
-- `Commit-16`: `B-2`
-- `Commit-17`: `B-3`
-- `Commit-18`: `B-4`
-- `Commit-19`: `B-5`
-- `Commit-20`: `D-3`
-- `Commit-21`: `E-1`
-- `Commit-22`: `E-3`
+- `Commit-11`: `C-1`（実施済み）
+- `Commit-12`: `C-2`（実施済み）
+- `Commit-13`: `C-3`（実施済み）
+- `Commit-14`: `C-4`（実施済み）
+- `Commit-15`: `D-1`（実施済み）
+- `Commit-16`: `D-2`（実施済み）
+- `Commit-17`: `E-2`（実施済み）
+- `Commit-18`: `B-1`（実施済み）
+- `Commit-19`: `B-2`（実施済み）
+- `Commit-20`: `B-3`（実施済み）
+- `Commit-21`: `B-4`（実施済み）
+- `Commit-22`: `B-5`（実施済み）
+- `Commit-23`: `D-3`
+- `Commit-24`: `E-1`
+- `Commit-25`: `E-3`
 
 補足:
-- `E-2`（REPL runtime error 時の終了経路整理）は既存コミットで実施済み。
+- `Commit-17` の `E-2` は REPL runtime error 時の終了経路整理に対応する。
 - 以降も原則として `1タスク = 1コミット` を維持する。

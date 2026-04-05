@@ -1537,11 +1537,8 @@ mod tests {
     use super::*;
 
     fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
-        spire::parse_with_context(
-            src,
-            spire::ParserContext::module(1, Some(module_path.to_string())),
-        )
-        .expect("module source should parse")
+        let _ = module_path;
+        spire::parse(src).expect("module source should parse")
     }
 
     fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {

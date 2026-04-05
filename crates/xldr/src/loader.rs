@@ -170,7 +170,6 @@ fn collect_sources(specs: &[SourceDescriptor]) -> Result<CollectedSources, LoadE
     let mut bindings = Vec::with_capacity(specs.len());
     let mut by_file: HashMap<String, (SourceId, String, SourceKind, Option<String>)> =
         HashMap::new();
-    let mut by_module: HashMap<String, String> = HashMap::new();
 
     for spec in specs {
         if let Some((source_id, existing_source, existing_kind, existing_module)) =
@@ -193,16 +192,6 @@ fn collect_sources(specs: &[SourceDescriptor]) -> Result<CollectedSources, LoadE
             });
         }
 
-        if let Some(module_path) = &spec.module_path {
-            if let Some(first_file_name) = by_module.get(module_path) {
-                return Err(LoadError::DuplicateModulePath {
-                    module_path: module_path.clone(),
-                    first_file_name: first_file_name.clone(),
-                    second_file_name: spec.file_name.clone(),
-                });
-            }
-        }
-
         let source_id = sources.register(spec.file_name.clone(), spec.source.clone());
         by_file.insert(
             spec.file_name.clone(),
@@ -213,10 +202,6 @@ fn collect_sources(specs: &[SourceDescriptor]) -> Result<CollectedSources, LoadE
                 spec.module_path.clone(),
             ),
         );
-
-        if let Some(module_path) = &spec.module_path {
-            by_module.insert(module_path.clone(), spec.file_name.clone());
-        }
 
         bindings.push(SourceBinding {
             source_id,
@@ -506,17 +491,15 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_module_path_returns_error() {
+    fn duplicate_module_path_is_not_rejected_during_source_registration() {
         let specs = vec![
             SourceDescriptor::module("a.srt", "defmod A {}", "Std::Math"),
             SourceDescriptor::module("b.srt", "defmod B {}", "Std::Math"),
         ];
 
-        let err = collect_sources(&specs).expect_err("duplicate module path must fail");
-        assert!(matches!(
-            err,
-            LoadError::DuplicateModulePath { module_path, .. } if module_path == "Std::Math"
-        ));
+        let collected =
+            collect_sources(&specs).expect("module-path validation is handled after defmod lower");
+        assert_eq!(collected.bindings.len(), 2);
     }
 
     #[test]

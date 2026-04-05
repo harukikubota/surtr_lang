@@ -1,5 +1,7 @@
 import Later::later_value;
 
-def use_later() -> Int {
-  later_value()
+defmod UseLater {
+  def use_later() -> Int {
+    later_value()
+  }
 }

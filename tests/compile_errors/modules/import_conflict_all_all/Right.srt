@@ -1,3 +1,5 @@
-def value() -> Int {
-  2
+defmod Right {
+  def value() -> Int {
+    2
+  }
 }
