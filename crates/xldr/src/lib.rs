@@ -19,9 +19,9 @@ mod loader;
 
 pub use loader::{
     collect_module_sources_with_module_file_stages, collect_module_sources_with_module_stages,
-    collect_module_sources_with_modules, compose_script_compile_sources, script_pseudo_module_path,
-    CompileSources, LoadError, ModuleInput, ModuleSources, SourceDescriptor, SourceKind,
-    StagedModule,
+    collect_module_sources_with_modules, collect_module_sources_with_std_module_stages,
+    compose_script_compile_sources, script_pseudo_module_path, CompileSources, LoadError,
+    ModuleInput, ModuleSources, SourceDescriptor, SourceKind, StagedModule,
 };
 
 #[derive(Debug, Clone, PartialEq)]

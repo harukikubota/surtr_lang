@@ -11,11 +11,16 @@ use crate::scope::Scope;
 
 const AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel"];
 
-fn initialize_scope() -> Scope {
+fn initialize_base_scope() -> Scope {
     let mut scope = Scope::new();
     let dummy = Span { start: 0, end: 0 };
     scope.define("Ok", dummy.clone());
     scope.define("Err", dummy);
+    scope
+}
+
+fn initialize_scope() -> Scope {
+    let mut scope = initialize_base_scope();
     for meta in BUILTIN_METAS {
         scope.define_with_id(meta.name, builtin_uid(meta.builtin_id));
     }
@@ -125,7 +130,7 @@ fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
 }
 
 fn build_global_scope(index: &DeclarationIndex, declaration_uids: &HashMap<String, u32>) -> Scope {
-    let mut scope = initialize_scope();
+    let mut scope = initialize_base_scope();
     for fq_name in index.keys() {
         if let Some(uid) = declaration_uids.get(fq_name) {
             scope.define_with_id(fq_name, *uid);
@@ -426,7 +431,7 @@ impl ImportState {
 ///
 /// The index key is fully-qualified name `ModulePath::Name`.
 /// Only declaration forms covered by Issue 6 are collected:
-/// `def`, `defstruct`, `defrecord`, `deferror`.
+/// `def`, `@@builtin def`, `defstruct`, `defrecord`, `deferror`.
 pub fn precollect_declaration_index(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<DeclarationIndex, ResolveError> {
@@ -437,6 +442,9 @@ pub fn precollect_declaration_index(
             for stmt in &module.ast {
                 let (span, name, kind) = match stmt {
                     Ast::Def(span, name, _, _, _) => (span, name.as_str(), DeclarationKind::Def),
+                    Ast::BuiltinDecl(span, name, _, _) => {
+                        (span, name.as_str(), DeclarationKind::Def)
+                    }
                     Ast::StructDef(span, name, _) => (span, name.as_str(), DeclarationKind::Struct),
                     Ast::RecordDef(span, name, _) => (span, name.as_str(), DeclarationKind::Record),
                     Ast::DeferrorDef(span, name, _, _) => {
@@ -1000,7 +1008,7 @@ impl Resolver {
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 self.scope.advance_next_id_to(decl_resolver.scope.next_id());
                 self.scope.define_with_id(&name, builtin_uid);
-                let qualified_name = name.clone();
+                let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
@@ -1632,7 +1640,20 @@ mod tests {
         let user_ast = spire::parse(user_src).expect("user script should parse");
         let mut full_stages = vec![vec![StagedModuleAst {
             module_path: "Bootstrap".to_string(),
-            ast: parse_module_ast(r#"deferror NoneError { "none" }"#, "Bootstrap"),
+            ast: parse_module_ast(
+                r#"@@builtin def print(a: String) -> Unit
+@@builtin def to_string(a: $A) -> String
+@@builtin def inspect(a: $A) -> String
+@@builtin def safe_div(a: $A, b: $A) -> Result<$A>
+@@builtin def safe_mod(a: Int, b: Int) -> Result<Int>
+@@builtin def eprint(err: Error) -> Unit
+@@builtin def set_exit_code(code: Int) -> Unit
+deferror NoneError { "none" }
+deferror ZeroDivisionError { "division by zero" }
+deferror EmptyList { "Empty List." }
+deferror IndexOutOfBounds(detail: String) { detail }"#,
+                "Bootstrap",
+            ),
         }]];
         full_stages.extend(module_stages.iter().cloned());
         let declaration_index =
@@ -1662,6 +1683,21 @@ deferror Oops(reason: String) { reason }"#,
         assert!(index.contains_key("Bootstrap::to_int"));
         assert!(index.contains_key("Bootstrap::Pair"));
         assert!(index.contains_key("Bootstrap::Oops"));
+    }
+
+    #[test]
+    fn test_precollect_builtin_decl_in_module() {
+        let module_stages = vec![vec![StagedModuleAst {
+            module_path: "Int".to_string(),
+            ast: parse_module_ast(
+                r#"@@builtin def shl(value: Int, bits: Int) -> Int"#,
+                "Int",
+            ),
+        }]];
+
+        let index =
+            precollect_declaration_index(&module_stages).expect("precollect should succeed");
+        assert!(index.contains_key("Int::shl"));
     }
 
     #[test]
@@ -1767,6 +1803,37 @@ deferror Oops(reason: String) { reason }"#,
                 ));
             }
             _ => panic!("Expected BuiltinDecl"),
+        }
+    }
+
+    #[test]
+    fn test_module_builtin_can_be_resolved_by_qualified_name() {
+        let module_stages = vec![vec![StagedModuleAst {
+            module_path: "Int".to_string(),
+            ast: parse_module_ast(
+                r#"@@builtin def shl(value: Int, bits: Int) -> Int"#,
+                "Int",
+            ),
+        }]];
+
+        let resolved = resolve_user_with_modules("value = Int::shl(2, 3)", &module_stages)
+            .expect("qualified builtin should resolve");
+        let bind = resolved
+            .iter()
+            .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+            .expect("expected bind in resolved output");
+        match bind {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::App(_, func, _) => match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "Int::shl");
+                        assert_eq!(id.qualified_name.as_deref(), Some("Int::shl"));
+                    }
+                    _ => panic!("Expected builtin var"),
+                },
+                _ => panic!("Expected app"),
+            },
+            _ => panic!("Expected bind"),
         }
     }
 

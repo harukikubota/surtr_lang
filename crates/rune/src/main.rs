@@ -303,6 +303,30 @@ fn collect_lib_root_sources() -> Result<Vec<(PathBuf, String)>, String> {
     Ok(sources)
 }
 
+fn collect_additional_std_module_inputs() -> Result<Vec<xldr::ModuleInput>, String> {
+    if !Path::new("lib").exists() {
+        return Ok(Vec::new());
+    }
+    let lib_sources = collect_lib_root_sources()?;
+    let mut module_inputs = Vec::new();
+    for (path, source) in lib_sources {
+        let file_path = display_path(&path);
+        let module_path = derive_primary_module_path(&source)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| module_path_from_file_name(&path));
+
+        if module_path != "Bootstrap" && module_path != "Kernel" {
+            module_inputs.push(xldr::ModuleInput {
+                file_name: file_path,
+                source,
+                module_path,
+            });
+        }
+    }
+
+    Ok(module_inputs)
+}
+
 fn module_path_from_file_name(path: &Path) -> String {
     path.file_stem()
         .and_then(|stem| stem.to_str())
@@ -637,7 +661,6 @@ fn test_command(options: TestOptions) -> Result<(), i32> {
     }
 
     let mut all_tests = Vec::new();
-    let mut module_inputs = Vec::new();
     for (path, source) in lib_sources {
         let file_path = display_path(&path);
         let module_path = derive_primary_module_path(&source)
@@ -650,14 +673,6 @@ fn test_command(options: TestOptions) -> Result<(), i32> {
             },
         )?;
         all_tests.extend(tests);
-
-        if module_path != "Bootstrap" && module_path != "Kernel" {
-            module_inputs.push(xldr::ModuleInput {
-                file_name: file_path,
-                source,
-                module_path,
-            });
-        }
     }
 
     if all_tests.is_empty() {
@@ -675,10 +690,14 @@ fn test_command(options: TestOptions) -> Result<(), i32> {
         return Ok(());
     }
 
+    let module_inputs = collect_additional_std_module_inputs().map_err(|message| {
+        eprintln!("{}", message);
+        1
+    })?;
     let module_sources = if module_inputs.is_empty() {
         xldr::collect_module_sources_with_module_stages(&[])
     } else {
-        xldr::collect_module_sources_with_module_stages(&[module_inputs])
+        xldr::collect_module_sources_with_std_module_stages(&[module_inputs])
     }
     .map_err(|e| {
         eprintln!("test: failed to collect module sources: {}", e);
@@ -834,7 +853,16 @@ fn collect_default_script_compile_sources(
     file_path: &str,
     source: &str,
 ) -> Result<xldr::CompileSources, i32> {
-    let module_sources = xldr::collect_module_sources_with_module_stages(&[]).map_err(|e| {
+    let module_inputs = collect_additional_std_module_inputs().map_err(|message| {
+        eprintln!("{}", message);
+        1
+    })?;
+    let module_sources = if module_inputs.is_empty() {
+        xldr::collect_module_sources_with_module_stages(&[])
+    } else {
+        xldr::collect_module_sources_with_std_module_stages(&[module_inputs])
+    }
+    .map_err(|e| {
         eprintln!("Error collecting module sources: {}", e);
         1
     })?;

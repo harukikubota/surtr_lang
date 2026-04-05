@@ -1,13 +1,122 @@
 #![allow(dead_code)]
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use forge::bytecode::Bytecode;
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("failed to resolve repository root")
+}
+
+fn derive_primary_module_path(source: &str) -> Option<String> {
+    let tokens = spire::lexer::tokenize(source).ok()?;
+    for (idx, spanned) in tokens.iter().enumerate() {
+        if !matches!(spanned.token, spire::token::Token::Defmod) {
+            continue;
+        }
+
+        let mut j = idx + 1;
+        while matches!(
+            tokens.get(j).map(|t| &t.token),
+            Some(spire::token::Token::Newline)
+        ) {
+            j += 1;
+        }
+
+        let mut segments = Vec::new();
+        match tokens.get(j).map(|sp| &sp.token) {
+            Some(spire::token::Token::Ident(name)) => {
+                segments.push(name.clone());
+                j += 1;
+            }
+            _ => return None,
+        }
+
+        while matches!(
+            tokens.get(j).map(|t| &t.token),
+            Some(spire::token::Token::Colon)
+        ) && matches!(
+            tokens.get(j + 1).map(|t| &t.token),
+            Some(spire::token::Token::Colon)
+        ) {
+            j += 2;
+            match tokens.get(j).map(|sp| &sp.token) {
+                Some(spire::token::Token::Ident(name)) => {
+                    segments.push(name.clone());
+                    j += 1;
+                }
+                _ => return None,
+            }
+        }
+
+        return Some(segments.join("::"));
+    }
+
+    None
+}
+
+fn collect_repo_std_modules() -> Result<Vec<xldr::ModuleInput>, String> {
+    let lib_dir = repo_root().join("lib");
+    if !lib_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let entries = fs::read_dir(&lib_dir)
+        .map_err(|e| format!("phase=load; message=failed to read `{}`: {}", lib_dir.display(), e))?;
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "srt")
+        {
+            files.push(path);
+        }
+    }
+    files.sort();
+
+    let mut modules = Vec::new();
+    for path in files {
+        let source = fs::read_to_string(&path).map_err(|e| {
+            format!("phase=load; message=failed to read `{}`: {}", path.display(), e)
+        })?;
+        let module_path = derive_primary_module_path(&source)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            });
+        if module_path != "Bootstrap" && module_path != "Kernel" {
+            modules.push(xldr::ModuleInput {
+                file_name: path.to_string_lossy().replace('\\', "/"),
+                source,
+                module_path,
+            });
+        }
+    }
+
+    Ok(modules)
+}
 
 pub fn collect_script_compile_sources(
     file_name: &str,
     source: &str,
 ) -> Result<xldr::CompileSources, String> {
-    let module_sources = xldr::collect_module_sources_with_module_stages(&[])
-        .map_err(|e| format!("phase=load; message={}", e))?;
+    let module_inputs = collect_repo_std_modules()?;
+    let module_sources = if module_inputs.is_empty() {
+        xldr::collect_module_sources_with_module_stages(&[])
+    } else {
+        xldr::collect_module_sources_with_std_module_stages(&[module_inputs])
+    }
+    .map_err(|e| format!("phase=load; message={}", e))?;
     Ok(xldr::compose_script_compile_sources(
         file_name,
         source,

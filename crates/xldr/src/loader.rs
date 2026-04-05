@@ -339,6 +339,79 @@ pub fn collect_module_sources_with_module_stages(
     })
 }
 
+pub fn collect_module_sources_with_std_module_stages(
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ModuleSources, LoadError> {
+    let mut stage_specs = vec![
+        vec![SourceDescriptor::std_module(
+            BUILTIN_PRELUDE_FILE,
+            BUILTIN_PRELUDE_SOURCE,
+            BUILTIN_PRELUDE_MODULE_PATH,
+        )],
+        vec![SourceDescriptor::std_module(
+            KERNEL_PRELUDE_FILE,
+            KERNEL_PRELUDE_SOURCE,
+            KERNEL_PRELUDE_MODULE_PATH,
+        )],
+    ];
+
+    for stage in module_input_stages {
+        let mut specs = Vec::with_capacity(stage.len());
+        for module in stage {
+            specs.push(SourceDescriptor::std_module(
+                module.file_name.clone(),
+                module.source.clone(),
+                module.module_path.clone(),
+            ));
+        }
+        stage_specs.push(specs);
+    }
+
+    let mut flattened_specs = Vec::new();
+    for stage in &stage_specs {
+        for spec in stage {
+            flattened_specs.push(spec.clone());
+        }
+    }
+
+    let collected = collect_sources(&flattened_specs)?;
+
+    let mut idx = 0;
+    let mut module_stages = Vec::with_capacity(stage_specs.len());
+    for stage in &stage_specs {
+        let mut stage_bindings = Vec::with_capacity(stage.len());
+        for _ in stage {
+            let binding = &collected.bindings[idx];
+            idx += 1;
+            stage_bindings.push(StagedModule {
+                source_id: binding.source_id,
+                module_path: binding.module_path.clone().unwrap_or_default(),
+                source_kind: binding.kind,
+            });
+        }
+        module_stages.push(stage_bindings);
+    }
+
+    let builtin = module_stages
+        .first()
+        .and_then(|stage| stage.first())
+        .ok_or_else(|| LoadError::ConflictingSource {
+            file_name: BUILTIN_PRELUDE_FILE.into(),
+        })?;
+    let module_source_ids = module_stages
+        .iter()
+        .flat_map(|stage| stage.iter().map(|entry| entry.source_id))
+        .collect();
+
+    Ok(ModuleSources {
+        sources: collected.sources,
+        builtin_source_id: builtin.source_id,
+        builtin_module_path: Some(builtin.module_path.clone()),
+        module_source_ids,
+        module_stages,
+    })
+}
+
 pub fn compose_script_compile_sources(
     user_file_name: &str,
     user_source: &str,

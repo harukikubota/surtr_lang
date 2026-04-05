@@ -34,6 +34,8 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_set_exit_code,
     },
+    BuiltinImpl { func: builtin_shl },
+    BuiltinImpl { func: builtin_shr },
 ];
 
 const _: () = {
@@ -179,6 +181,30 @@ fn builtin_set_exit_code(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     Ok(Value::Unit)
 }
 
+fn builtin_shl(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("shl expects (Int, Int)"));
+    };
+    let amount = u32::try_from(*bits)
+        .map_err(|_| RuntimeError::new(format!("shl shift amount must be non-negative: {}", bits)))?;
+    let shifted = value
+        .checked_shl(amount)
+        .ok_or_else(|| RuntimeError::new(format!("shl shift amount out of range: {}", bits)))?;
+    Ok(Value::Int(shifted))
+}
+
+fn builtin_shr(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("shr expects (Int, Int)"));
+    };
+    let amount = u32::try_from(*bits)
+        .map_err(|_| RuntimeError::new(format!("shr shift amount must be non-negative: {}", bits)))?;
+    let shifted = value
+        .checked_shr(amount)
+        .ok_or_else(|| RuntimeError::new(format!("shr shift amount out of range: {}", bits)))?;
+    Ok(Value::Int(shifted))
+}
+
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     let registry = vm.type_registry();
     value.to_display_string(&registry)
@@ -252,9 +278,13 @@ mod tests {
 
     #[test]
     fn builtin_srt_and_builtin_meta_are_aligned() {
-        let source = include_str!("../../../lib/bootstrap.srt");
-        let lines = source
-            .lines()
+        let sources = [
+            include_str!("../../../lib/bootstrap.srt"),
+            include_str!("../../../lib/int.srt"),
+        ];
+        let lines = sources
+            .iter()
+            .flat_map(|source| source.lines())
             .map(str::trim)
             .filter(|line| line.starts_with("@@builtin "))
             .collect::<Vec<_>>();

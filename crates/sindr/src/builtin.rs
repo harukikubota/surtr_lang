@@ -56,6 +56,18 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 1,
         sig_str: "(Int) -> Unit",
     },
+    BuiltinMeta {
+        name: "shl",
+        builtin_id: 7,
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "shr",
+        builtin_id: 8,
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
 ];
 
 pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {

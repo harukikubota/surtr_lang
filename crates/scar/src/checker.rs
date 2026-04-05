@@ -126,6 +126,11 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
             params: vec![Ty::Int],
             ret: Box::new(Ty::Unit),
         },
+        "shl" | "shr" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Int, Ty::Int],
+            ret: Box::new(Ty::Int),
+        },
         _ => Ty::BuiltinFunc {
             name: meta.name.into(),
             params: vec![Ty::Unit; meta.arity as usize],
@@ -2689,17 +2694,6 @@ impl Checker {
             span: span.clone(),
             hint: None,
         })?;
-        let expected_uid = builtin_uid(meta.builtin_id);
-        if id.unique_id != expected_uid {
-            return Err(TypeError {
-                message: format!(
-                    "Builtin {} has inconsistent unique_id: expected {}, got {}",
-                    id.name, expected_uid, id.unique_id
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
         if params.len() != usize::from(meta.arity) {
             return Err(TypeError {
                 message: format!(
