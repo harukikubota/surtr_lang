@@ -118,3 +118,41 @@ fn test_command_reports_failure_details_for_comparison() {
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn test_command_allows_annotations_and_blank_lines_between_test_and_def() {
+    let temp = unique_temp_dir("surtr_test_command_annotation_chain");
+    let module_path = temp.join("lib/math.srt");
+    write_source(
+        &module_path,
+        r#"defmod Math {
+  @@test add(1, 2) == 3
+
+  @@builtin def to_string(a: $A) -> String
+
+  @@test add(2, 3) == 5
+
+  def add(x: Int, y: Int) -> Int { x + y }
+}
+"#,
+    );
+
+    let bin = surtr_bin();
+    let output = Command::new(&bin)
+        .args(["test"])
+        .current_dir(&temp)
+        .output()
+        .expect("failed to run surtr test command");
+    assert!(
+        output.status.success(),
+        "test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PASS] Math::add"));
+    assert!(stdout.contains("test result: passed=2, failed=0, total=2"));
+
+    let _ = fs::remove_dir_all(temp);
+}

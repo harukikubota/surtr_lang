@@ -477,7 +477,7 @@ fn find_def_name_for_test_chain(
         }
 
         match tokens.get(index).map(|t| &t.token) {
-            Some(Token::Annotator(name)) if name == "test" => {
+            Some(Token::Annotator(_)) => {
                 index += 1;
                 while !matches!(
                     tokens.get(index).map(|t| &t.token),
@@ -497,9 +497,7 @@ fn find_def_name_for_test_chain(
                 return Err("@@test must target `def <name>(...)`".into());
             }
             _ => {
-                return Err(
-                    "@@test must be placed immediately before a function definition (`def`)".into(),
-                );
+                return Err("@@test must target a following function definition (`def`)".into());
             }
         }
     }
