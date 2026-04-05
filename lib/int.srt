@@ -1,4 +1,13 @@
 defmod Int {
-  @@builtin def shl(value: Int, bits: Int) -> Int
-  @@builtin def shr(value: Int, bits: Int) -> Int
+  @@builtin 
+  @@test shl(1, 1) == 2
+  @@test shl(1, 4) == 16
+  @@test shl(8, 2) == 32
+  def shl(value: Int, bits: Int) -> Int
+
+  @@builtin 
+  @@test shr(1, 1) == 0
+  @@test shr(16, 2) == 4
+  @@test shr(1024, 10) == 1
+  def shr(value: Int, bits: Int) -> Int
 }
