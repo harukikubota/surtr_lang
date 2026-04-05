@@ -9,7 +9,7 @@ use crate::error::ResolveError;
 use crate::resolved::*;
 use crate::scope::Scope;
 
-const AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap"];
+const AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel"];
 
 fn initialize_scope() -> Scope {
     let mut scope = Scope::new();
@@ -72,6 +72,24 @@ pub fn resolve_staged_program(
     Ok(resolved)
 }
 
+pub fn build_scope_for_module(
+    module_stages: &[Vec<StagedModuleAst>],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
+) -> Result<Scope, ResolveError> {
+    let declaration_index = precollect_declaration_index(module_stages)?;
+    let declaration_uids = assign_declaration_uids(&declaration_index);
+    let global_scope = build_global_scope(&declaration_index, &declaration_uids);
+    build_module_scope(
+        &global_scope,
+        &declaration_index,
+        &declaration_uids,
+        &[],
+        current_module_path,
+        current_stage_index,
+    )
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
     pub module_path: String,
@@ -127,6 +145,21 @@ fn build_module_scope(
     let mut scope = global_scope.clone();
     let mut import_state = ImportState::default();
 
+    for stmt in stmts {
+        if let Ast::Import(span, path, spec) = stmt {
+            apply_import_to_scope(
+                &mut scope,
+                declaration_index,
+                declaration_uids,
+                current_stage_index,
+                path,
+                spec,
+                &mut import_state,
+                span.clone(),
+            )?;
+        }
+    }
+
     for auto_import in AUTO_IMPORT_MODULES {
         if current_module_path == Some(*auto_import) {
             continue;
@@ -141,21 +174,6 @@ fn build_module_scope(
             &mut import_state,
             Span { start: 0, end: 0 },
         )?;
-    }
-
-    for stmt in stmts {
-        if let Ast::Import(span, path, spec) = stmt {
-            apply_import_to_scope(
-                &mut scope,
-                declaration_index,
-                declaration_uids,
-                current_stage_index,
-                path,
-                spec,
-                &mut import_state,
-                span.clone(),
-            )?;
-        }
     }
 
     if let Some(module_path) = current_module_path {
@@ -182,6 +200,18 @@ fn apply_import_to_scope(
     span: Span,
 ) -> Result<(), ResolveError> {
     let module_name = path.segments.join("::");
+    if AUTO_IMPORT_MODULES
+        .iter()
+        .any(|auto| auto == &module_name.as_str())
+    {
+        return Err(ResolveError {
+            message: format!(
+                "Duplicate import: `{}` is auto-imported and cannot be explicitly imported",
+                module_name
+            ),
+            span,
+        });
+    }
     match spec {
         spire::ast::ImportSpec::All => import_module_into_scope(
             scope,
@@ -258,6 +288,8 @@ fn import_module_into_scope(
 
     if imported_any {
         Ok(())
+    } else if auto_import && AUTO_IMPORT_MODULES.contains(&module_name) {
+        Ok(())
     } else if blocked_by_stage {
         Err(ResolveError {
             message: format!(
@@ -333,18 +365,14 @@ fn bind_import_name(
         if existing_uid == uid {
             return Ok(());
         }
+        if auto_import {
+            return Ok(());
+        }
         return Err(ResolveError {
-            message: if auto_import {
-                format!(
-                    "Auto-import conflict for `{}` from module `{}`",
-                    short_name, module_name
-                )
-            } else {
-                format!(
-                    "Import conflict for `{}` from module `{}`",
-                    short_name, module_name
-                )
-            },
+            message: format!(
+                "Import conflict for `{}` from module `{}`",
+                short_name, module_name
+            ),
             span,
         });
     }
@@ -493,6 +521,10 @@ impl SigilSession {
     pub fn rollback(&mut self, checkpoint: SigilCheckpoint) {
         self.scope = checkpoint.scope;
     }
+
+    pub fn replace_scope(&mut self, scope: Scope) {
+        self.scope = scope;
+    }
 }
 
 impl Default for SigilSession {
@@ -615,13 +647,9 @@ impl Resolver {
                         });
                     }
                     let uid = self
-                        .current_module_path
-                        .as_deref()
-                        .and_then(|module_path| {
-                            self.declaration_uids
-                                .get(&format!("{}::{}", module_path, name))
-                                .copied()
-                        })
+                        .declaration_uids
+                        .get(&self.qualify_current_declaration_name(name))
+                        .copied()
                         .unwrap_or_else(|| self.scope.reserve_id());
                     self.predeclared_ids
                         .entry(name.clone())
@@ -666,13 +694,9 @@ impl Resolver {
                         });
                     }
                     let uid = self
-                        .current_module_path
-                        .as_deref()
-                        .and_then(|module_path| {
-                            self.declaration_uids
-                                .get(&format!("{}::{}", module_path, name))
-                                .copied()
-                        })
+                        .declaration_uids
+                        .get(&self.qualify_current_declaration_name(name))
+                        .copied()
                         .unwrap_or_else(|| self.scope.reserve_id());
                     self.predeclared_ids
                         .entry(name.clone())
@@ -2230,15 +2254,26 @@ print("ok")"#,
     }
 
     #[test]
+    fn test_explicit_kernel_auto_import_is_rejected() {
+        let err = parse_and_resolve(
+            r#"import Kernel;
+print(to_string(add(1, 2)))"#,
+        )
+        .expect_err("explicit kernel auto-import must fail");
+        assert!(err.message.contains("Duplicate import"));
+        assert!(err.message.contains("Kernel"));
+    }
+
+    #[test]
     fn test_duplicate_module_import_is_rejected() {
         let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Kernel".to_string(),
-            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+            module_path: "Helper".to_string(),
+            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
         }]];
 
         let err = resolve_user_with_modules(
-            r#"import Kernel;
-import Kernel;
+            r#"import Helper;
+import Helper;
 print(to_string(add(1, 2)))"#,
             &module_stages,
         )
@@ -2248,19 +2283,23 @@ print(to_string(add(1, 2)))"#,
             "actual error: {}",
             err.message
         );
-        assert!(err.message.contains("Kernel"), "actual error: {}", err.message);
+        assert!(
+            err.message.contains("Helper"),
+            "actual error: {}",
+            err.message
+        );
     }
 
     #[test]
     fn test_duplicate_module_then_member_import_is_rejected() {
         let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Kernel".to_string(),
-            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+            module_path: "Helper".to_string(),
+            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
         }]];
 
         let err = resolve_user_with_modules(
-            r#"import Kernel;
-import Kernel::add;
+            r#"import Helper;
+import Helper::add;
 print(to_string(add(1, 2)))"#,
             &module_stages,
         )
@@ -2271,7 +2310,7 @@ print(to_string(add(1, 2)))"#,
             err.message
         );
         assert!(
-            err.message.contains("Kernel::add"),
+            err.message.contains("Helper::add"),
             "actual error: {}",
             err.message
         );
@@ -2280,13 +2319,13 @@ print(to_string(add(1, 2)))"#,
     #[test]
     fn test_duplicate_member_then_module_import_is_rejected() {
         let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Kernel".to_string(),
-            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+            module_path: "Helper".to_string(),
+            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
         }]];
 
         let err = resolve_user_with_modules(
-            r#"import Kernel::add;
-import Kernel;
+            r#"import Helper::add;
+import Helper;
 print(to_string(add(1, 2)))"#,
             &module_stages,
         )
@@ -2296,19 +2335,23 @@ print(to_string(add(1, 2)))"#,
             "actual error: {}",
             err.message
         );
-        assert!(err.message.contains("Kernel"), "actual error: {}", err.message);
+        assert!(
+            err.message.contains("Helper"),
+            "actual error: {}",
+            err.message
+        );
     }
 
     #[test]
     fn test_duplicate_member_import_is_rejected() {
         let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Kernel".to_string(),
-            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+            module_path: "Helper".to_string(),
+            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
         }]];
 
         let err = resolve_user_with_modules(
-            r#"import Kernel::add;
-import Kernel::add;
+            r#"import Helper::add;
+import Helper::add;
 print(to_string(add(1, 2)))"#,
             &module_stages,
         )
@@ -2319,10 +2362,81 @@ print(to_string(add(1, 2)))"#,
             err.message
         );
         assert!(
-            err.message.contains("Kernel::add"),
+            err.message.contains("Helper::add"),
             "actual error: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn test_explicit_import_shadows_auto_imported_kernel_function() {
+        let module_stages = vec![
+            vec![StagedModuleAst {
+                module_path: "Kernel".to_string(),
+                ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+            }],
+            vec![StagedModuleAst {
+                module_path: "Helper".to_string(),
+                ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x - y }"#, "Helper"),
+            }],
+        ];
+
+        let resolved = resolve_user_with_modules(
+            r#"import Helper::add;
+print(to_string(add(7, 3)))"#,
+            &module_stages,
+        )
+        .expect("explicit import should shadow auto-imported function");
+
+        let helper_add_uid = resolved
+            .iter()
+            .find_map(|node| match node {
+                Resolved::Def(_, id, _, _, _)
+                    if id.qualified_name.as_deref() == Some("Helper::add") =>
+                {
+                    Some(id.unique_id)
+                }
+                _ => None,
+            })
+            .expect("helper add should be resolved");
+
+        let imported_add_uid = resolved
+            .iter()
+            .find_map(|node| match node {
+                Resolved::App(_, print_func, print_args) => {
+                    if !matches!(print_func.as_ref(), Resolved::Var(_, id) if id.name == "print") {
+                        return None;
+                    }
+                    let call = match print_args.first()? {
+                        ResolvedRecordLitArg::Positional(inner) => inner,
+                        _ => return None,
+                    };
+                    let call = match call {
+                        Resolved::App(_, func, args) => {
+                            if !matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "to_string")
+                            {
+                                return None;
+                            }
+                            match args.first()? {
+                                ResolvedRecordLitArg::Positional(inner) => inner,
+                                _ => return None,
+                            }
+                        }
+                        _ => return None,
+                    };
+                    match call {
+                        Resolved::App(_, func, _) => match func.as_ref() {
+                            Resolved::Var(_, id) if id.name == "add" => Some(id.unique_id),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .expect("user call should resolve imported add");
+
+        assert_eq!(imported_add_uid, helper_add_uid);
     }
 
     #[test]

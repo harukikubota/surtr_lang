@@ -20,9 +20,9 @@ StdModV1 の大枠実装が一通り入ったため、残っている「破壊�
 
 1. 既存 API 利用箇所に対する破壊的変更の整理
 2. テスト拡充
-3. ドキュメント更新
-4. `bootstrap.srt` の `Bootstrap` / `Kernel` 分離と `@@builtin` の利用境界整理
-5. error 定義の配置ルール整理
+3. `bootstrap.srt` の `Bootstrap` / `Kernel` 分離と `@@builtin` の利用境界整理
+4. error 定義の配置ルール整理
+5. ドキュメント更新
 
 今は扱わないもの:
 

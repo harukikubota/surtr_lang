@@ -1,1 +1,1 @@
-print(to_string(Kernel::add(2, 3)))
+print(to_string(Helper::add(2, 3)))

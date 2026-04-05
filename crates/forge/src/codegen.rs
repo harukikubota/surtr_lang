@@ -1602,17 +1602,37 @@ impl Codegen {
         // Invariant: functions[idx].fun_idx == idx.
         // VM relies on O(1) array lookup by fun_idx and fails fast if this invariant is broken.
         self.state.functions.sort_by_key(|entry| entry.fun_idx);
+        let mut remap = HashMap::new();
         for (idx, entry) in self.state.functions.iter().enumerate() {
-            if entry.fun_idx as usize != idx {
+            let old_idx = entry.fun_idx;
+            let new_idx = idx as u32;
+            if remap.insert(old_idx, new_idx).is_some() {
                 return Err(CodegenError {
-                    message: format!(
-                        "Function table invariant violated: functions[{}].fun_idx = {}",
-                        idx, entry.fun_idx
-                    ),
+                    message: format!("Duplicate function index detected: {}", old_idx),
                     span: Span { start: 0, end: 0 },
                 });
             }
         }
+
+        for entry in &mut self.state.functions {
+            if let Some(new_idx) = remap.get(&entry.fun_idx) {
+                entry.fun_idx = *new_idx;
+            }
+        }
+
+        for ir in &mut self.ir {
+            if let IrOp::Op(op) = ir {
+                match op {
+                    Opcode::LoadFunctionRef(fun_idx) | Opcode::Call(fun_idx, _, _, _) => {
+                        if let Some(new_idx) = remap.get(fun_idx) {
+                            *fun_idx = *new_idx;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         Ok(())
     }
 

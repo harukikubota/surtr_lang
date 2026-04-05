@@ -2855,7 +2855,6 @@ impl Checker {
                 });
             }
         };
-
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
@@ -3313,7 +3312,6 @@ impl Checker {
                 });
             }
         };
-
         // The error builder behaves like a function returning Error.
         self.env.bind_var(
             id.unique_id,

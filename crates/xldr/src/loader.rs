@@ -6,6 +6,9 @@ use diagnostics::{SourceId, SourceRegistry};
 const BUILTIN_PRELUDE_FILE: &str = "bootstrap.srt";
 const BUILTIN_PRELUDE_MODULE_PATH: &str = "Bootstrap";
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
+const KERNEL_PRELUDE_FILE: &str = "kernel.srt";
+const KERNEL_PRELUDE_MODULE_PATH: &str = "Kernel";
+const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
 const REPL_MODULE_NAME: &str = "REPL";
 const SCRIPT_PSEUDO_MODULE_PREFIX: &str = "__Script";
 const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
@@ -259,11 +262,18 @@ pub fn collect_module_sources_with_modules(
 pub fn collect_module_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
-    let mut stage_specs = vec![vec![SourceDescriptor::std_module(
-        BUILTIN_PRELUDE_FILE,
-        BUILTIN_PRELUDE_SOURCE,
-        BUILTIN_PRELUDE_MODULE_PATH,
-    )]];
+    let mut stage_specs = vec![
+        vec![SourceDescriptor::std_module(
+            BUILTIN_PRELUDE_FILE,
+            BUILTIN_PRELUDE_SOURCE,
+            BUILTIN_PRELUDE_MODULE_PATH,
+        )],
+        vec![SourceDescriptor::std_module(
+            KERNEL_PRELUDE_FILE,
+            KERNEL_PRELUDE_SOURCE,
+            KERNEL_PRELUDE_MODULE_PATH,
+        )],
+    ];
 
     for stage in module_input_stages {
         let mut specs = Vec::with_capacity(stage.len());
@@ -390,29 +400,20 @@ fn module_path_from_file_name(file_name: &str) -> Option<String> {
 pub(crate) struct ReplSources {
     pub(crate) sources: SourceRegistry,
     pub(crate) builtin_source_id: SourceId,
-    pub(crate) builtin_module_path: Option<String>,
+    pub(crate) module_stages: Vec<Vec<StagedModule>>,
     pub(crate) repl_source_id: SourceId,
     pub(crate) repl_module_path: String,
 }
 
 pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
-    let specs = vec![
-        SourceDescriptor::std_module(
-            BUILTIN_PRELUDE_FILE,
-            BUILTIN_PRELUDE_SOURCE,
-            BUILTIN_PRELUDE_MODULE_PATH,
-        ),
-        SourceDescriptor::repl_chunk(REPL_MODULE_NAME, ""),
-    ];
-    let collected = collect_sources(&specs)?;
-    let builtin = &collected.bindings[0];
-    let repl = &collected.bindings[1];
+    let mut module_sources = collect_module_sources_with_module_stages(&[])?;
+    let repl_source_id = module_sources.sources.register(REPL_MODULE_NAME, "");
 
     Ok(ReplSources {
-        sources: collected.sources,
-        builtin_source_id: builtin.source_id,
-        builtin_module_path: builtin.module_path.clone(),
-        repl_source_id: repl.source_id,
+        sources: module_sources.sources,
+        builtin_source_id: module_sources.builtin_source_id,
+        module_stages: module_sources.module_stages,
+        repl_source_id,
         repl_module_path: REPL_PSEUDO_MODULE_PATH.to_string(),
     })
 }
@@ -469,9 +470,11 @@ mod tests {
             loaded.builtin_module_path.as_deref(),
             Some(BUILTIN_PRELUDE_MODULE_PATH)
         );
-        assert_eq!(loaded.module_source_ids.len(), 1);
+        assert_eq!(loaded.module_source_ids.len(), 2);
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
-        assert_eq!(loaded.module_stages.len(), 1);
+        assert_eq!(loaded.module_stages.len(), 2);
+        assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
+        assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
     }
 
     #[test]
@@ -529,10 +532,11 @@ mod tests {
         .expect("staged module collection should succeed");
         let loaded = compose_script_compile_sources("main.srt", "print(\"hi\")", module_sources);
 
-        assert_eq!(loaded.module_stages.len(), 3);
+        assert_eq!(loaded.module_stages.len(), 4);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap
-        assert_eq!(loaded.module_stages[1].len(), 1);
-        assert_eq!(loaded.module_stages[2].len(), 2);
+        assert_eq!(loaded.module_stages[1].len(), 1); // kernel
+        assert_eq!(loaded.module_stages[2].len(), 1);
+        assert_eq!(loaded.module_stages[3].len(), 2);
         assert_eq!(
             loaded.module_stages[0][0].source_id,
             loaded.builtin_source_id
@@ -541,12 +545,17 @@ mod tests {
             loaded.module_stages[0][0].source_kind,
             SourceKind::StdModule
         );
-        assert_eq!(loaded.module_stages[1][0].source_kind, SourceKind::Module);
+        assert_eq!(
+            loaded.module_stages[1][0].source_kind,
+            SourceKind::StdModule
+        );
         assert_eq!(loaded.module_stages[2][0].source_kind, SourceKind::Module);
-        assert_eq!(loaded.module_stages[2][1].source_kind, SourceKind::Module);
-        assert_eq!(loaded.module_stages[1][0].module_path, "Std::Math");
-        assert_eq!(loaded.module_stages[2][0].module_path, "Std::String");
-        assert_eq!(loaded.module_stages[2][1].module_path, "Std::List");
+        assert_eq!(loaded.module_stages[3][0].source_kind, SourceKind::Module);
+        assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
+        assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
+        assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
+        assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
+        assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");
     }
 
     #[test]

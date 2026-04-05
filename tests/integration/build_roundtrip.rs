@@ -106,7 +106,10 @@ print(to_string(10 + 20))"#,
 
     let first = fs::read(&first_eldr_path).expect("failed to read first build output");
     let second = fs::read(&second_eldr_path).expect("failed to read second build output");
-    assert_eq!(first, second, "same input should produce identical .eldr bytes");
+    assert_eq!(
+        first, second,
+        "same input should produce identical .eldr bytes"
+    );
 
     let _ = fs::remove_dir_all(temp);
 }

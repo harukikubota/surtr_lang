@@ -150,6 +150,18 @@ impl SourceRules {
         }
     }
 
+    pub fn std_module_member() -> Self {
+        Self {
+            allow_top_level_expr: false,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::BuiltinDecl,
+            ]),
+            set_exit_code_policy: SetExitCodePolicy::Forbidden,
+            normalized_entrypoint: None,
+        }
+    }
+
     pub fn repl_chunk() -> Self {
         Self {
             allow_top_level_expr: true,
@@ -522,7 +534,15 @@ impl Parser {
         self.context.level = DeclLevel::Top;
         self.context.unit_kind = CompileUnitKind::Module;
         self.context.module_path = module_path;
-        self.context.source_rules = SourceRules::module_member();
+        self.context.source_rules = if prev_context
+            .source_rules
+            .allowed_top_level_decl_kinds
+            .allows(TopLevelDeclKind::BuiltinDecl)
+        {
+            SourceRules::std_module_member()
+        } else {
+            SourceRules::module_member()
+        };
 
         let result = (|| {
             let mut stmts = Vec::new();
@@ -3539,11 +3559,14 @@ import Kernel::{add, sub};"#,
     #[test]
     fn test_std_module_compile_unit_accepts_builtin_decl() {
         let ast = parse_with_context(
-            "@@builtin def print(a: String) -> Unit",
+            "defmod Bootstrap { @@builtin def print(a: String) -> Unit }",
             ParserContext::module(1, None).with_rules(SourceRules::std_module()),
         )
         .expect("std module compile unit should accept builtin declarations");
-        assert!(matches!(ast.as_slice(), [Ast::BuiltinDecl(_, _, _, _)]));
+        assert!(
+            matches!(ast.as_slice(), [Ast::Defmod(_, name, body)] if name == "Bootstrap"
+            && matches!(body.as_slice(), [Ast::BuiltinDecl(_, _, _, _)]))
+        );
     }
 
     #[test]

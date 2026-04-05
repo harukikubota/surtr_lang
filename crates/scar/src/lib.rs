@@ -13,15 +13,66 @@ mod tests {
     use super::{typecheck, typecheck_with_context, TypecheckContext};
     use crate::typed::TypedInner;
     use crate::typed::TypedNode;
+    use spire::ast::Ast;
     use spire::{EntryPoint, SetExitCodePolicy, SourceRules};
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
+    const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+
+    fn parse_std_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
+        let ast = spire::parse_with_context(
+            source,
+            spire::ParserContext::module(0, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("std module should parse");
+
+        let shared_imports = ast
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Import(_, _, _) => Some(stmt.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut lowered = Vec::new();
+        let mut shared_defs = Vec::new();
+
+        for stmt in ast {
+            match stmt {
+                Ast::Defmod(_, module_path, body) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.extend(body);
+                    lowered.push(sigil::StagedModuleAst {
+                        module_path,
+                        ast: module_ast,
+                    });
+                }
+                Ast::Import(_, _, _) => {}
+                other => shared_defs.push(other),
+            }
+        }
+
+        if !shared_defs.is_empty() {
+            let mut global_ast = shared_imports;
+            global_ast.extend(shared_defs);
+            lowered.push(sigil::StagedModuleAst {
+                module_path: String::new(),
+                ast: global_ast,
+            });
+        }
+
+        lowered
+    }
 
     fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
-        let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE).expect("builtin prelude should parse");
-        let mut user_ast = spire::parse(source).expect("source should parse");
-        ast.append(&mut user_ast);
-        sigil::resolve(ast).expect("source should resolve")
+        let module_stages = vec![
+            parse_std_module_stage(BUILTIN_PRELUDE_SOURCE),
+            parse_std_module_stage(KERNEL_PRELUDE_SOURCE),
+        ];
+        let user_ast = spire::parse(source).expect("source should parse");
+        let declaration_index = sigil::precollect_declaration_index(&module_stages)
+            .expect("std modules should precollect");
+        sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
+            .expect("source should resolve")
     }
 
     fn typecheck_with_builtin_prelude(source: &str) -> Vec<TypedNode> {

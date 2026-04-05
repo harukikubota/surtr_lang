@@ -1,4 +1,4 @@
-import Kernel::add;
-import Kernel;
+import Helper::add;
+import Helper;
 
 print(to_string(add(1, 2)))

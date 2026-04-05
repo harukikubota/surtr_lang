@@ -363,8 +363,8 @@ fn dump_includes_qualified_function_names_for_module_defined_functions() {
     assert!(
         functions
             .iter()
-            .any(|entry| entry["qualified_name"] == "Kernel::add"),
-        "expected dump to include qualified_name=Kernel::add, got:\n{}",
+            .any(|entry| entry["qualified_name"] == "Helper::add"),
+        "expected dump to include qualified_name=Helper::add, got:\n{}",
         String::from_utf8_lossy(&dump.stdout)
     );
 

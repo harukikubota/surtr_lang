@@ -153,15 +153,15 @@ pub fn lower_module_source_ast(
     lowered
 }
 
-pub fn parse_module_stages_from_compile_sources(
-    compile_sources: &CompileSources,
+fn parse_module_stages_from_sources(
+    sources: &SourceRegistry,
+    module_stages: &[Vec<loader::StagedModule>],
     compile_unit_kind: spire::CompileUnitKind,
 ) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
-    let sources = &compile_sources.sources;
-    let mut staged_module_asts = Vec::with_capacity(compile_sources.module_stages.len());
+    let mut staged_module_asts = Vec::with_capacity(module_stages.len());
     let mut seen_module_paths: HashMap<String, String> = HashMap::new();
 
-    for stage in &compile_sources.module_stages {
+    for stage in module_stages {
         let mut stage_ast = Vec::new();
         for module in stage {
             let module_source = sources.source(module.source_id).unwrap_or("");
@@ -179,13 +179,7 @@ pub fn parse_module_stages_from_compile_sources(
                 },
             })?;
 
-            let fallback_module_path = match module.source_kind {
-                SourceKind::StdModule => Some(module.module_path.as_str()),
-                SourceKind::Module => None,
-                SourceKind::Script | SourceKind::ReplChunk => None,
-            };
-
-            for lowered in lower_module_source_ast(parsed, fallback_module_path) {
+            for lowered in lower_module_source_ast(parsed, None) {
                 if !lowered.module_path.is_empty() {
                     let second_file_name = sources
                         .file_name(module.source_id)
@@ -217,6 +211,17 @@ pub fn parse_module_stages_from_compile_sources(
     }
 
     Ok(staged_module_asts)
+}
+
+pub fn parse_module_stages_from_compile_sources(
+    compile_sources: &CompileSources,
+    compile_unit_kind: spire::CompileUnitKind,
+) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
+    parse_module_stages_from_sources(
+        &compile_sources.sources,
+        &compile_sources.module_stages,
+        compile_unit_kind,
+    )
 }
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -327,8 +332,9 @@ enum ReplOutcome {
 struct ReplEngine {
     sources: SourceRegistry,
     builtin_source_id: SourceId,
-    builtin_module_path: Option<String>,
+    module_stages: Vec<Vec<StagedModule>>,
     repl_source_id: SourceId,
+    repl_module_path: String,
     sigil_session: sigil::SigilSession,
     scar_session: scar::ScarSession,
     forge_session: forge::ForgeSession,
@@ -347,8 +353,9 @@ impl ReplEngine {
         let mut engine = Self {
             sources: repl_sources.sources,
             builtin_source_id: repl_sources.builtin_source_id,
-            builtin_module_path: repl_sources.builtin_module_path,
+            module_stages: repl_sources.module_stages,
             repl_source_id: repl_sources.repl_source_id,
+            repl_module_path: repl_sources.repl_module_path.clone(),
             sigil_session: sigil::SigilSession::with_module_path(Some(
                 repl_sources.repl_module_path,
             )),
@@ -364,44 +371,49 @@ impl ReplEngine {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
         };
-        engine.bootstrap_builtins();
+        engine.bootstrap_std_modules();
         Ok(engine)
     }
 
-    fn bootstrap_builtins(&mut self) {
-        let builtin_source = self
-            .sources
-            .source(self.builtin_source_id)
-            .unwrap_or("")
-            .to_string();
-        let ast = match spire::parse_with_context(
-            &builtin_source,
-            spire::ParserContext::module(
-                self.builtin_source_id.0,
-                self.builtin_module_path.clone(),
-            )
-            .with_rules(derive_source_rules(
-                spire::CompileUnitKind::Repl,
-                SourceKind::StdModule,
-                None,
-            )),
+    fn bootstrap_std_modules(&mut self) {
+        let module_stages = match parse_module_stages_from_sources(
+            &self.sources,
+            &self.module_stages,
+            spire::CompileUnitKind::Repl,
         ) {
-            Ok(ast) => ast,
+            Ok(stages) => stages,
             Err(e) => {
                 diagnostics::report_error_by_id(
                     &self.sources,
-                    self.builtin_source_id,
-                    diagnostics::simple_error("ParseError", e.message(), e.span().clone(), None),
+                    e.source_id,
+                    diagnostics::simple_error("ParseError", e.message(), e.span(), None),
                 );
                 return;
             }
         };
 
-        if ast.is_empty() {
+        if module_stages.iter().all(|stage| stage.is_empty()) {
             return;
         }
 
-        let resolved = match self.sigil_session.resolve(ast) {
+        let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
+            Ok(index) => index,
+            Err(e) => {
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.builtin_source_id,
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                );
+                return;
+            }
+        };
+
+        let resolved = match sigil::resolve_staged_program(
+            &module_stages,
+            Vec::new(),
+            &declaration_index,
+            None,
+        ) {
             Ok(r) => r,
             Err(e) => {
                 diagnostics::report_error_by_id(
@@ -446,7 +458,13 @@ impl ReplEngine {
             }
         };
 
-        populate_error_template_lines(&mut chunk.error_templates, &builtin_source);
+        for stage in &self.module_stages {
+            for module in stage {
+                if let Some(source) = self.sources.source(module.source_id) {
+                    populate_error_template_lines(&mut chunk.error_templates, source);
+                }
+            }
+        }
         if let Some((source, file_name)) = self.sources.owned_context(self.builtin_source_id) {
             self.vm.set_source(source, file_name);
         }
@@ -460,6 +478,23 @@ impl ReplEngine {
             );
             return;
         }
+
+        let scope = match sigil::build_scope_for_module(
+            &module_stages,
+            Some(&self.repl_module_path),
+            module_stages.len(),
+        ) {
+            Ok(scope) => scope,
+            Err(e) => {
+                diagnostics::report_error_by_id(
+                    &self.sources,
+                    self.builtin_source_id,
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                );
+                return;
+            }
+        };
+        self.sigil_session.replace_scope(scope);
 
         for name in &meta.function_defs {
             self.symbols.insert(name.clone());
