@@ -3,11 +3,11 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Padding, Paragraph},
+    widgets::{Block, Borders, Padding, Paragraph},
     Frame,
 };
 
-use super::app::{App, FocusPane, ResultEntry, ResultEntryKind};
+use super::app::{App, FocusPane, ResultEntryKind};
 
 pub(super) fn draw(frame: &mut Frame, app: &App) {
     let completion_h = if app.completion.visible { 5u16 } else { 1 };
@@ -40,47 +40,81 @@ fn pane_title(name: &str, focused: bool) -> String {
     }
 }
 
-fn result_entry_to_list_item(entry: &ResultEntry) -> ListItem<'static> {
-    let base_style = match entry.kind {
-        ResultEntryKind::EvalError => Style::default().fg(Color::Red),
-        ResultEntryKind::Info => Style::default().fg(Color::Yellow),
-        ResultEntryKind::EvalSuccess | ResultEntryKind::CommandOutput => Style::default(),
-    };
-    // Result lines (bindings / values) in green.
-    let result_style = match entry.kind {
-        ResultEntryKind::EvalSuccess => Style::default().fg(Color::Green),
-        _ => base_style,
-    };
+// ── Results pane custom widget ────────────────────────────────────────────────
 
-    let lines: Vec<Line<'static>> = entry
-        .rendered_lines
-        .iter()
-        .enumerate()
-        .map(|(i, line)| {
-            // First and last line (separator) use base_style; middle lines that
-            // are not the prompt use result_style.
-            let is_sep = i == 0 || i == entry.rendered_lines.len() - 1;
-            let is_prompt = i == 1 && !entry.rendered_lines.is_empty();
-            let style = if is_sep || is_prompt { base_style } else { result_style };
-            Line::styled(line.clone(), style)
-        })
-        .collect();
+struct ResultsPaneWidget<'a> {
+    app: &'a App,
+    focused: bool,
+}
 
-    ListItem::new(Text::from(lines))
+impl Widget for ResultsPaneWidget<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let border_style = if self.focused {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+        let outer_block = Block::default()
+            .title(pane_title("Results / History", self.focused))
+            .borders(Borders::ALL)
+            .border_style(border_style);
+        let inner = outer_block.inner(area);
+        outer_block.render(area, buf);
+
+        let mut y = inner.top();
+        for entry in self.app.results.iter().skip(self.app.results_scroll) {
+            if y >= inner.bottom() {
+                break;
+            }
+
+            let content_lines = entry.rendered_lines.len().max(1) as u16;
+            let entry_height = 2 + content_lines; // 2 for top+bottom borders
+            let available = inner.bottom() - y;
+            let h = entry_height.min(available);
+            let entry_rect = Rect::new(inner.left(), y, inner.width, h);
+
+            let is_selected = self.app.selected_result == Some(entry.idx);
+            let entry_border_style = if is_selected {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+            let kind_style = match entry.kind {
+                ResultEntryKind::EvalError => Style::default().fg(Color::Red),
+                ResultEntryKind::Info => Style::default().fg(Color::Yellow),
+                ResultEntryKind::CommandOutput => Style::default().fg(Color::Cyan),
+                ResultEntryKind::EvalSuccess => Style::default(),
+            };
+            let result_style = match entry.kind {
+                ResultEntryKind::EvalSuccess => Style::default().fg(Color::Green),
+                _ => kind_style,
+            };
+
+            let title = format!("xldr({})> {}", entry.idx, entry.source);
+            let entry_block = Block::default()
+                .title(Span::styled(title, kind_style))
+                .borders(Borders::ALL)
+                .border_style(entry_border_style);
+            let content_area = entry_block.inner(entry_rect);
+            entry_block.render(entry_rect, buf);
+
+            if content_area.height > 0 && !entry.rendered_lines.is_empty() {
+                let lines: Vec<Line> = entry
+                    .rendered_lines
+                    .iter()
+                    .map(|l| Line::styled(l.clone(), result_style))
+                    .collect();
+                Paragraph::new(lines).render(content_area, buf);
+            }
+
+            y += h;
+        }
+    }
 }
 
 fn draw_results(frame: &mut Frame, app: &App, area: Rect) {
-    let title = pane_title("Results / History", app.focus == FocusPane::Results);
-    let items: Vec<ListItem> = app
-        .results
-        .iter()
-        .skip(app.results_scroll)
-        .map(result_entry_to_list_item)
-        .collect();
-
-    let list = List::new(items)
-        .block(Block::default().title(title).borders(Borders::ALL).padding(Padding::horizontal(1)));
-    frame.render_widget(list, area);
+    let focused = app.focus == FocusPane::Results;
+    frame.render_widget(ResultsPaneWidget { app, focused }, area);
 }
 
 fn draw_docs(frame: &mut Frame, app: &App, area: Rect) {

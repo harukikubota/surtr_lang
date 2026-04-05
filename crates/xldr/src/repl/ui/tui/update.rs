@@ -202,37 +202,26 @@ pub(super) fn submit_input(app: &mut App, engine: &mut ReplEngine) {
     app.input.clear();
     app.completion.clear();
 
-    let idx = app.results.len();
-    let prompt = format!("xldr({})> {}", idx + 1, source);
-    let sep = "-".repeat(40);
-
     let result = engine.handle_line(&source);
     match result.output {
         ReplOutput::EvalSuccess { rendered, .. } => {
-            let mut display = vec![sep.clone(), prompt];
-            display.extend(rendered);
-            display.push(sep);
-            app.push_result(&source, display, ResultEntryKind::EvalSuccess);
+            app.push_result(&source, rendered, ResultEntryKind::EvalSuccess);
         }
         ReplOutput::EvalError { rendered, .. } => {
-            let display = vec![sep.clone(), prompt, rendered.join("\n"), sep];
-            app.push_result(&source, display, ResultEntryKind::EvalError);
+            app.push_result(&source, rendered, ResultEntryKind::EvalError);
         }
         ReplOutput::CommandOutput { rendered } => {
-            let display = vec![sep.clone(), prompt, rendered.join("\n"), sep];
-            app.push_result(&source, display, ResultEntryKind::EvalSuccess);
+            app.push_result(&source, rendered, ResultEntryKind::CommandOutput);
         }
         ReplOutput::StatusMessage(_) => {
             if result.should_exit {
                 app.should_quit = true;
                 return;
             }
-            let display = vec![sep.clone(), prompt, sep];
-            app.push_result(&source, display, ResultEntryKind::EvalSuccess);
+            app.push_result(&source, vec![], ResultEntryKind::Info);
         }
         _ => {
-            let display = vec![sep.clone(), prompt, sep];
-            app.push_result(&source, display, ResultEntryKind::EvalSuccess);
+            app.push_result(&source, vec![], ResultEntryKind::EvalSuccess);
         }
     }
     if result.should_exit {
@@ -304,13 +293,14 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
         "v" => {
             // Recall source of a previous result into the input buffer.
             match arg.parse::<usize>() {
-                Ok(idx) if idx >= 1 => {
-                    if let Some(entry) = app.results.get(idx - 1) {
-                        app.input.set(entry.source.clone());
+                Ok(idx) => {
+                    if let Some(entry) = app.results.iter().find(|e| e.idx == idx) {
+                        let src = entry.source.clone();
+                        app.input.set(src);
                     } else {
                         app.push_result(
                             format!(":v {arg}"),
-                            vec![format!("no result at index {arg}")],
+                            vec![format!("no result with idx {arg}")],
                             ResultEntryKind::EvalError,
                         );
                     }
@@ -326,8 +316,16 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
         }
         "j" => {
             if let Ok(idx) = arg.parse::<usize>() {
-                app.results_scroll = idx.min(app.results.len().saturating_sub(1));
-                app.selected_result = Some(app.results_scroll);
+                if let Some(pos) = app.results.iter().position(|e| e.idx == idx) {
+                    app.selected_result = Some(idx);
+                    app.results_scroll = pos;
+                } else {
+                    app.push_result(
+                        format!(":j {arg}"),
+                        vec![format!("no result with idx {arg}")],
+                        ResultEntryKind::EvalError,
+                    );
+                }
             }
         }
         "doc-focus" => {

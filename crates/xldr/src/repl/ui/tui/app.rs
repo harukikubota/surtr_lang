@@ -186,7 +186,7 @@ impl App {
         rendered_lines: Vec<String>,
         kind: ResultEntryKind,
     ) {
-        let idx = self.results.len();
+        let idx = self.results.len() + 1;
         self.results.push_back(ResultEntry {
             idx,
             source: source.into(),
