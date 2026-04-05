@@ -27,6 +27,10 @@
   - 各 crate の責務
   - 入出力の型境界
   - crate 間の依存関係
+- [実装レシピ](./implementation-recipes.md)
+  - 命令追加の手順
+  - builtin 追加の手順
+  - コピペ用テンプレート
 
 ## 現在の前提
 
