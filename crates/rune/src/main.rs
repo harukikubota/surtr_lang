@@ -54,7 +54,7 @@ fn print_usage() {
     eprintln!("  surtr run <file.srt|file.eldr> [--entry <name>]");
     eprintln!("  surtr repl [--quiet] [--banner] [--version]");
     eprintln!("  surtr build <file.srt> [output.eldr]");
-    eprintln!("  surtr dump <file.eldr> [--format json]");
+    eprintln!("  surtr dump <file.eldr|entry.srt> [--format json] [--entry <name>]");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +167,10 @@ fn run_source_file(file_path: &str, cli_entry: Option<&str>) -> Result<(), i32> 
         }
     };
 
+    // E-1 contract (CLI run):
+    // 1) compile-time failures (parse/resolve/typecheck/codegen) terminate immediately with exit=1.
+    // 2) runtime traps terminate with exit=1.
+    // 3) final `Result::Err` is reported as a language-level error and also exits with exit=1.
     let compile_plan = match prepare_script_compile_plan(file_path, &source, cli_entry) {
         Ok(plan) => plan,
         Err(e) => {
@@ -546,6 +550,9 @@ fn execute_bytecode(
 }
 
 fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
+    // E-3 note:
+    // We intentionally keep this check at the CLI boundary instead of abstracting it into
+    // the lower pipeline; `run` and `repl` have different UX semantics for `Result::Err`.
     match vm.last_value() {
         Some(Value::Tagged { tag: 1, fields }) => {
             if let Some(err_value) = fields.first() {

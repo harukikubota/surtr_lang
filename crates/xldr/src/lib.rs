@@ -621,6 +621,8 @@ impl ReplEngine {
                 }
             }
             Err(e) => {
+                // E-1 contract (REPL):
+                // runtime traps are treated as terminal for the current REPL session.
                 eldr::report_runtime_error(
                     &e,
                     self.vm.source(),
@@ -672,6 +674,9 @@ impl ReplEngine {
     }
 
     fn report_main_result_error_if_any(&self, value: &Value) -> bool {
+        // E-3 note:
+        // Unlike CLI `run`, REPL keeps the session alive after `Result::Err`.
+        // This stays local to REPL entry handling by design.
         match value {
             Value::Tagged { tag: 1, fields } => {
                 if let Some(err_value) = fields.first() {

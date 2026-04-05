@@ -119,3 +119,48 @@ fn dump_outputs_valid_json_for_jq() {
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn dump_supports_entry_srt_and_traces_normalized_entrypoint() {
+    let temp = unique_temp_dir("surtr_dump_entry_srt");
+    let source_path = temp.join("entry_trace.srt");
+
+    write_source(
+        &source_path,
+        r#"@@entrypoint
+def auto() -> Result<()> { Ok(()) }
+
+def launch() -> Result<()> { Ok(()) }
+"#,
+    );
+
+    let bin = surtr_bin();
+    let dump = Command::new(&bin)
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--entry",
+            "launch",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert_eq!(json["entrypoint_trace"]["source"], "entry_file");
+    assert_eq!(json["entrypoint_trace"]["selected_entry_name"], "launch");
+    let normalized = json["entrypoint_trace"]["normalized_entrypoint"]
+        .as_str()
+        .expect("normalized entrypoint must be a string");
+    assert!(normalized.starts_with("__Script::"));
+    assert!(normalized.ends_with("::launch"));
+
+    let _ = fs::remove_dir_all(temp);
+}

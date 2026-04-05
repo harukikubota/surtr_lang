@@ -48,16 +48,18 @@
   - `C-2`: REPL pseudo module identity 導入
   - `C-3`: CLI script 実行経路で Loader 非依存 + `--entry` 実行モード導入
   - `C-4`: `@@entrypoint` と `CLI --entry` の優先順位実装（`CLI > @@entrypoint > top-level`）
-- `Issue D`（一部）
+- `Issue D`
   - `D-1`: script `--entry` を pseudo module qualified symbol に正規化
   - `D-2`: script entry シグネチャ検証を entrypoint ベースへ接続
-- `Issue E`（一部）
+  - `D-3`: dump で entrypoint 正規化結果の追跡を追加（現時点は entry file 由来を対応）
+- `Issue E`
+  - `E-1`: run/repl の compile/runtime error 境界を整理し、判定コード近傍へ仕様コメントを明記
   - `E-2`: REPL runtime error 時の終了経路整理
+  - `E-3`: `Result::Err` 表示経路は CLI 入口差分を維持したまま混線回避を確認
 
 ### 未実施（この時点）
 
-- `Issue D` の entrypoint 正規化結果の dump 追跡（`D-3`）
-- `Issue E` の run/repl 全経路でのエラー境界最終統一
+- `Issue A〜F` は完了。残タスクは Future Issue に分離済み。
 
 補足:
 - 現時点でルートが 1 本の経路は維持し、分岐を増やしていない。
@@ -869,8 +871,8 @@ annotation (`@@doc`, `@@test`, `@@entrypoint` など) は module と script で�
 2. `Issue F`（実施済み）
 3. `Issue B`（実施済み）
 4. `Issue C`（実施済み）
-5. `Issue D`（`D-3` のみ未実施）
-6. `Issue E`（`E-1` / `E-3` 未実施）
+5. `Issue D`（実施済み）
+6. `Issue E`（実施済み）
 7. `Future Issue 6`
 8. `Future Issue 7`
 9. `Future Issue 5`
@@ -883,8 +885,8 @@ annotation (`@@doc`, `@@test`, `@@entrypoint` など) は module と script で�
 実装ブロックとしては次の順で進める。
 
 - 第1ブロック: `Issue A -> Issue F`（実施済み）
-- 第2ブロック: `Issue B -> Issue C -> Issue D`（`D-3` が残）
-- 第3ブロック: `Issue E -> Future Issue 6 -> Future Issue 7`（`Issue E` の `E-1` / `E-3` が残）
+- 第2ブロック: `Issue B -> Issue C -> Issue D`（実施済み）
+- 第3ブロック: `Issue E -> Future Issue 6 -> Future Issue 7`（`Issue E` 実施済み）
 - 第4ブロック: `Future Issue 5 -> Future Issue 1 -> Future Issue 2`
 - 第5ブロック: `Future Issue 3 -> Future Issue 8 -> Future Issue 9`
 
@@ -929,19 +931,19 @@ annotation (`@@doc`, `@@test`, `@@entrypoint` など) は module と script で�
 
 ---
 
-### 4.5 タスク分解: Issue D
+### 4.5 タスク分解: Issue D（実施済み）
 
 - `D-1`: `EntryPoint` 型を導入し、script / module / project entry を同一表現へ正規化する（実施済み）
 - `D-2`: entry 関数のシグネチャ検証を `main` 特別扱いから entrypoint 検証へ移す（実施済み）
-- `D-3`: dump / debug で entrypoint 正規化結果を追跡できるメタデータを追加する
+- `D-3`: dump / debug で entrypoint 正規化結果を追跡できるメタデータを追加する（実施済み・現時点は entry file 由来）
 
 ---
 
-### 4.6 タスク分解: Issue E
+### 4.6 タスク分解: Issue E（実施済み）
 
-- `E-1`: `compile error` と `runtime error` の終了経路を run / repl で整理する
+- `E-1`: `compile error` と `runtime error` の終了経路を run / repl で整理する（実施済み）
 - `E-2`: REPL の runtime error を継続ではなく終了に変更する（実施済み）
-- `E-3`: `Result::Err` の表示経路を run / repl で共通化し、runtime error と混ざらないようにする
+- `E-3`: `Result::Err` の表示経路を run / repl で共通化し、runtime error と混ざらないようにする（実施済み・CLI 入口差分維持）
 
 ---
 
@@ -992,9 +994,9 @@ annotation (`@@doc`, `@@test`, `@@entrypoint` など) は module と script で�
 - `Commit-20`: `B-3`（実施済み）
 - `Commit-21`: `B-4`（実施済み）
 - `Commit-22`: `B-5`（実施済み）
-- `Commit-23`: `D-3`
-- `Commit-24`: `E-1`
-- `Commit-25`: `E-3`
+- `Commit-23`: `D-3`（実施済み）
+- `Commit-24`: `E-1`（実施済み）
+- `Commit-25`: `E-3`（実施済み）
 
 補足:
 - `Commit-17` の `E-2` は REPL runtime error 時の終了経路整理に対応する。
