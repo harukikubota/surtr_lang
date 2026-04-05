@@ -1,0 +1,4 @@
+defmod Int {
+  @@builtin def shl(value: Int, bits: Int) -> Int
+  @@builtin def shr(value: Int, bits: Int) -> Int
+}

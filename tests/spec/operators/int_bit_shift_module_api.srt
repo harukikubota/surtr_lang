@@ -1,0 +1,2 @@
+print(to_string(Int::shl(1, 3)))
+print(to_string(Int::shr(16, 2)))
