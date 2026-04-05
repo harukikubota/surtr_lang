@@ -70,7 +70,7 @@ pub enum Opcode {
     GetTag,
 
     // Built-in function call
-    CallBuiltin(u16, u8),
+    CallBuiltin(u16, u8, u32, u32),
 
     // User-defined function call
     Call(u32, u8, u32, u32),

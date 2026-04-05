@@ -55,10 +55,13 @@ cargo clean
 
 ## Docs
 
-- [Phase 1 Flow](./doc/phase1-flow.md)
+- [Public Docs Index](./doc/site/README.md)
+- [Language Guide](./doc/site/language-guide.md)
+- [Language Reference](./doc/site/language-reference.md)
+- [Compiler Design Guide](./doc/site/compiler-design.md)
+- [Crate Reference](./doc/site/crate-reference.md)
 - [Open Issues](./doc/open-issues.md)
-- [Idea11 (Draft)](./doc/idea11.md)
-- [Requirements (V8, Japanese)](./doc/要件定義v8.md)
+- [Requirements (V9, Japanese)](./doc/要件定義v9.md)
 
 ## Status
 

@@ -1,0 +1,259 @@
+Surtr VM List 修正案・実装方針（追記版）
+=====================================
+
+概要
+----
+既存の `Value::List(Vec<Value>)` ベース表現を、cons cell ベースの List 表現へ移行する。
+これにより、先頭追加と先頭分解を O(1) で扱い、Surtr の List 構文およびパターン規則と整合させる。
+
+本追記版では、VM 実装方針に加えて「List 構文・パターン・型規則」に必要な反映点を盛り込む。
+
+
+1. 変更目的
+-----------
+1. `cons` を O(1) にする
+2. `uncons` 相当の分解を pattern lowering で自然に扱う
+3. `len` を O(1) にする
+4. List を静的型付き `List<A>` として扱い、ランタイム型チェックを原則不要にする
+5. 表面構文 `[head, ..tail]` の構築/分解二重性を VM 側で支えられる形にする
+
+
+2. 既存実装の課題
+-----------------
+既存表現:
+
+- `Value::List(Vec<Value>)`
+- `ListEmpty`
+- `ListNew(n)`
+
+この構成では:
+
+- front-cons が O(n) になりやすい
+- `[head, ..tail]` の分解が list copy 前提になりやすい
+- `reduce` による list 構築で不利
+- Erlang 風の先頭追加スタイルと噛み合いにくい
+
+
+3. 新しいランタイム表現
+----------------------
+
+3.1 List node
+~~~~~~~~~~~~~
+cons cell を arena に保持する。
+
+概念例:
+
+    enum ListNode {
+        Nil,
+        Cons(Value, ListRef),
+    }
+
+`ListRef` は arena index または GC 管理参照とする。
+
+
+3.2 List handle
+~~~~~~~~~~~~~~~
+List 値は node 参照だけでなく長さも持つ。
+
+概念例:
+
+    struct ListHandle {
+        head: ListRef,
+        len: usize,
+    }
+
+Value 側では以下のように保持する。
+
+    Value::List(ListHandle)
+
+利点:
+
+- `len` が O(1)
+- `cons` で `len + 1`
+- `uncons`/tail 生成で `len - 1`
+- node sharing を維持しつつ handle ごとに長さを持てる
+
+
+4. 表面構文との対応
+------------------
+
+4.1 Expr 位置
+~~~~~~~~~~~~~
+`[head, ..tail]` は `cons(head, tail)` として lowering する。
+
+VM/IR では構築操作として扱う。
+
+
+4.2 Pattern 位置
+~~~~~~~~~~~~~~~~
+`[head, ..tail]` は非空 List 分解パターンとして lowering する。
+
+表面には `uncons` 関数を出さない。
+pattern lowering 後に必要であれば内部的に以下へ落とす。
+
+- is_empty 判定
+- head 抽出
+- tail handle 生成
+
+
+4.3 `[]`
+~~~~~~~~
+`[]` は位置に応じて以下へ解釈する。
+
+- Expr 位置: 空 List 構築
+- Pattern 位置: 空 List 一致パターン
+
+
+5. 型規則との対応
+----------------
+List は `List<A>` の静的型を持つ。
+
+前提:
+
+- `[]` は IR/bytecode では `List<A>` に具体化済み
+- `cons` は `A x List<A> -> List<A>`
+- pattern の `[head, ..tail]` は `List<A>` にのみ適用可能
+- `head : A`
+- `tail : List<A>`
+
+この保証はコンパイラまたは verifier が担い、VM 実行時の `cons` 型検査は原則不要とする。
+
+
+6. 推奨 opcode / 内部操作
+------------------------
+公開命令名は実装都合で調整してよいが、意味としては以下を想定する。
+
+- `ListNil`
+- `ListCons`
+- `ListIsEmpty`
+- `ListHead`
+- `ListTail`
+- `ListFromItems(n)`
+
+備考:
+
+- `ListHead` / `ListTail` は user-facing API 用ではなく、pattern lowering や内部処理用でもよい
+- `ListFromItems(n)` はリテラル `[a, b, c]` 最適化用に置いてよい
+
+
+7. reduce 実装方針
+-----------------
+`reduce` の accumulator はスタック常駐にせず local 管理を基本とする。
+
+状態:
+
+- 入力 list
+- 現在 cursor / ref
+- accumulator
+
+理由:
+
+- 毎反復ごとの stack shuffle を減らせる
+- 関数呼び出し後の戻り値で acc 更新がしやすい
+- list 構築系 reduce でも `acc = cons(x, acc)` に落としやすい
+
+list 構築パターン:
+
+    acc = []
+    for elem in input:
+        acc = cons(f(elem), acc)
+    acc = reverse(acc)
+
+これは cons cell 化後に自然な高速パターンになる。
+
+
+8. 標準ライブラリ方針との整合
+----------------------------
+公開 API 想定:
+
+- `List::cons`
+- `List::first`
+- `List::len`
+- `List::reverse`
+- `List::reduce`
+- `List::map`
+- `List::filter`
+
+公開しない:
+
+- `uncons` 関数
+
+構文で提供するもの:
+
+- `[]`
+- `[head, ..tail]` in Expr
+- `[head, ..tail]` in Pattern
+
+`first : List<A> -> A?` は式位置の補助 API とする。
+分解の中心は pattern 構文とする。
+
+
+9. 後方連結ポリシー
+------------------
+後方連結は提供してよいが推奨しない。
+
+理由:
+
+- cons list では `append(left, right)` が左辺長に対して線形
+- ループ中の後方連結は O(n^2) を招きやすい
+
+推奨スタイル:
+
+- 逐次構築は `cons + reverse`
+- ドキュメントで明記
+- 将来的には lint で警告候補にする
+
+
+10. 実装ステップ
+----------------
+
+Step 1.
+`Value::List(Vec<Value>)` を `Value::List(ListHandle)` へ置換する。
+
+Step 2.
+List arena / node 管理を実装する。
+
+Step 3.
+`ListNil`, `ListCons`, `ListIsEmpty`, `ListHead`, `ListTail` 相当を実装する。
+
+Step 4.
+`len` を handle の `len` 参照で O(1) にする。
+
+Step 5.
+AST/HIR で Expr と Pattern の List ノードを分離する。
+
+Step 6.
+`[head, ..tail]` の Expr/Patterm 文脈別 lowering を実装する。
+
+Step 7.
+`reduce` の accumulator 管理を locals ベースで整理する。
+
+Step 8.
+標準ライブラリに `reverse`, `reduce`, `map`, `filter`, `first`, `len` を揃える。
+
+Step 9.
+後方連結をドキュメント上で非推奨にし、`cons + reverse` を推奨する。
+
+
+11. 仕様反映の要点
+-----------------
+1. `uncons` は仕様上の公開関数ではない
+2. `[head, ..tail]` は位置依存構文である
+3. List は `List<A>` の静的型付き不変列である
+4. `len` は handle 保持で O(1)
+5. VM は cons cell により先頭追加/分解を O(1) で支える
+6. 型安全性はコンパイラ/verifier で保証し、VM ランタイムチェックは最小化する
+
+
+12. 結論
+--------
+cons cell 化は、Surtr の List を
+- 構築は `cons`
+- 分解は pattern
+- 集約は `reduce`
+- 順序回復は `reverse`
+
+という一貫した設計へ寄せるための基盤になる。
+
+特に `[head, ..tail]` を Expr では構築、Pattern では分解として扱う仕様と非常に相性がよく、
+`len` を handle に持たせる方針とも整合する。

@@ -79,6 +79,9 @@ pub fn derive_source_rules(
     source_kind: SourceKind,
     entrypoint: Option<&spire::EntryPoint>,
 ) -> spire::SourceRules {
+    // SourceKind controls the syntactic boundary (`@@builtin`, top-level expr,
+    // etc.), while CompileUnitKind refines runtime-only rules such as where
+    // `set_exit_code` is legal in project builds.
     let base = match source_kind {
         SourceKind::Script => spire::SourceRules::script(),
         SourceKind::Module => spire::SourceRules::module(),

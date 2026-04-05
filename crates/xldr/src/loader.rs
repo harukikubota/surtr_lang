@@ -13,6 +13,10 @@ const REPL_MODULE_NAME: &str = "REPL";
 const SCRIPT_PSEUDO_MODULE_PREFIX: &str = "__Script";
 const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
 
+/// Logical source categories that drive parser/typechecker policy selection.
+///
+/// The loader always materializes standard sources in the fixed order
+/// `Bootstrap -> Kernel -> [other standard modules] -> user source`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Script,
@@ -262,6 +266,9 @@ pub fn collect_module_sources_with_modules(
 pub fn collect_module_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
+    // Stage 0/1 are reserved for the built-in standard layers. User-provided
+    // modules are appended afterwards so they can depend on Bootstrap/Kernel
+    // but never precede them.
     let mut stage_specs = vec![
         vec![SourceDescriptor::std_module(
             BUILTIN_PRELUDE_FILE,

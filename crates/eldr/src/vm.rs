@@ -921,13 +921,15 @@ impl VM {
             }
 
             // Built-in function call
-            Opcode::CallBuiltin(builtin_id, arity) => {
+            Opcode::CallBuiltin(builtin_id, arity, span_start, span_end) => {
                 let mut args = Vec::with_capacity(arity as usize);
                 for _ in 0..arity {
                     args.push(self.pop_stack()?);
                 }
                 args.reverse();
-                let result = call_builtin(self, builtin_id, args)?;
+                let result = self.with_call_site(Some((span_start, span_end)), |vm| {
+                    call_builtin(vm, builtin_id, args)
+                })?;
                 self.stack.push(result);
             }
 
@@ -1124,7 +1126,9 @@ impl VM {
 
                 match callable.target {
                     CallableTarget::Builtin(builtin_id) => {
-                        let result = call_builtin(self, builtin_id, full_args)?;
+                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
+                            call_builtin(vm, builtin_id, full_args)
+                        })?;
                         self.stack.push(result);
                     }
                     CallableTarget::Function(fun_idx) => {
@@ -1275,6 +1279,23 @@ impl VM {
         self.frames
             .last_mut()
             .ok_or_else(|| RuntimeError::new("Frame stack underflow"))
+    }
+
+    fn with_call_site<T>(
+        &mut self,
+        call_site: Option<(u32, u32)>,
+        f: impl FnOnce(&mut Self) -> Result<T, RuntimeError>,
+    ) -> Result<T, RuntimeError> {
+        let frame_idx = self
+            .frames
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| RuntimeError::new("Frame stack underflow"))?;
+        let previous = self.frames[frame_idx].call_site;
+        self.frames[frame_idx].call_site = call_site;
+        let result = f(self);
+        self.frames[frame_idx].call_site = previous;
+        result
     }
 
     fn pop_int(&mut self) -> Result<i64, RuntimeError> {
@@ -1577,6 +1598,35 @@ mod tests {
                 assert_eq!(rich.location.span_end, 36);
             }
             other => panic!("expected Value::Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn builtin_result_error_uses_builtin_call_span_as_location() {
+        let source = "safe_mod(10, 0)\n".to_string();
+        let span_end = source.trim_end().len() as u32;
+        let bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::CallBuiltin(4, 2, 0, span_end),
+            Opcode::Halt,
+        ]);
+        let mut vm = VM::new(bytecode).with_source(source, "REPL".into());
+        vm.bytecode.constants = vec![Constant::Int(10), Constant::Int(0)];
+
+        vm.run().expect("run should succeed");
+        match vm.last_value().cloned().expect("result should be recorded") {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "ZeroDivisionError");
+                    assert_eq!(rich.location.line, 1);
+                    assert_eq!(rich.location.column, 1);
+                    assert_eq!(rich.location.span_start, 0);
+                    assert_eq!(rich.location.span_end, span_end);
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
         }
     }
 

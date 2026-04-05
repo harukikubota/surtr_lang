@@ -12,6 +12,13 @@ StdModV1 の大枠実装が一通り入ったため、残っている「破壊�
 - 本ファイルの役割: 後続で着手する具体タスクの整理
 - 参照元の役割: StdModV1 再編の背景、実施済み Issue、設計判断の経緯
 
+### 現在の扱い（2026-04-05）
+
+- `Task 3: ドキュメント更新` は完了
+- 確定仕様は `doc/要件定義v9.md` / `doc/テスト方針.md` / `doc/Xldr_spec.md` / `doc/EldrVM_spec.md` へ反映済み
+- 未確定のみ `doc/open-issues.md` に残す
+- 本ファイルは以後、未完の実装・テスト follow-up を確認するための補助メモとして扱う
+
 ---
 
 ## 1. スコープ
@@ -152,7 +159,7 @@ StdModV1 の設計変更が既存仕様を壊していないこと、そして�
 - `bootstrap.srt` 分離後のロード順、可視性、名前衝突、entrypoint 解決を固定する
 - `@@builtin` が標準モジュールでは許可され、ユーザ拡張では禁止されることを `compile_errors` で固定する
 - builtin 起点 error 定義が `Result` / `eprint` / 診断表示で従来どおり振る舞うことを `spec` / `integration` で固定する
-- 標準モジュールが auto import され、明示 import が拒否されることを `compile_errors` / `integration` で固定する
+- `Bootstrap` / `Kernel` が auto import され、明示 import が拒否されることを `compile_errors` / `integration` で固定する
 - 同一ファイル内で同一標準モジュールまたは同一標準関数を再 import すると失敗することを `compile_errors` で固定する
 - step compile では同一 bytecode、将来の並列前提では bytecode 集合同値を検証できる観点を用意する
 
@@ -195,7 +202,7 @@ StdModV1 の設計変更が既存仕様を壊していないこと、そして�
 
 ##### `spec`
 
-- auto import 前提で標準 API が使えること
+- `Bootstrap` / `Kernel` の auto import 前提で標準 API が使えること
 - `Bootstrap` 側に置いた汎用 error が `Result` / `match` / `eprint` で従来どおり使えること
 - `Kernel` 側に置いた非 builtin 標準関数が import なしで使えること
 - `bootstrap.srt` 分離後も既存の代表的成功ケースが壊れていないこと
@@ -278,7 +285,7 @@ StdModV1 の現状を正本ドキュメントへ反映し、実装と文書の�
 - `@@builtin` はユーザ拡張では利用不可とする
 - `Bootstrap` は汎用 error と builtin 宣言を先行解決する層として扱う
 - `Kernel` は現時点の標準関数群を集約する層として扱う
-- 標準モジュールは auto import 対象とし、明示 import は禁止する
+- `Bootstrap` / `Kernel` は auto import 対象とし、明示 import は禁止する
 - 組込み宣言は `Bootstrap`、それ以外の標準 API は `Kernel` に置く
 - import 検査はファイル単位で行い、同一モジュールまたは同一関数の再 import を禁止する
 
@@ -308,7 +315,7 @@ StdModV1 の現状を正本ドキュメントへ反映し、実装と文書の�
 - builtin 宣言と標準モジュール定義の責務が分離されている
 - `Bootstrap` / `Kernel` のどちらに何を置くかが明文化されている
 - `Bootstrap` の先行コンパイル理由が error 解決順と並列待機削減の両面で説明できる
-- 標準モジュールは auto import だけで利用でき、明示 import は compile error になる
+- `Bootstrap` / `Kernel` は auto import だけで利用でき、明示 import は compile error になる
 - 同一ファイルでの重複 import が、モジュール単位・関数単位の両方で compile error になる
 - ユーザ拡張で `@@builtin` を使うと compile error になる
 - 標準モジュール読み込み後も既存プログラムの挙動が維持される、または差分が明記される
@@ -350,7 +357,7 @@ error 定義の配置方針を先に固定し、後から型別モジュール�
 
 - `Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張` の読み込み順をコードと文書で固定する
 - `&mut Loader` を操作するラッパー API で、ユーザ拡張が後段に積まれることを保証する
-- 標準モジュールは auto import 対象、明示 import は禁止とする
+- `Bootstrap` / `Kernel` は auto import 対象、明示 import は禁止とする
 - 相互参照の可否
 - script / project / REPL で同一契約にするかどうか
 

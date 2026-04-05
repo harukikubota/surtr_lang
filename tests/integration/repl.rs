@@ -49,6 +49,26 @@ fn run_repl_session(input: &str) -> Output {
     run_repl_session_with_args(&[], input)
 }
 
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+
+    out
+}
+
 #[test]
 fn repl_quit_exits_cleanly() {
     let output = run_repl_session(":quit\n");
@@ -468,6 +488,34 @@ fn repl_safe_xxx_zero_uses_zero_division_error() {
         2,
         "expected both safe_div and safe_mod to use ZeroDivisionError, got:\n{}",
         stdout
+    );
+}
+
+#[test]
+fn repl_safe_mod_runtime_error_highlights_the_full_call() {
+    let output = run_repl_session("safe_mod(10, 0)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("ZeroDivisionError"),
+        "expected zero division error in stderr, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("REPL:1:1"),
+        "expected runtime error to point at the start of the call, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("safe_mod(10, 0)"),
+        "expected diagnostic to include the full call site, got:\n{}",
+        stderr
     );
 }
 

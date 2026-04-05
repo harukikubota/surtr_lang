@@ -1200,7 +1200,12 @@ impl Codegen {
             message: "Unknown builtin: to_string".into(),
             span: span.clone(),
         })?;
-        self.emit(Opcode::CallBuiltin(to_string_id, 1));
+        self.emit(Opcode::CallBuiltin(
+            to_string_id,
+            1,
+            span.start as u32,
+            span.end as u32,
+        ));
         self.emit(Opcode::ConcatStr);
         let suffix_idx = self.add_constant(Constant::Str(")".into()));
         self.emit(Opcode::LoadConst(suffix_idx));
@@ -1235,9 +1240,14 @@ impl Codegen {
             self.emit_error_value(kind, message, &span);
             let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
                 message: "Unknown builtin: eprint".into(),
-                span,
+                span: span.clone(),
             })?;
-            self.emit(Opcode::CallBuiltin(eprint_id, 1));
+            self.emit(Opcode::CallBuiltin(
+                eprint_id,
+                1,
+                span.start as u32,
+                span.end as u32,
+            ));
             self.emit(Opcode::Halt);
         }
         Ok(())
@@ -1274,9 +1284,14 @@ impl Codegen {
             self.emit_error_value_from_stack(kind, &span);
             let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
                 message: "Unknown builtin: eprint".into(),
-                span,
+                span: span.clone(),
             })?;
-            self.emit(Opcode::CallBuiltin(eprint_id, 1));
+            self.emit(Opcode::CallBuiltin(
+                eprint_id,
+                1,
+                span.start as u32,
+                span.end as u32,
+            ));
             self.emit(Opcode::Halt);
         }
         Ok(())
@@ -1590,9 +1605,14 @@ impl Codegen {
             self.emit(Opcode::GetField(0));
             let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
                 message: "Unknown builtin: eprint".into(),
-                span,
+                span: span.clone(),
             })?;
-            self.emit(Opcode::CallBuiltin(eprint_id, 1));
+            self.emit(Opcode::CallBuiltin(
+                eprint_id,
+                1,
+                span.start as u32,
+                span.end as u32,
+            ));
             self.emit(Opcode::Halt);
         }
         Ok(())
@@ -1653,7 +1673,12 @@ impl Codegen {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::CallBuiltin(builtin_id, args.len() as u8));
+                self.emit(Opcode::CallBuiltin(
+                    builtin_id,
+                    args.len() as u8,
+                    call_span.start as u32,
+                    call_span.end as u32,
+                ));
             }
             Ty::UserFunc {
                 fun_idx, params, ..
@@ -1772,7 +1797,12 @@ impl Codegen {
                             message: "Unknown builtin: to_string".into(),
                             span: expr.span.clone(),
                         })?;
-                    self.emit(Opcode::CallBuiltin(to_string_id, 1));
+                    self.emit(Opcode::CallBuiltin(
+                        to_string_id,
+                        1,
+                        expr.span.start as u32,
+                        expr.span.end as u32,
+                    ));
                 }
             }
 

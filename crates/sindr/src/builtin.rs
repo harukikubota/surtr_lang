@@ -1,4 +1,7 @@
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
+///
+/// Surtr source files such as `lib/bootstrap.srt` may declare these builtins
+/// with `@@builtin`, but the canonical definition order and ids live here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltinMeta {
     pub name: &'static str,
