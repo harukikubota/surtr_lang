@@ -2534,4 +2534,286 @@ captured = &print"#,
 
         assert_eq!(captured_target_id, local_print_id);
     }
+
+    // --- SigilSession tests ---
+
+    #[test]
+    fn test_sigil_session_basic_resolve() {
+        let mut session = SigilSession::new();
+        let ast = spire::parse("x = 1").expect("parse failed");
+        let resolved = session.resolve(ast).expect("resolve failed");
+        assert_eq!(resolved.len(), 1);
+        assert!(
+            matches!(&resolved[0], Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "x")
+        );
+    }
+
+    #[test]
+    fn test_sigil_session_scope_persists_across_calls() {
+        let mut session = SigilSession::new();
+
+        let ast1 = spire::parse("x = 1").expect("parse failed");
+        session.resolve(ast1).expect("first resolve failed");
+
+        // x must be in scope for the second call
+        let ast2 = spire::parse("y = x + 1").expect("parse failed");
+        let resolved = session.resolve(ast2).expect("second resolve failed");
+        assert!(
+            matches!(&resolved[0], Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "y")
+        );
+    }
+
+    #[test]
+    fn test_sigil_session_lookup_uid_returns_bound_id() {
+        let mut session = SigilSession::new();
+        let ast = spire::parse("answer = 42").expect("parse failed");
+        let resolved = session.resolve(ast).expect("resolve failed");
+
+        let expected_id = match &resolved[0] {
+            Resolved::Bind(_, ResolvedPattern::Var(id), _) => id.unique_id,
+            _ => panic!("Expected Bind"),
+        };
+
+        assert_eq!(session.lookup_uid("answer"), Some(expected_id));
+    }
+
+    #[test]
+    fn test_sigil_session_checkpoint_rollback_removes_later_bindings() {
+        let mut session = SigilSession::new();
+
+        // Define x
+        let ast1 = spire::parse("x = 1").expect("parse failed");
+        session.resolve(ast1).expect("first resolve failed");
+        let x_id = session.lookup_uid("x").expect("x should be defined after first resolve");
+
+        // Save checkpoint before defining y
+        let checkpoint = session.checkpoint();
+
+        // Define y
+        let ast2 = spire::parse("y = 2").expect("parse failed");
+        session.resolve(ast2).expect("second resolve failed");
+        assert!(
+            session.lookup_uid("y").is_some(),
+            "y should be visible before rollback"
+        );
+
+        // Rollback to before y was added
+        session.rollback(checkpoint);
+
+        assert!(
+            session.lookup_uid("y").is_none(),
+            "y should be gone after rollback"
+        );
+        assert_eq!(
+            session.lookup_uid("x"),
+            Some(x_id),
+            "x should remain after rollback"
+        );
+    }
+
+    #[test]
+    fn test_sigil_session_failed_resolve_does_not_pollute_scope() {
+        let mut session = SigilSession::new();
+
+        // Define x
+        let ast1 = spire::parse("x = 1").expect("parse failed");
+        session.resolve(ast1).expect("first resolve failed");
+        let x_id = session.lookup_uid("x").expect("x should be defined");
+
+        // Attempt to resolve something with an undefined variable — must fail
+        let ast_fail = spire::parse("y = undefined_name + 1").expect("parse failed");
+        assert!(
+            session.resolve(ast_fail).is_err(),
+            "resolve of undefined var must fail"
+        );
+
+        // x should survive; y must not be committed to scope
+        assert_eq!(
+            session.lookup_uid("x"),
+            Some(x_id),
+            "x should remain after failed resolve"
+        );
+        assert!(
+            session.lookup_uid("y").is_none(),
+            "y must not be in scope after a failed resolve"
+        );
+    }
+
+    // --- Expression resolution tests ---
+
+    #[test]
+    fn test_interpolated_string_resolves_embedded_variable() {
+        let resolved = parse_and_resolve(
+            r#"name = "alice"
+greeting = "Hello #{name}!""#,
+        )
+        .unwrap();
+
+        match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::InterpolatedStr(_, parts) => {
+                    let has_text = parts
+                        .iter()
+                        .any(|p| matches!(p, ResolvedInterpolatedPart::Text(s) if s.contains("Hello")));
+                    let has_name_var = parts.iter().any(|p| {
+                        matches!(p, ResolvedInterpolatedPart::Expr(e)
+                            if matches!(e.as_ref(), Resolved::Var(_, id) if id.name == "name"))
+                    });
+                    assert!(has_text, "expected 'Hello' text part in interpolated string");
+                    assert!(has_name_var, "expected resolved `name` variable in interpolated string");
+                }
+                _ => panic!("Expected InterpolatedStr, got {:?}", rhs),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_field_access_resolves_correct_target() {
+        let resolved = parse_and_resolve(
+            r#"defstruct Point { x: Int, y: Int }
+p = Point { x: 1, y: 2 }
+val = p.x"#,
+        )
+        .unwrap();
+
+        match &resolved[2] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::FieldAccess(_, expr, field) => {
+                    assert_eq!(field, "x");
+                    assert!(
+                        matches!(expr.as_ref(), Resolved::Var(_, id) if id.name == "p"),
+                        "field access target should be `p`"
+                    );
+                }
+                _ => panic!("Expected FieldAccess"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_list_literal_resolves_all_elements() {
+        let resolved = parse_and_resolve("items = [1, 2, 3]").unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::ListLiteral(_, elems) => {
+                    assert_eq!(elems.len(), 3);
+                    assert!(matches!(&elems[0], Resolved::Lit(_, Lit::Int(1))));
+                    assert!(matches!(&elems[1], Resolved::Lit(_, Lit::Int(2))));
+                    assert!(matches!(&elems[2], Resolved::Lit(_, Lit::Int(3))));
+                }
+                _ => panic!("Expected ListLiteral"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_semicolon_expression_wraps_inner_node() {
+        let resolved = parse_and_resolve(r#"print("hello");"#).unwrap();
+        match &resolved[0] {
+            Resolved::Semi(_, inner) => match inner.as_ref() {
+                Resolved::App(_, func, _) => match func.as_ref() {
+                    Resolved::Var(_, id) => assert_eq!(id.name, "print"),
+                    _ => panic!("Expected Var(print) inside Semi"),
+                },
+                _ => panic!("Expected App inside Semi"),
+            },
+            _ => panic!("Expected Semi at top level"),
+        }
+    }
+
+    // --- Import error tests ---
+
+    #[test]
+    fn test_unknown_import_member_is_error() {
+        let module_stages = vec![vec![StagedModuleAst {
+            module_path: "Helper".to_string(),
+            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+        }]];
+
+        let err = resolve_user_with_modules(
+            r#"import Helper::nonexistent;
+print("ok")"#,
+            &module_stages,
+        )
+        .expect_err("importing a non-existent member must fail");
+
+        assert!(
+            err.message.contains("Unknown import member"),
+            "actual error: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("Helper::nonexistent"),
+            "actual error: {}",
+            err.message
+        );
+    }
+
+    // --- Match arm binding tests ---
+
+    #[test]
+    fn test_match_arm_constructor_binding_resolves_to_same_uid_in_body() {
+        let resolved = parse_and_resolve(
+            r#"value: Result<Int> = Ok(42)
+result = match value {
+  Ok(x) => x,
+  Err(e) => 0,
+}"#,
+        )
+        .unwrap();
+
+        match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Match(_, _, arms) => {
+                    match &arms[0] {
+                        (ResolvedMatchPattern::Constructor(_, ctor_id, Some(binding_id)), body) => {
+                            assert_eq!(ctor_id.name, "Ok");
+                            assert_eq!(binding_id.name, "x");
+                            // The arm body `x` must refer to the same uid as the pattern binding
+                            match body {
+                                Resolved::Var(_, var_id) => {
+                                    assert_eq!(
+                                        var_id.unique_id, binding_id.unique_id,
+                                        "body var uid must match pattern binding uid"
+                                    );
+                                }
+                                _ => panic!("Expected Var as match arm body"),
+                            }
+                        }
+                        _ => panic!("Expected Constructor arm pattern with binding"),
+                    }
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    // --- build_scope_for_module tests ---
+
+    #[test]
+    fn test_build_scope_for_module_includes_prior_stage_declarations() {
+        let module_stages = vec![
+            vec![StagedModuleAst {
+                module_path: "Util".to_string(),
+                ast: parse_module_ast(r#"def helper(x: Int) -> Int { x }"#, "Util"),
+            }],
+            vec![StagedModuleAst {
+                module_path: "App".to_string(),
+                ast: parse_module_ast(r#"def main() -> Int { 0 }"#, "App"),
+            }],
+        ];
+
+        // Stage index 1 (App) — Util::helper from stage 0 should appear by fully-qualified name
+        let scope = build_scope_for_module(&module_stages, Some("App"), 1)
+            .expect("build_scope_for_module should succeed");
+
+        assert!(
+            scope.lookup("Util::helper").is_some(),
+            "Util::helper should be accessible by qualified name in App's scope"
+        );
+    }
 }
