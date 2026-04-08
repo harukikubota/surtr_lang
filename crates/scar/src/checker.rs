@@ -1,6 +1,6 @@
 #![allow(unused_variables)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sigil::resolved::*;
 use sindr::builtin::{builtin_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS};
@@ -276,6 +276,8 @@ impl Checker {
             }
         }
 
+        self.ensure_no_type_cycles(stmts)?;
+
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
@@ -338,6 +340,91 @@ impl Checker {
                         })?;
                 }
                 _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    fn ensure_no_type_cycles(&self, stmts: &[Resolved]) -> Result<(), TypeError> {
+        let mut decl_spans: HashMap<String, Span> = HashMap::new();
+        let mut edges: HashMap<String, HashSet<String>> = HashMap::new();
+
+        for stmt in stmts {
+            let (id, fields) = match stmt {
+                Resolved::StructDef(_, id, fields)
+                | Resolved::RecordDef(_, id, fields)
+                | Resolved::DeferrorDef(_, id, fields, _) => (id, fields),
+                _ => continue,
+            };
+            decl_spans.insert(id.name.clone(), id.span.clone());
+            edges.entry(id.name.clone()).or_default();
+            for field in fields {
+                let mut refs = Vec::new();
+                Self::collect_type_ref_names(&field.ty, &mut refs);
+                for ref_name in refs {
+                    edges.entry(id.name.clone()).or_default().insert(ref_name);
+                }
+            }
+        }
+
+        for refs in edges.values_mut() {
+            refs.retain(|name| decl_spans.contains_key(name));
+        }
+
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Visit {
+            Visiting,
+            Done,
+        }
+
+        fn dfs(
+            node: &str,
+            edges: &HashMap<String, HashSet<String>>,
+            states: &mut HashMap<String, Visit>,
+            stack: &mut Vec<String>,
+        ) -> Option<Vec<String>> {
+            if let Some(state) = states.get(node) {
+                if *state == Visit::Visiting {
+                    let start = stack.iter().position(|name| name == node).unwrap_or(0);
+                    let mut cycle = stack[start..].to_vec();
+                    cycle.push(node.to_string());
+                    return Some(cycle);
+                }
+                if *state == Visit::Done {
+                    return None;
+                }
+            }
+
+            states.insert(node.to_string(), Visit::Visiting);
+            stack.push(node.to_string());
+
+            if let Some(nexts) = edges.get(node) {
+                for next in nexts {
+                    if let Some(cycle) = dfs(next, edges, states, stack) {
+                        return Some(cycle);
+                    }
+                }
+            }
+
+            stack.pop();
+            states.insert(node.to_string(), Visit::Done);
+            None
+        }
+
+        let mut states: HashMap<String, Visit> = HashMap::new();
+        let mut stack = Vec::new();
+        for name in decl_spans.keys() {
+            if let Some(cycle) = dfs(name, &edges, &mut states, &mut stack) {
+                let head = cycle.first().cloned().unwrap_or_else(|| name.clone());
+                return Err(TypeError {
+                    message: format!("Cyclic type definition detected: {}", cycle.join(" -> ")),
+                    span: decl_spans
+                        .get(&head)
+                        .cloned()
+                        .unwrap_or_else(|| Span { start: 0, end: 0 }),
+                    hint: None,
+                });
             }
         }
 
@@ -496,7 +583,8 @@ impl Checker {
                 let (typed_pat, pat_ty) = self.check_pattern(pat, &typed_rhs.ty, span)?;
 
                 // Store the binding type in env
-                self.bind_typed_pattern(&typed_pat, &pat_ty);
+                self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
+                self.normalize_env_bindings();
 
                 Ok(TypedNode {
                     ty: Ty::Unit,
@@ -681,6 +769,23 @@ impl Checker {
     fn ast_ty_span(ast_ty: &AstTy) -> &Span {
         match ast_ty {
             AstTy::Named(span, _) | AstTy::Generic(span, _, _) | AstTy::Func(span, _, _) => span,
+        }
+    }
+
+    fn collect_type_ref_names(ast_ty: &AstTy, out: &mut Vec<String>) {
+        match ast_ty {
+            AstTy::Named(_, name) => out.push(name.clone()),
+            AstTy::Generic(_, _, args) => {
+                for arg in args {
+                    Self::collect_type_ref_names(arg, out);
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                for param in params {
+                    Self::collect_type_ref_names(param, out);
+                }
+                Self::collect_type_ref_names(ret, out);
+            }
         }
     }
 
@@ -1536,13 +1641,14 @@ impl Checker {
     }
 
     fn bind_typed_pattern(&mut self, pat: &TypedPattern, rhs_ty: &Ty) {
+        let rhs_ty = self.resolve_ty(rhs_ty);
         match pat {
             TypedPattern::Var(_, id) => {
                 self.env.bind_var(id.unique_id, rhs_ty.clone());
             }
             TypedPattern::As(alias_ty, inner, id) => {
-                self.env.bind_var(id.unique_id, alias_ty.clone());
-                self.bind_typed_pattern(inner, rhs_ty);
+                self.env.bind_var(id.unique_id, self.resolve_ty(alias_ty));
+                self.bind_typed_pattern(inner, &rhs_ty);
             }
             TypedPattern::Wildcard(_)
             | TypedPattern::ListNil(_)
@@ -1550,7 +1656,7 @@ impl Checker {
             | TypedPattern::StrLit(_, _)
             | TypedPattern::BoolLit(_, _) => {}
             TypedPattern::ListCons(_, head, tail) => {
-                let elem_ty = match rhs_ty {
+                let elem_ty = match &rhs_ty {
                     Ty::List(inner) => inner.as_ref().clone(),
                     _ => return,
                 };
@@ -1559,11 +1665,20 @@ impl Checker {
                 self.bind_typed_pattern(tail, &tail_ty);
             }
             TypedPattern::ResultOk(_, inner) => {
-                let ok_ty = match rhs_ty {
+                let ok_ty = match &rhs_ty {
                     Ty::Result(ok, _) => ok.as_ref().clone(),
                     _ => return,
                 };
                 self.bind_typed_pattern(inner, &ok_ty);
+            }
+        }
+    }
+
+    fn normalize_env_bindings(&mut self) {
+        let keys = self.env.vars.keys().copied().collect::<Vec<_>>();
+        for key in keys {
+            if let Some(ty) = self.env.vars.get(&key).cloned() {
+                self.env.vars.insert(key, self.resolve_ty(&ty));
             }
         }
     }
@@ -2086,20 +2201,33 @@ impl Checker {
             },
             BinOp::Eq | BinOp::Neq => match (&lt, &rt) {
                 (Ty::Int, Ty::Int) | (Ty::Str, Ty::Str) | (Ty::Bool, Ty::Bool) => Ok(Ty::Bool),
-                _ if !self.types_compatible(&lt, &rt) => Err(TypeError {
-                    message: format!(
-                        "Cannot compare {} and {}",
-                        self.ty_name(&lt),
-                        self.ty_name(&rt)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
-                _ => Err(TypeError {
-                    message: format!("== / != not supported for {} in phase 1", self.ty_name(&lt)),
-                    span: span.clone(),
-                    hint: None,
-                }),
+                _ => {
+                    // Equality checks are intentionally restricted for now.
+                    // Probe comparability without committing substitutions on failure.
+                    let before = self.substitutions.clone();
+                    let comparable = self.types_compatible(&lt, &rt);
+                    self.substitutions = before;
+                    if !comparable {
+                        Err(TypeError {
+                            message: format!(
+                                "Cannot compare {} and {}",
+                                self.ty_name(&lt),
+                                self.ty_name(&rt)
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        })
+                    } else {
+                        Err(TypeError {
+                            message: format!(
+                                "== / != not supported for {} in phase 1",
+                                self.ty_name(&lt)
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        })
+                    }
+                }
             },
             BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => match (&lt, &rt) {
                 (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) => Ok(Ty::Bool),
@@ -2344,6 +2472,7 @@ impl Checker {
                 result_ty = Some(body_node.ty.clone());
             }
             typed_arms.push((typed_pat, body_node));
+            self.normalize_env_bindings();
         }
 
         self.check_match_exhaustive(span, &typed_scrut.ty, &typed_arms)?;
@@ -2468,7 +2597,8 @@ impl Checker {
     ) -> Result<TypedMatchPattern, TypeError> {
         match pat {
             ResolvedPattern::Var(id) => {
-                self.env.bind_var(id.unique_id, expected_ty.clone());
+                self.env
+                    .bind_var(id.unique_id, self.resolve_ty(expected_ty));
                 Ok(TypedMatchPattern::Binding(id.clone()))
             }
             ResolvedPattern::Annotated(id, ast_ty) => {
@@ -2938,7 +3068,26 @@ impl Checker {
 
         let tag = def.tag;
 
-        // Check fields match definition order and types
+        // Reject unknown/duplicate fields before type-checking values.
+        let mut seen = HashSet::new();
+        for (name, _value) in field_vals {
+            if !def.fields.iter().any(|(field_name, _)| field_name == name) {
+                return Err(TypeError {
+                    message: format!("Unknown field '{}' in {}", name, id.name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            if !seen.insert(name.clone()) {
+                return Err(TypeError {
+                    message: format!("Duplicate field '{}' in {}", name, id.name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        }
+
+        // Check fields match definition order and types.
         let mut typed_fields = Vec::new();
         for (def_name, def_ty) in &def.fields {
             let (_, resolved_val) =
@@ -3162,8 +3311,16 @@ impl Checker {
                 }
             }
         } else if all_named {
+            let mut seen = HashSet::new();
             for arg in args {
                 if let ResolvedRecordLitArg::Named(name, expr) = arg {
+                    if !seen.insert(name.clone()) {
+                        return Err(TypeError {
+                            message: format!("Duplicate field '{}' in {}", name, id.name),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
                     let idx = def
                         .fields
                         .iter()
@@ -3305,7 +3462,7 @@ impl Checker {
             .check_node(show_expr)
             .map_err(|err| TypeError {
                 message: err.message,
-                span: span.clone(),
+                span: err.span,
                 hint: err.hint,
             })?;
         self.env.next_tyvar = self.env.next_tyvar.max(show_checker.env.next_tyvar);
@@ -3316,7 +3473,7 @@ impl Checker {
                     "deferror show block must return String, got {}",
                     self.ty_name(&typed_show.ty)
                 ),
-                span: span.clone(),
+                span: typed_show.span.clone(),
                 hint: None,
             });
         }

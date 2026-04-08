@@ -309,4 +309,76 @@ deferror NotFound(code: String) {
         .expect_err("non-entrypoint function must fail");
         assert!(err.message.contains("only allowed inside entrypoint"));
     }
+
+    #[test]
+    fn generic_annotation_list_int_is_accepted() {
+        let typed = typecheck_with_builtin_prelude("nums: List<Int> = [1, 2, 3]");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::Bind(_, _))
+        ));
+    }
+
+    #[test]
+    fn cyclic_type_definition_is_rejected() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct Node {
+  next: Node,
+}"#,
+        );
+        let err = typecheck(resolved).expect_err("cyclic type must fail");
+        assert!(err.message.contains("Cyclic type definition detected"));
+    }
+
+    #[test]
+    fn match_binding_pattern_is_treated_as_exhaustive() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"flag = True
+answer = match flag {
+  value => value,
+}"#,
+        );
+        let typed = typecheck(resolved).expect("binding arm should be exhaustive");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::Bind(_, _))
+        ));
+    }
+
+    #[test]
+    fn struct_literal_rejects_extra_fields() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+user = User { name: "alice", age: 20, extra: 1 }"#,
+        );
+        let err = typecheck(resolved).expect_err("extra fields must fail");
+        assert!(err.message.contains("Unknown field 'extra' in User"));
+    }
+
+    #[test]
+    fn constructor_named_args_reject_duplicate_fields() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defrecord Pair(first: Int, second: String)
+pair = Pair(first: 1, first: 2)"#,
+        );
+        let err = typecheck(resolved).expect_err("duplicate named args must fail");
+        assert!(err.message.contains("Duplicate field 'first' in Pair"));
+    }
+
+    #[test]
+    fn deferror_show_type_mismatch_points_to_show_expression_span() {
+        let source = r#"deferror NotFound(code: String) {
+  123
+}"#;
+        let resolved = resolve_with_builtin_prelude(source);
+        let err = typecheck(resolved).expect_err("show block must return String");
+        let literal_start = source.find("123").expect("literal should exist in source");
+        assert!(err
+            .message
+            .contains("deferror show block must return String"));
+        assert_eq!(err.span.start, literal_start);
+    }
 }
