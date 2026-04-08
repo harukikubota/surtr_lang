@@ -56,7 +56,11 @@ pub fn run_command(options: TuiOptions) -> Result<(), i32> {
 
     let mut app = App::new();
     if let Some(path) = &options.eldr_path {
-        app.push_result(path.clone(), vec![format!("loaded {path}")], ResultEntryKind::Info);
+        app.push_result(
+            path.clone(),
+            vec![format!("loaded {path}")],
+            ResultEntryKind::Info,
+        );
     }
 
     enable_raw_mode().map_err(|e| {

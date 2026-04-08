@@ -1,3 +1,4 @@
+use sindr::primitives::SurtrInt;
 use spire::ast::{AstTy, BinOp, Lit, Span, Symbol};
 
 /// A resolved identifier — name + unique id + source location.
@@ -111,7 +112,7 @@ pub enum ResolvedPattern {
     Wildcard(Span),
     ListNil(Span),
     ListCons(Box<ResolvedPattern>, Box<ResolvedPattern>),
-    IntLit(Span, i64),
+    IntLit(Span, SurtrInt),
     StrLit(Span, String),
     BoolLit(Span, bool),
     Constructor(ResolvedId, Box<ResolvedPattern>),
@@ -127,7 +128,7 @@ pub enum ResolvedMatchPattern {
     /// `True` / `False`
     BoolLit(Span, bool),
     /// Integer literal
-    IntLit(Span, i64),
+    IntLit(Span, SurtrInt),
     /// String literal
     StrLit(Span, String),
     /// `Ok(var)` / `Err(var)` — constructor tag resolved

@@ -12,3 +12,7 @@ members = [
     "crates/xldr",
     "crates/rune",
 ]
+
+[workspace.dependencies]
+num-bigint = { version = "0.4", features = ["serde"] }
+num-traits = "0.2"

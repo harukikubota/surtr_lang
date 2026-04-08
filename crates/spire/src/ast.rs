@@ -1,3 +1,5 @@
+use sindr::primitives::SurtrInt;
+
 /// Source location — attached to every AST node for downstream error reporting.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Span {
@@ -12,7 +14,7 @@ pub type Symbol = String;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Lit {
-    Int(i64),
+    Int(SurtrInt),
     Float(f64),
     Str(String),
     Bool(bool),
@@ -64,7 +66,7 @@ pub enum AstPattern {
     /// `[head, ..tail]`
     ListCons(Span, Box<AstPattern>, Box<AstPattern>),
     /// Integer literal in pattern position.
-    IntLit(Span, i64),
+    IntLit(Span, SurtrInt),
     /// String literal in pattern position.
     StrLit(Span, String),
     /// Boolean literal in pattern position.
@@ -86,7 +88,7 @@ pub enum AstMatchPattern {
     /// `True` / `False`
     BoolLit(Span, bool),
     /// Integer literal
-    IntLit(Span, i64),
+    IntLit(Span, SurtrInt),
     /// String literal
     StrLit(Span, String),
     /// `Ok(val)` / `Err(e)` — constructor with optional inner binding
@@ -246,6 +248,7 @@ pub enum Ast {
 #[cfg(test)]
 mod tests {
     use super::{Ast, AstPath, ImportSpec, Lit, Span};
+    use sindr::primitives::int;
 
     #[test]
     fn import_forms_are_distinct_in_ast() {
@@ -274,7 +277,7 @@ mod tests {
     #[test]
     fn defmod_keeps_body_nodes() {
         let span = Span { start: 0, end: 20 };
-        let body = vec![Ast::Lit(span.clone(), Lit::Int(1))];
+        let body = vec![Ast::Lit(span.clone(), Lit::Int(int(1)))];
         let node = Ast::Defmod(span, "Kernel".to_string(), body.clone());
 
         match node {

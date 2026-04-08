@@ -1430,7 +1430,7 @@ impl Checker {
                         hint: None,
                     });
                 }
-                Ok((TypedPattern::IntLit(Ty::Int, *n), rhs_ty))
+                Ok((TypedPattern::IntLit(Ty::Int, n.clone()), rhs_ty))
             }
             ResolvedPattern::StrLit(pspan, s) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
@@ -2452,7 +2452,7 @@ impl Checker {
                     });
                 }
                 let typed_body = self.check_node(body)?;
-                Ok((TypedMatchPattern::IntLit(*n), typed_body))
+                Ok((TypedMatchPattern::IntLit(n.clone()), typed_body))
             }
             ResolvedMatchPattern::StrLit(span, s) => {
                 if !self.types_compatible(&Ty::Str, scrut_ty) {
@@ -2569,7 +2569,7 @@ impl Checker {
                         hint: None,
                     });
                 }
-                Ok(TypedMatchPattern::IntLit(*n))
+                Ok(TypedMatchPattern::IntLit(n.clone()))
             }
             ResolvedMatchPattern::StrLit(span, s) => {
                 if !self.types_compatible(&Ty::Str, expected_ty) {

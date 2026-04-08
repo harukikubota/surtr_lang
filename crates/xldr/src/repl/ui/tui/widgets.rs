@@ -1,13 +1,13 @@
 //! TUI widget rendering.
 
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::*,
     widgets::{Block, Borders, Padding, Paragraph, Widget},
+    Frame,
 };
 
-use super::app::{App, FocusPane, ResultEntryKind, ReplMode};
+use super::app::{App, FocusPane, ReplMode, ResultEntryKind};
 
 pub(super) fn draw(frame: &mut Frame, app: &App) {
     let completion_h = if app.completion.visible { 5u16 } else { 1 };
@@ -74,8 +74,7 @@ impl Widget for ResultsPaneWidget<'_> {
             return;
         }
 
-        for entry in self.app.results.iter()
-        {
+        for entry in self.app.results.iter() {
             let entry_lines_len = 1 + entry.rendered_lines.len();
             let entry_height = (entry_lines_len as u16).saturating_add(2);
             if y.saturating_add(entry_height) > max_y {
@@ -160,14 +159,19 @@ fn draw_docs(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_completion(frame: &mut Frame, app: &App, area: Rect) {
     let completion_focused = app.focus == FocusPane::Input && app.completion.visible;
-    let block = pane_block("Completion".to_string(), completion_focused).padding(Padding::horizontal(1));
+    let block =
+        pane_block("Completion".to_string(), completion_focused).padding(Padding::horizontal(1));
     let lines: Vec<Line> = if app.completion.visible {
         app.completion
             .items
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                let cursor = if i == app.completion.selected { ">" } else { " " };
+                let cursor = if i == app.completion.selected {
+                    ">"
+                } else {
+                    " "
+                };
                 let detail = item.detail.clone().unwrap_or_default();
                 let style = if i == app.completion.selected {
                     Style::default().fg(Color::Cyan)

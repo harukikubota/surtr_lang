@@ -35,9 +35,10 @@ surtr/
 
 | ファイル | 内容 |
 |---|---|
-| `doc/要件定義.md`             | 言語仕様・コンパイラ設計の全体定義 |
+| `doc/要件定義v9.md`           | 言語仕様・コンパイラ設計の全体定義 |
 | `doc/EldrVM_spec.md`         | VM仕様書 |
-| `doc/テスト方針.md`            | テストの分離方法・レイヤー | 
+| `doc/テスト方針.md`            | テストの分離方法・レイヤー |
+| `doc/float.md`               | `Float` の暫定仕様メモ |
 
 ---
 
@@ -84,16 +85,16 @@ fn execute(bytecode: Bytecode)        -> Result<(), RuntimeError>
 
 ### 組込み関数
 
-- 組込み関数の追加・変更は **`eldr/src/builtin_registry.rs` の `BUILTINS` テーブルのみ** を起点にする
-- Sigil・Scar・Eldr の3者がこのテーブルを参照する。他ファイルへの直接ハードコード禁止
-- `unique_id` の割り当て順序は `BUILTINS` テーブルの定義順に従う
+- 組込み関数の追加・変更は **`crates/sindr/src/builtin.rs` の `BUILTIN_METAS` テーブルのみ** を起点にする
+- Sigil・Scar・Forge・Eldr の4者がこのテーブルを参照する。他ファイルへの直接ハードコード禁止
+- `builtin_id` の割り当て順序は `BUILTIN_METAS` テーブルの定義順に従う
 
 ```rust
-// BUILTINS テーブルの構造
-pub const BUILTINS: &[BuiltinDef] = &[
-    BuiltinDef { name: "print",     builtin_id: 0, ... },
-    BuiltinDef { name: "to_string", builtin_id: 1, ... },
-    BuiltinDef { name: "eprint",    builtin_id: 2, ... },
+// BUILTIN_METAS テーブルの構造
+pub const BUILTIN_METAS: &[BuiltinMeta] = &[
+    BuiltinMeta { name: "print",     builtin_id: 0, ... },
+    BuiltinMeta { name: "to_string", builtin_id: 1, ... },
+    BuiltinMeta { name: "eprint",    builtin_id: 2, ... },
 ];
 ```
 
@@ -120,33 +121,16 @@ Forge は `GetField(idx)` を emit するだけでよい。
 - Forge が構築し Eldr がランタイムで参照する
 - tag 番号の予約: `Ok = 0`, `Err = 1`
 - ユーザ定義型の tag は出現順で連番割り当て
+- runtime tag は user-visible `Int` と分離する
 
 ---
 
-## Current Scope: Phase 1 Only
+## Current Focus
 
-### 実装対象
-
-- プリミティブ型: `Int` / `Float` / `String` / `Boolean` / `Unit`
-- コレクション: `List` リテラル・空リスト・型推論
-- データ定義: `defstruct` / `defrecord` / `deferror`
-- 制御構造: `if` 式 / `match`（Boolean・Result のみ、網羅必須）
-- 演算子: 算術 / 比較 / `==` `!=`（Int・String・Bool のみ）/ `++`（文字列結合）
-- 組込み関数: `print` / `to_string` / `eprint`
-
-### 実装しないもの（フェーズ2以降）
-
-- `def`（関数定義）・クロージャ・ラムダ
-- `|>` パイプライン
-- `@@builtin` 構文・`builtin.srt`
-- `.eldr` ファイル出力
-- `MakeFrame` / `PopFrame` / `Return` Opcode
-- 名前付き引数（`defrecord` を除く）
-- 式埋め込み文字列（`"#{expr}"`）
-- トレイト・型エイリアス・NewType
-- マクロシステム
-
-上記をフェーズ1のコードに混入させないこと。
+- `Int` は `BigInt` を採用し、通常算術でオーバーフローしない前提で扱う
+- runtime 内部 ID（tag / builtin_id / fun_idx）は固定幅の内部識別子として扱い、user-visible `Int` と混同しない
+- `Float` は実装を維持するが、厳密契約は `doc/float.md` で継続整理する
+- `@@builtin` の surface 宣言は標準 module 内の宣言層であり、追加・変更の正本ではない
 
 ---
 
@@ -155,6 +139,8 @@ Forge は `GetField(idx)` を emit するだけでよい。
 ### ユニットテスト
 
 各クレートに `#[test]` を書く。`cargo test` ですべて通ること。
+
+将来仕様の先置きには `#[ignore]` テストを使ってよい。pending 理由をテスト名か ignore 理由で明記すること。
 
 ### 仕様ベーステスト
 

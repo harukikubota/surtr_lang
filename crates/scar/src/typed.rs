@@ -1,4 +1,5 @@
 use sigil::resolved::ResolvedId;
+use sindr::primitives::SurtrInt;
 use spire::ast::{BinOp, Lit, Span};
 
 use crate::types::Ty;
@@ -74,7 +75,7 @@ pub enum TypedPattern {
     Wildcard(Ty),
     ListNil(Ty),
     ListCons(Ty, Box<TypedPattern>, Box<TypedPattern>),
-    IntLit(Ty, i64),
+    IntLit(Ty, SurtrInt),
     StrLit(Ty, String),
     BoolLit(Ty, bool),
     /// `Ok(inner)` pattern node in safe-bind recursion.
@@ -90,7 +91,7 @@ pub enum TypedMatchPattern {
     /// `True` / `False`
     BoolLit(bool),
     /// Integer literal
-    IntLit(i64),
+    IntLit(SurtrInt),
     /// String literal
     StrLit(String),
     /// Constructor tag + optional inner binding

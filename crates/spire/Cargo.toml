@@ -5,3 +5,4 @@ edition = "2021"
 description = "Surtr's Parser Ingesting Raw Expressions"
 
 [dependencies]
+sindr = { path = "../sindr" }

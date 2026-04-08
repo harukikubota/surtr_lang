@@ -1,5 +1,11 @@
 # Spire レビュー — 2026-04-06
 
+2026-04-08 取り込みメモ:
+
+- `i64` 前提の指摘は `Int=BigInt` 移行で再整理する
+- `@@builtin` と将来の `type` 宣言読み取りは pending テストを先置きし、段階導入する
+- `AstTy::Generic` は今回の作業フローでは future work として切り出す
+
 ## 対象範囲
 
 `crates/spire/src/` 以下の全ファイル

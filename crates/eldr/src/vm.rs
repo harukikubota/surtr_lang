@@ -1,6 +1,7 @@
 use sindr::ir::{
     line_column_for_offset, Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, SourceMap,
 };
+use sindr::primitives::SurtrInt;
 use sindr::runtime::{
     Callable, CallableTarget, ListHandle, Location, RichError, TypeRegistry, Value,
 };
@@ -201,11 +202,7 @@ impl VM {
     /// actual frame size.  This method returns a corrected clone suitable for
     /// `Bytecode::encode()`.
     pub fn snapshot_bytecode(&self) -> Bytecode {
-        let actual_num_locals = self
-            .frames
-            .first()
-            .map(|f| f.locals.len())
-            .unwrap_or(0);
+        let actual_num_locals = self.frames.first().map(|f| f.locals.len()).unwrap_or(0);
         let mut bc = self.bytecode.clone();
         bc.num_locals = actual_num_locals;
         bc
@@ -685,7 +682,8 @@ impl VM {
                     RuntimeError::new(format!("LoadConst index out of bounds: {}", idx))
                 })?;
                 let val = match c {
-                    Constant::Int(n) => Value::Int(*n),
+                    Constant::Int(n) => Value::Int(n.clone()),
+                    Constant::Tag(tag) => Value::Tag(*tag),
                     Constant::Float(f) => Value::Float(*f),
                     Constant::Str(s) => Value::Str(s.clone()),
                     Constant::Bool(b) => Value::Bool(*b),
@@ -904,12 +902,10 @@ impl VM {
                 fields.reverse();
                 let tag_val = self.pop_stack()?;
                 let tag = match tag_val {
-                    Value::Int(tag) => u32::try_from(tag).map_err(|_| {
-                        RuntimeError::new(format!("StructNew: invalid tag value {}", tag))
-                    })?,
+                    Value::Tag(tag) => tag,
                     other => {
                         return Err(RuntimeError::new(format!(
-                            "StructNew: expected Int tag, got {:?}",
+                            "StructNew: expected Tag, got {:?}",
                             other
                         )));
                     }
@@ -933,13 +929,16 @@ impl VM {
             Opcode::GetTag => {
                 let val = self.pop_stack()?;
                 match val {
-                    Value::Tagged { tag, .. } => {
-                        self.stack.push(Value::Int(tag as i64));
-                    }
+                    Value::Tagged { tag, .. } => self.stack.push(Value::Tag(tag)),
                     _ => {
                         return Err(RuntimeError::new("GetTag on non-tagged value"));
                     }
                 }
+            }
+            Opcode::EqTag => {
+                let b = self.pop_tag()?;
+                let a = self.pop_tag()?;
+                self.stack.push(Value::Bool(a == b));
             }
 
             // Built-in function call
@@ -1320,10 +1319,17 @@ impl VM {
         result
     }
 
-    fn pop_int(&mut self) -> Result<i64, RuntimeError> {
+    fn pop_int(&mut self) -> Result<SurtrInt, RuntimeError> {
         match self.pop_stack()? {
             Value::Int(n) => Ok(n),
             other => Err(RuntimeError::new(format!("Expected Int, got {:?}", other))),
+        }
+    }
+
+    fn pop_tag(&mut self) -> Result<u32, RuntimeError> {
+        match self.pop_stack()? {
+            Value::Tag(tag) => Ok(tag),
+            other => Err(RuntimeError::new(format!("Expected Tag, got {:?}", other))),
         }
     }
 
@@ -1353,7 +1359,7 @@ impl VM {
 
     fn int_binop<F>(&mut self, f: F) -> Result<(), RuntimeError>
     where
-        F: FnOnce(i64, i64) -> Result<Value, RuntimeError>,
+        F: FnOnce(SurtrInt, SurtrInt) -> Result<Value, RuntimeError>,
     {
         let b = self.pop_int()?;
         let a = self.pop_int()?;
@@ -1380,6 +1386,7 @@ mod tests {
         Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
         SourceMap,
     };
+    use sindr::primitives::int;
     use sindr::runtime::{TypeEntry, TypeKind, TypeRegistry, Value};
 
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
@@ -1423,7 +1430,7 @@ mod tests {
             Opcode::Halt,
         ]);
         let mut vm = VM::new(bytecode);
-        vm.bytecode.constants = vec![Constant::Int(1)];
+        vm.bytecode.constants = vec![Constant::Int(int(1))];
 
         let err = vm.run().expect_err("must fail");
         assert_eq!(err.context.pc, Some(1));
@@ -1451,7 +1458,7 @@ mod tests {
             Opcode::LoadLocal(0),
             Opcode::Return,
         ]);
-        bytecode.constants = vec![Constant::Int(5)];
+        bytecode.constants = vec![Constant::Int(int(5))];
         bytecode.functions = vec![FunctionEntry {
             fun_idx: 0,
             entry_pc: 3,
@@ -1502,7 +1509,7 @@ mod tests {
             ],
             source_map: None,
             const_base: 0,
-            constants: vec![Constant::Int(99), Constant::Int(7)],
+            constants: vec![Constant::Int(int(99)), Constant::Int(int(7))],
             new_locals: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
@@ -1511,20 +1518,20 @@ mod tests {
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
-        assert_eq!(result, Value::Int(7));
+        assert_eq!(result, Value::Int(int(7)));
     }
 
     #[test]
     fn push_relocates_const_indices() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
-        bytecode.constants = vec![Constant::Int(10)];
+        bytecode.constants = vec![Constant::Int(int(10))];
         let mut vm = VM::new(bytecode);
 
         let chunk = BytecodeChunk {
             opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
             source_map: None,
             const_base: 1,
-            constants: vec![Constant::Int(42)],
+            constants: vec![Constant::Int(int(42))],
             new_locals: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
@@ -1533,7 +1540,7 @@ mod tests {
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
-        assert_eq!(result, Value::Int(42));
+        assert_eq!(result, Value::Int(int(42)));
     }
 
     #[test]
@@ -1634,7 +1641,7 @@ mod tests {
             Opcode::Halt,
         ]);
         let mut vm = VM::new(bytecode).with_source(source, "REPL".into());
-        vm.bytecode.constants = vec![Constant::Int(10), Constant::Int(0)];
+        vm.bytecode.constants = vec![Constant::Int(int(10)), Constant::Int(int(0))];
 
         vm.run().expect("run should succeed");
         match vm.last_value().cloned().expect("result should be recorded") {
@@ -1708,7 +1715,7 @@ mod tests {
             opcodes: vec![Opcode::LoadConst(0)],
             source_map: None,
             const_base: 0,
-            constants: vec![Constant::Int(1)],
+            constants: vec![Constant::Int(int(1))],
             new_locals: 0,
             type_entries: Vec::new(),
             error_template_base: 0,

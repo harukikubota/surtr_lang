@@ -22,9 +22,23 @@ pub fn parse_repl_command(trimmed: &str) -> Option<ReplCommand> {
 
     let command = match cmd {
         "quit" | "q" => ReplCommand::Quit,
-        "v" => ReplCommand::ValueRecall { arg: rest.to_string() },
-        "save" => ReplCommand::Save { path: rest.to_string() },
-        other => ReplCommand::Unknown { raw: format!(":{}{}", other, if rest.is_empty() { String::new() } else { format!(" {rest}") }) },
+        "v" => ReplCommand::ValueRecall {
+            arg: rest.to_string(),
+        },
+        "save" => ReplCommand::Save {
+            path: rest.to_string(),
+        },
+        other => ReplCommand::Unknown {
+            raw: format!(
+                ":{}{}",
+                other,
+                if rest.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {rest}")
+                }
+            ),
+        },
     };
     Some(command)
 }

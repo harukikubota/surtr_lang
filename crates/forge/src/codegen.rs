@@ -6,6 +6,7 @@ use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_meta_by_name;
+use sindr::primitives::int;
 use spire::ast::{BinOp, Lit, Span};
 
 use crate::bytecode::*;
@@ -139,8 +140,10 @@ impl ForgeSession {
                 .iter()
                 .find(|f| f.qualified_name.as_deref() == Some(&template.kind))
             {
-                error_ctor_funs
-                    .insert(template.kind.clone(), (fun_entry.fun_idx, template.num_params));
+                error_ctor_funs.insert(
+                    template.kind.clone(),
+                    (fun_entry.fun_idx, template.num_params),
+                );
             }
         }
 
@@ -920,7 +923,7 @@ impl Codegen {
 
             TypedInner::StructLit(tag, fields) => {
                 // Push tag first, then fields
-                let tag_const = self.add_constant(Constant::Int(*tag as i64));
+                let tag_const = self.add_constant(Constant::Tag(*tag));
                 self.emit(Opcode::LoadConst(tag_const));
                 for field in fields {
                     self.emit_node(field)?;
@@ -930,7 +933,7 @@ impl Codegen {
             }
 
             TypedInner::ConstructorCall(tag, fields) => {
-                let tag_const = self.add_constant(Constant::Int(*tag as i64));
+                let tag_const = self.add_constant(Constant::Tag(*tag));
                 self.emit(Opcode::LoadConst(tag_const));
                 for field in fields {
                     self.emit_node(field)?;
@@ -1034,9 +1037,9 @@ impl Codegen {
 
         self.emit(Opcode::LoadLocal(result_slot));
         self.emit(Opcode::GetTag);
-        let err_tag = self.add_constant(Constant::Int(1));
+        let err_tag = self.add_constant(Constant::Tag(1));
         self.emit(Opcode::LoadConst(err_tag));
-        self.emit(Opcode::EqInt);
+        self.emit(Opcode::EqTag);
 
         let ok_path = self.fresh_label();
         self.emit_jump_if_false(ok_path);
@@ -1204,7 +1207,7 @@ impl Codegen {
 
         let rem_count_slot = self.state.next_slot;
         self.state.next_slot += 1;
-        let zero_idx = self.add_constant(Constant::Int(0));
+        let zero_idx = self.add_constant(Constant::Int(int(0)));
         self.emit(Opcode::LoadConst(zero_idx));
         self.emit(Opcode::StoreLocal(rem_count_slot));
 
@@ -1216,7 +1219,7 @@ impl Codegen {
         self.emit_jump_if_true(loop_done);
 
         self.emit(Opcode::LoadLocal(rem_count_slot));
-        let one_idx = self.add_constant(Constant::Int(1));
+        let one_idx = self.add_constant(Constant::Int(int(1)));
         self.emit(Opcode::LoadConst(one_idx));
         self.emit(Opcode::AddInt);
         self.emit(Opcode::StoreLocal(rem_count_slot));
@@ -1229,7 +1232,7 @@ impl Codegen {
 
         let rhs_total_slot = self.state.next_slot;
         self.state.next_slot += 1;
-        let lhs_idx = self.add_constant(Constant::Int(lhs_len as i64));
+        let lhs_idx = self.add_constant(Constant::Int(int(lhs_len as u64)));
         self.emit(Opcode::LoadConst(lhs_idx));
         self.emit(Opcode::LoadLocal(rem_count_slot));
         self.emit(Opcode::AddInt);
@@ -1268,13 +1271,13 @@ impl Codegen {
         span: Span,
     ) -> Result<(), CodegenError> {
         if self.in_function {
-            let tag_const = self.add_constant(Constant::Int(1));
+            let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit_error_value(kind, message, &span);
             self.emit(Opcode::StructNew(1));
             self.emit(Opcode::Return);
         } else if self.top_level_returns_result {
-            let tag_const = self.add_constant(Constant::Int(1));
+            let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit_error_value(kind, message, &span);
             self.emit(Opcode::StructNew(1));
@@ -1306,7 +1309,7 @@ impl Codegen {
             self.state.next_slot += 1;
             self.emit(Opcode::StoreLocal(msg_slot));
 
-            let tag_const = self.add_constant(Constant::Int(1));
+            let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit(Opcode::LoadLocal(msg_slot));
             self.emit_error_value_from_stack(kind, &span);
@@ -1317,7 +1320,7 @@ impl Codegen {
             self.state.next_slot += 1;
             self.emit(Opcode::StoreLocal(msg_slot));
 
-            let tag_const = self.add_constant(Constant::Int(1));
+            let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit(Opcode::LoadLocal(msg_slot));
             self.emit_error_value_from_stack(kind, &span);
@@ -1496,7 +1499,7 @@ impl Codegen {
             }
             TypedPattern::IntLit(_, n) => {
                 self.emit(Opcode::LoadLocal(slot));
-                let n_const = self.add_constant(Constant::Int(*n));
+                let n_const = self.add_constant(Constant::Int(n.clone()));
                 self.emit(Opcode::LoadConst(n_const));
                 self.emit(Opcode::EqInt);
                 self.emit_jump_if_false(fail_label);
@@ -1555,9 +1558,9 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::GetTag);
                 let expected_tag = if propagate_result_error { 1 } else { 0 };
-                let tag_const = self.add_constant(Constant::Int(expected_tag));
+                let tag_const = self.add_constant(Constant::Tag(expected_tag));
                 self.emit(Opcode::LoadConst(tag_const));
-                self.emit(Opcode::EqInt);
+                self.emit(Opcode::EqTag);
 
                 if propagate_result_error {
                     let inner_ok = self.fresh_label();
@@ -1919,7 +1922,7 @@ impl Codegen {
             }
             TypedMatchPattern::IntLit(n) => {
                 self.emit(Opcode::LoadLocal(slot));
-                let int_const = self.add_constant(Constant::Int(*n));
+                let int_const = self.add_constant(Constant::Int(n.clone()));
                 self.emit(Opcode::LoadConst(int_const));
                 self.emit(Opcode::EqInt);
                 self.emit_jump_if_false(fail_label);
@@ -1934,9 +1937,9 @@ impl Codegen {
             TypedMatchPattern::Constructor(tag, _) => {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::GetTag);
-                let tag_const = self.add_constant(Constant::Int(*tag as i64));
+                let tag_const = self.add_constant(Constant::Tag(*tag));
                 self.emit(Opcode::LoadConst(tag_const));
-                self.emit(Opcode::EqInt);
+                self.emit(Opcode::EqTag);
                 self.emit_jump_if_false(fail_label);
             }
             TypedMatchPattern::ListNil => {
@@ -2021,7 +2024,7 @@ impl Codegen {
 
     fn lit_to_constant(&self, lit: &Lit) -> Constant {
         match lit {
-            Lit::Int(n) => Constant::Int(*n),
+            Lit::Int(n) => Constant::Int(n.clone()),
             Lit::Float(f) => Constant::Float(*f),
             Lit::Str(s) => Constant::Str(s.clone()),
             Lit::Bool(b) => Constant::Bool(*b),

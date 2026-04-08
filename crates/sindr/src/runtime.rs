@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 
+use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
+
 /// Kind of user-defined type at runtime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeKind {
@@ -11,7 +13,7 @@ pub enum TypeKind {
 /// Runtime metadata for a tagged type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypeEntry {
-    pub tag: u32,
+    pub tag: RuntimeTag,
     pub name: String,
     pub kind: TypeKind,
     pub field_names: Vec<String>,
@@ -34,7 +36,7 @@ impl TypeRegistry {
         self.entries.push(entry);
     }
 
-    pub fn lookup(&self, tag: u32) -> Option<&TypeEntry> {
+    pub fn lookup(&self, tag: RuntimeTag) -> Option<&TypeEntry> {
         self.entries.iter().find(|entry| entry.tag == tag)
     }
 }
@@ -42,7 +44,8 @@ impl TypeRegistry {
 /// Runtime value in the Surtr VM.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    Int(i64),
+    Int(SurtrInt),
+    Tag(RuntimeTag),
     Float(f64),
     Str(String),
     Bool(bool),
@@ -79,8 +82,8 @@ pub struct Callable {
 /// Callable target reference.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallableTarget {
-    Builtin(u16),
-    Function(u32),
+    Builtin(BuiltinId),
+    Function(FunctionId),
 }
 
 impl Value {
@@ -88,6 +91,7 @@ impl Value {
     pub fn to_display_string(&self, registry: &TypeRegistry) -> String {
         match self {
             Value::Int(n) => n.to_string(),
+            Value::Tag(tag) => format!("<tag:{}>", tag),
             Value::Float(f) => {
                 let s = format!("{}", f);
                 if s.contains('.') {
@@ -264,13 +268,14 @@ pub struct Location {
 #[cfg(test)]
 mod tests {
     use super::{ListHandle, Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value};
+    use crate::primitives::int;
 
     #[test]
     fn display_for_reserved_result_tags() {
         let registry = TypeRegistry::new();
         let ok = Value::Tagged {
             tag: 0,
-            fields: vec![Value::Int(42)],
+            fields: vec![Value::Int(int(42))],
         };
         let err = Value::Tagged {
             tag: 1,
@@ -298,11 +303,11 @@ mod tests {
 
         let user = Value::Tagged {
             tag: 10,
-            fields: vec![Value::Str("alice".into()), Value::Int(20)],
+            fields: vec![Value::Str("alice".into()), Value::Int(int(20))],
         };
         let pair = Value::Tagged {
             tag: 11,
-            fields: vec![Value::Int(1), Value::Int(2)],
+            fields: vec![Value::Int(int(1)), Value::Int(int(2))],
         };
 
         assert_eq!(
@@ -334,9 +339,9 @@ mod tests {
     fn list_display_uses_cons_handle_shape() {
         let registry = TypeRegistry::new();
         let value = Value::List(ListHandle::from_items(vec![
-            Value::Int(1),
-            Value::Int(2),
-            Value::Int(3),
+            Value::Int(int(1)),
+            Value::Int(int(2)),
+            Value::Int(int(3)),
         ]));
         assert_eq!(value.to_display_string(&registry), "[1, 2, 3]");
     }

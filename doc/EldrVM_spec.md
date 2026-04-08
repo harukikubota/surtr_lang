@@ -97,6 +97,7 @@ Eldr が扱う値の概念カテゴリ:
 - プリミティブ: `Int`, `Float`, `String`, `Boolean`, `Unit`
 - コンテナ: `List`
 - タグ付き値: `Tagged { tag, fields }`
+- runtime 内部 tag 値: `Tag(u32)`（user-visible `Int` と分離）
 - 呼び出し可能値: `Callable`
 - 言語エラー値: `Error(RichError)`
 
@@ -163,6 +164,8 @@ Opcode は以下のカテゴリを持つ。
 - `Bootstrap` module の `@@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
+- `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
+- `Float` の厳密契約は `doc/float.md` を参照する
 
 組込み宣言の読み込み順序は compile 側で `Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
@@ -171,6 +174,7 @@ Opcode は以下のカテゴリを持つ。
 - `tag -> 型名/フィールド名` の逆引きを提供
 - 表示 (`to_string`) と診断表示で参照される
 - `Ok=0`, `Err=1` は予約 tag
+- runtime tag は user-visible `Int` に乗せ替えない
 
 ---
 

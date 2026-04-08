@@ -2,6 +2,11 @@
 
 最終更新日: 2026-04-05
 
+2026-04-08 注記:
+
+- StdModV1 由来の未完タスクのうち、数値モデル・runtime failure・review 反映は `/Users/haruca/work/rust/surtr/作業フロー.md` に再配置した
+- 本ファイルは標準 module 再編そのものに近い follow-up に限定して読む
+
 ---
 
 ## 0. 位置づけ

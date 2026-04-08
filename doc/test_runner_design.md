@@ -2,6 +2,11 @@
 
 最終更新: 2026-04-05
 
+2026-04-08 メモ:
+
+- `@@builtin` と `@@test` が同一標準 module に共存するケースを future coverage に追加する
+- `@@builtin` 単独行 form を前提にしているため、annotation の並び順は pending 回帰テストで固定する
+
 ## 1. 目的
 
 標準モジュール作成前に、Surtrコードのみで自己検証できる `surtr test` 実行基盤を導入する。
@@ -97,4 +102,4 @@ flowchart TD
 | TST-008 | `rune: execute tests with selector filtering` | 全件/Module/Module::func のフィルタ実行、トークン順実行、pass/fail集計 | 3形態の `surtr test` が動作 |
 | TST-009 | `rune: lib root discovery and reporting` | 探索範囲を `/lib` 直下 `.srt` のみに固定し、結果表示と終了コードを確定 | 成功=0、失敗あり=非0、出力が安定 |
 | TST-010 | `integration: add end-to-end fixtures for test command` | `@@test` 正常系・失敗系・selector系の統合テスト追加 | `cargo test -p rune` で通過 |
-
+| TST-011 | `integration: cover std-module @@builtin + @@test coexistence` | `@@builtin` 単独行、`@@test` 併記、標準 module 読み込み順の回帰テストを追加 | ignored 先置き後、仕様確定時に unignore できる |

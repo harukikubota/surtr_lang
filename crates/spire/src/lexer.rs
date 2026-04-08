@@ -1,6 +1,7 @@
 use crate::ast::Span;
 use crate::error::ParseError;
 use crate::token::{Spanned, Token};
+use sindr::primitives::SurtrInt;
 
 pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
     let mut tokens = Vec::new();
@@ -158,7 +159,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 });
             } else {
                 let text: String = chars[start..i].iter().collect();
-                let val: i64 = text.parse().map_err(|_| {
+                let val: SurtrInt = text.parse().map_err(|_| {
                     ParseError::syntax(format!("Invalid integer: {}", text), Span { start, end: i })
                 })?;
                 tokens.push(Spanned {
@@ -282,13 +283,14 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sindr::primitives::int;
 
     #[test]
     fn test_basic_tokens() {
         let tokens = tokenize("num = 10").unwrap();
         assert!(matches!(tokens[0].token, Token::Ident(ref s) if s == "num"));
         assert!(matches!(tokens[1].token, Token::Bind));
-        assert!(matches!(tokens[2].token, Token::Int(10)));
+        assert!(matches!(tokens[2].token, Token::Int(ref n) if n == &int(10)));
     }
 
     #[test]

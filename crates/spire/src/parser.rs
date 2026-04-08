@@ -2729,6 +2729,7 @@ impl Ast {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sindr::primitives::int;
 
     #[test]
     fn test_bind_and_var() {
@@ -2737,7 +2738,7 @@ mod tests {
         match &ast[0] {
             Ast::Bind(_, AstPattern::Var(_, name), rhs) => {
                 assert_eq!(name, "x");
-                assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Int(42))));
+                assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(42)));
             }
             _ => panic!("Expected Bind"),
         }
@@ -2893,7 +2894,7 @@ def noop() {()}"#,
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::BinOp(_, BinOp::Add, left, right) => {
-                    assert!(matches!(left.as_ref(), Ast::Lit(_, Lit::Int(1))));
+                    assert!(matches!(left.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1)));
                     assert!(matches!(right.as_ref(), Ast::BinOp(_, BinOp::Mul, _, _)));
                 }
                 _ => panic!("Expected Add at top"),
@@ -2932,7 +2933,7 @@ def noop() {()}"#,
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::ListCons(_, head, tail) => {
-                    assert!(matches!(head.as_ref(), Ast::Lit(_, Lit::Int(1))));
+                    assert!(matches!(head.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1)));
                     assert!(matches!(tail.as_ref(), Ast::Var(_, name) if name == "tail"));
                 }
                 _ => panic!("Expected ListCons"),
@@ -3053,7 +3054,7 @@ def noop() {()}"#,
         let ast = parse("1 =? value").unwrap();
         match &ast[0] {
             Ast::SafeBind(_, pattern, rhs) => {
-                assert!(matches!(pattern, AstPattern::IntLit(_, 1)));
+                assert!(matches!(pattern, AstPattern::IntLit(_, n) if n == &int(1)));
                 assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
             }
             _ => panic!("Expected SafeBind"),
@@ -3070,7 +3071,7 @@ def noop() {()}"#,
                     AstPattern::ListCons(_, first, rest)
                         if matches!(first.as_ref(),
                             AstPattern::Constructor(_, ctor, inner)
-                            if ctor == "Ok" && matches!(inner.as_ref(), AstPattern::IntLit(_, 1))
+                            if ctor == "Ok" && matches!(inner.as_ref(), AstPattern::IntLit(_, n) if n == &int(1))
                         )
                         && matches!(rhs.as_ref(), Ast::Var(_, name) if name == "lr")
                         && matches!(rest.as_ref(), AstPattern::ListCons(_, _, _))
@@ -3301,7 +3302,7 @@ def noop() {()}"#,
         let ast = parse("x = -5").unwrap();
         match &ast[0] {
             Ast::Bind(_, _, rhs) => {
-                assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Int(-5))));
+                assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(-5)));
             }
             _ => panic!("Expected Bind with negative Int"),
         }
@@ -3333,7 +3334,7 @@ def noop() {()}"#,
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Match(_, _, arms) => {
-                    assert!(matches!(&arms[0].0, AstMatchPattern::IntLit(_, 1)));
+                    assert!(matches!(&arms[0].0, AstMatchPattern::IntLit(_, n) if n == &int(1)));
                     assert!(matches!(&arms[1].0, AstMatchPattern::Wildcard(_)));
                 }
                 _ => panic!("Expected Match"),
@@ -3377,7 +3378,7 @@ def noop() {()}"#,
                     assert!(matches!(
                         &arms[0].0,
                         AstMatchPattern::ListCons(_, head, tail)
-                            if matches!(head.as_ref(), AstMatchPattern::IntLit(_, -1))
+                            if matches!(head.as_ref(), AstMatchPattern::IntLit(_, n) if n == &int(-1))
                                 && matches!(tail.as_ref(), AstMatchPattern::ListNil(_))
                     ));
                 }

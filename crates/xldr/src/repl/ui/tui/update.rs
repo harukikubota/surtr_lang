@@ -5,7 +5,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::repl::logic::core::ReplEngine;
 use crate::repl::logic::output::ReplOutput;
 
-use super::app::{App, Completion, CompletionItem, FocusPane, InputBuffer, InputMode, ResultEntryKind};
+use super::app::{
+    App, Completion, CompletionItem, FocusPane, InputBuffer, InputMode, ResultEntryKind,
+};
 
 // ── Completion helpers ────────────────────────────────────────────────────────
 
@@ -38,7 +40,10 @@ pub(super) fn refresh_completion(app: &mut App, engine: &ReplEngine) {
                 let items: Vec<CompletionItem> = symbols
                     .iter()
                     .filter(|s| s.starts_with(&prefix))
-                    .map(|s| CompletionItem { label: s.clone(), detail: None })
+                    .map(|s| CompletionItem {
+                        label: s.clone(),
+                        detail: None,
+                    })
                     .collect();
                 app.completion = Completion {
                     visible: !items.is_empty(),
@@ -250,13 +255,20 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
         "help" => {
             app.push_result(
                 ":help",
-                vec![":q :help :doc <sym> :sig <sym> :type <expr> :save <path> :v <idx> :j <idx>".to_string()],
+                vec![
+                    ":q :help :doc <sym> :sig <sym> :type <expr> :save <path> :v <idx> :j <idx>"
+                        .to_string(),
+                ],
                 ResultEntryKind::Info,
             );
         }
         "save" => {
             if arg.is_empty() {
-                app.push_result(":save", vec!["Usage: :save <path>".to_string()], ResultEntryKind::EvalError);
+                app.push_result(
+                    ":save",
+                    vec!["Usage: :save <path>".to_string()],
+                    ResultEntryKind::EvalError,
+                );
             } else {
                 let result = engine.handle_line(&format!(":save {arg}"));
                 let lines = match result.output {
@@ -268,7 +280,11 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
         }
         "doc" => {
             if arg.is_empty() {
-                app.push_result(":doc", vec!["Usage: :doc <symbol>".to_string()], ResultEntryKind::EvalError);
+                app.push_result(
+                    ":doc",
+                    vec!["Usage: :doc <symbol>".to_string()],
+                    ResultEntryKind::EvalError,
+                );
             } else {
                 // Placeholder: future work hooks into sigil doc resolution.
                 app.docs.push_back(super::app::DocEntry {
@@ -281,13 +297,25 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             }
         }
         "sig" => {
-            app.push_result(format!(":sig {arg}"), vec![format!("sig({arg}): (not yet implemented)")], ResultEntryKind::Info);
+            app.push_result(
+                format!(":sig {arg}"),
+                vec![format!("sig({arg}): (not yet implemented)")],
+                ResultEntryKind::Info,
+            );
         }
         "type" => {
             if arg.is_empty() {
-                app.push_result(":type", vec!["Usage: :type <expr>".to_string()], ResultEntryKind::EvalError);
+                app.push_result(
+                    ":type",
+                    vec!["Usage: :type <expr>".to_string()],
+                    ResultEntryKind::EvalError,
+                );
             } else {
-                app.push_result(format!(":type {arg}"), vec![format!("type({arg}): (not yet implemented)")], ResultEntryKind::Info);
+                app.push_result(
+                    format!(":type {arg}"),
+                    vec![format!("type({arg}): (not yet implemented)")],
+                    ResultEntryKind::Info,
+                );
             }
         }
         "v" => {
@@ -318,7 +346,12 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             if let Ok(idx) = arg.parse::<usize>() {
                 if let Some(pos) = app.results.iter().position(|e| e.idx == idx) {
                     app.selected_result = Some(idx);
-                    let line_offset: usize = app.results.iter().take(pos).map(|e| 3 + e.rendered_lines.len()).sum();
+                    let line_offset: usize = app
+                        .results
+                        .iter()
+                        .take(pos)
+                        .map(|e| 3 + e.rendered_lines.len())
+                        .sum();
                     app.results_scroll = line_offset;
                 } else {
                     app.push_result(

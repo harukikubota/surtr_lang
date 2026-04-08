@@ -62,10 +62,12 @@ cargo clean
 - [Crate Reference](./doc/site/crate-reference.md)
 - [Open Issues](./doc/open-issues.md)
 - [Requirements (V9, Japanese)](./doc/要件定義v9.md)
+- [Float Policy (Japanese)](./doc/float.md)
+- [Improvement Workflow (Japanese)](./作業フロー.md)
 
 ## Status
 
-Current implementation target is Phase 1.
+Current work is focused on stabilizing the V9 baseline and cleanup items from the recent review pass.
 
 Implemented core includes:
 
@@ -74,3 +76,9 @@ Implemented core includes:
 - `defstruct` / `defrecord` / `deferror`
 - `if` and `match` (Boolean / Result subset)
 - Builtins: `print`, `to_string`, `eprint`
+
+Implementation notes:
+
+- `Int` is being migrated to unbounded `BigInt` semantics across the pipeline
+- runtime-internal tags stay fixed-width and separate from user-visible `Int`
+- `Float` remains implemented, but its precise contract is tracked separately in [doc/float.md](./doc/float.md)

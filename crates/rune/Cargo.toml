@@ -46,3 +46,7 @@ path = "../../tests/integration/module_import_fixtures.rs"
 [[test]]
 name = "test_command"
 path = "../../tests/integration/test_command.rs"
+
+[[test]]
+name = "pending_regressions"
+path = "../../tests/integration/pending_regressions.rs"

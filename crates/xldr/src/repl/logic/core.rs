@@ -11,11 +11,13 @@ use sindr::builtin::BUILTIN_METAS;
 use spire::ast::{Ast, ImportSpec, Span};
 use spire::token::Token;
 
-use crate::loader::{self, ModuleInput, StagedModule};
-use crate::{derive_source_rules, LoadError, ModuleStageParseError, ModuleStageParseErrorKind, SourceKind};
 use super::command::{parse_repl_command, ReplCommand};
 use super::output::{ReplOutput, ReplResult};
 use super::render;
+use crate::loader::{self, ModuleInput, StagedModule};
+use crate::{
+    derive_source_rules, LoadError, ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
+};
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const REPL_AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel"];
@@ -112,11 +114,9 @@ impl ReplEngine {
     /// resolve.  Full restoration requires the compile-time type context, which
     /// will be addressed when `--debug=full` span / type metadata is added.
     pub fn from_eldr(bytes: &[u8]) -> Result<Self, EldrLoadError> {
-        let bytecode = sindr::ir::Bytecode::decode(bytes)
-            .map_err(EldrLoadError::Format)?;
+        let bytecode = sindr::ir::Bytecode::decode(bytes).map_err(EldrLoadError::Format)?;
 
-        let std_module_inputs =
-            collect_repl_std_module_inputs().map_err(EldrLoadError::Load)?;
+        let std_module_inputs = collect_repl_std_module_inputs().map_err(EldrLoadError::Load)?;
         let repl_sources = if std_module_inputs.is_empty() {
             loader::collect_repl_sources()
         } else {
@@ -739,7 +739,11 @@ impl ReplEngine {
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
-                return ReplResult::ok(ReplOutput::EvalError { idx, source, rendered });
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx,
+                    source,
+                    rendered,
+                });
             }
         };
 
@@ -766,7 +770,11 @@ impl ReplEngine {
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
-                return ReplResult::ok(ReplOutput::EvalError { idx, source, rendered });
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx,
+                    source,
+                    rendered,
+                });
             }
         };
 
@@ -784,7 +792,11 @@ impl ReplEngine {
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
-                return ReplResult::ok(ReplOutput::EvalError { idx, source, rendered });
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx,
+                    source,
+                    rendered,
+                });
             }
         };
 
@@ -811,7 +823,11 @@ impl ReplEngine {
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
-                return ReplResult::ok(ReplOutput::EvalError { idx, source, rendered });
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx,
+                    source,
+                    rendered,
+                });
             }
         };
 
@@ -829,7 +845,11 @@ impl ReplEngine {
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
-                return ReplResult::ok(ReplOutput::EvalError { idx, source, rendered });
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx,
+                    source,
+                    rendered,
+                });
             }
         };
 
@@ -846,14 +866,14 @@ impl ReplEngine {
                     let rendered = vec!["Error result".to_string()];
                     self.bump_line(None, None);
                     self.pending.clear();
-                    return ReplResult::ok(ReplOutput::EvalError { idx, source, rendered });
+                    return ReplResult::ok(ReplOutput::EvalError {
+                        idx,
+                        source,
+                        rendered,
+                    });
                 }
 
-                let rendered = render::format_result_lines(
-                    &self.vm,
-                    Some(&value),
-                    Some(&meta),
-                );
+                let rendered = render::format_result_lines(&self.vm, Some(&value), Some(&meta));
 
                 let mut all_rendered = rendered;
                 if import_only {
@@ -872,7 +892,11 @@ impl ReplEngine {
                 }
                 self.bump_line(Some(value), Some(meta.clone()));
                 self.pending.clear();
-                ReplResult::ok(ReplOutput::EvalSuccess { idx, source, rendered: all_rendered })
+                ReplResult::ok(ReplOutput::EvalSuccess {
+                    idx,
+                    source,
+                    rendered: all_rendered,
+                })
             }
             Err(e) => {
                 let rendered = vec![format!("RuntimeError: {}", e)];
@@ -884,7 +908,11 @@ impl ReplEngine {
                 );
                 self.bump_line(None, None);
                 self.pending.clear();
-                ReplResult::exit(ReplOutput::EvalError { idx, source, rendered })
+                ReplResult::exit(ReplOutput::EvalError {
+                    idx,
+                    source,
+                    rendered,
+                })
             }
         }
     }
@@ -1041,10 +1069,7 @@ fn find_source_id_for_span(
             }
         }
     }
-    best_code
-        .or(best_any)
-        .map(|(id, _)| id)
-        .unwrap_or(fallback)
+    best_code.or(best_any).map(|(id, _)| id).unwrap_or(fallback)
 }
 
 fn collect_repl_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {

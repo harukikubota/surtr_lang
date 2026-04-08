@@ -2,6 +2,11 @@
 
 最終更新日: 2026-04-05
 
+2026-04-08 注記:
+
+- 本文中の実施済み Issue はそのまま履歴として残す
+- review 由来の新規整理 (`BigInt`, runtime ID 分離, `Float` 切り出し) は `/Users/haruca/work/rust/surtr/作業フロー.md` と各正本ドキュメント側で扱う
+
 ---
 
 ## 0. 実施状況（HEAD基準）

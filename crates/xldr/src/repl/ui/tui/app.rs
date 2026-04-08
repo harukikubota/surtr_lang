@@ -209,7 +209,11 @@ impl App {
         });
         // Keep scroll at bottom when new output arrives (line-based).
         // Set to total so the widget clamps to (total - viewport_height) correctly.
-        let total: usize = self.results.iter().map(|e| 3 + e.rendered_lines.len()).sum();
+        let total: usize = self
+            .results
+            .iter()
+            .map(|e| 3 + e.rendered_lines.len())
+            .sum();
         self.results_scroll = total;
     }
 

@@ -36,10 +36,16 @@ pub struct ReplResult {
 
 impl ReplResult {
     pub fn ok(output: ReplOutput) -> Self {
-        Self { output, should_exit: false }
+        Self {
+            output,
+            should_exit: false,
+        }
     }
 
     pub fn exit(output: ReplOutput) -> Self {
-        Self { output, should_exit: true }
+        Self {
+            output,
+            should_exit: true,
+        }
     }
 }

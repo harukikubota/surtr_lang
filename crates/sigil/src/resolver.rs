@@ -1630,6 +1630,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sindr::primitives::int;
 
     fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
         let _ = module_path;
@@ -2115,7 +2116,9 @@ x = match s {
             Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
                 Resolved::Match(_, _, arms) => {
                     assert!(matches!(&arms[0].0, ResolvedMatchPattern::StrLit(_, s) if s == "a"));
-                    assert!(matches!(&arms[1].0, ResolvedMatchPattern::IntLit(_, 2)));
+                    assert!(
+                        matches!(&arms[1].0, ResolvedMatchPattern::IntLit(_, n) if n == &int(2))
+                    );
                     assert!(matches!(&arms[2].0, ResolvedMatchPattern::Wildcard(_)));
                 }
                 _ => panic!("Expected Match"),
@@ -2208,7 +2211,7 @@ Ok(num) =? value"#,
                     head.as_ref(),
                     ResolvedPattern::Constructor(ctor, inner)
                         if ctor.name == "Ok"
-                        && matches!(inner.as_ref(), ResolvedPattern::IntLit(_, 1))
+                        && matches!(inner.as_ref(), ResolvedPattern::IntLit(_, n) if n == &int(1))
                 ));
                 assert!(matches!(tail.as_ref(), ResolvedPattern::Var(id) if id.name == "tail"));
                 assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "lr"));
@@ -2584,7 +2587,9 @@ captured = &print"#,
         // Define x
         let ast1 = spire::parse("x = 1").expect("parse failed");
         session.resolve(ast1).expect("first resolve failed");
-        let x_id = session.lookup_uid("x").expect("x should be defined after first resolve");
+        let x_id = session
+            .lookup_uid("x")
+            .expect("x should be defined after first resolve");
 
         // Save checkpoint before defining y
         let checkpoint = session.checkpoint();
@@ -2652,15 +2657,21 @@ greeting = "Hello #{name}!""#,
         match &resolved[1] {
             Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
                 Resolved::InterpolatedStr(_, parts) => {
-                    let has_text = parts
-                        .iter()
-                        .any(|p| matches!(p, ResolvedInterpolatedPart::Text(s) if s.contains("Hello")));
+                    let has_text = parts.iter().any(
+                        |p| matches!(p, ResolvedInterpolatedPart::Text(s) if s.contains("Hello")),
+                    );
                     let has_name_var = parts.iter().any(|p| {
                         matches!(p, ResolvedInterpolatedPart::Expr(e)
                             if matches!(e.as_ref(), Resolved::Var(_, id) if id.name == "name"))
                     });
-                    assert!(has_text, "expected 'Hello' text part in interpolated string");
-                    assert!(has_name_var, "expected resolved `name` variable in interpolated string");
+                    assert!(
+                        has_text,
+                        "expected 'Hello' text part in interpolated string"
+                    );
+                    assert!(
+                        has_name_var,
+                        "expected resolved `name` variable in interpolated string"
+                    );
                 }
                 _ => panic!("Expected InterpolatedStr, got {:?}", rhs),
             },
@@ -2699,9 +2710,9 @@ val = p.x"#,
             Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
                 Resolved::ListLiteral(_, elems) => {
                     assert_eq!(elems.len(), 3);
-                    assert!(matches!(&elems[0], Resolved::Lit(_, Lit::Int(1))));
-                    assert!(matches!(&elems[1], Resolved::Lit(_, Lit::Int(2))));
-                    assert!(matches!(&elems[2], Resolved::Lit(_, Lit::Int(3))));
+                    assert!(matches!(&elems[0], Resolved::Lit(_, Lit::Int(n)) if n == &int(1)));
+                    assert!(matches!(&elems[1], Resolved::Lit(_, Lit::Int(n)) if n == &int(2)));
+                    assert!(matches!(&elems[2], Resolved::Lit(_, Lit::Int(n)) if n == &int(3)));
                 }
                 _ => panic!("Expected ListLiteral"),
             },

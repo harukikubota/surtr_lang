@@ -2,6 +2,7 @@ use crate::error::RuntimeError;
 use crate::value::Value;
 use crate::vm::VM;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
+use sindr::primitives::{ToPrimitive, Zero};
 use sindr::runtime::{Location, RichError};
 
 /// Function pointer type for built-in implementations.
@@ -94,7 +95,7 @@ fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError>
 fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match (&args[0], &args[1]) {
         (Value::Int(a), Value::Int(b)) => {
-            if *b == 0 {
+            if b.is_zero() {
                 Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
             } else {
                 Ok(ok_result(Value::Int(a / b)))
@@ -117,7 +118,7 @@ fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
 fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match (&args[0], &args[1]) {
         (Value::Int(a), Value::Int(b)) => {
-            if *b == 0 {
+            if b.is_zero() {
                 Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
             } else {
                 Ok(ok_result(Value::Int(a % b)))
@@ -172,11 +173,12 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
 }
 
 fn builtin_set_exit_code(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let Value::Int(code) = args[0] else {
+    let Value::Int(ref code) = args[0] else {
         return Err(RuntimeError::new("set_exit_code expects Int"));
     };
-    let exit_code = i32::try_from(code)
-        .map_err(|_| RuntimeError::new(format!("set_exit_code out of range for i32: {}", code)))?;
+    let exit_code = code.to_i32().ok_or_else(|| {
+        RuntimeError::new(format!("set_exit_code out of range for i32: {}", code))
+    })?;
     vm.set_exit_code(exit_code);
     Ok(Value::Unit)
 }
@@ -185,12 +187,10 @@ fn builtin_shl(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("shl expects (Int, Int)"));
     };
-    let amount = u32::try_from(*bits).map_err(|_| {
+    let amount = bits.to_usize().ok_or_else(|| {
         RuntimeError::new(format!("shl shift amount must be non-negative: {}", bits))
     })?;
-    let shifted = value
-        .checked_shl(amount)
-        .ok_or_else(|| RuntimeError::new(format!("shl shift amount out of range: {}", bits)))?;
+    let shifted = value << amount;
     Ok(Value::Int(shifted))
 }
 
@@ -198,12 +198,10 @@ fn builtin_shr(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("shr expects (Int, Int)"));
     };
-    let amount = u32::try_from(*bits).map_err(|_| {
+    let amount = bits.to_usize().ok_or_else(|| {
         RuntimeError::new(format!("shr shift amount must be non-negative: {}", bits))
     })?;
-    let shifted = value
-        .checked_shr(amount)
-        .ok_or_else(|| RuntimeError::new(format!("shr shift amount out of range: {}", bits)))?;
+    let shifted = value >> amount;
     Ok(Value::Int(shifted))
 }
 

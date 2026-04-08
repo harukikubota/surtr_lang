@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
 use crate::runtime::{TypeEntry, TypeRegistry};
 
 /// Surtr bytecode instructions.
@@ -7,8 +8,8 @@ use crate::runtime::{TypeEntry, TypeRegistry};
 pub enum Opcode {
     // Constants & locals
     LoadConst(u32),
-    LoadBuiltinRef(u16),
-    LoadFunctionRef(u32),
+    LoadBuiltinRef(BuiltinId),
+    LoadFunctionRef(FunctionId),
     LoadLocal(u32),
     StoreLocal(u32),
 
@@ -68,12 +69,13 @@ pub enum Opcode {
     StructNew(u32),
     GetField(u32),
     GetTag,
+    EqTag,
 
     // Built-in function call
-    CallBuiltin(u16, u8, u32, u32),
+    CallBuiltin(BuiltinId, u8, u32, u32),
 
     // User-defined function call
-    Call(u32, u8, u32, u32),
+    Call(FunctionId, u8, u32, u32),
     CaptureClosure(u8),
     CapturePartial(u8),
     MakeError(u32),
@@ -149,7 +151,7 @@ pub struct BytecodeChunk {
 /// Function table entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionEntry {
-    pub fun_idx: u32,
+    pub fun_idx: FunctionId,
     pub entry_pc: u32,
     pub num_locals: u32,
     pub arity: u8,
@@ -159,7 +161,8 @@ pub struct FunctionEntry {
 /// Constant pool entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Constant {
-    Int(i64),
+    Int(SurtrInt),
+    Tag(RuntimeTag),
     Float(f64),
     Str(String),
     Bool(bool),
@@ -466,6 +469,7 @@ mod tests {
         Constant, ErrTemplate, FunctionEntry, LegacyBytecode, LegacyFunctionEntry, Opcode,
         OpcodeSource, SourceMap,
     };
+    use crate::primitives::int;
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
 
     fn sample_registry() -> TypeRegistry {
@@ -482,7 +486,7 @@ mod tests {
     fn sample_bytecode(source_map: Option<SourceMap>) -> Bytecode {
         Bytecode {
             opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
-            constants: vec![Constant::Int(42)],
+            constants: vec![Constant::Int(int(42))],
             num_locals: 1,
             type_registry: sample_registry(),
             error_templates: vec![ErrTemplate {
@@ -549,7 +553,7 @@ mod tests {
     fn decode_legacy_payload_without_source_map() {
         let legacy = LegacyBytecode {
             opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
-            constants: vec![Constant::Int(7)],
+            constants: vec![Constant::Int(int(7))],
             num_locals: 0,
             type_registry: sample_registry(),
             error_templates: Vec::new(),
@@ -577,7 +581,7 @@ mod tests {
 
         let decoded = Bytecode::decode(&bytes).expect("legacy decode should succeed");
         assert_eq!(decoded.source_map, None);
-        assert_eq!(decoded.constants, vec![Constant::Int(7)]);
+        assert_eq!(decoded.constants, vec![Constant::Int(int(7))]);
         assert_eq!(decoded.functions[0].qualified_name, None);
     }
 
