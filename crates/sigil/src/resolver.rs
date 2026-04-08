@@ -1483,8 +1483,8 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spire::ast::AstTy;
     use sindr::primitives::int;
+    use spire::ast::AstTy;
 
     fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
         let _ = module_path;

@@ -86,6 +86,8 @@ pub enum TypedPattern {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedMatchPattern {
     Binding(ResolvedId),
+    /// `inner @ alias`
+    As(Box<TypedMatchPattern>, ResolvedId),
     /// `_`
     Wildcard,
     /// `True` / `False`
@@ -94,8 +96,8 @@ pub enum TypedMatchPattern {
     IntLit(SurtrInt),
     /// String literal
     StrLit(String),
-    /// Constructor tag + optional inner binding
-    Constructor(u32, Option<ResolvedId>),
+    /// Constructor tag + inner pattern
+    Constructor(u32, Box<TypedMatchPattern>),
     /// `[]`
     ListNil,
     /// `[head, ..tail]`

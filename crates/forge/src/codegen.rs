@@ -1913,6 +1913,9 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         match pat {
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => {}
+            TypedMatchPattern::As(inner, _) => {
+                self.emit_match_pattern_test(inner, slot, fail_label)?;
+            }
             TypedMatchPattern::BoolLit(b) => {
                 self.emit(Opcode::LoadLocal(slot));
                 let bool_const = self.add_constant(Constant::Bool(*b));
@@ -1934,13 +1937,20 @@ impl Codegen {
                 self.emit(Opcode::EqStr);
                 self.emit_jump_if_false(fail_label);
             }
-            TypedMatchPattern::Constructor(tag, _) => {
+            TypedMatchPattern::Constructor(tag, inner) => {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::GetTag);
                 let tag_const = self.add_constant(Constant::Tag(*tag));
                 self.emit(Opcode::LoadConst(tag_const));
                 self.emit(Opcode::EqTag);
                 self.emit_jump_if_false(fail_label);
+
+                let inner_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::StoreLocal(inner_slot));
+                self.emit_match_pattern_test(inner, inner_slot, fail_label)?;
             }
             TypedMatchPattern::ListNil => {
                 self.emit(Opcode::LoadLocal(slot));
@@ -1981,18 +1991,24 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::StoreLocal(bind_slot));
             }
+            TypedMatchPattern::As(inner, alias) => {
+                let bind_slot = self.alloc_slot(alias.unique_id);
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::StoreLocal(bind_slot));
+                self.emit_match_pattern_bind(inner, slot)?;
+            }
             TypedMatchPattern::Wildcard
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::ListNil => {}
-            TypedMatchPattern::Constructor(_, inner_id) => {
-                if let Some(inner) = inner_id {
-                    self.emit(Opcode::LoadLocal(slot));
-                    self.emit(Opcode::GetField(0));
-                    let inner_slot = self.alloc_slot(inner.unique_id);
-                    self.emit(Opcode::StoreLocal(inner_slot));
-                }
+            TypedMatchPattern::Constructor(_, inner) => {
+                let inner_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::StoreLocal(inner_slot));
+                self.emit_match_pattern_bind(inner, inner_slot)?;
             }
             TypedMatchPattern::ListCons(head, tail) => {
                 let head_slot = self.state.next_slot;

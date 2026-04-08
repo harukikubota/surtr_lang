@@ -680,10 +680,7 @@ impl Checker {
 
     fn ast_ty_span(ast_ty: &AstTy) -> &Span {
         match ast_ty {
-            AstTy::Named(span, _)
-            | AstTy::ListOf(span, _)
-            | AstTy::ResultOf(span, _, _)
-            | AstTy::Func(span, _, _) => span,
+            AstTy::Named(span, _) | AstTy::Generic(span, _, _) | AstTy::Func(span, _, _) => span,
         }
     }
 
@@ -725,14 +722,31 @@ impl Checker {
                     }
                 }
             },
-            AstTy::ListOf(_, inner) => {
-                let inner_ty = self.resolve_ast_ty_in_context(inner, TypeSyntaxContext::General)?;
-                Ok(Ty::List(Box::new(inner_ty)))
-            }
-            AstTy::ResultOf(span, ok_ty, err_ty) => {
-                let ok = self.resolve_ast_ty_in_context(ok_ty, TypeSyntaxContext::General)?;
-                let err = match err_ty {
-                    Some(e) => {
+            AstTy::Generic(span, name, args) => match name.as_str() {
+                "List" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "List<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner_ty =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    Ok(Ty::List(Box::new(inner_ty)))
+                }
+                "Result" => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(TypeError {
+                            message: "Result<T> or Result<T, E> requires 1 or 2 type arguments"
+                                .into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let ok =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    let err = if args.len() == 2 {
                         if context != TypeSyntaxContext::FunctionReturn {
                             return Err(TypeError {
                                 message:
@@ -742,12 +756,18 @@ impl Checker {
                                 hint: Some("Use Result<T> in local code.".into()),
                             });
                         }
-                        self.resolve_ast_ty_in_context(e, TypeSyntaxContext::ErrorMarker)?
-                    }
-                    None => Ty::Error, // Result<T> = Result<T, Error>
-                };
-                Ok(Ty::Result(Box::new(ok), Box::new(err)))
-            }
+                        self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::ErrorMarker)?
+                    } else {
+                        Ty::Error
+                    };
+                    Ok(Ty::Result(Box::new(ok), Box::new(err)))
+                }
+                other => Err(TypeError {
+                    message: format!("Unknown generic type: {}", other),
+                    span: span.clone(),
+                    hint: None,
+                }),
+            },
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
@@ -791,22 +811,37 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::ListOf(_, inner) => {
-                let inner_ty = self.resolve_builtin_ast_ty_in_context(
-                    inner,
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                Ok(Ty::List(Box::new(inner_ty)))
-            }
-            AstTy::ResultOf(span, ok_ty, err_ty) => {
-                let ok = self.resolve_builtin_ast_ty_in_context(
-                    ok_ty,
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                let err = match err_ty {
-                    Some(e) => {
+            AstTy::Generic(span, name, args) => match name.as_str() {
+                "List" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "List<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner_ty = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    Ok(Ty::List(Box::new(inner_ty)))
+                }
+                "Result" => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(TypeError {
+                            message: "Result<T> or Result<T, E> requires 1 or 2 type arguments"
+                                .into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let ok = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    let err = if args.len() == 2 {
                         if context != TypeSyntaxContext::FunctionReturn {
                             return Err(TypeError {
                                 message:
@@ -817,15 +852,17 @@ impl Checker {
                             });
                         }
                         self.resolve_builtin_ast_ty_in_context(
-                            e,
+                            &args[1],
                             TypeSyntaxContext::ErrorMarker,
                             tyvars,
                         )?
-                    }
-                    None => Ty::Error,
-                };
-                Ok(Ty::Result(Box::new(ok), Box::new(err)))
-            }
+                    } else {
+                        Ty::Error
+                    };
+                    Ok(Ty::Result(Box::new(ok), Box::new(err)))
+                }
+                _ => self.resolve_ast_ty_in_context(ast_ty, context),
+            },
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
@@ -2283,7 +2320,7 @@ impl Checker {
         &mut self,
         span: &Span,
         scrutinee: &Resolved,
-        arms: &[(ResolvedMatchPattern, Resolved)],
+        arms: &[(ResolvedPattern, Resolved)],
     ) -> Result<TypedNode, TypeError> {
         let typed_scrut = self.check_node(scrutinee)?;
         let mut typed_arms = Vec::new();
@@ -2325,10 +2362,7 @@ impl Checker {
         scrut_ty: &Ty,
         arms: &[(TypedMatchPattern, TypedNode)],
     ) -> Result<(), TypeError> {
-        if arms
-            .iter()
-            .any(|(pat, _)| matches!(pat, TypedMatchPattern::Wildcard))
-        {
+        if arms.iter().any(|(pat, _)| self.is_match_catch_all(pat)) {
             return Ok(());
         }
 
@@ -2417,141 +2451,69 @@ impl Checker {
 
     fn check_match_arm(
         &mut self,
-        pat: &ResolvedMatchPattern,
+        pat: &ResolvedPattern,
         body: &Resolved,
         scrut_ty: &Ty,
         span: &Span,
     ) -> Result<(TypedMatchPattern, TypedNode), TypeError> {
-        match pat {
-            ResolvedMatchPattern::Binding(id) => {
-                self.env.bind_var(id.unique_id, scrut_ty.clone());
-                let typed_body = self.check_node(body)?;
-                Ok((TypedMatchPattern::Binding(id.clone()), typed_body))
-            }
-            ResolvedMatchPattern::Wildcard(_) => {
-                let typed_body = self.check_node(body)?;
-                Ok((TypedMatchPattern::Wildcard, typed_body))
-            }
-            ResolvedMatchPattern::BoolLit(span, b) => {
-                if !self.types_compatible(&Ty::Bool, scrut_ty) {
-                    return Err(TypeError {
-                        message: "Boolean pattern on non-Boolean scrutinee".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let typed_body = self.check_node(body)?;
-                Ok((TypedMatchPattern::BoolLit(*b), typed_body))
-            }
-            ResolvedMatchPattern::IntLit(span, n) => {
-                if !self.types_compatible(&Ty::Int, scrut_ty) {
-                    return Err(TypeError {
-                        message: "Int pattern on non-Int scrutinee".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let typed_body = self.check_node(body)?;
-                Ok((TypedMatchPattern::IntLit(n.clone()), typed_body))
-            }
-            ResolvedMatchPattern::StrLit(span, s) => {
-                if !self.types_compatible(&Ty::Str, scrut_ty) {
-                    return Err(TypeError {
-                        message: "String pattern on non-String scrutinee".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let typed_body = self.check_node(body)?;
-                Ok((TypedMatchPattern::StrLit(s.clone()), typed_body))
-            }
-            ResolvedMatchPattern::Constructor(_, ctor_id, inner_id) => {
-                if !matches!(scrut_ty, Ty::Result(_, _)) {
-                    return Err(TypeError {
-                        message: "Result constructor pattern on non-Result scrutinee".into(),
-                        span: ctor_id.span.clone(),
-                        hint: None,
-                    });
-                }
-
-                // Ok => tag 0, Err => tag 1
-                let tag = match ctor_id.name.as_str() {
-                    "Ok" => 0u32,
-                    "Err" => 1u32,
-                    _ => {
-                        return Err(TypeError {
-                            message: format!("Unknown constructor: {}", ctor_id.name),
-                            span: ctor_id.span.clone(),
-                            hint: None,
-                        });
-                    }
-                };
-
-                // Bind inner variable
-                if let Some(inner) = inner_id {
-                    let inner_ty = match (tag, scrut_ty) {
-                        (0, Ty::Result(ok, _)) => ok.as_ref().clone(),
-                        (1, Ty::Result(_, err)) => err.as_ref().clone(),
-                        _ => unreachable!("scrutinee type checked as Result above"),
-                    };
-                    self.env.bind_var(inner.unique_id, inner_ty.clone());
-                }
-
-                let typed_body = self.check_node(body)?;
-                Ok((
-                    TypedMatchPattern::Constructor(tag, inner_id.clone()),
-                    typed_body,
-                ))
-            }
-            ResolvedMatchPattern::ListNil(span) => {
-                if !matches!(scrut_ty, Ty::List(_)) {
-                    return Err(TypeError {
-                        message: "empty list pattern on non-List scrutinee".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let typed_body = self.check_node(body)?;
-                Ok((TypedMatchPattern::ListNil, typed_body))
-            }
-            ResolvedMatchPattern::ListCons(head, tail) => {
-                let elem_ty = match scrut_ty {
-                    Ty::List(inner) => inner.as_ref().clone(),
-                    other => {
-                        return Err(TypeError {
-                            message: format!(
-                                "list pattern requires List<...>, got {}",
-                                self.ty_name(other)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                };
-                let typed_head = self.check_match_subpattern(head, &elem_ty)?;
-                let tail_ty = Ty::List(Box::new(elem_ty.clone()));
-                let typed_tail = self.check_match_subpattern(tail, &tail_ty)?;
-                let typed_body = self.check_node(body)?;
-                Ok((
-                    TypedMatchPattern::ListCons(Box::new(typed_head), Box::new(typed_tail)),
-                    typed_body,
-                ))
-            }
-        }
+        let typed_pat = self.check_match_subpattern(pat, scrut_ty)?;
+        let typed_body = self.check_node(body)?;
+        Ok((typed_pat, typed_body))
     }
 
     fn check_match_subpattern(
         &mut self,
-        pat: &ResolvedMatchPattern,
+        pat: &ResolvedPattern,
         expected_ty: &Ty,
     ) -> Result<TypedMatchPattern, TypeError> {
         match pat {
-            ResolvedMatchPattern::Binding(id) => {
+            ResolvedPattern::Var(id) => {
                 self.env.bind_var(id.unique_id, expected_ty.clone());
                 Ok(TypedMatchPattern::Binding(id.clone()))
             }
-            ResolvedMatchPattern::Wildcard(_) => Ok(TypedMatchPattern::Wildcard),
-            ResolvedMatchPattern::BoolLit(span, b) => {
+            ResolvedPattern::Annotated(id, ast_ty) => {
+                let expected =
+                    self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                if !self.types_compatible(&expected, expected_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "expected {}, got {}",
+                            self.ty_name(&expected),
+                            self.ty_name(expected_ty)
+                        ),
+                        span: id.span.clone(),
+                        hint: None,
+                    });
+                }
+                let bind_ty = self.resolve_ty(&expected);
+                self.env.bind_var(id.unique_id, bind_ty);
+                Ok(TypedMatchPattern::Binding(id.clone()))
+            }
+            ResolvedPattern::As(inner, alias, alias_ty) => {
+                let typed_inner = self.check_match_subpattern(inner, expected_ty)?;
+                let alias_bind_ty = if let Some(ast_ty) = alias_ty {
+                    let expected =
+                        self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                    if !self.types_compatible(&expected, expected_ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "expected {}, got {}",
+                                self.ty_name(&expected),
+                                self.ty_name(expected_ty)
+                            ),
+                            span: alias.span.clone(),
+                            hint: None,
+                        });
+                    }
+                    self.resolve_ty(&expected)
+                } else {
+                    self.resolve_ty(expected_ty)
+                };
+                self.env.bind_var(alias.unique_id, alias_bind_ty);
+                Ok(TypedMatchPattern::As(Box::new(typed_inner), alias.clone()))
+            }
+            ResolvedPattern::Wildcard(_) => Ok(TypedMatchPattern::Wildcard),
+            ResolvedPattern::BoolLit(span, b) => {
                 if !self.types_compatible(&Ty::Bool, expected_ty) {
                     return Err(TypeError {
                         message: "Boolean pattern on non-Boolean scrutinee".into(),
@@ -2561,7 +2523,7 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::BoolLit(*b))
             }
-            ResolvedMatchPattern::IntLit(span, n) => {
+            ResolvedPattern::IntLit(span, n) => {
                 if !self.types_compatible(&Ty::Int, expected_ty) {
                     return Err(TypeError {
                         message: "Int pattern on non-Int scrutinee".into(),
@@ -2571,7 +2533,7 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::IntLit(n.clone()))
             }
-            ResolvedMatchPattern::StrLit(span, s) => {
+            ResolvedPattern::StrLit(span, s) => {
                 if !self.types_compatible(&Ty::Str, expected_ty) {
                     return Err(TypeError {
                         message: "String pattern on non-String scrutinee".into(),
@@ -2581,7 +2543,7 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::StrLit(s.clone()))
             }
-            ResolvedMatchPattern::Constructor(_, ctor_id, inner_id) => {
+            ResolvedPattern::Constructor(ctor_id, inner_pat) => {
                 if !matches!(expected_ty, Ty::Result(_, _)) {
                     return Err(TypeError {
                         message: "Result constructor pattern on non-Result scrutinee".into(),
@@ -2600,17 +2562,15 @@ impl Checker {
                         });
                     }
                 };
-                if let Some(inner) = inner_id {
-                    let inner_ty = match (tag, expected_ty) {
-                        (0, Ty::Result(ok, _)) => ok.as_ref().clone(),
-                        (1, Ty::Result(_, err)) => err.as_ref().clone(),
-                        _ => unreachable!(),
-                    };
-                    self.env.bind_var(inner.unique_id, inner_ty);
-                }
-                Ok(TypedMatchPattern::Constructor(tag, inner_id.clone()))
+                let inner_ty = match (tag, expected_ty) {
+                    (0, Ty::Result(ok, _)) => ok.as_ref().clone(),
+                    (1, Ty::Result(_, err)) => err.as_ref().clone(),
+                    _ => unreachable!(),
+                };
+                let typed_inner = self.check_match_subpattern(inner_pat, &inner_ty)?;
+                Ok(TypedMatchPattern::Constructor(tag, Box::new(typed_inner)))
             }
-            ResolvedMatchPattern::ListNil(span) => {
+            ResolvedPattern::ListNil(span) => {
                 if !matches!(expected_ty, Ty::List(_)) {
                     return Err(TypeError {
                         message: "empty list pattern on non-List scrutinee".into(),
@@ -2620,7 +2580,7 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::ListNil)
             }
-            ResolvedMatchPattern::ListCons(head, tail) => {
+            ResolvedPattern::ListCons(head, tail) => {
                 let elem_ty = match expected_ty {
                     Ty::List(inner) => inner.as_ref().clone(),
                     other => {
@@ -2642,6 +2602,19 @@ impl Checker {
                     Box::new(typed_tail),
                 ))
             }
+        }
+    }
+
+    fn is_match_catch_all(&self, pat: &TypedMatchPattern) -> bool {
+        match pat {
+            TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => true,
+            TypedMatchPattern::As(inner, _) => self.is_match_catch_all(inner),
+            TypedMatchPattern::BoolLit(_)
+            | TypedMatchPattern::IntLit(_)
+            | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::Constructor(_, _)
+            | TypedMatchPattern::ListNil
+            | TypedMatchPattern::ListCons(_, _) => false,
         }
     }
 
