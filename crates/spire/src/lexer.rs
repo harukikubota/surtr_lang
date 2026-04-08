@@ -85,6 +85,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                         't' => s.push('\t'),
                         '\\' => s.push('\\'),
                         '"' => s.push('"'),
+                        '\'' => s.push('\''),
                         other => {
                             s.push('\\');
                             s.push(other);
@@ -115,8 +116,11 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 if chars[i] == '\\' && i + 1 < len {
                     i += 1;
                     match chars[i] {
+                        'n' => s.push('\n'),
+                        't' => s.push('\t'),
                         '\\' => s.push('\\'),
                         '\'' => s.push('\''),
+                        '"' => s.push('"'),
                         other => {
                             s.push('\\');
                             s.push(other);
@@ -303,6 +307,24 @@ mod tests {
     fn test_string_escape() {
         let tokens = tokenize(r#""hello\nworld""#).unwrap();
         assert!(matches!(tokens[0].token, Token::Str(ref s) if s == "hello\nworld"));
+    }
+
+    #[test]
+    fn test_double_quote_string_escape_symmetry() {
+        let tokens = tokenize(r#""a\n\t\"\'\\z""#).unwrap();
+        assert!(matches!(
+            tokens[0].token,
+            Token::Str(ref s) if s == "a\n\t\"'\\z"
+        ));
+    }
+
+    #[test]
+    fn test_single_quote_string_escape_symmetry() {
+        let tokens = tokenize(r#"'a\n\t\"\'\\z'"#).unwrap();
+        assert!(matches!(
+            tokens[0].token,
+            Token::Str(ref s) if s == "a\n\t\"'\\z"
+        ));
     }
 
     #[test]

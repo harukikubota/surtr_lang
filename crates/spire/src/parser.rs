@@ -1558,41 +1558,39 @@ impl Parser {
             ));
         }
 
-        // Named type, possibly with type args: Result<Int> or Result<Int, Error>
+        // Named type, possibly with type args: Result<Int>, List<Int>, Option<Int>, ...
         let (name, _) = self.expect_ident()?;
 
         // Check for type parameters: Name<T> or Name<T, E>
         if matches!(self.peek(), Token::Lt) {
             self.advance();
             self.skip_newlines();
-            let first = self.parse_type()?;
+            let mut args = vec![self.parse_type()?];
             self.skip_newlines();
-            let second = if matches!(self.peek(), Token::Comma) {
+            while matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
-                Some(Box::new(self.parse_type()?))
-            } else {
-                None
-            };
-            self.skip_newlines();
+                args.push(self.parse_type()?);
+                self.skip_newlines();
+            }
             let end = self.expect(&Token::Gt)?;
-            let span = Span {
-                start: sp.start,
-                end: end.end,
-            };
-
-            if name == "Result" {
-                return Ok(AstTy::ResultOf(span, Box::new(first), second));
-            }
-            if name == "List" && second.is_none() {
-                return Ok(AstTy::ListOf(span, Box::new(first)));
-            }
-            // Keep parsing the generic syntax so we can reserve it for future user-defined
-            // generic types, but for now only `Result<...>` and `List<...>` are preserved.
-            return Ok(AstTy::Named(span, name));
+            return Ok(AstTy::Generic(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                name,
+                args,
+            ));
         }
 
-        Ok(AstTy::Named(sp, name))
+        Ok(AstTy::Named(
+            Span {
+                start: sp.start,
+                end: sp.end,
+            },
+            name,
+        ))
     }
 
     fn parse_closure_literal(&mut self, sp: Span) -> Result<Ast, ParseError> {
@@ -1603,7 +1601,18 @@ impl Parser {
         if !matches!(self.peek(), Token::Pipe) {
             loop {
                 let (name, pspan) = self.expect_ident()?;
-                params.push(ClosureParam { name, span: pspan });
+                let ty = if matches!(self.peek(), Token::Colon) {
+                    self.advance();
+                    self.skip_newlines();
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                params.push(ClosureParam {
+                    name,
+                    ty,
+                    span: pspan,
+                });
                 self.skip_newlines();
                 if matches!(self.peek(), Token::Comma) {
                     self.advance();
@@ -1970,6 +1979,12 @@ impl Parser {
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         let body_stmts = self.parse_block_stmts()?;
+        if body_stmts.is_empty() {
+            return Err(ParseError::syntax(
+                "Function body must not be empty",
+                self.peek_span(),
+            ));
+        }
         let end = self.expect(&Token::RBrace)?;
         let body = Ast::Block(
             Span {
@@ -2006,8 +2021,15 @@ impl Parser {
         self.expect(&Token::Match)?;
         let scrutinee = self.parse_expr()?;
         self.skip_newlines();
-        self.expect(&Token::LBrace)?;
+        let lbrace = self.expect(&Token::LBrace)?;
         self.skip_newlines();
+
+        if matches!(self.peek(), Token::RBrace) {
+            return Err(ParseError::syntax(
+                "Match expression must contain at least one arm",
+                lbrace,
+            ));
+        }
 
         let mut arms = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
@@ -2233,6 +2255,11 @@ impl Parser {
         let parts = self.parse_interpolated_parts(&raw, &span)?;
         if parts.is_empty() {
             Ok(Ast::Lit(span, Lit::Str(raw)))
+        } else if matches!(parts.as_slice(), [InterpolatedPart::Text(_)]) {
+            match parts.into_iter().next() {
+                Some(InterpolatedPart::Text(text)) => Ok(Ast::Lit(span, Lit::Str(text))),
+                _ => unreachable!("checked single text part"),
+            }
         } else {
             Ok(Ast::InterpolatedStr(span, parts))
         }
@@ -2248,6 +2275,7 @@ impl Parser {
         let mut text = String::new();
         let mut i = 0;
         let mut has_interpolation = false;
+        let mut has_escaped_interpolation = false;
 
         while i < chars.len() {
             let ch = chars[i];
@@ -2256,6 +2284,16 @@ impl Parser {
                 && chars[i + 1] == '{'
                 && (i == 0 || chars[i - 1] != '\\');
             if !is_interp_start {
+                if ch == '\\'
+                    && i + 2 < chars.len()
+                    && chars[i + 1] == '#'
+                    && chars[i + 2] == '{'
+                {
+                    text.push('#');
+                    has_escaped_interpolation = true;
+                    i += 2;
+                    continue;
+                }
                 text.push(ch);
                 i += 1;
                 continue;
@@ -2361,7 +2399,7 @@ impl Parser {
             parts.push(InterpolatedPart::Text(text));
         }
 
-        if has_interpolation {
+        if has_interpolation || has_escaped_interpolation {
             Ok(parts)
         } else {
             Ok(Vec::new())
@@ -2378,10 +2416,7 @@ fn shift_span(span: Span, delta: usize) -> Span {
 
 fn ast_ty_span(ty: &AstTy) -> &Span {
     match ty {
-        AstTy::Named(span, _)
-        | AstTy::ListOf(span, _)
-        | AstTy::ResultOf(span, _, _)
-        | AstTy::Func(span, _, _) => span,
+        AstTy::Named(span, _) | AstTy::Generic(span, _, _) | AstTy::Func(span, _, _) => span,
     }
 }
 
@@ -2427,14 +2462,10 @@ fn fixed_match_list_pattern(
 fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
     match ty {
         AstTy::Named(span, name) => AstTy::Named(shift_span(span, delta), name),
-        AstTy::ListOf(span, inner) => AstTy::ListOf(
+        AstTy::Generic(span, name, args) => AstTy::Generic(
             shift_span(span, delta),
-            Box::new(shift_ast_ty(*inner, delta)),
-        ),
-        AstTy::ResultOf(span, ok, err) => AstTy::ResultOf(
-            shift_span(span, delta),
-            Box::new(shift_ast_ty(*ok, delta)),
-            err.map(|e| Box::new(shift_ast_ty(*e, delta))),
+            name,
+            args.into_iter().map(|arg| shift_ast_ty(arg, delta)).collect(),
         ),
         AstTy::Func(span, params, ret) => AstTy::Func(
             shift_span(span, delta),
@@ -2674,6 +2705,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .into_iter()
                 .map(|p| ClosureParam {
                     name: p.name,
+                    ty: p.ty.map(|ty| shift_ast_ty(ty, delta)),
                     span: shift_span(p.span, delta),
                 })
                 .collect(),
@@ -2919,8 +2951,10 @@ def noop() {()}"#,
     fn test_empty_list_with_annotation() {
         let ast = parse("empty: List<Int> = []").unwrap();
         match &ast[0] {
-            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::ListOf(_, inner)), rhs) => {
-                assert!(matches!(inner.as_ref(), AstTy::Named(_, ref n) if n == "Int"));
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, args)), rhs) => {
+                assert_eq!(name, "List");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0], AstTy::Named(_, ref n) if n == "Int"));
                 assert!(matches!(rhs.as_ref(), Ast::ListNil(_)));
             }
             _ => panic!("Expected annotated Bind with empty List"),
@@ -2966,9 +3000,10 @@ def noop() {()}"#,
             Ast::SafeBind(_, pattern, rhs) => {
                 assert!(matches!(
                     pattern,
-                    AstPattern::As(_, inner, alias, Some(AstTy::ListOf(_, elem)))
+                    AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, name, args)))
                         if alias == "list_dup"
-                        && matches!(elem.as_ref(), AstTy::Named(_, name) if name == "Int")
+                        && name == "List"
+                        && matches!(args.as_slice(), [AstTy::Named(_, elem)] if elem == "Int")
                         && matches!(inner.as_ref(), AstPattern::ListCons(_, _, _))
                 ));
                 assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
@@ -3085,8 +3120,9 @@ def noop() {()}"#,
     fn test_result_type_annotation() {
         let ast = parse("r: Result<Int> = Ok(42)").unwrap();
         match &ast[0] {
-            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::ResultOf(_, ok_ty, None)), _) => {
-                assert!(matches!(ok_ty.as_ref(), AstTy::Named(_, ref n) if n == "Int"));
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, args)), _) => {
+                assert_eq!(name, "Result");
+                assert!(matches!(args.as_slice(), [AstTy::Named(_, n)] if n == "Int"));
             }
             _ => panic!("Expected annotated Bind with Result type"),
         }
@@ -3096,10 +3132,31 @@ def noop() {()}"#,
     fn test_result_unit_type_annotation_uses_unit_token() {
         let ast = parse("def main() -> Result<()> { Ok(()) }").unwrap();
         match &ast[0] {
-            Ast::Def(_, _, _, Some(AstTy::ResultOf(_, ok_ty, None)), _) => {
-                assert!(matches!(ok_ty.as_ref(), AstTy::Named(_, ref n) if n == "Unit"));
+            Ast::Def(_, _, _, Some(AstTy::Generic(_, name, args)), _) => {
+                assert_eq!(name, "Result");
+                assert!(matches!(args.as_slice(), [AstTy::Named(_, n)] if n == "Unit"));
             }
             _ => panic!("Expected def with Result<()> return type"),
+        }
+    }
+
+    #[test]
+    fn test_generic_type_args_are_preserved_for_user_defined_type() {
+        let ast = parse("v: Option<Result<Int, ParseError>> = value").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, args)), _) => {
+                assert_eq!(name, "Option");
+                assert!(matches!(
+                    args.as_slice(),
+                    [AstTy::Generic(_, inner_name, inner_args)]
+                        if inner_name == "Result"
+                        && matches!(
+                            inner_args.as_slice(),
+                            [AstTy::Named(_, a), AstTy::Named(_, b)] if a == "Int" && b == "ParseError"
+                        )
+                ));
+            }
+            _ => panic!("Expected annotated bind with nested generic type"),
         }
     }
 
@@ -3182,6 +3239,22 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_closure_param_annotation_is_optional() {
+        let ast = parse("fun = {|x: Int, y| y}").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Closure(_, params, _) => {
+                    assert_eq!(params.len(), 2);
+                    assert!(matches!(params[0].ty, Some(AstTy::Named(_, ref n)) if n == "Int"));
+                    assert!(params[1].ty.is_none());
+                }
+                _ => panic!("Expected Closure"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
     fn test_semicolon_wraps_statement_in_semi() {
         let ast = parse("print(\"x\");").unwrap();
         assert!(matches!(
@@ -3202,6 +3275,12 @@ def noop() {()}"#,
             }
             _ => panic!("Expected Def"),
         }
+    }
+
+    #[test]
+    fn test_empty_def_body_is_error() {
+        let err = parse("def noop() -> Unit {}").expect_err("Expected parse error");
+        assert!(err.message().contains("Function body must not be empty"));
     }
 
     #[test]
@@ -3298,6 +3377,17 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_interpolation_escape_drops_backslash() {
+        let ast = parse(r#"msg = "\#{name}""#).unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Str(s)) if s == "#{name}"));
+            }
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
     fn test_negative_int() {
         let ast = parse("x = -5").unwrap();
         match &ast[0] {
@@ -3386,6 +3476,14 @@ def noop() {()}"#,
             },
             _ => panic!("Expected Bind with Match"),
         }
+    }
+
+    #[test]
+    fn test_empty_match_is_error() {
+        let err = parse("x = match value {}").expect_err("Expected parse error");
+        assert!(err
+            .message()
+            .contains("Match expression must contain at least one arm"));
     }
 
     #[test]

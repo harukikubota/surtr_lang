@@ -43,10 +43,8 @@ pub enum BinOp {
 pub enum AstTy {
     /// `Int`, `String`, `Boolean`, `Unit`, `User`, ...
     Named(Span, Symbol),
-    /// `List<Int>`, `List<String>`, ...
-    ListOf(Span, Box<AstTy>),
-    /// `Result<Int>` or `Result<Int, ParseError>`
-    ResultOf(Span, Box<AstTy>, Option<Box<AstTy>>),
+    /// `List<T>`, `Result<T, E>`, `Option<T>`, user-defined generic types, ...
+    Generic(Span, Symbol, Vec<AstTy>),
     /// `(-> T)`, `(A -> B)`, `(A, B -> C)`
     Func(Span, Vec<AstTy>, Box<AstTy>),
 }
@@ -127,6 +125,7 @@ pub struct FunParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureParam {
     pub name: Symbol,
+    pub ty: Option<AstTy>,
     pub span: Span,
 }
 
