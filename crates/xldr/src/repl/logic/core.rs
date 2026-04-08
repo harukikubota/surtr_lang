@@ -138,6 +138,9 @@ impl ReplEngine {
                 symbols.insert(name.clone());
             }
         }
+        for entry in vm.bytecode().type_registry.entries.iter() {
+            symbols.insert(entry.name.clone());
+        }
 
         let mut engine = Self {
             sources: repl_sources.sources,

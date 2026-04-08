@@ -168,7 +168,7 @@ fn handle_results_pane(app: &mut App, key: KeyEvent) {
         KeyCode::BackTab => app.prev_focus(),
         KeyCode::Up => app.results_scroll = app.results_scroll.saturating_sub(1),
         KeyCode::Down => {
-            let max = app.results.len().saturating_sub(1);
+            let max: usize = app.results.iter().map(|e| 3 + e.rendered_lines.len()).sum();
             app.results_scroll = (app.results_scroll + 1).min(max);
         }
         _ => {}
@@ -318,7 +318,8 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             if let Ok(idx) = arg.parse::<usize>() {
                 if let Some(pos) = app.results.iter().position(|e| e.idx == idx) {
                     app.selected_result = Some(idx);
-                    app.results_scroll = pos;
+                    let line_offset: usize = app.results.iter().take(pos).map(|e| 3 + e.rendered_lines.len()).sum();
+                    app.results_scroll = line_offset;
                 } else {
                     app.push_result(
                         format!(":j {arg}"),

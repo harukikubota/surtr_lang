@@ -1,5 +1,4 @@
 //! TUI application state types.
-
 use std::collections::VecDeque;
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
@@ -23,6 +22,19 @@ pub(super) enum ResultEntryKind {
     EvalError,
     CommandOutput,
     Info,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplMode {
+    Repl,
+}
+
+impl ReplMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReplMode::Repl => "repl",
+        }
+    }
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────
@@ -160,6 +172,7 @@ pub(super) struct App {
     pub(super) selected_doc: Option<usize>,
     pub(super) completion: Completion,
     pub(super) status: String,
+    pub(super) mode: ReplMode,
 }
 
 impl App {
@@ -177,6 +190,7 @@ impl App {
             selected_doc: None,
             completion: Completion::default(),
             status: "INSERT | Tab Focus | Ctrl-C Quit".to_string(),
+            mode: ReplMode::Repl,
         }
     }
 
@@ -193,8 +207,10 @@ impl App {
             rendered_lines,
             kind,
         });
-        // Keep scroll at bottom when new output arrives.
-        self.results_scroll = self.results.len().saturating_sub(1);
+        // Keep scroll at bottom when new output arrives (line-based).
+        // Set to total so the widget clamps to (total - viewport_height) correctly.
+        let total: usize = self.results.iter().map(|e| 3 + e.rendered_lines.len()).sum();
+        self.results_scroll = total;
     }
 
     pub(super) fn active_buf(&self) -> &InputBuffer {
