@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../lib/builtin.srt");
+mod support;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -35,28 +35,18 @@ fn collect_files_with_extension(root: &Path, ext: &str) -> Vec<PathBuf> {
     files
 }
 
-fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, String> {
-    let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE)
-        .map_err(|e| format!("phase=parse; message=Parse (builtin.srt): {}", e))?;
-    let mut user_ast =
-        spire::parse(source).map_err(|e| format!("phase=parse; message=Parse: {}", e))?;
-    ast.append(&mut user_ast);
-    Ok(ast)
+fn is_multi_source_module_fixture(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    normalized.contains("/tests/spec/modules/")
+        || normalized.contains("/tests/compile_errors/modules/")
 }
 
 fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
-    let ast = parse_with_builtin_prelude(source)?;
-    let resolved = sigil::resolve(ast).map_err(|e| format!("phase=resolve; message={}", e))?;
-    let typed = scar::typecheck(resolved).map_err(|e| format!("phase=typecheck; message={}", e))?;
-    forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))
+    support::compile_script("fixture.srt", source)
 }
 
 fn run_surtr(source: &str) -> Result<Vec<String>, String> {
-    let bytecode = compile_surtr(source)?;
-    let mut vm = eldr::VM::new(bytecode).with_output_capture();
-    vm.run()
-        .map_err(|e| format!("phase=runtime; message={}", e))?;
-    Ok(vm.output.unwrap_or_default())
+    support::run_script("fixture.srt", source)
 }
 
 fn normalize_text(text: &str) -> String {
@@ -107,7 +97,11 @@ fn extract_phase_tag(message: &str) -> Option<&str> {
 #[test]
 fn spec_fixtures_match_expected_stdout() {
     let spec_root = repo_root().join("tests/spec");
-    let sources = collect_files_with_extension(&spec_root, "srt");
+    let sources = collect_files_with_extension(&spec_root, "srt")
+        .into_iter()
+        .filter(|source_path| !is_multi_source_module_fixture(source_path))
+        .filter(|source_path| source_path.with_extension("expected").exists())
+        .collect::<Vec<_>>();
     assert!(
         !sources.is_empty(),
         "no spec fixtures found under {}",
@@ -143,7 +137,11 @@ fn spec_fixtures_match_expected_stdout() {
 #[test]
 fn compile_error_fixtures_match_expectations() {
     let error_root = repo_root().join("tests/compile_errors");
-    let sources = collect_files_with_extension(&error_root, "srt");
+    let sources = collect_files_with_extension(&error_root, "srt")
+        .into_iter()
+        .filter(|source_path| !is_multi_source_module_fixture(source_path))
+        .filter(|source_path| source_path.with_extension("error").exists())
+        .collect::<Vec<_>>();
     assert!(
         !sources.is_empty(),
         "no compile error fixtures found under {}",

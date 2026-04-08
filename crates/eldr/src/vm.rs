@@ -1,7 +1,10 @@
 use sindr::ir::{
     line_column_for_offset, Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, SourceMap,
 };
-use sindr::runtime::{Callable, CallableTarget, Location, RichError, TypeRegistry, Value};
+use sindr::primitives::SurtrInt;
+use sindr::runtime::{
+    Callable, CallableTarget, ListHandle, Location, RichError, TypeRegistry, Value,
+};
 use std::collections::BTreeSet;
 
 use crate::builtin::call_builtin;
@@ -33,6 +36,10 @@ pub struct VM {
     pub output: Option<Vec<String>>,
     /// Captured stderr (for testing). `None` = print to real stderr.
     pub error_output: Option<Vec<String>>,
+    /// Process exit code requested by the running program.
+    exit_code: i32,
+    /// Last value produced by full-program or chunk execution.
+    last_result: Option<Value>,
 }
 
 impl VM {
@@ -52,6 +59,8 @@ impl VM {
             source_file: None,
             output: None,
             error_output: None,
+            exit_code: 0,
+            last_result: None,
         }
     }
 
@@ -181,6 +190,36 @@ impl VM {
         self.bytecode.type_registry.clone()
     }
 
+    /// Read-only access to the accumulated bytecode.
+    pub fn bytecode(&self) -> &Bytecode {
+        &self.bytecode
+    }
+
+    /// Snapshot the current accumulated bytecode as a serialisable `Bytecode`.
+    ///
+    /// In interactive/REPL mode the VM grows its local frame dynamically, so
+    /// `self.bytecode.num_locals` (initialised to 0) does not reflect the
+    /// actual frame size.  This method returns a corrected clone suitable for
+    /// `Bytecode::encode()`.
+    pub fn snapshot_bytecode(&self) -> Bytecode {
+        let actual_num_locals = self.frames.first().map(|f| f.locals.len()).unwrap_or(0);
+        let mut bc = self.bytecode.clone();
+        bc.num_locals = actual_num_locals;
+        bc
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        self.exit_code
+    }
+
+    pub fn set_exit_code(&mut self, exit_code: i32) {
+        self.exit_code = exit_code;
+    }
+
+    pub fn last_value(&self) -> Option<&Value> {
+        self.last_result.as_ref()
+    }
+
     /// Read a local slot value (used by REPL display logic).
     pub fn get_local(&self, slot: u32) -> Option<Value> {
         self.frames
@@ -191,6 +230,7 @@ impl VM {
     /// Execute the loaded bytecode (`run` mode expects `Halt`).
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         self.verify_loaded_bytecode()?;
+        self.last_result = None;
         loop {
             if self.pc >= self.bytecode.opcodes.len() {
                 return Err(RuntimeError::new("PC out of bounds"));
@@ -203,6 +243,7 @@ impl VM {
             self.pc = next_pc;
 
             if halted {
+                self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
                 return Ok(());
             }
         }
@@ -292,6 +333,7 @@ impl VM {
         }
 
         let result = self.stack.pop().unwrap_or(Value::Unit);
+        self.last_result = Some(result.clone());
         self.stack.clear();
         Ok(result)
     }
@@ -640,7 +682,8 @@ impl VM {
                     RuntimeError::new(format!("LoadConst index out of bounds: {}", idx))
                 })?;
                 let val = match c {
-                    Constant::Int(n) => Value::Int(*n),
+                    Constant::Int(n) => Value::Int(n.clone()),
+                    Constant::Tag(tag) => Value::Tag(*tag),
                     Constant::Float(f) => Value::Float(*f),
                     Constant::Str(s) => Value::Str(s.clone()),
                     Constant::Bool(b) => Value::Bool(*b),
@@ -771,10 +814,83 @@ impl VM {
                     elems.push(self.pop_stack()?);
                 }
                 elems.reverse();
-                self.stack.push(Value::List(elems));
+                self.stack.push(Value::List(ListHandle::from_items(elems)));
             }
             Opcode::ListEmpty => {
-                self.stack.push(Value::List(Vec::new()));
+                self.stack.push(Value::List(ListHandle::empty()));
+            }
+            Opcode::ListNil => {
+                self.stack.push(Value::List(ListHandle::empty()));
+            }
+            Opcode::ListCons => {
+                let tail = self.pop_stack()?;
+                let head = self.pop_stack()?;
+                match tail {
+                    Value::List(handle) => {
+                        self.stack
+                            .push(Value::List(ListHandle::cons(head, &handle)));
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListCons expects list tail, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListIsEmpty => {
+                let list = self.pop_stack()?;
+                match list {
+                    Value::List(handle) => self.stack.push(Value::Bool(handle.is_empty())),
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListIsEmpty expects List, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListHead => {
+                let list = self.pop_stack()?;
+                match list {
+                    Value::List(handle) => {
+                        let head = handle
+                            .head_value()
+                            .ok_or_else(|| RuntimeError::new("ListHead on empty list"))?;
+                        self.stack.push(head);
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListHead expects List, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListTail => {
+                let list = self.pop_stack()?;
+                match list {
+                    Value::List(handle) => {
+                        let tail = handle
+                            .tail_handle()
+                            .ok_or_else(|| RuntimeError::new("ListTail on empty list"))?;
+                        self.stack.push(Value::List(tail));
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListTail expects List, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListFromItems(n) => {
+                let mut elems = Vec::with_capacity(n as usize);
+                for _ in 0..n {
+                    elems.push(self.pop_stack()?);
+                }
+                elems.reverse();
+                self.stack.push(Value::List(ListHandle::from_items(elems)));
             }
 
             // Struct / Tagged
@@ -786,12 +902,10 @@ impl VM {
                 fields.reverse();
                 let tag_val = self.pop_stack()?;
                 let tag = match tag_val {
-                    Value::Int(tag) => u32::try_from(tag).map_err(|_| {
-                        RuntimeError::new(format!("StructNew: invalid tag value {}", tag))
-                    })?,
+                    Value::Tag(tag) => tag,
                     other => {
                         return Err(RuntimeError::new(format!(
-                            "StructNew: expected Int tag, got {:?}",
+                            "StructNew: expected Tag, got {:?}",
                             other
                         )));
                     }
@@ -815,23 +929,28 @@ impl VM {
             Opcode::GetTag => {
                 let val = self.pop_stack()?;
                 match val {
-                    Value::Tagged { tag, .. } => {
-                        self.stack.push(Value::Int(tag as i64));
-                    }
+                    Value::Tagged { tag, .. } => self.stack.push(Value::Tag(tag)),
                     _ => {
                         return Err(RuntimeError::new("GetTag on non-tagged value"));
                     }
                 }
             }
+            Opcode::EqTag => {
+                let b = self.pop_tag()?;
+                let a = self.pop_tag()?;
+                self.stack.push(Value::Bool(a == b));
+            }
 
             // Built-in function call
-            Opcode::CallBuiltin(builtin_id, arity) => {
+            Opcode::CallBuiltin(builtin_id, arity, span_start, span_end) => {
                 let mut args = Vec::with_capacity(arity as usize);
                 for _ in 0..arity {
                     args.push(self.pop_stack()?);
                 }
                 args.reverse();
-                let result = call_builtin(self, builtin_id, args)?;
+                let result = self.with_call_site(Some((span_start, span_end)), |vm| {
+                    call_builtin(vm, builtin_id, args)
+                })?;
                 self.stack.push(result);
             }
 
@@ -914,6 +1033,57 @@ impl VM {
                     location,
                 })));
             }
+            Opcode::MakeErrorLiteral(kind_idx, message_idx) => {
+                let kind = match self.bytecode.constants.get(kind_idx as usize) {
+                    Some(Constant::Str(s)) => s.clone(),
+                    Some(other) => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErrorLiteral kind expects String constant, got {:?}",
+                            other
+                        )))
+                    }
+                    None => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErrorLiteral kind index out of bounds: {}",
+                            kind_idx
+                        )))
+                    }
+                };
+                let message = match self.bytecode.constants.get(message_idx as usize) {
+                    Some(Constant::Str(s)) => s.clone(),
+                    Some(other) => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErrorLiteral message expects String constant, got {:?}",
+                            other
+                        )))
+                    }
+                    None => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErrorLiteral message index out of bounds: {}",
+                            message_idx
+                        )))
+                    }
+                };
+                let (line, column) = self
+                    .source()
+                    .map(|source| line_column_for_offset(source, 0))
+                    .unwrap_or((0, 0));
+                self.stack.push(Value::Error(Box::new(RichError {
+                    kind,
+                    message,
+                    location: Location {
+                        file: self
+                            .source_file()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "<repl>".to_string()),
+                        func: "<pattern>".into(),
+                        line,
+                        column,
+                        span_start: 0,
+                        span_end: 0,
+                    },
+                })));
+            }
 
             Opcode::CaptureClosure(num_captured) => {
                 let mut lexical_captures = Vec::with_capacity(num_captured as usize);
@@ -977,7 +1147,9 @@ impl VM {
 
                 match callable.target {
                     CallableTarget::Builtin(builtin_id) => {
-                        let result = call_builtin(self, builtin_id, full_args)?;
+                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
+                            call_builtin(vm, builtin_id, full_args)
+                        })?;
                         self.stack.push(result);
                     }
                     CallableTarget::Function(fun_idx) => {
@@ -1130,10 +1302,34 @@ impl VM {
             .ok_or_else(|| RuntimeError::new("Frame stack underflow"))
     }
 
-    fn pop_int(&mut self) -> Result<i64, RuntimeError> {
+    fn with_call_site<T>(
+        &mut self,
+        call_site: Option<(u32, u32)>,
+        f: impl FnOnce(&mut Self) -> Result<T, RuntimeError>,
+    ) -> Result<T, RuntimeError> {
+        let frame_idx = self
+            .frames
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| RuntimeError::new("Frame stack underflow"))?;
+        let previous = self.frames[frame_idx].call_site;
+        self.frames[frame_idx].call_site = call_site;
+        let result = f(self);
+        self.frames[frame_idx].call_site = previous;
+        result
+    }
+
+    fn pop_int(&mut self) -> Result<SurtrInt, RuntimeError> {
         match self.pop_stack()? {
             Value::Int(n) => Ok(n),
             other => Err(RuntimeError::new(format!("Expected Int, got {:?}", other))),
+        }
+    }
+
+    fn pop_tag(&mut self) -> Result<u32, RuntimeError> {
+        match self.pop_stack()? {
+            Value::Tag(tag) => Ok(tag),
+            other => Err(RuntimeError::new(format!("Expected Tag, got {:?}", other))),
         }
     }
 
@@ -1163,7 +1359,7 @@ impl VM {
 
     fn int_binop<F>(&mut self, f: F) -> Result<(), RuntimeError>
     where
-        F: FnOnce(i64, i64) -> Result<Value, RuntimeError>,
+        F: FnOnce(SurtrInt, SurtrInt) -> Result<Value, RuntimeError>,
     {
         let b = self.pop_int()?;
         let a = self.pop_int()?;
@@ -1190,6 +1386,7 @@ mod tests {
         Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
         SourceMap,
     };
+    use sindr::primitives::int;
     use sindr::runtime::{TypeEntry, TypeKind, TypeRegistry, Value};
 
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
@@ -1233,7 +1430,7 @@ mod tests {
             Opcode::Halt,
         ]);
         let mut vm = VM::new(bytecode);
-        vm.bytecode.constants = vec![Constant::Int(1)];
+        vm.bytecode.constants = vec![Constant::Int(int(1))];
 
         let err = vm.run().expect_err("must fail");
         assert_eq!(err.context.pc, Some(1));
@@ -1261,12 +1458,13 @@ mod tests {
             Opcode::LoadLocal(0),
             Opcode::Return,
         ]);
-        bytecode.constants = vec![Constant::Int(5)];
+        bytecode.constants = vec![Constant::Int(int(5))];
         bytecode.functions = vec![FunctionEntry {
             fun_idx: 0,
             entry_pc: 3,
             num_locals: 1,
             arity: 1,
+            qualified_name: None,
         }];
 
         VM::new(bytecode).run().expect("run should succeed");
@@ -1289,6 +1487,7 @@ mod tests {
             entry_pc: 1,
             num_locals: 0,
             arity: 0,
+            qualified_name: None,
         }];
 
         let err = VM::new(bytecode).run().expect_err("must fail");
@@ -1310,7 +1509,7 @@ mod tests {
             ],
             source_map: None,
             const_base: 0,
-            constants: vec![Constant::Int(99), Constant::Int(7)],
+            constants: vec![Constant::Int(int(99)), Constant::Int(int(7))],
             new_locals: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
@@ -1319,20 +1518,20 @@ mod tests {
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
-        assert_eq!(result, Value::Int(7));
+        assert_eq!(result, Value::Int(int(7)));
     }
 
     #[test]
     fn push_relocates_const_indices() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
-        bytecode.constants = vec![Constant::Int(10)];
+        bytecode.constants = vec![Constant::Int(int(10))];
         let mut vm = VM::new(bytecode);
 
         let chunk = BytecodeChunk {
             opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
             source_map: None,
             const_base: 1,
-            constants: vec![Constant::Int(42)],
+            constants: vec![Constant::Int(int(42))],
             new_locals: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
@@ -1341,7 +1540,7 @@ mod tests {
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
-        assert_eq!(result, Value::Int(42));
+        assert_eq!(result, Value::Int(int(42)));
     }
 
     #[test]
@@ -1432,6 +1631,35 @@ mod tests {
     }
 
     #[test]
+    fn builtin_result_error_uses_builtin_call_span_as_location() {
+        let source = "safe_mod(10, 0)\n".to_string();
+        let span_end = source.trim_end().len() as u32;
+        let bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::CallBuiltin(4, 2, 0, span_end),
+            Opcode::Halt,
+        ]);
+        let mut vm = VM::new(bytecode).with_source(source, "REPL".into());
+        vm.bytecode.constants = vec![Constant::Int(int(10)), Constant::Int(int(0))];
+
+        vm.run().expect("run should succeed");
+        match vm.last_value().cloned().expect("result should be recorded") {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "ZeroDivisionError");
+                    assert_eq!(rich.location.line, 1);
+                    assert_eq!(rich.location.column, 1);
+                    assert_eq!(rich.location.span_start, 0);
+                    assert_eq!(rich.location.span_end, span_end);
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn push_fails_when_constant_base_mismatches() {
         let bytecode = base_bytecode(vec![Opcode::Halt]);
         let mut vm = VM::new(bytecode);
@@ -1487,7 +1715,7 @@ mod tests {
             opcodes: vec![Opcode::LoadConst(0)],
             source_map: None,
             const_base: 0,
-            constants: vec![Constant::Int(1)],
+            constants: vec![Constant::Int(int(1))],
             new_locals: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
@@ -1578,6 +1806,7 @@ mod tests {
             entry_pc: 0,
             num_locals: 0,
             arity: 0,
+            qualified_name: None,
         }];
 
         let err = VM::new(bytecode).run().expect_err("must fail");

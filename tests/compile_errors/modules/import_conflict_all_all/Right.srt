@@ -1,0 +1,5 @@
+defmod Right {
+  def value() -> Int {
+    2
+  }
+}

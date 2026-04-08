@@ -1,0 +1,4 @@
+import Left;
+import Right;
+
+print(to_string(value()))

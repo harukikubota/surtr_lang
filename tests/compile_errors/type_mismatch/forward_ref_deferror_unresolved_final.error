@@ -1,0 +1,2 @@
+phase: typecheck
+contains: The error marker E in Result<T, E> must be a deferror-defined type.

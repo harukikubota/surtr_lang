@@ -1,483 +1,293 @@
-use std::collections::BTreeSet;
-use std::io::{self, IsTerminal, Write};
+use spire::token::Token;
 
-use eldr::builtin::inspect_value;
-use eldr::value::Value;
-use forge::bytecode::populate_error_template_lines;
-use rustyline::completion::{Completer, Pair};
-use rustyline::error::ReadlineError;
-use rustyline::highlight::Highlighter;
-use rustyline::hint::{Hinter, HistoryHinter};
-use rustyline::history::DefaultHistory;
-use rustyline::validate::{ValidationContext, ValidationResult, Validator};
-use rustyline::{Context, Editor, Helper};
-use sindr::builtin::BUILTIN_METAS;
+mod loader;
+pub mod repl;
+pub mod tui;
 
-mod diagnostics;
+pub use loader::{
+    collect_module_sources_with_module_file_stages, collect_module_sources_with_module_stages,
+    collect_module_sources_with_modules, collect_module_sources_with_std_module_stages,
+    compose_script_compile_sources, script_pseudo_module_path, CompileSources, LoadError,
+    ModuleInput, ModuleSources, SourceDescriptor, SourceKind, StagedModule,
+};
 
-const BUILTIN_PRELUDE_FILE: &str = "builtin.srt";
-const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/builtin.srt");
-const REPL_MODULE_NAME: &str = "REPL";
+pub use repl::logic::core::{EldrLoadError, ReplEngine};
+pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
 
-struct ReplHelper {
-    hinter: HistoryHinter,
-    symbols: Vec<String>,
+// ── Public types used by other crates ────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoweredModuleAst {
+    pub module_path: String,
+    pub ast: Vec<spire::ast::Ast>,
+    pub declared_span: Option<spire::ast::Span>,
 }
 
-impl ReplHelper {
-    fn new() -> Self {
-        Self {
-            hinter: HistoryHinter {},
-            symbols: Vec::new(),
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModuleStageParseErrorKind {
+    Parse {
+        message: String,
+        span: spire::ast::Span,
+    },
+    DuplicateModulePath {
+        module_path: String,
+        first_file_name: String,
+        second_file_name: String,
+        span: spire::ast::Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModuleStageParseError {
+    pub source_id: diagnostics::SourceId,
+    pub kind: ModuleStageParseErrorKind,
+}
+
+impl ModuleStageParseError {
+    pub fn message(&self) -> String {
+        match &self.kind {
+            ModuleStageParseErrorKind::Parse { message, .. } => message.clone(),
+            ModuleStageParseErrorKind::DuplicateModulePath {
+                module_path,
+                first_file_name,
+                second_file_name,
+                ..
+            } => format!(
+                "duplicate module path `{}` in `{}` and `{}`",
+                module_path, first_file_name, second_file_name
+            ),
         }
     }
 
-    fn set_symbols(&mut self, symbols: Vec<String>) {
-        self.symbols = symbols;
+    pub fn span(&self) -> spire::ast::Span {
+        match &self.kind {
+            ModuleStageParseErrorKind::Parse { span, .. } => span.clone(),
+            ModuleStageParseErrorKind::DuplicateModulePath { span, .. } => span.clone(),
+        }
     }
 }
 
-impl Helper for ReplHelper {}
-impl Highlighter for ReplHelper {}
+pub fn derive_source_rules(
+    compile_unit_kind: spire::CompileUnitKind,
+    source_kind: SourceKind,
+    entrypoint: Option<&spire::EntryPoint>,
+) -> spire::SourceRules {
+    // SourceKind controls the syntactic boundary (`@@builtin`, top-level expr,
+    // etc.), while CompileUnitKind refines runtime-only rules such as where
+    // `set_exit_code` is legal in project builds.
+    let base = match source_kind {
+        SourceKind::Script => spire::SourceRules::script(),
+        SourceKind::Module => spire::SourceRules::module(),
+        SourceKind::StdModule => spire::SourceRules::std_module(),
+        SourceKind::ReplChunk => spire::SourceRules::repl_chunk(),
+    };
 
-impl Validator for ReplHelper {
-    fn validate(
-        &self,
-        _ctx: &mut ValidationContext<'_>,
-    ) -> Result<ValidationResult, ReadlineError> {
-        Ok(ValidationResult::Valid(None))
+    let policy = match source_kind {
+        SourceKind::Script => spire::SetExitCodePolicy::Anywhere,
+        SourceKind::ReplChunk => spire::SetExitCodePolicy::Forbidden,
+        SourceKind::Module | SourceKind::StdModule
+            if compile_unit_kind == spire::CompileUnitKind::Project =>
+        {
+            spire::SetExitCodePolicy::EntryOnly
+        }
+        SourceKind::Module | SourceKind::StdModule => spire::SetExitCodePolicy::Forbidden,
+    };
+
+    base.with_set_exit_code_policy(policy, entrypoint)
+}
+
+fn erase_non_newline_span(chars: &mut [char], start: usize, end: usize) {
+    let len = chars.len();
+    let capped_end = end.min(len);
+    let capped_start = start.min(len);
+    for ch in chars.iter_mut().take(capped_end).skip(capped_start) {
+        if *ch != '\n' {
+            *ch = ' ';
+        }
     }
 }
 
-impl Hinter for ReplHelper {
-    type Hint = String;
+/// Strip `@@test <expr>` annotations while preserving source span offsets.
+///
+/// The parser does not need to process `@@test` in normal compilation flows.
+/// Replacing characters with spaces keeps diagnostics line/column stable.
+pub fn strip_test_annotations(source: &str) -> String {
+    let tokens = match spire::lexer::tokenize(source) {
+        Ok(tokens) => tokens,
+        Err(_) => return source.to_string(),
+    };
 
-    fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<Self::Hint> {
-        self.hinter.hint(line, pos, ctx)
+    let mut chars = source.chars().collect::<Vec<_>>();
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if let Token::Annotator(name) = &tokens[i].token {
+            if name == "test" {
+                let mut j = i + 1;
+                while j < tokens.len() && !matches!(tokens[j].token, Token::Newline | Token::Eof) {
+                    j += 1;
+                }
+                let end = if j > i + 1 {
+                    tokens[j - 1].span.end
+                } else {
+                    tokens[i].span.end
+                };
+                erase_non_newline_span(&mut chars, tokens[i].span.start, end);
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
     }
+
+    chars.into_iter().collect::<String>()
 }
 
-impl Completer for ReplHelper {
-    type Candidate = Pair;
+pub fn lower_module_source_ast(
+    ast: Vec<spire::ast::Ast>,
+    fallback_module_path: Option<&str>,
+) -> Vec<LoweredModuleAst> {
+    let shared_imports = ast
+        .iter()
+        .filter_map(|stmt| match stmt {
+            spire::ast::Ast::Import(_, _, _) => Some(stmt.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
 
-    fn complete(
-        &self,
-        line: &str,
-        pos: usize,
-        _ctx: &Context<'_>,
-    ) -> Result<(usize, Vec<Pair>), ReadlineError> {
-        const COMMANDS: &[&str] = &[":quit", ":v"];
-        let start = line[..pos]
-            .rfind(char::is_whitespace)
-            .map(|idx| idx + 1)
-            .unwrap_or(0);
-        let word = &line[start..pos];
+    let mut lowered = Vec::new();
+    let mut shared_non_module_defs = Vec::new();
 
-        let mut matches = Vec::new();
-        for cmd in COMMANDS {
-            if cmd.starts_with(word) {
-                matches.push(Pair {
-                    display: cmd.to_string(),
-                    replacement: cmd.to_string(),
+    for stmt in ast {
+        match stmt {
+            spire::ast::Ast::Defmod(span, module_path, body) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    ast: module_ast,
+                    declared_span: Some(span),
                 });
             }
-        }
-        for symbol in &self.symbols {
-            if symbol.starts_with(word) {
-                matches.push(Pair {
-                    display: symbol.clone(),
-                    replacement: symbol.clone(),
-                });
+            spire::ast::Ast::Import(_, _, _) => {}
+            spire::ast::Ast::StructDef(_, _, _)
+            | spire::ast::Ast::RecordDef(_, _, _)
+            | spire::ast::Ast::DeferrorDef(_, _, _, _)
+            | spire::ast::Ast::BuiltinDecl(_, _, _, _) => {
+                shared_non_module_defs.push(stmt);
             }
-        }
-        Ok((start, matches))
-    }
-}
-
-enum ReplOutcome {
-    Continue,
-    Exit,
-}
-
-struct ReplEngine {
-    sigil_session: sigil::SigilSession,
-    scar_session: scar::ScarSession,
-    forge_session: forge::ForgeSession,
-    vm: eldr::VM,
-    pending: String,
-    next_line: usize,
-    results: Vec<Option<Value>>,
-    symbols: BTreeSet<String>,
-}
-
-impl ReplEngine {
-    fn new() -> Self {
-        let forge_session = forge::ForgeSession::new();
-        let vm = eldr::VM::new_interactive(forge_session.type_registry());
-        let mut engine = Self {
-            sigil_session: sigil::SigilSession::new(),
-            scar_session: scar::ScarSession::new(),
-            forge_session,
-            vm,
-            pending: String::new(),
-            next_line: 1,
-            results: Vec::new(),
-            symbols: ["Ok", "Err"]
-                .into_iter()
-                .map(str::to_string)
-                .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
-                .collect(),
-        };
-        engine.bootstrap_builtins();
-        engine
-    }
-
-    fn bootstrap_builtins(&mut self) {
-        let ast = match spire::parse(BUILTIN_PRELUDE_SOURCE) {
-            Ok(ast) => ast,
-            Err(e) => {
-                diagnostics::report_error(
-                    BUILTIN_PRELUDE_FILE,
-                    BUILTIN_PRELUDE_SOURCE,
-                    diagnostics::simple_error("ParseError", e.message(), e.span().clone(), None),
-                );
-                return;
-            }
-        };
-
-        if ast.is_empty() {
-            return;
-        }
-
-        let resolved = match self.sigil_session.resolve(ast) {
-            Ok(r) => r,
-            Err(e) => {
-                diagnostics::report_error(
-                    BUILTIN_PRELUDE_FILE,
-                    BUILTIN_PRELUDE_SOURCE,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-                );
-                return;
-            }
-        };
-
-        let typed = match self.scar_session.typecheck(resolved) {
-            Ok(t) => t,
-            Err(e) => {
-                diagnostics::report_error(
-                    BUILTIN_PRELUDE_FILE,
-                    BUILTIN_PRELUDE_SOURCE,
-                    diagnostics::type_error_spec(BUILTIN_PRELUDE_SOURCE, &e),
-                );
-                return;
-            }
-        };
-
-        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
-            Ok(c) => c,
-            Err(e) => {
-                diagnostics::report_error(
-                    BUILTIN_PRELUDE_FILE,
-                    BUILTIN_PRELUDE_SOURCE,
-                    diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
-                );
-                return;
-            }
-        };
-
-        populate_error_template_lines(&mut chunk.error_templates, BUILTIN_PRELUDE_SOURCE);
-        self.vm.set_source(
-            BUILTIN_PRELUDE_SOURCE.to_string(),
-            BUILTIN_PRELUDE_FILE.to_string(),
-        );
-
-        if let Err(e) = self.vm.push_atomic(chunk) {
-            eldr::report_runtime_error(
-                &e,
-                self.vm.source(),
-                self.vm.source_file(),
-                self.vm.runtime_error_location(),
-            );
-            return;
-        }
-
-        for name in &meta.function_defs {
-            self.symbols.insert(name.clone());
-        }
-    }
-
-    fn completion_symbols(&self) -> Vec<String> {
-        self.symbols.iter().cloned().collect()
-    }
-
-    fn prompt(&self) -> String {
-        if self.pending.is_empty() {
-            format!("surtr({})> ", self.next_line)
-        } else {
-            format!("...({})> ", self.next_line)
-        }
-    }
-
-    fn handle_line(&mut self, line: &str) -> ReplOutcome {
-        if self.pending.is_empty() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                return ReplOutcome::Continue;
-            }
-            if trimmed == ":quit" {
-                return ReplOutcome::Exit;
-            }
-            if let Some(rest) = trimmed.strip_prefix(":v") {
-                self.handle_value_recall(rest.trim());
-                return ReplOutcome::Continue;
-            }
-            if trimmed.starts_with(':') {
-                eprintln!("Unknown REPL command: {}", trimmed);
-                self.bump_line(None);
-                return ReplOutcome::Continue;
-            }
-        }
-
-        self.pending.push_str(line);
-        self.pending.push('\n');
-
-        let ast = match spire::parse(&self.pending) {
-            Ok(ast) => ast,
-            Err(e) if e.is_incomplete() => {
-                return ReplOutcome::Continue;
-            }
-            Err(e) => {
-                let message = e.message();
-                diagnostics::report_error(
-                    REPL_MODULE_NAME,
-                    &self.pending,
-                    diagnostics::simple_error("ParseError", message, e.span().clone(), None),
-                );
-                self.pending.clear();
-                self.bump_line(None);
-                return ReplOutcome::Continue;
-            }
-        };
-
-        if ast.is_empty() {
-            self.pending.clear();
-            return ReplOutcome::Continue;
-        }
-
-        let sigil_cp = self.sigil_session.checkpoint();
-        let scar_cp = self.scar_session.checkpoint();
-        let forge_cp = self.forge_session.checkpoint();
-
-        let resolved = match self.sigil_session.resolve(ast) {
-            Ok(r) => r,
-            Err(e) => {
-                self.sigil_session.rollback(sigil_cp);
-                self.scar_session.rollback(scar_cp);
-                self.forge_session.rollback(forge_cp);
-                diagnostics::report_error(
-                    REPL_MODULE_NAME,
-                    &self.pending,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-                );
-                self.pending.clear();
-                self.bump_line(None);
-                return ReplOutcome::Continue;
-            }
-        };
-
-        let typed = match self.scar_session.typecheck(resolved) {
-            Ok(t) => t,
-            Err(e) => {
-                self.sigil_session.rollback(sigil_cp);
-                self.scar_session.rollback(scar_cp);
-                self.forge_session.rollback(forge_cp);
-                diagnostics::report_error(
-                    REPL_MODULE_NAME,
-                    &self.pending,
-                    diagnostics::type_error_spec(&self.pending, &e),
-                );
-                self.pending.clear();
-                self.bump_line(None);
-                return ReplOutcome::Continue;
-            }
-        };
-
-        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
-            Ok(c) => c,
-            Err(e) => {
-                self.sigil_session.rollback(sigil_cp);
-                self.scar_session.rollback(scar_cp);
-                self.forge_session.rollback(forge_cp);
-                diagnostics::report_error(
-                    REPL_MODULE_NAME,
-                    &self.pending,
-                    diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
-                );
-                self.pending.clear();
-                self.bump_line(None);
-                return ReplOutcome::Continue;
-            }
-        };
-
-        populate_error_template_lines(&mut chunk.error_templates, &self.pending);
-        self.vm
-            .set_source(self.pending.clone(), REPL_MODULE_NAME.to_string());
-
-        match self.vm.push_atomic(chunk) {
-            Ok(value) => {
-                display_repl_result(&self.vm, value.clone(), &meta);
-                for b in &meta.bindings {
-                    self.symbols.insert(b.name.clone());
-                }
-                for name in &meta.function_defs {
-                    self.symbols.insert(name.clone());
-                }
-                self.bump_line(Some(value));
-            }
-            Err(e) => {
-                eldr::report_runtime_error(
-                    &e,
-                    self.vm.source(),
-                    self.vm.source_file(),
-                    self.vm.runtime_error_location(),
-                );
-                self.bump_line(None);
-            }
-        }
-
-        self.pending.clear();
-        ReplOutcome::Continue
-    }
-
-    fn handle_value_recall(&mut self, arg: &str) {
-        if arg.is_empty() {
-            eprintln!("Usage: :v <line>");
-            self.bump_line(None);
-            return;
-        }
-
-        let line_num = match arg.parse::<usize>() {
-            Ok(n) if n > 0 => n,
             _ => {
-                eprintln!("Invalid line number for :v: {}", arg);
-                self.bump_line(None);
-                return;
-            }
-        };
-
-        if line_num > self.results.len() {
-            eprintln!("No such line: {}", line_num);
-            self.bump_line(None);
-            return;
-        }
-
-        match self.results[line_num - 1].clone() {
-            Some(value) => {
-                println!("> {}", inspect_value(&self.vm, &value));
-                self.bump_line(Some(value));
-            }
-            None => {
-                eprintln!("Line {} has no value", line_num);
-                self.bump_line(None);
+                // Defensive fallback. Parser policy should keep this unreachable for module sources.
+                shared_non_module_defs.push(stmt);
             }
         }
     }
 
-    fn bump_line(&mut self, value: Option<Value>) {
-        self.results.push(value);
-        self.next_line += 1;
+    if !shared_non_module_defs.is_empty() {
+        let mut shared_ast = shared_imports;
+        shared_ast.extend(shared_non_module_defs);
+        lowered.push(LoweredModuleAst {
+            module_path: fallback_module_path.unwrap_or_default().to_string(),
+            ast: shared_ast,
+            declared_span: None,
+        });
     }
+
+    lowered
 }
 
-pub fn repl_command() -> Result<(), i32> {
-    let mut engine = ReplEngine::new();
-
-    if io::stdin().is_terminal() {
-        let mut editor: Editor<ReplHelper, DefaultHistory> = Editor::new().map_err(|e| {
-            eprintln!("Error initializing line editor: {}", e);
-            1
-        })?;
-        editor.set_helper(Some(ReplHelper::new()));
-
-        loop {
-            let prompt = engine.prompt();
-            let symbols = engine.completion_symbols();
-            if let Some(helper) = editor.helper_mut() {
-                helper.set_symbols(symbols);
-            }
-            match editor.readline(&prompt) {
-                Ok(line) => {
-                    if !line.trim().is_empty() {
-                        let _ = editor.add_history_entry(line.as_str());
-                    }
-                    if matches!(engine.handle_line(&line), ReplOutcome::Exit) {
-                        break;
-                    }
-                }
-                Err(ReadlineError::Interrupted) => {
-                    return Err(130);
-                }
-                Err(ReadlineError::Eof) => {
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("Error reading input: {}", e);
-                    return Err(1);
-                }
-            }
-        }
-    } else {
-        let stdin = io::stdin();
-        loop {
-            print!("{}", engine.prompt());
-            if io::stdout().flush().is_err() {
-                return Err(1);
-            }
-
-            let mut line = String::new();
-            let read = match stdin.read_line(&mut line) {
-                Ok(n) => n,
-                Err(e) => {
-                    eprintln!("Error reading input: {}", e);
-                    return Err(1);
-                }
-            };
-            if read == 0 {
-                break;
-            }
-            let line = line.trim_end_matches(&['\r', '\n'][..]);
-            if matches!(engine.handle_line(line), ReplOutcome::Exit) {
-                break;
-            }
-        }
-    }
-
-    Ok(())
+pub fn parse_module_stages_from_compile_sources(
+    compile_sources: &CompileSources,
+    compile_unit_kind: spire::CompileUnitKind,
+) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
+    repl::logic::core::parse_module_stages_from_sources(
+        &compile_sources.sources,
+        &compile_sources.module_stages,
+        compile_unit_kind,
+    )
 }
 
-fn display_repl_result(vm: &eldr::VM, value: Value, meta: &forge::ChunkMeta) {
-    if !matches!(value, Value::Unit) {
-        println!("> {}", inspect_value(vm, &value));
-        return;
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lower_module_source_extracts_defmods_and_shared_defs() {
+        let ast = spire::parse_with_context(
+            r#"import Other::f;
+
+defmod A {
+  def fa() -> Int { 1 }
+}
+
+defrecord Pair(left: Int, right: Int)
+
+defmod B {
+  def fb() -> Int { f() }
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("module source should parse");
+
+        let lowered = lower_module_source_ast(ast, None);
+        assert_eq!(lowered.len(), 3);
+        assert_eq!(lowered[0].module_path, "A");
+        assert_eq!(lowered[1].module_path, "B");
+        assert_eq!(lowered[2].module_path, "");
+        assert!(matches!(
+            lowered[0].ast[0],
+            spire::ast::Ast::Import(_, _, spire::ast::ImportSpec::Single(_))
+        ));
+        assert!(lowered[2]
+            .ast
+            .iter()
+            .any(|stmt| matches!(stmt, spire::ast::Ast::RecordDef(_, _, _))));
     }
 
-    if !meta.bindings.is_empty() {
-        for binding in &meta.bindings {
-            if let Some(val) = vm.get_local(binding.slot_id) {
-                println!(
-                    "> {}: {} = {}",
-                    binding.name,
-                    binding.ty,
-                    inspect_value(vm, &val)
-                );
-            }
-        }
-        return;
+    #[test]
+    fn parse_module_stages_detects_duplicate_defmod_paths() {
+        let module_sources = collect_module_sources_with_module_stages(&[vec![
+            ModuleInput {
+                file_name: "a.srt".into(),
+                source: "defmod Shared { def a() -> Int { 1 } }".into(),
+                module_path: "A".into(),
+            },
+            ModuleInput {
+                file_name: "b.srt".into(),
+                source: "defmod Shared { def b() -> Int { 2 } }".into(),
+                module_path: "B".into(),
+            },
+        ]])
+        .expect("module collection should succeed");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
+
+        let err = parse_module_stages_from_compile_sources(
+            &compile_sources,
+            spire::CompileUnitKind::Script,
+        )
+        .expect_err("duplicate defmod path must fail");
+        assert!(matches!(
+            err.kind,
+            ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Shared"
+        ));
     }
 
-    if !meta.type_defs.is_empty() {
-        for type_def in &meta.type_defs {
-            println!("> {}", type_def.name);
-        }
+    #[test]
+    fn strip_test_annotations_replaces_annotated_line_with_spaces() {
+        let source =
+            "defmod M {\n  @@test add(1, 2) == 3\n  def add(x: Int, y: Int) -> Int { x + y }\n}\n";
+        let stripped = strip_test_annotations(source);
+
+        assert!(!stripped.contains("@@test"));
+        assert!(stripped.contains("def add(x: Int, y: Int) -> Int { x + y }"));
+        assert_eq!(source.lines().count(), stripped.lines().count());
+    }
+
+    #[test]
+    fn strip_test_annotations_is_noop_without_annotations() {
+        let source = "defmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}\n";
+        assert_eq!(strip_test_annotations(source), source);
     }
 }

@@ -6,6 +6,7 @@ use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_meta_by_name;
+use sindr::primitives::int;
 use spire::ast::{BinOp, Lit, Span};
 
 use crate::bytecode::*;
@@ -66,6 +67,7 @@ struct CodegenState {
     type_registry: TypeRegistry,
     error_templates: Vec<ErrTemplate>,
     functions: Vec<FunctionEntry>,
+    error_ctor_funs: HashMap<String, (u32, u8)>, // error kind -> (fun_idx, arity)
 }
 
 impl CodegenState {
@@ -78,6 +80,7 @@ impl CodegenState {
             type_registry: TypeRegistry::new(),
             error_templates: Vec::new(),
             functions: Vec::new(),
+            error_ctor_funs: HashMap::new(),
         }
     }
 }
@@ -113,9 +116,69 @@ impl ForgeSession {
         self.state.type_registry.clone()
     }
 
+    /// Restore a `ForgeSession` from an already-executed `Bytecode`.
+    ///
+    /// This is used when the TUI (or REPL) loads a pre-compiled `.eldr` file.
+    /// The restored session can generate new REPL chunks that append on top of
+    /// the loaded bytecode.  It cannot recover `slot_map` (let-binding
+    /// unique_id → slot), so previous REPL local variables are not accessible
+    /// by name in new input.  Function definitions and the type registry are
+    /// fully restored.
+    pub fn from_bytecode(bytecode: &sindr::ir::Bytecode) -> Self {
+        let next_fun_idx = bytecode
+            .functions
+            .iter()
+            .map(|f| f.fun_idx + 1)
+            .max()
+            .unwrap_or(0);
+
+        // Reconstruct error_ctor_funs: ErrTemplate.kind → (fun_idx, num_params).
+        let mut error_ctor_funs = HashMap::new();
+        for template in &bytecode.error_templates {
+            if let Some(fun_entry) = bytecode
+                .functions
+                .iter()
+                .find(|f| f.qualified_name.as_deref() == Some(&template.kind))
+            {
+                error_ctor_funs.insert(
+                    template.kind.clone(),
+                    (fun_entry.fun_idx, template.num_params),
+                );
+            }
+        }
+
+        Self {
+            state: CodegenState {
+                constants: bytecode.constants.clone(),
+                slot_map: HashMap::new(),
+                next_slot: bytecode.num_locals as u32,
+                next_fun_idx,
+                type_registry: bytecode.type_registry.clone(),
+                error_templates: bytecode.error_templates.clone(),
+                functions: bytecode.functions.clone(),
+                error_ctor_funs,
+            },
+        }
+    }
+
     pub fn codegen_chunk(
         &mut self,
         typed: Vec<TypedNode>,
+    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+        self.codegen_chunk_with_options(typed, false)
+    }
+
+    pub fn codegen_chunk_repl_result(
+        &mut self,
+        typed: Vec<TypedNode>,
+    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+        self.codegen_chunk_with_options(typed, true)
+    }
+
+    fn codegen_chunk_with_options(
+        &mut self,
+        typed: Vec<TypedNode>,
+        top_level_returns_result: bool,
     ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
         let before = self.state.clone();
         let typed_for_meta = typed.clone();
@@ -124,6 +187,7 @@ impl ForgeSession {
 
         let mut gene = Codegen::from_state(before.clone());
         gene.set_chunk_constant_dedup_start(const_base);
+        gene.set_top_level_returns_result(top_level_returns_result);
         gene.emit_program_chunk(typed)?;
         let (mut opcodes, after) = gene.finalize();
         localize_chunk_indices(&mut opcodes, const_base, error_template_base)?;
@@ -215,56 +279,110 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
     let mut function_defs = Vec::new();
 
     for stmt in typed {
-        match &stmt.node {
-            TypedInner::Bind(TypedPattern::Var(ty, id), _)
-            | TypedInner::SafeBind(TypedPattern::Var(ty, id), _) => {
-                if let Some(slot_id) = slot_map.get(&id.unique_id) {
-                    bindings.push(BindingInfo {
-                        name: id.name.clone(),
-                        ty: ty_to_string(ty),
-                        slot_id: *slot_id,
-                    });
-                }
-            }
-            TypedInner::StructDef(_, name, field_names) => {
-                type_defs.push(TypeDefDisplay {
-                    name: name.clone(),
-                    kind: ReplTypeKind::Struct,
-                    fields: field_names
-                        .iter()
-                        .map(|field| (field.clone(), String::new()))
-                        .collect(),
-                });
-            }
-            TypedInner::RecordDef(_, name, field_names) => {
-                type_defs.push(TypeDefDisplay {
-                    name: name.clone(),
-                    kind: ReplTypeKind::Record,
-                    fields: field_names
-                        .iter()
-                        .map(|field| (field.clone(), String::new()))
-                        .collect(),
-                });
-            }
-            TypedInner::DeferrorDef(_, _, id, _, _) => {
-                type_defs.push(TypeDefDisplay {
-                    name: id.name.clone(),
-                    kind: ReplTypeKind::Error,
-                    fields: Vec::new(),
-                });
-                function_defs.push(id.name.clone());
-            }
-            TypedInner::Def(_, id, _, _, _) => {
-                function_defs.push(id.name.clone());
-            }
-            _ => {}
-        }
+        collect_stmt_meta(
+            stmt,
+            slot_map,
+            &mut bindings,
+            &mut type_defs,
+            &mut function_defs,
+        );
     }
 
     ChunkMeta {
         bindings,
         type_defs,
         function_defs,
+    }
+}
+
+fn collect_stmt_meta(
+    stmt: &TypedNode,
+    slot_map: &HashMap<u32, u32>,
+    bindings: &mut Vec<BindingInfo>,
+    type_defs: &mut Vec<TypeDefDisplay>,
+    function_defs: &mut Vec<String>,
+) {
+    match &stmt.node {
+        TypedInner::Bind(pat, _) | TypedInner::SafeBind(pat, _) => {
+            collect_pattern_binding_infos(pat, slot_map, bindings);
+        }
+        TypedInner::StructDef(_, name, field_names) => {
+            type_defs.push(TypeDefDisplay {
+                name: name.clone(),
+                kind: ReplTypeKind::Struct,
+                fields: field_names
+                    .iter()
+                    .map(|field| (field.clone(), String::new()))
+                    .collect(),
+            });
+        }
+        TypedInner::RecordDef(_, name, field_names) => {
+            type_defs.push(TypeDefDisplay {
+                name: name.clone(),
+                kind: ReplTypeKind::Record,
+                fields: field_names
+                    .iter()
+                    .map(|field| (field.clone(), String::new()))
+                    .collect(),
+            });
+        }
+        TypedInner::DeferrorDef(_, _, id, _, _) => {
+            type_defs.push(TypeDefDisplay {
+                name: id.name.clone(),
+                kind: ReplTypeKind::Error,
+                fields: Vec::new(),
+            });
+            function_defs.push(id.name.clone());
+        }
+        TypedInner::Def(_, id, _, _, _) => {
+            function_defs.push(id.name.clone());
+        }
+        // `;` keeps Unit as expression result, but for REPL metadata we still
+        // want to surface bindings/type defs introduced by the wrapped statement.
+        TypedInner::Semi(inner) => {
+            collect_stmt_meta(inner, slot_map, bindings, type_defs, function_defs);
+        }
+        _ => {}
+    }
+}
+
+fn collect_pattern_binding_infos(
+    pat: &TypedPattern,
+    slot_map: &HashMap<u32, u32>,
+    out: &mut Vec<BindingInfo>,
+) {
+    match pat {
+        TypedPattern::Var(ty, id) => {
+            if let Some(slot_id) = slot_map.get(&id.unique_id) {
+                out.push(BindingInfo {
+                    name: id.name.clone(),
+                    ty: ty_to_string(ty),
+                    slot_id: *slot_id,
+                });
+            }
+        }
+        TypedPattern::As(ty, inner, id) => {
+            if let Some(slot_id) = slot_map.get(&id.unique_id) {
+                out.push(BindingInfo {
+                    name: id.name.clone(),
+                    ty: ty_to_string(ty),
+                    slot_id: *slot_id,
+                });
+            }
+            collect_pattern_binding_infos(inner, slot_map, out);
+        }
+        TypedPattern::Wildcard(_)
+        | TypedPattern::ListNil(_)
+        | TypedPattern::IntLit(_, _)
+        | TypedPattern::StrLit(_, _)
+        | TypedPattern::BoolLit(_, _) => {}
+        TypedPattern::ListCons(_, head, tail) => {
+            collect_pattern_binding_infos(head, slot_map, out);
+            collect_pattern_binding_infos(tail, slot_map, out);
+        }
+        TypedPattern::ResultOk(_, inner) => {
+            collect_pattern_binding_infos(inner, slot_map, out);
+        }
     }
 }
 
@@ -275,7 +393,7 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Str => "String".into(),
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
-        Ty::List(inner) => format!("[{}]", ty_to_string(inner)),
+        Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
         Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
         Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
         Ty::Error => "Error".into(),
@@ -330,6 +448,7 @@ struct Codegen {
     label_positions: HashMap<Label, usize>, // label → IR index it points to
     pending_closures: Vec<PendingClosure>,
     in_function: bool,
+    top_level_returns_result: bool,
     constant_dedup_start: usize,
 }
 
@@ -346,12 +465,17 @@ impl Codegen {
             label_positions: HashMap::new(),
             pending_closures: Vec::new(),
             in_function: false,
+            top_level_returns_result: false,
             constant_dedup_start: 0,
         }
     }
 
     fn set_chunk_constant_dedup_start(&mut self, start: usize) {
         self.constant_dedup_start = start;
+    }
+
+    fn set_top_level_returns_result(&mut self, enabled: bool) {
+        self.top_level_returns_result = enabled;
     }
 
     fn fresh_label(&mut self) -> Label {
@@ -448,6 +572,7 @@ impl Codegen {
             entry_pc,
             num_locals: self.state.next_slot,
             arity: total_arity as u8,
+            qualified_name: None,
         });
 
         self.state.slot_map = saved_slot_map;
@@ -513,7 +638,7 @@ impl Codegen {
     // ── Program ──
 
     fn emit_program(&mut self, stmts: Vec<TypedNode>) -> Result<(), CodegenError> {
-        self.emit_program_with_functions(stmts, true)
+        self.emit_program_with_functions(stmts, false)
     }
 
     fn emit_program_chunk(&mut self, stmts: Vec<TypedNode>) -> Result<(), CodegenError> {
@@ -557,6 +682,11 @@ impl Codegen {
             .max(existing_fun_idx);
 
         for stmt in &stmts {
+            if let TypedInner::DeferrorDef(_, fun_idx, id, params, _) = &stmt.node {
+                self.state
+                    .error_ctor_funs
+                    .insert(id.name.clone(), (*fun_idx, params.len() as u8));
+            }
             match &stmt.node {
                 TypedInner::Def(..) | TypedInner::DeferrorDef(..) => defs.push(stmt),
                 _ => main_stmts.push(stmt),
@@ -628,6 +758,7 @@ impl Codegen {
             entry_pc,
             num_locals,
             arity: params.len() as u8,
+            qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
         });
         self.state.next_fun_idx = self.state.next_fun_idx.max(*fun_idx + 1);
 
@@ -688,7 +819,11 @@ impl Codegen {
             entry_pc,
             num_locals,
             arity: params.len() as u8,
+            qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
         });
+        self.state
+            .error_ctor_funs
+            .insert(id.name.clone(), (*fun_idx, params.len() as u8));
 
         self.state.slot_map = saved_slot_map;
         self.state.next_slot = saved_next_slot;
@@ -716,15 +851,26 @@ impl Codegen {
 
             TypedInner::Bind(pat, rhs) => {
                 self.emit_node(rhs)?;
-                match pat {
-                    TypedPattern::Var(_, id) => {
-                        let slot = self.alloc_slot(id.unique_id);
-                        self.emit(Opcode::StoreLocal(slot));
-                    }
-                    TypedPattern::Wildcard(_) => {
-                        self.emit(Opcode::Pop);
-                    }
-                }
+                let payload_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(payload_slot));
+
+                let fail_label = self.fresh_label();
+                self.emit_pattern_test_from_local_for_bind(
+                    pat,
+                    payload_slot,
+                    fail_label,
+                    &rhs.span,
+                )?;
+                self.emit_pattern_bind_from_local(pat, payload_slot)?;
+
+                let success_label = self.fresh_label();
+                self.emit_jump(success_label);
+
+                self.patch_label(fail_label);
+                self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+
+                self.patch_label(success_label);
                 // Bind produces Unit
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -745,15 +891,17 @@ impl Codegen {
                 self.emit(opcode);
             }
 
-            TypedInner::List(elems) => {
-                if elems.is_empty() {
-                    self.emit(Opcode::ListEmpty);
-                } else {
-                    for elem in elems {
-                        self.emit_node(elem)?;
-                    }
-                    self.emit(Opcode::ListNew(elems.len() as u32));
+            TypedInner::ListNil => self.emit(Opcode::ListNil),
+            TypedInner::ListCons(head, tail) => {
+                self.emit_node(head)?;
+                self.emit_node(tail)?;
+                self.emit(Opcode::ListCons);
+            }
+            TypedInner::ListLiteral(elems) => {
+                for elem in elems {
+                    self.emit_node(elem)?;
                 }
+                self.emit(Opcode::ListFromItems(elems.len() as u32));
             }
 
             TypedInner::InterpolatedStr(parts) => {
@@ -775,7 +923,7 @@ impl Codegen {
 
             TypedInner::StructLit(tag, fields) => {
                 // Push tag first, then fields
-                let tag_const = self.add_constant(Constant::Int(*tag as i64));
+                let tag_const = self.add_constant(Constant::Tag(*tag));
                 self.emit(Opcode::LoadConst(tag_const));
                 for field in fields {
                     self.emit_node(field)?;
@@ -785,7 +933,7 @@ impl Codegen {
             }
 
             TypedInner::ConstructorCall(tag, fields) => {
-                let tag_const = self.add_constant(Constant::Int(*tag as i64));
+                let tag_const = self.add_constant(Constant::Tag(*tag));
                 self.emit(Opcode::LoadConst(tag_const));
                 for field in fields {
                     self.emit_node(field)?;
@@ -876,6 +1024,10 @@ impl Codegen {
     }
 
     fn emit_safebind(&mut self, pat: &TypedPattern, rhs: &TypedNode) -> Result<(), CodegenError> {
+        if !matches!(rhs.ty, Ty::Result(_, _)) {
+            return self.emit_safebind_from_list(pat, rhs);
+        }
+
         self.emit_node(rhs)?;
 
         // Preserve the Result value for tag check and payload extraction.
@@ -885,42 +1037,630 @@ impl Codegen {
 
         self.emit(Opcode::LoadLocal(result_slot));
         self.emit(Opcode::GetTag);
-        let err_tag = self.add_constant(Constant::Int(1));
+        let err_tag = self.add_constant(Constant::Tag(1));
         self.emit(Opcode::LoadConst(err_tag));
-        self.emit(Opcode::EqInt);
+        self.emit(Opcode::EqTag);
 
         let ok_path = self.fresh_label();
         self.emit_jump_if_false(ok_path);
 
-        self.emit(Opcode::LoadLocal(result_slot));
-        if self.in_function {
-            self.emit(Opcode::Return);
-        } else {
-            // Script path: report and stop immediately.
-            self.emit(Opcode::GetField(0));
-            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-                message: "Unknown builtin: eprint".into(),
-                span: rhs.span.clone(),
-            })?;
-            self.emit(Opcode::CallBuiltin(eprint_id, 1));
-            self.emit(Opcode::Halt);
-        }
+        self.emit_propagate_result_from_local(result_slot, rhs.span.clone())?;
 
         self.patch_label(ok_path);
 
         self.emit(Opcode::LoadLocal(result_slot));
         self.emit(Opcode::GetField(0));
-        match pat {
-            TypedPattern::Var(_, id) => {
-                let slot = self.alloc_slot(id.unique_id);
-                self.emit(Opcode::StoreLocal(slot));
+        let payload_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(payload_slot));
+
+        if let Some(items) = Self::collect_exact_list_pattern_items(pat) {
+            let lhs_len = items.len();
+            let fail_shorts = (0..lhs_len).map(|_| self.fresh_label()).collect::<Vec<_>>();
+            let fail_long = self.fresh_label();
+            let fail_mismatch = self.fresh_label();
+            let rest_slot = self.emit_exact_list_pattern_test_from_local(
+                &items,
+                payload_slot,
+                &fail_shorts,
+                fail_long,
+                fail_mismatch,
+                &rhs.span,
+            )?;
+            self.emit_pattern_bind_from_local(pat, payload_slot)?;
+            let success_label = self.fresh_label();
+            self.emit_jump(success_label);
+
+            for (rhs_len, fail_short) in fail_shorts.into_iter().enumerate() {
+                self.patch_label(fail_short);
+                self.emit_list_len_mismatch_failure_concrete(
+                    lhs_len,
+                    rhs_len,
+                    ">",
+                    rhs.span.clone(),
+                )?;
             }
-            TypedPattern::Wildcard(_) => {
-                self.emit(Opcode::Pop);
-            }
+
+            self.patch_label(fail_long);
+            self.emit_list_len_mismatch_failure_rhs_long(lhs_len, rest_slot, rhs.span.clone())?;
+
+            self.patch_label(fail_mismatch);
+            self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+
+            self.patch_label(success_label);
+            let unit_idx = self.add_constant(Constant::Unit);
+            self.emit(Opcode::LoadConst(unit_idx));
+            return Ok(());
+        }
+
+        let pattern_fail = self.fresh_label();
+        self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail, &rhs.span)?;
+        self.emit_pattern_bind_from_local(pat, payload_slot)?;
+        let success_label = self.fresh_label();
+        self.emit_jump(success_label);
+
+        self.patch_label(pattern_fail);
+        self.emit_empty_list_failure(rhs.span.clone())?;
+
+        self.patch_label(success_label);
+        if matches!(pat, TypedPattern::Wildcard(_)) {
+            // no-op
         }
         let unit_idx = self.add_constant(Constant::Unit);
         self.emit(Opcode::LoadConst(unit_idx));
+        Ok(())
+    }
+
+    fn emit_safebind_from_list(
+        &mut self,
+        pat: &TypedPattern,
+        rhs: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(rhs)?;
+
+        let list_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(list_slot));
+
+        if let Some(items) = Self::collect_exact_list_pattern_items(pat) {
+            let lhs_len = items.len();
+            let fail_shorts = (0..lhs_len).map(|_| self.fresh_label()).collect::<Vec<_>>();
+            let fail_long = self.fresh_label();
+            let fail_mismatch = self.fresh_label();
+            let rest_slot = self.emit_exact_list_pattern_test_from_local(
+                &items,
+                list_slot,
+                &fail_shorts,
+                fail_long,
+                fail_mismatch,
+                &rhs.span,
+            )?;
+            self.emit_pattern_bind_from_local(pat, list_slot)?;
+            let success_label = self.fresh_label();
+            self.emit_jump(success_label);
+
+            for (rhs_len, fail_short) in fail_shorts.into_iter().enumerate() {
+                self.patch_label(fail_short);
+                self.emit_list_len_mismatch_failure_concrete(
+                    lhs_len,
+                    rhs_len,
+                    ">",
+                    rhs.span.clone(),
+                )?;
+            }
+
+            self.patch_label(fail_long);
+            self.emit_list_len_mismatch_failure_rhs_long(lhs_len, rest_slot, rhs.span.clone())?;
+
+            self.patch_label(fail_mismatch);
+            self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+
+            self.patch_label(success_label);
+            let unit_idx = self.add_constant(Constant::Unit);
+            self.emit(Opcode::LoadConst(unit_idx));
+            return Ok(());
+        }
+
+        let pattern_fail = self.fresh_label();
+        self.emit_pattern_test_from_local(pat, list_slot, pattern_fail, &rhs.span)?;
+        self.emit_pattern_bind_from_local(pat, list_slot)?;
+        let success_label = self.fresh_label();
+        self.emit_jump(success_label);
+
+        self.patch_label(pattern_fail);
+        self.emit_empty_list_failure(rhs.span.clone())?;
+
+        self.patch_label(success_label);
+        let unit_idx = self.add_constant(Constant::Unit);
+        self.emit(Opcode::LoadConst(unit_idx));
+        Ok(())
+    }
+
+    fn emit_empty_list_failure(&mut self, span: Span) -> Result<(), CodegenError> {
+        self.emit_pattern_failure("EmptyList", "Empty List.", span)
+    }
+
+    fn emit_list_len_mismatch_failure_concrete(
+        &mut self,
+        lhs_len: usize,
+        rhs_len: usize,
+        op: &str,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        self.emit_pattern_failure(
+            "IndexOutOfBounds",
+            &format!("LHS.len({}) {} RHS.len({})", lhs_len, op, rhs_len),
+            span,
+        )
+    }
+
+    fn emit_list_len_mismatch_failure_rhs_long(
+        &mut self,
+        lhs_len: usize,
+        remainder_slot: u32,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let iter_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::LoadLocal(remainder_slot));
+        self.emit(Opcode::StoreLocal(iter_slot));
+
+        let rem_count_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        let zero_idx = self.add_constant(Constant::Int(int(0)));
+        self.emit(Opcode::LoadConst(zero_idx));
+        self.emit(Opcode::StoreLocal(rem_count_slot));
+
+        let loop_head = self.fresh_label();
+        let loop_done = self.fresh_label();
+        self.patch_label(loop_head);
+        self.emit(Opcode::LoadLocal(iter_slot));
+        self.emit(Opcode::ListIsEmpty);
+        self.emit_jump_if_true(loop_done);
+
+        self.emit(Opcode::LoadLocal(rem_count_slot));
+        let one_idx = self.add_constant(Constant::Int(int(1)));
+        self.emit(Opcode::LoadConst(one_idx));
+        self.emit(Opcode::AddInt);
+        self.emit(Opcode::StoreLocal(rem_count_slot));
+
+        self.emit(Opcode::LoadLocal(iter_slot));
+        self.emit(Opcode::ListTail);
+        self.emit(Opcode::StoreLocal(iter_slot));
+        self.emit_jump(loop_head);
+        self.patch_label(loop_done);
+
+        let rhs_total_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        let lhs_idx = self.add_constant(Constant::Int(int(lhs_len as u64)));
+        self.emit(Opcode::LoadConst(lhs_idx));
+        self.emit(Opcode::LoadLocal(rem_count_slot));
+        self.emit(Opcode::AddInt);
+        self.emit(Opcode::StoreLocal(rhs_total_slot));
+
+        let prefix_idx =
+            self.add_constant(Constant::Str(format!("LHS.len({}) < RHS.len(", lhs_len)));
+        self.emit(Opcode::LoadConst(prefix_idx));
+        self.emit(Opcode::LoadLocal(rhs_total_slot));
+        let to_string_id = Self::builtin_id("to_string").ok_or_else(|| CodegenError {
+            message: "Unknown builtin: to_string".into(),
+            span: span.clone(),
+        })?;
+        self.emit(Opcode::CallBuiltin(
+            to_string_id,
+            1,
+            span.start as u32,
+            span.end as u32,
+        ));
+        self.emit(Opcode::ConcatStr);
+        let suffix_idx = self.add_constant(Constant::Str(")".into()));
+        self.emit(Opcode::LoadConst(suffix_idx));
+        self.emit(Opcode::ConcatStr);
+
+        self.emit_pattern_failure_from_message_stack("IndexOutOfBounds", span)
+    }
+
+    fn emit_pattern_mismatch_failure(&mut self, span: Span) -> Result<(), CodegenError> {
+        self.emit_pattern_failure("PatternMismatch", "Pattern did not match.", span)
+    }
+
+    fn emit_pattern_failure(
+        &mut self,
+        kind: &str,
+        message: &str,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        if self.in_function {
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit_error_value(kind, message, &span);
+            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::Return);
+        } else if self.top_level_returns_result {
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit_error_value(kind, message, &span);
+            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::Halt);
+        } else {
+            self.emit_error_value(kind, message, &span);
+            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                message: "Unknown builtin: eprint".into(),
+                span: span.clone(),
+            })?;
+            self.emit(Opcode::CallBuiltin(
+                eprint_id,
+                1,
+                span.start as u32,
+                span.end as u32,
+            ));
+            self.emit(Opcode::Halt);
+        }
+        Ok(())
+    }
+
+    fn emit_pattern_failure_from_message_stack(
+        &mut self,
+        kind: &str,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        if self.in_function {
+            let msg_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(msg_slot));
+
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit(Opcode::LoadLocal(msg_slot));
+            self.emit_error_value_from_stack(kind, &span);
+            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::Return);
+        } else if self.top_level_returns_result {
+            let msg_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(msg_slot));
+
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit(Opcode::LoadLocal(msg_slot));
+            self.emit_error_value_from_stack(kind, &span);
+            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::Halt);
+        } else {
+            self.emit_error_value_from_stack(kind, &span);
+            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                message: "Unknown builtin: eprint".into(),
+                span: span.clone(),
+            })?;
+            self.emit(Opcode::CallBuiltin(
+                eprint_id,
+                1,
+                span.start as u32,
+                span.end as u32,
+            ));
+            self.emit(Opcode::Halt);
+        }
+        Ok(())
+    }
+
+    fn emit_error_value(&mut self, kind: &str, message: &str, span: &Span) {
+        if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
+            match arity {
+                0 => {
+                    self.emit(Opcode::Call(fun_idx, 0, span.start as u32, span.end as u32));
+                    return;
+                }
+                1 => {
+                    let message_idx = self.add_constant(Constant::Str(message.into()));
+                    self.emit(Opcode::LoadConst(message_idx));
+                    self.emit(Opcode::Call(fun_idx, 1, span.start as u32, span.end as u32));
+                    return;
+                }
+                _ => {
+                    // fall back to literal when constructor arity is not supported here
+                }
+            }
+        }
+
+        let kind_idx = self.add_constant(Constant::Str(kind.into()));
+        let message_idx = self.add_constant(Constant::Str(message.into()));
+        self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
+    }
+
+    fn emit_error_value_from_stack(&mut self, kind: &str, span: &Span) {
+        if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
+            match arity {
+                1 => {
+                    self.emit(Opcode::Call(fun_idx, 1, span.start as u32, span.end as u32));
+                    return;
+                }
+                0 => {
+                    self.emit(Opcode::Pop);
+                    self.emit(Opcode::Call(fun_idx, 0, span.start as u32, span.end as u32));
+                    return;
+                }
+                _ => {
+                    // fall through to literal fallback
+                }
+            }
+        }
+
+        self.emit(Opcode::Pop);
+        let kind_idx = self.add_constant(Constant::Str(kind.into()));
+        let message_idx = self.add_constant(Constant::Str("Pattern did not match.".into()));
+        self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
+    }
+
+    fn collect_exact_list_pattern_items<'a>(
+        pat: &'a TypedPattern,
+    ) -> Option<Vec<&'a TypedPattern>> {
+        fn walk<'a>(pat: &'a TypedPattern, out: &mut Vec<&'a TypedPattern>) -> bool {
+            match pat {
+                TypedPattern::As(_, inner, _) => walk(inner.as_ref(), out),
+                TypedPattern::ListNil(_) => true,
+                TypedPattern::ListCons(_, head, tail) => {
+                    out.push(head.as_ref());
+                    walk(tail.as_ref(), out)
+                }
+                _ => false,
+            }
+        }
+
+        let mut out = Vec::new();
+        if walk(pat, &mut out) {
+            Some(out)
+        } else {
+            None
+        }
+    }
+
+    fn emit_exact_list_pattern_test_from_local(
+        &mut self,
+        items: &[&TypedPattern],
+        list_slot: u32,
+        fail_shorts: &[Label],
+        fail_long: Label,
+        fail_mismatch: Label,
+        err_span: &Span,
+    ) -> Result<u32, CodegenError> {
+        if fail_shorts.len() != items.len() {
+            return Err(CodegenError {
+                message: "internal error: fail_short label count mismatch".into(),
+                span: err_span.clone(),
+            });
+        }
+
+        let mut current_slot = list_slot;
+
+        for (idx, item) in items.iter().enumerate() {
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListIsEmpty);
+            self.emit_jump_if_true(fail_shorts[idx]);
+
+            let head_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListHead);
+            self.emit(Opcode::StoreLocal(head_slot));
+            self.emit_pattern_test_from_local(item, head_slot, fail_mismatch, err_span)?;
+
+            let next_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListTail);
+            self.emit(Opcode::StoreLocal(next_slot));
+            current_slot = next_slot;
+        }
+
+        self.emit(Opcode::LoadLocal(current_slot));
+        self.emit(Opcode::ListIsEmpty);
+        self.emit_jump_if_false(fail_long);
+        Ok(current_slot)
+    }
+
+    fn emit_pattern_test_from_local(
+        &mut self,
+        pat: &TypedPattern,
+        slot: u32,
+        fail_label: Label,
+        err_span: &Span,
+    ) -> Result<(), CodegenError> {
+        self.emit_pattern_test_from_local_with_mode(pat, slot, fail_label, err_span, true)
+    }
+
+    fn emit_pattern_test_from_local_for_bind(
+        &mut self,
+        pat: &TypedPattern,
+        slot: u32,
+        fail_label: Label,
+        err_span: &Span,
+    ) -> Result<(), CodegenError> {
+        self.emit_pattern_test_from_local_with_mode(pat, slot, fail_label, err_span, false)
+    }
+
+    fn emit_pattern_test_from_local_with_mode(
+        &mut self,
+        pat: &TypedPattern,
+        slot: u32,
+        fail_label: Label,
+        err_span: &Span,
+        propagate_result_error: bool,
+    ) -> Result<(), CodegenError> {
+        match pat {
+            TypedPattern::Var(_, _) | TypedPattern::Wildcard(_) => {}
+            TypedPattern::As(_, inner, _) => {
+                self.emit_pattern_test_from_local_with_mode(
+                    inner,
+                    slot,
+                    fail_label,
+                    err_span,
+                    propagate_result_error,
+                )?;
+            }
+            TypedPattern::IntLit(_, n) => {
+                self.emit(Opcode::LoadLocal(slot));
+                let n_const = self.add_constant(Constant::Int(n.clone()));
+                self.emit(Opcode::LoadConst(n_const));
+                self.emit(Opcode::EqInt);
+                self.emit_jump_if_false(fail_label);
+            }
+            TypedPattern::StrLit(_, s) => {
+                self.emit(Opcode::LoadLocal(slot));
+                let s_const = self.add_constant(Constant::Str(s.clone()));
+                self.emit(Opcode::LoadConst(s_const));
+                self.emit(Opcode::EqStr);
+                self.emit_jump_if_false(fail_label);
+            }
+            TypedPattern::BoolLit(_, b) => {
+                self.emit(Opcode::LoadLocal(slot));
+                let b_const = self.add_constant(Constant::Bool(*b));
+                self.emit(Opcode::LoadConst(b_const));
+                self.emit(Opcode::EqBool);
+                self.emit_jump_if_false(fail_label);
+            }
+            TypedPattern::ListNil(_) => {
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListIsEmpty);
+                self.emit_jump_if_false(fail_label);
+            }
+            TypedPattern::ListCons(_, head, tail) => {
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListIsEmpty);
+                self.emit_jump_if_true(fail_label);
+
+                let head_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListHead);
+                self.emit(Opcode::StoreLocal(head_slot));
+                self.emit_pattern_test_from_local_with_mode(
+                    head,
+                    head_slot,
+                    fail_label,
+                    err_span,
+                    propagate_result_error,
+                )?;
+
+                let tail_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListTail);
+                self.emit(Opcode::StoreLocal(tail_slot));
+                self.emit_pattern_test_from_local_with_mode(
+                    tail,
+                    tail_slot,
+                    fail_label,
+                    err_span,
+                    propagate_result_error,
+                )?;
+            }
+            TypedPattern::ResultOk(_, inner) => {
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::GetTag);
+                let expected_tag = if propagate_result_error { 1 } else { 0 };
+                let tag_const = self.add_constant(Constant::Tag(expected_tag));
+                self.emit(Opcode::LoadConst(tag_const));
+                self.emit(Opcode::EqTag);
+
+                if propagate_result_error {
+                    let inner_ok = self.fresh_label();
+                    self.emit_jump_if_false(inner_ok);
+                    self.emit_propagate_result_from_local(slot, err_span.clone())?;
+                    self.patch_label(inner_ok);
+                } else {
+                    self.emit_jump_if_false(fail_label);
+                }
+
+                let inner_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::StoreLocal(inner_slot));
+                self.emit_pattern_test_from_local_with_mode(
+                    inner,
+                    inner_slot,
+                    fail_label,
+                    err_span,
+                    propagate_result_error,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_pattern_bind_from_local(
+        &mut self,
+        pat: &TypedPattern,
+        slot: u32,
+    ) -> Result<(), CodegenError> {
+        match pat {
+            TypedPattern::Var(_, id) => {
+                let bind_slot = self.alloc_slot(id.unique_id);
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::StoreLocal(bind_slot));
+            }
+            TypedPattern::As(_, inner, id) => {
+                let bind_slot = self.alloc_slot(id.unique_id);
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::StoreLocal(bind_slot));
+                self.emit_pattern_bind_from_local(inner, slot)?;
+            }
+            TypedPattern::Wildcard(_)
+            | TypedPattern::ListNil(_)
+            | TypedPattern::IntLit(_, _)
+            | TypedPattern::StrLit(_, _)
+            | TypedPattern::BoolLit(_, _) => {}
+            TypedPattern::ListCons(_, head, tail) => {
+                let head_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListHead);
+                self.emit(Opcode::StoreLocal(head_slot));
+                self.emit_pattern_bind_from_local(head, head_slot)?;
+
+                let tail_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListTail);
+                self.emit(Opcode::StoreLocal(tail_slot));
+                self.emit_pattern_bind_from_local(tail, tail_slot)?;
+            }
+            TypedPattern::ResultOk(_, inner) => {
+                let inner_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::StoreLocal(inner_slot));
+                self.emit_pattern_bind_from_local(inner, inner_slot)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_propagate_result_from_local(
+        &mut self,
+        result_slot: u32,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        self.emit(Opcode::LoadLocal(result_slot));
+        if self.in_function {
+            self.emit(Opcode::Return);
+        } else if self.top_level_returns_result {
+            self.emit(Opcode::Halt);
+        } else {
+            self.emit(Opcode::GetField(0));
+            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                message: "Unknown builtin: eprint".into(),
+                span: span.clone(),
+            })?;
+            self.emit(Opcode::CallBuiltin(
+                eprint_id,
+                1,
+                span.start as u32,
+                span.end as u32,
+            ));
+            self.emit(Opcode::Halt);
+        }
         Ok(())
     }
 
@@ -928,17 +1668,37 @@ impl Codegen {
         // Invariant: functions[idx].fun_idx == idx.
         // VM relies on O(1) array lookup by fun_idx and fails fast if this invariant is broken.
         self.state.functions.sort_by_key(|entry| entry.fun_idx);
+        let mut remap = HashMap::new();
         for (idx, entry) in self.state.functions.iter().enumerate() {
-            if entry.fun_idx as usize != idx {
+            let old_idx = entry.fun_idx;
+            let new_idx = idx as u32;
+            if remap.insert(old_idx, new_idx).is_some() {
                 return Err(CodegenError {
-                    message: format!(
-                        "Function table invariant violated: functions[{}].fun_idx = {}",
-                        idx, entry.fun_idx
-                    ),
+                    message: format!("Duplicate function index detected: {}", old_idx),
                     span: Span { start: 0, end: 0 },
                 });
             }
         }
+
+        for entry in &mut self.state.functions {
+            if let Some(new_idx) = remap.get(&entry.fun_idx) {
+                entry.fun_idx = *new_idx;
+            }
+        }
+
+        for ir in &mut self.ir {
+            if let IrOp::Op(op) = ir {
+                match op {
+                    Opcode::LoadFunctionRef(fun_idx) | Opcode::Call(fun_idx, _, _, _) => {
+                        if let Some(new_idx) = remap.get(fun_idx) {
+                            *fun_idx = *new_idx;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -959,7 +1719,12 @@ impl Codegen {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::CallBuiltin(builtin_id, args.len() as u8));
+                self.emit(Opcode::CallBuiltin(
+                    builtin_id,
+                    args.len() as u8,
+                    call_span.start as u32,
+                    call_span.end as u32,
+                ));
             }
             Ty::UserFunc {
                 fun_idx, params, ..
@@ -1078,7 +1843,12 @@ impl Codegen {
                             message: "Unknown builtin: to_string".into(),
                             span: expr.span.clone(),
                         })?;
-                    self.emit(Opcode::CallBuiltin(to_string_id, 1));
+                    self.emit(Opcode::CallBuiltin(
+                        to_string_id,
+                        1,
+                        expr.span.start as u32,
+                        expr.span.end as u32,
+                    ));
                 }
             }
 
@@ -1118,46 +1888,8 @@ impl Codegen {
                 end_label
             };
 
-            match pat {
-                TypedMatchPattern::Wildcard => {}
-                TypedMatchPattern::BoolLit(b) => {
-                    self.emit(Opcode::LoadLocal(scrut_slot));
-                    let bool_const = self.add_constant(Constant::Bool(*b));
-                    self.emit(Opcode::LoadConst(bool_const));
-                    self.emit(Opcode::EqBool);
-                    self.emit_jump_if_false(next_arm);
-                }
-                TypedMatchPattern::IntLit(n) => {
-                    self.emit(Opcode::LoadLocal(scrut_slot));
-                    let int_const = self.add_constant(Constant::Int(*n));
-                    self.emit(Opcode::LoadConst(int_const));
-                    self.emit(Opcode::EqInt);
-                    self.emit_jump_if_false(next_arm);
-                }
-                TypedMatchPattern::StrLit(s) => {
-                    self.emit(Opcode::LoadLocal(scrut_slot));
-                    let str_const = self.add_constant(Constant::Str(s.clone()));
-                    self.emit(Opcode::LoadConst(str_const));
-                    self.emit(Opcode::EqStr);
-                    self.emit_jump_if_false(next_arm);
-                }
-                TypedMatchPattern::Constructor(tag, inner_id) => {
-                    self.emit(Opcode::LoadLocal(scrut_slot));
-                    self.emit(Opcode::GetTag);
-                    let tag_const = self.add_constant(Constant::Int(*tag as i64));
-                    self.emit(Opcode::LoadConst(tag_const));
-                    self.emit(Opcode::EqInt);
-                    self.emit_jump_if_false(next_arm);
-
-                    // Bind inner variable
-                    if let Some(inner) = inner_id {
-                        self.emit(Opcode::LoadLocal(scrut_slot));
-                        self.emit(Opcode::GetField(0));
-                        let inner_slot = self.alloc_slot(inner.unique_id);
-                        self.emit(Opcode::StoreLocal(inner_slot));
-                    }
-                }
-            }
+            self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
+            self.emit_match_pattern_bind(pat, scrut_slot)?;
 
             // Emit body
             self.emit_node(body)?;
@@ -1173,6 +1905,114 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_match_pattern_test(
+        &mut self,
+        pat: &TypedMatchPattern,
+        slot: u32,
+        fail_label: Label,
+    ) -> Result<(), CodegenError> {
+        match pat {
+            TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => {}
+            TypedMatchPattern::BoolLit(b) => {
+                self.emit(Opcode::LoadLocal(slot));
+                let bool_const = self.add_constant(Constant::Bool(*b));
+                self.emit(Opcode::LoadConst(bool_const));
+                self.emit(Opcode::EqBool);
+                self.emit_jump_if_false(fail_label);
+            }
+            TypedMatchPattern::IntLit(n) => {
+                self.emit(Opcode::LoadLocal(slot));
+                let int_const = self.add_constant(Constant::Int(n.clone()));
+                self.emit(Opcode::LoadConst(int_const));
+                self.emit(Opcode::EqInt);
+                self.emit_jump_if_false(fail_label);
+            }
+            TypedMatchPattern::StrLit(s) => {
+                self.emit(Opcode::LoadLocal(slot));
+                let str_const = self.add_constant(Constant::Str(s.clone()));
+                self.emit(Opcode::LoadConst(str_const));
+                self.emit(Opcode::EqStr);
+                self.emit_jump_if_false(fail_label);
+            }
+            TypedMatchPattern::Constructor(tag, _) => {
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::GetTag);
+                let tag_const = self.add_constant(Constant::Tag(*tag));
+                self.emit(Opcode::LoadConst(tag_const));
+                self.emit(Opcode::EqTag);
+                self.emit_jump_if_false(fail_label);
+            }
+            TypedMatchPattern::ListNil => {
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListIsEmpty);
+                self.emit_jump_if_false(fail_label);
+            }
+            TypedMatchPattern::ListCons(head, tail) => {
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListIsEmpty);
+                self.emit_jump_if_true(fail_label);
+
+                let head_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListHead);
+                self.emit(Opcode::StoreLocal(head_slot));
+                self.emit_match_pattern_test(head, head_slot, fail_label)?;
+
+                let tail_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListTail);
+                self.emit(Opcode::StoreLocal(tail_slot));
+                self.emit_match_pattern_test(tail, tail_slot, fail_label)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_match_pattern_bind(
+        &mut self,
+        pat: &TypedMatchPattern,
+        slot: u32,
+    ) -> Result<(), CodegenError> {
+        match pat {
+            TypedMatchPattern::Binding(id) => {
+                let bind_slot = self.alloc_slot(id.unique_id);
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::StoreLocal(bind_slot));
+            }
+            TypedMatchPattern::Wildcard
+            | TypedMatchPattern::BoolLit(_)
+            | TypedMatchPattern::IntLit(_)
+            | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::ListNil => {}
+            TypedMatchPattern::Constructor(_, inner_id) => {
+                if let Some(inner) = inner_id {
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetField(0));
+                    let inner_slot = self.alloc_slot(inner.unique_id);
+                    self.emit(Opcode::StoreLocal(inner_slot));
+                }
+            }
+            TypedMatchPattern::ListCons(head, tail) => {
+                let head_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListHead);
+                self.emit(Opcode::StoreLocal(head_slot));
+                self.emit_match_pattern_bind(head, head_slot)?;
+
+                let tail_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::ListTail);
+                self.emit(Opcode::StoreLocal(tail_slot));
+                self.emit_match_pattern_bind(tail, tail_slot)?;
+            }
+        }
+        Ok(())
+    }
+
     // ── Label resolution ──
 
     /// Mark a label as pointing to the current IR position.
@@ -1184,7 +2024,7 @@ impl Codegen {
 
     fn lit_to_constant(&self, lit: &Lit) -> Constant {
         match lit {
-            Lit::Int(n) => Constant::Int(*n),
+            Lit::Int(n) => Constant::Int(n.clone()),
             Lit::Float(f) => Constant::Float(*f),
             Lit::Str(s) => Constant::Str(s.clone()),
             Lit::Bool(b) => Constant::Bool(*b),

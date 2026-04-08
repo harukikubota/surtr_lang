@@ -1,0 +1,2 @@
+user = User { name: "alice", age: 30 }
+print(to_string(user.age))

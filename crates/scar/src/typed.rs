@@ -1,4 +1,5 @@
 use sigil::resolved::ResolvedId;
+use sindr::primitives::SurtrInt;
 use spire::ast::{BinOp, Lit, Span};
 
 use crate::types::Ty;
@@ -21,7 +22,9 @@ pub enum TypedInner {
     Bind(TypedPattern, Box<TypedNode>),
     SafeBind(TypedPattern, Box<TypedNode>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
-    List(Vec<TypedNode>),
+    ListNil,
+    ListCons(Box<TypedNode>, Box<TypedNode>),
+    ListLiteral(Vec<TypedNode>),
     InterpolatedStr(Vec<TypedInterpolatedPart>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Match(Box<TypedNode>, Vec<(TypedMatchPattern, TypedNode)>),
@@ -68,22 +71,35 @@ pub enum TypedInterpolatedPart {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedPattern {
     Var(Ty, ResolvedId),
+    As(Ty, Box<TypedPattern>, ResolvedId),
     Wildcard(Ty),
+    ListNil(Ty),
+    ListCons(Ty, Box<TypedPattern>, Box<TypedPattern>),
+    IntLit(Ty, SurtrInt),
+    StrLit(Ty, String),
+    BoolLit(Ty, bool),
+    /// `Ok(inner)` pattern node in safe-bind recursion.
+    ResultOk(Ty, Box<TypedPattern>),
 }
 
 /// Match pattern (typed).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedMatchPattern {
+    Binding(ResolvedId),
     /// `_`
     Wildcard,
     /// `True` / `False`
     BoolLit(bool),
     /// Integer literal
-    IntLit(i64),
+    IntLit(SurtrInt),
     /// String literal
     StrLit(String),
     /// Constructor tag + optional inner binding
     Constructor(u32, Option<ResolvedId>),
+    /// `[]`
+    ListNil,
+    /// `[head, ..tail]`
+    ListCons(Box<TypedMatchPattern>, Box<TypedMatchPattern>),
 }
 
 /// Function parameter (typed).

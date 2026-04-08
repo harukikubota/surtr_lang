@@ -5,11 +5,13 @@ edition = "2021"
 description = "Interactive and eXtensible surtr and eLDR runtime tools"
 
 [dependencies]
+diagnostics = { path = "../diagnostics" }
 spire = { path = "../spire" }
 sigil = { path = "../sigil" }
 scar = { path = "../scar" }
 forge = { path = "../forge" }
 eldr = { path = "../eldr" }
 sindr = { path = "../sindr" }
-ariadne = "0.6.0"
 rustyline = "13"
+ratatui = "0.29"
+crossterm = "0.28"

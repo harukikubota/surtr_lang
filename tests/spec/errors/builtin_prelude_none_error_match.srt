@@ -1,0 +1,5 @@
+ret: Result<Int> = Err(NoneError)
+match ret {
+  Ok(val) => print("ok"),
+  Err(e)  => print("none"),
+}

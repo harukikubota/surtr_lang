@@ -102,6 +102,90 @@ fn run_eldr_matches_run_srt_output() {
 }
 
 #[test]
+fn run_source_rejects_explicit_bootstrap_import() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_explicit_bootstrap_import");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"import Bootstrap;
+
+print("ok")"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Duplicate import"),
+        "expected duplicate import diagnostic, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Bootstrap"),
+        "expected Bootstrap in diagnostic, got:\n{}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_rejects_explicit_kernel_import() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_explicit_kernel_import");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"import Kernel;
+
+print(to_string(add(1, 2)))"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Duplicate import"),
+        "expected duplicate import diagnostic, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Kernel"),
+        "expected Kernel in diagnostic, got:\n{}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn run_source_error_points_to_generation_site() {
     let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_deferror_location");
@@ -258,6 +342,293 @@ fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
         stderr.trim().is_empty(),
         "expected no stderr, got:\n{}",
         stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_main_set_exit_code_updates_process_status_and_keeps_running() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_main_set_exit_code");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def main() -> Result<()> {
+  set_exit_code(7)
+  print("still running")
+  Ok(())
+}
+
+main()
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "expected exit code 7\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "still running\n",
+        "expected evaluation to continue after set_exit_code"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+        "expected no stderr output"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_main_err_overrides_set_exit_code_with_runtime_error_exit() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_main_err_overrides_exit_code");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"deferror Boom { "boom" }
+
+def main() -> Result<()> {
+  set_exit_code(7)
+  Err(Boom)
+}
+
+main()
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected Err(main()) to force exit code 1\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Boom"),
+        "expected runtime diagnostic for Boom, got:\n{}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_cli_entry_executes_selected_function_only() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_cli_entry");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"print("top-level")
+
+def start() -> Result<()> {
+  print("start")
+  Ok(())
+}
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--entry",
+            "start",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "start\n",
+        "top-level evaluation must be skipped when --entry is provided"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_entrypoint_annotation_executes_annotated_function() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_annotation_entry");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"print("top-level")
+
+@@entrypoint
+def auto_entry() -> Result<()> {
+  print("annotated")
+  Ok(())
+}
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "annotated\n",
+        "top-level evaluation must be skipped when @@entrypoint is present"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_cli_entry_overrides_entrypoint_annotation() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_entry_precedence");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"@@entrypoint
+def auto_entry() -> Result<()> {
+  print("auto")
+  Ok(())
+}
+
+def manual_entry() -> Result<()> {
+  print("manual")
+  Ok(())
+}
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--entry",
+            "manual_entry",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "manual\n");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_duplicate_entrypoint_annotation_is_compile_error() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_duplicate_entrypoint");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"@@entrypoint
+def first() -> Result<()> { Ok(()) }
+@@entrypoint
+def second() -> Result<()> { Ok(()) }
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("multiple @@entrypoint annotations"),
+        "expected duplicate @@entrypoint error, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_entry_signature_is_checked_when_entry_selected() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_entry_signature");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def start(code: Int) -> Result<()> {
+  Ok(())
+}
+"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--entry",
+            "start",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("must have signature () -> Result<()>"),
+        "expected entry signature violation, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 
     let _ = fs::remove_dir_all(temp);

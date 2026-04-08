@@ -1,0 +1,13 @@
+import Helper::inc;
+
+defmod Left {
+  def left() -> Int {
+    inc(1)
+  }
+}
+
+defmod Right {
+  def right() -> Int {
+    inc(inc(1))
+  }
+}

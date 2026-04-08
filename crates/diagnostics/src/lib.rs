@@ -1,6 +1,68 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use scar::error::TypeError;
 use spire::ast::Span;
+use std::io::{self, Write};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SourceId(pub u32);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceEntry {
+    pub id: SourceId,
+    pub file_name: String,
+    pub source: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SourceRegistry {
+    entries: Vec<SourceEntry>,
+}
+
+impl SourceRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(
+        &mut self,
+        file_name: impl Into<String>,
+        source: impl Into<String>,
+    ) -> SourceId {
+        let id = SourceId(self.entries.len() as u32);
+        self.entries.push(SourceEntry {
+            id,
+            file_name: file_name.into(),
+            source: source.into(),
+        });
+        id
+    }
+
+    pub fn get(&self, source_id: SourceId) -> Option<&SourceEntry> {
+        self.entries.get(source_id.0 as usize)
+    }
+
+    pub fn file_name(&self, source_id: SourceId) -> Option<&str> {
+        self.get(source_id).map(|entry| entry.file_name.as_str())
+    }
+
+    pub fn source(&self, source_id: SourceId) -> Option<&str> {
+        self.get(source_id).map(|entry| entry.source.as_str())
+    }
+
+    pub fn update_source(&mut self, source_id: SourceId, source: impl Into<String>) -> bool {
+        if let Some(entry) = self.entries.get_mut(source_id.0 as usize) {
+            entry.source = source.into();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn owned_context(&self, source_id: SourceId) -> Option<(String, String)> {
+        self.get(source_id)
+            .map(|entry| (entry.source.clone(), entry.file_name.clone()))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DiagnosticSpec {
@@ -54,7 +116,35 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
     spec
 }
 
+pub fn type_error_spec_by_id(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    error: &TypeError,
+) -> DiagnosticSpec {
+    type_error_spec(sources.source(source_id).unwrap_or(""), error)
+}
+
 pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
+    let report = build_report(file_name, &spec);
+
+    if let Err(err) = report.eprint((file_name, Source::from(source))) {
+        let mut stderr = io::stderr().lock();
+        let _ = write_fallback_diagnostic(&mut stderr, file_name, &spec, &err);
+    }
+}
+
+pub fn report_error_by_id(sources: &SourceRegistry, source_id: SourceId, spec: DiagnosticSpec) {
+    if let Some(entry) = sources.get(source_id) {
+        report_error(&entry.file_name, &entry.source, spec);
+    } else {
+        report_error("<unknown>", "", spec);
+    }
+}
+
+fn build_report<'a>(
+    file_name: &'a str,
+    spec: &'a DiagnosticSpec,
+) -> Report<'a, (&'a str, std::ops::Range<usize>)> {
     let mut builder = Report::build(
         ReportKind::Error,
         (file_name, spec.primary_span.start..spec.primary_span.end),
@@ -66,22 +156,47 @@ pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
             .with_color(Color::Red),
     );
 
-    for label in spec.labels {
+    for label in &spec.labels {
         builder = builder.with_label(
             Label::new((file_name, label.span.start..label.span.end))
-                .with_message(label.message)
+                .with_message(&label.message)
                 .with_color(label.color),
         );
     }
 
-    if let Some(h) = spec.help {
+    if let Some(h) = &spec.help {
         builder = builder.with_help(h);
     }
 
-    builder
-        .finish()
-        .eprint((file_name, Source::from(source)))
-        .unwrap();
+    builder.finish()
+}
+
+fn write_fallback_diagnostic(
+    writer: &mut impl Write,
+    file_name: &str,
+    spec: &DiagnosticSpec,
+    render_err: &io::Error,
+) -> io::Result<()> {
+    writeln!(writer, "diagnostic rendering failed: {}", render_err)?;
+    writeln!(writer, "{}: {}", spec.kind, spec.message)?;
+    writeln!(
+        writer,
+        "--> {}:{}-{}",
+        file_name, spec.primary_span.start, spec.primary_span.end
+    )?;
+    for label in &spec.labels {
+        writeln!(
+            writer,
+            "= note: {} [{}-{}]",
+            label.message, label.span.start, label.span.end
+        )?;
+    }
+    if let Some(help) = &spec.help {
+        for line in help.lines() {
+            writeln!(writer, "= help: {}", line)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -406,7 +521,7 @@ fn find_enclosing_match_block(chars: &[char], focus_pos: usize) -> Option<(usize
         if !is_match_keyword_at(chars, i) {
             continue;
         }
-        let mut j = i + 5; // after "match"
+        let mut j = i + 5;
         while j < chars.len() && chars[j].is_ascii_whitespace() {
             j += 1;
         }
@@ -423,9 +538,7 @@ fn find_enclosing_match_block(chars: &[char], focus_pos: usize) -> Option<(usize
                     brace_open = Some(j);
                     break;
                 }
-                '\n' if paren_depth == 0 && bracket_depth == 0 => {
-                    // keep scanning, match arm blocks are commonly multiline
-                }
+                '\n' if paren_depth == 0 && bracket_depth == 0 => {}
                 _ => {}
             }
             j += 1;
@@ -538,4 +651,95 @@ fn trim_char_span(chars: &[char], start: usize, end: usize) -> (usize, usize) {
         e -= 1;
     }
     (s, e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("writer failed"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("writer failed"))
+        }
+    }
+
+    #[test]
+    fn fallback_diagnostic_preserves_core_fields() {
+        let spec = DiagnosticSpec {
+            kind: "TypeError".into(),
+            message: "expected Int, got String".into(),
+            primary_span: Span { start: 13, end: 23 },
+            labels: vec![DiagnosticLabel {
+                span: Span { start: 13, end: 23 },
+                message: "binding value".into(),
+                color: Color::Blue,
+            }],
+            help: Some("The type annotation requires Int".into()),
+        };
+
+        let mut buf = Vec::new();
+        write_fallback_diagnostic(
+            &mut buf,
+            "main.srt",
+            &spec,
+            &io::Error::other("broken pipe"),
+        )
+        .expect("fallback output should succeed");
+
+        let text = String::from_utf8(buf).expect("fallback output must be valid utf-8");
+        assert!(text.contains("diagnostic rendering failed: broken pipe"));
+        assert!(text.contains("TypeError: expected Int, got String"));
+        assert!(text.contains("--> main.srt:13-23"));
+        assert!(text.contains("= note: binding value [13-23]"));
+        assert!(text.contains("= help: The type annotation requires Int"));
+    }
+
+    #[test]
+    fn fallback_diagnostic_returns_writer_error() {
+        let spec = simple_error(
+            "ParseError",
+            "unexpected token",
+            Span { start: 2, end: 5 },
+            None,
+        );
+        let err = write_fallback_diagnostic(
+            &mut FailingWriter,
+            "main.srt",
+            &spec,
+            &io::Error::other("broken pipe"),
+        )
+        .expect_err("failing writer should propagate io error");
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn source_registry_registers_and_updates_entries() {
+        let mut sources = SourceRegistry::new();
+        let src_id = sources.register("main.srt", "x = 1");
+
+        assert_eq!(sources.file_name(src_id), Some("main.srt"));
+        assert_eq!(sources.source(src_id), Some("x = 1"));
+
+        assert!(sources.update_source(src_id, "x = 2"));
+        assert_eq!(sources.source(src_id), Some("x = 2"));
+    }
+
+    #[test]
+    fn source_registry_returns_owned_context() {
+        let mut sources = SourceRegistry::new();
+        let src_id = sources.register("script.srt", "print(\"ok\")");
+
+        let context = sources
+            .owned_context(src_id)
+            .expect("registered source should exist");
+        assert_eq!(context.0, "print(\"ok\")");
+        assert_eq!(context.1, "script.srt");
+    }
 }

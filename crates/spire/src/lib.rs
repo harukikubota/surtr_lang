@@ -5,4 +5,7 @@ pub mod parser;
 pub mod token;
 
 // Re-export the main entry point
-pub use parser::parse;
+pub use parser::{
+    parse, parse_with_context, CompileUnitKind, DeclLevel, EntryPoint, ParserContext,
+    SetExitCodePolicy, SourceRules, TopLevelDeclKind, TopLevelDeclPolicy,
+};

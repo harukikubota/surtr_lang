@@ -55,14 +55,19 @@ cargo clean
 
 ## Docs
 
-- [Phase 1 Flow](./doc/phase1-flow.md)
+- [Public Docs Index](./doc/site/README.md)
+- [Language Guide](./doc/site/language-guide.md)
+- [Language Reference](./doc/site/language-reference.md)
+- [Compiler Design Guide](./doc/site/compiler-design.md)
+- [Crate Reference](./doc/site/crate-reference.md)
 - [Open Issues](./doc/open-issues.md)
-- [Idea11 (Draft)](./doc/idea11.md)
-- [Requirements (V8, Japanese)](./doc/要件定義v8.md)
+- [Requirements (V9, Japanese)](./doc/要件定義v9.md)
+- [Float Policy (Japanese)](./doc/float.md)
+- [Improvement Workflow (Japanese)](./作業フロー.md)
 
 ## Status
 
-Current implementation target is Phase 1.
+Current work is focused on stabilizing the V9 baseline and cleanup items from the recent review pass.
 
 Implemented core includes:
 
@@ -71,3 +76,9 @@ Implemented core includes:
 - `defstruct` / `defrecord` / `deferror`
 - `if` and `match` (Boolean / Result subset)
 - Builtins: `print`, `to_string`, `eprint`
+
+Implementation notes:
+
+- `Int` is being migrated to unbounded `BigInt` semantics across the pipeline
+- runtime-internal tags stay fixed-width and separate from user-visible `Int`
+- `Float` remains implemented, but its precise contract is tracked separately in [doc/float.md](./doc/float.md)

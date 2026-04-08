@@ -1,6 +1,7 @@
 use crate::ast::Span;
 use crate::error::ParseError;
 use crate::token::{Spanned, Token};
+use sindr::primitives::SurtrInt;
 
 pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
     let mut tokens = Vec::new();
@@ -38,28 +39,36 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
-        // Attribute keyword (currently only @builtin)
+        // Annotator: @@builtin, @@foo, ...
         if c == '@' {
             let start = i;
-            i += 1; // skip '@'
-            let name_start = i;
-            while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            let name: String = chars[name_start..i].iter().collect();
-            let token = match name.as_str() {
-                "builtin" => Token::AtBuiltin,
-                _ => {
+            if i + 1 < len && chars[i + 1] == '@' {
+                i += 2; // skip '@@'
+                let name_start = i;
+                while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+                let name: String = chars[name_start..i].iter().collect();
+                if name.is_empty() {
                     return Err(ParseError::syntax(
-                        format!("Unknown attribute: @{}", name),
+                        "Expected annotator name after '@@'",
                         Span { start, end: i },
                     ));
                 }
-            };
+                tokens.push(Spanned {
+                    token: Token::Annotator(name),
+                    span: Span { start, end: i },
+                });
+                continue;
+            }
             tokens.push(Spanned {
-                token,
-                span: Span { start, end: i },
+                token: Token::At,
+                span: Span {
+                    start,
+                    end: start + 1,
+                },
             });
+            i += 1;
             continue;
         }
 
@@ -76,6 +85,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                         't' => s.push('\t'),
                         '\\' => s.push('\\'),
                         '"' => s.push('"'),
+                        '\'' => s.push('\''),
                         other => {
                             s.push('\\');
                             s.push(other);
@@ -106,8 +116,11 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 if chars[i] == '\\' && i + 1 < len {
                     i += 1;
                     match chars[i] {
+                        'n' => s.push('\n'),
+                        't' => s.push('\t'),
                         '\\' => s.push('\\'),
                         '\'' => s.push('\''),
+                        '"' => s.push('"'),
                         other => {
                             s.push('\\');
                             s.push(other);
@@ -150,7 +163,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 });
             } else {
                 let text: String = chars[start..i].iter().collect();
-                let val: i64 = text.parse().map_err(|_| {
+                let val: SurtrInt = text.parse().map_err(|_| {
                     ParseError::syntax(format!("Invalid integer: {}", text), Span { start, end: i })
                 })?;
                 tokens.push(Spanned {
@@ -172,6 +185,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "True" => Token::True,
                 "False" => Token::False,
                 "def" => Token::Def,
+                "defmod" => Token::Defmod,
+                "import" => Token::Import,
                 "defstruct" => Token::Defstruct,
                 "defrecord" => Token::Defrecord,
                 "deferror" => Token::Deferror,
@@ -195,6 +210,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "!=" => Some(Token::BangEq),
                 "<=" => Some(Token::LtEq),
                 ">=" => Some(Token::GtEq),
+                ".." => Some(Token::DotDot),
                 "=>" => Some(Token::FatArrow),
                 "->" => Some(Token::Arrow),
                 _ => None,
@@ -271,13 +287,14 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sindr::primitives::int;
 
     #[test]
     fn test_basic_tokens() {
         let tokens = tokenize("num = 10").unwrap();
         assert!(matches!(tokens[0].token, Token::Ident(ref s) if s == "num"));
         assert!(matches!(tokens[1].token, Token::Bind));
-        assert!(matches!(tokens[2].token, Token::Int(10)));
+        assert!(matches!(tokens[2].token, Token::Int(ref n) if n == &int(10)));
     }
 
     #[test]
@@ -290,6 +307,24 @@ mod tests {
     fn test_string_escape() {
         let tokens = tokenize(r#""hello\nworld""#).unwrap();
         assert!(matches!(tokens[0].token, Token::Str(ref s) if s == "hello\nworld"));
+    }
+
+    #[test]
+    fn test_double_quote_string_escape_symmetry() {
+        let tokens = tokenize(r#""a\n\t\"\'\\z""#).unwrap();
+        assert!(matches!(
+            tokens[0].token,
+            Token::Str(ref s) if s == "a\n\t\"'\\z"
+        ));
+    }
+
+    #[test]
+    fn test_single_quote_string_escape_symmetry() {
+        let tokens = tokenize(r#"'a\n\t\"\'\\z'"#).unwrap();
+        assert!(matches!(
+            tokens[0].token,
+            Token::Str(ref s) if s == "a\n\t\"'\\z"
+        ));
     }
 
     #[test]
@@ -318,9 +353,40 @@ mod tests {
     }
 
     #[test]
-    fn test_at_builtin_keyword() {
-        let tokens = tokenize("@builtin def print(a: String) -> Unit").unwrap();
-        assert!(matches!(tokens[0].token, Token::AtBuiltin));
+    fn test_defmod_keyword() {
+        let tokens = tokenize("defmod Kernel { def add() -> Unit { () } }").unwrap();
+        assert!(matches!(tokens[0].token, Token::Defmod));
+    }
+
+    #[test]
+    fn test_import_keyword() {
+        let tokens = tokenize("import Kernel::add").unwrap();
+        assert!(matches!(tokens[0].token, Token::Import));
+    }
+
+    #[test]
+    fn test_at_builtin_annotator_token() {
+        let tokens = tokenize("@@builtin def print(a: String) -> Unit").unwrap();
+        assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "builtin"));
+    }
+
+    #[test]
+    fn test_custom_annotator_token() {
+        let tokens = tokenize("@@memo def f()").unwrap();
+        assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "memo"));
+    }
+
+    #[test]
+    fn test_invalid_empty_annotator_name() {
+        let err = tokenize("@@ def f()").expect_err("expected lexer error");
+        assert!(err.message().contains("Expected annotator name after '@@'"));
+    }
+
+    #[test]
+    fn test_single_at_token() {
+        let tokens = tokenize("@x").unwrap();
+        assert!(matches!(tokens[0].token, Token::At));
+        assert!(matches!(tokens[1].token, Token::Ident(ref s) if s == "x"));
     }
 
     #[test]

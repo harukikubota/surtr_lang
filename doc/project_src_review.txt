@@ -1,0 +1,449 @@
+Surtr project_src.rs レビュー
+============================
+
+2026-04-08 取り込みメモ
+----------------------
+- clone ベースの `push_atomic` は今回「即修正」ではなく、作業フロー上の後続最適化課題として残す
+- 診断系重複は別タスク化し、今回は数値モデルと runtime ID 分離を優先する
+- トップレベル宣言の事前登録ポリシーは `doc/要件定義v9.md` と `doc/open-issues.md` 側で追跡する
+
+対象
+----
+- 結合ソース: project_src.rs
+- 主に設計整合性・失敗時挙動・将来のスケーリング観点で確認
+- 単体の大ファイル提出のため、Cargo全体の実ビルド/実行ではなくコード読解ベースのレビュー
+
+総評
+----
+全体として、
+- フロントエンド(spire/sigil/scar) → IR/bytecode(forge/sindr) → VM(eldr)
+の層分離はかなり明確です。
+- Span を広く保持しており、診断品質を上げる前提もできています。
+- Session / Checkpoint / Rollback の考え方も REPL・増分実行に向いています。
+
+一方で、現状は「正しさを優先して clone で成立させる」箇所が複数あり、REPL や長時間セッション、将来の最適化フェーズでボトルネックになりやすいです。
+また、診断系の重複と、トップレベル宣言の事前登録ポリシーの不整合は早めに整理したほうがよいです。
+
+重要度: 高
+==========
+
+1. push_atomic が VM 全体 clone 前提で、増分実行コストが O(状態全体)
+---------------------------------------------------------------
+該当:
+- crates/eldr/src/vm.rs: 779-785 行付近
+- `pub fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError>`
+
+内容:
+- `let mut next = self.clone();` で VM 全体を複製してから chunk を適用しています。
+- VM には bytecode, constants, functions, source_map, frames, stack などが入っており、REPL でコードを足すたびに全体コピーになります。
+- セッションが長くなるほど push_atomic のコストが線形増加しやすいです。
+
+懸念:
+- REPL / LSP 裏の評価 / マクロ展開確認 / bytecode dump 前提だと、この経路はかなり頻繁に通るはずです。
+- 現時点では安全ですが、将来的に「遅いが理由が見えづらい」箇所になります。
+
+提案:
+- clone ベースは暫定実装として維持しつつ、将来的には以下のどちらかへ寄せるのがよいです。
+  1. append 差分だけを記録して失敗時に巻き戻すジャーナル方式
+  2. bytecode/constants/functions/source_map を永続データ構造風に分け、chunk 適用時に差分だけ差し替える方式
+- 少なくとも `push_atomic` が clone ベースであることを API コメントで明記したほうがよいです。
+
+
+2. 診断コードが rune / xldr で実質重複している
+-----------------------------------------------
+該当:
+- crates/rune/src/diagnostics.rs: 3597 行以降
+- crates/xldr/src/diagnostics.rs: 12485 行以降
+
+内容:
+- 差分を見る限り、両者はほぼ同一実装です。
+- エラーテンプレート推論や ariadne レポート生成が二重管理になります。
+
+懸念:
+- 片方だけ修正してもう片方が古いまま、という事故が起きやすいです。
+- 診断ロジックは細かい調整が多く、重複は将来ほぼ確実にメンテ負債になります。
+
+提案:
+- `crates/common_diagnostics` のような小さな共通 crate に寄せるか、少なくとも shared module に抽出してください。
+- CLI ごとの差分は「入力の渡し方」「出力先」「終了コード」に限定し、診断組み立て自体は一本化したほうがよいです。
+
+
+3. report_error が出力失敗時に unwrap で panic する
+-------------------------------------------------
+該当:
+- crates/rune/src/diagnostics.rs: 3675-3681 行付近
+- crates/xldr/src/diagnostics.rs: 12563-12569 行付近
+
+内容:
+- `builder.finish().eprint(...).unwrap();`
+- 標準エラー出力や writer 周りで失敗した場合、ユーザー向け診断フェーズで panic になります。
+
+懸念:
+- コンパイラ/ランナーの「エラーを表示する処理」が panic すると、元の失敗原因が埋もれます。
+- 特にテスト・IDE 連携・パイプ出力時に扱いづらいです。
+
+提案:
+- `if let Err(err) = ...` で握って簡易フォールバックを出すほうが安全です。
+- 少なくとも panic ではなく、`eprintln!(...)` などへの退避経路を持たせたほうがよいです。
+
+
+4. トップレベル事前登録が関数系だけで、型/コンストラクタ系と方針が揃っていない
+------------------------------------------------------------------
+該当:
+- crates/sigil/src/resolver.rs: 7787-7849 行付近 (`predeclare_functions`)
+
+内容:
+- `Ast::Def` と `Ast::BuiltinDecl` は事前登録されます。
+- しかし `Ast::StructDef` / `Ast::RecordDef` / `Ast::DeferrorDef` は重複チェックだけで、事前登録はしていません。
+
+懸念:
+- 言語仕様として「トップレベルは前方参照できる」の範囲が関数だけになります。
+- 将来的にコンストラクタや型名を値文脈でも扱うなら、かなり分かりにくい差になります。
+- 仕様として意図済みなら問題ありませんが、未決定なら早めに固定した方がよいです。
+
+提案:
+- 仕様を明文化してください。
+  - A. 前方参照は関数だけ許可
+  - B. トップレベル宣言は原則すべて事前登録
+- 個人的には、値として呼ばれるもの/参照されるものはトップレベルで統一ポリシーに寄せたほうが理解しやすいです。
+
+
+重要度: 中
+==========
+
+5. TypeRegistry getter が clone を返しており、読み取り API としては重い
+---------------------------------------------------------------
+該当:
+- crates/eldr/src/vm.rs: 653-659 行付近
+- crates/forge/src/codegen.rs: 2323-2326 行付近
+
+内容:
+- `pub fn type_registry(&self) -> TypeRegistry` が clone を返しています。
+- display/inspect のような読み取り経路から毎回 clone されます。
+
+懸念:
+- 型エントリが増えるほど、診断や表示のたびに不要コピーが発生します。
+
+提案:
+- 可能なら `&TypeRegistry` を返す API に寄せる。
+- 所有権が必要な箇所だけ明示的に clone する設計のほうが後で効きます。
+
+
+6. セッション系 API が全体 clone 依存で揃っており、規模拡大時に compile-time / memory cost が増える
+----------------------------------------------------------------------------------------
+該当例:
+- crates/scar/src/checker.rs: 4649-4660 行付近
+- crates/forge/src/codegen.rs: 2305-2317, 2329-2346 行付近
+- crates/sigil/src/resolver.rs: 7742-7750, 7794-7800 行付近
+
+内容:
+- Sigil / Scar / Forge の session/checkpoint/child scope が clone ベースです。
+- 実装としては分かりやすいですが、型環境・slot_map・定数表が大きくなるほどコストが見え始めます。
+
+提案:
+- 今すぐ全面改修は不要です。
+- ただし「clone で正しさを担保する層」と「差分で進めたい層」を整理しておくと後で楽です。
+- 特に REPL hot path だけでも差分方式へ寄せる価値があります。
+
+
+7. Resolver の with_child_scope は next_id だけ親へ反映するため、仕様意図をコメントで強く残したほうがよい
+-----------------------------------------------------------------------------------------
+該当:
+- crates/sigil/src/resolver.rs: 7794-7800 行付近
+
+内容:
+- 子スコープで作られた binding 自体は親に戻さず、`next_id` だけを親へ反映しています。
+- ブロックスコープ変数を漏らさないための設計としては妥当です。
+
+懸念:
+- 将来読む人が「なぜ child の定義が親に戻らないのか」を誤解しやすいです。
+- マクロや特殊フォームを増やしたとき、ここを誤って変更すると名前解決の前提が崩れます。
+
+提案:
+- 「ブロック内 binding は漏らさないが、unique_id 空間だけは単調増加を維持する」という設計意図をコメントで明文化するとよいです。
+
+
+8. 一部の整合性チェックが “panic ではないが内部不変条件頼み” になっている
+--------------------------------------------------------------------------
+該当例:
+- crates/sigil/src/resolver.rs: 8292-8296 行付近 `iter.next().expect("checked arg length")`
+- crates/spire/src/parser.rs: 11701 行付近 `parsed.into_iter().next().unwrap()`
+
+内容:
+- 直前チェックがあるので基本的には安全です。
+- ただ、将来の分岐追加で前提が崩れると即 panic 系になります。
+
+提案:
+- ここは現状でも大きな問題ではありません。
+- ただし「内部不変条件に依存する expect/unwrap」は `debug_assert!` 補助や小さな helper に包んでおくとレビューしやすくなります。
+
+
+良い点
+======
+- レイヤ分割が明快
+  - parser / resolver / typechecker / codegen / vm の責務境界が比較的見やすいです。
+- Span がかなり丁寧に運ばれている
+  - 後から診断品質を上げやすいです。
+- REPL/増分実行を session/checkpoint で先に意識している
+  - 個人開発言語としてはかなり良い投資です。
+- builtin metadata と impl 数の const assert
+  - 地味ですが破綻防止として効いています。
+- runtime error context の追加情報
+  - `stack_depth`, `frame_depth`, `locals_len`, `stack_top` などは実運用で役に立ちます。
+
+
+優先度付きアクション提案
+======================
+以下は、現行の crate 分割後コードベースに引き直した実装タスク一覧です。
+
+Task 1. diagnostics 共通化 Clear
+--------------------------
+目的:
+- `rune` / `xldr` の診断ロジック二重管理を解消する。
+
+対象:
+- crates/rune/src/diagnostics.rs
+- crates/xldr/src/diagnostics.rs
+- Cargo workspace 定義
+- 必要なら新規 crate（例: `crates/diagnostics`）
+
+作業:
+- `DiagnosticSpec`, `DiagnosticLabel`, `simple_error`, `type_error_spec`, `report_error` を共通化する。
+- `infer_type_error_template` 以下の補助関数も共通化する。
+- `rune` と `xldr` には CLI 固有の薄い入口だけを残す。
+- 共通化後に差分がなくなることを確認する。
+
+テスト:
+- `cargo test`
+- `tests/integration/run_srt.rs`
+- `tests/integration/repl.rs`
+
+完了条件:
+- `rune` / `xldr` の diagnostics 実装本体が 1 箇所に集約される。
+- 型エラー表示の内容が既存と等価である。
+
+
+Task 2. `report_error` の panic 除去 Clear
+-----------------------------------
+目的:
+- 診断表示失敗時に元エラーを隠して panic しないようにする。
+
+対象:
+- 共通化後の diagnostics 実装
+
+作業:
+- `builder.finish().eprint(...).unwrap()` をやめる。
+- `if let Err(err) = ...` でフォールバック表示へ退避する。
+- フォールバックは最低でも `kind`, `message`, `span` を落とさず stderr へ出す。
+- 可能なら「diagnostic rendering failed: ...」の補助メッセージを加える。
+
+テスト:
+- 既存テストを通す。
+- diagnostics 単体テストを追加できるなら、writer failure を模した経路を 1 件追加する。
+
+完了条件:
+- ユーザー向けエラー表示経路に `unwrap` / `expect` が残らない。
+- 表示失敗時もプロセスが panic ではなく通常エラー終了になる。
+
+
+Task 3. 前方参照ポリシーを仕様として固定
+----------------------------------------
+目的:
+- トップレベル前方参照ポリシーを仕様・実装・テストで一致させる。
+- 将来の「関数/マクロ単位の並列コンパイル」に耐える名前解決基盤を先に固める。
+
+対象:
+- doc/要件定義v9.md
+- doc/テスト方針.md
+- crates/sigil/src/resolver.rs
+- crates/scar/src/checker.rs
+- 必要なら crates/scar/src/env.rs
+- tests/spec/**
+- tests/compile_errors/**
+- tests/integration/language_features.rs
+
+作業:
+- 仕様は B を採用し、以下を明文化する。
+- `def` / `@@builtin def` / `defstruct` / `defrecord` / `deferror` はトップレベル事前登録対象にする。
+- 参照が定義より前でも、最終的に同一コンパイル単位で解決できれば成功とする。
+- 解決状態を `Declared` / `SignatureResolved` / `Pending` / `Resolved` / `Error` で管理する方針をドキュメント化する。
+- 定義前参照は即失敗ではなく `Pending` に置き、定義出現後に再解決する。
+- 全体処理（または fixpoint）終了時に `Pending` が残る場合のみエラー確定する。
+- `sigil` の predeclare 対象を拡張し、定義時には予約済み `unique_id` を再利用する。
+- `scar` で型名/コンストラクタ名のシグネチャ先行登録を導入し、struct literal / constructor call / error constructor / 型注釈の前方参照を通せるようにする。
+- `unique_id` と型 tag の採番規則を「実行順依存なしの決定的順序」で固定する。
+- 将来拡張として、以下を `open-issues` または設計メモに整理する。
+- 宣言インデックス先行収集（段階的ファイルリード前提）
+- 依存グラフ + 再試行キュー
+- fixpoint 終了条件（新規解決ゼロ）
+- 循環依存ポリシー
+- マクロ展開段階と通常解決段階の分離
+
+テスト:
+- 関数前方参照の成功ケース
+- `defstruct` 前方参照の成功ケース
+- `defrecord` 前方参照の成功ケース
+- `deferror` 前方参照の成功ケース
+- 「途中では未解決(Pending)だが、後段で解決して成功」のケース
+- 最終的に未解決のまま残り失敗するケース
+- 重複トップレベル定義の失敗ケース（既存維持）
+- 並列化導入後を見据え、診断結果と ID/tag が決定的であることの回帰ケース
+
+完了条件:
+- 仕様書と実装挙動が一致する。
+- 「最終解決可能なら成功 / 最終未解決のみ失敗」がテストで固定される。
+- 将来の並列化で必要な状態モデルと終了条件が文書化される。
+
+
+Task 4. `push_atomic` clone コストの明文化
+-----------------------------------------
+目的:
+- REPL hot path のコスト特性をコード上で見失わないようにする。
+
+対象:
+- crates/eldr/src/vm.rs
+- 必要なら crates/forge/src/codegen.rs
+
+作業:
+- `VM::push_atomic` の doc comment に「現在は VM 全体 clone ベースの atomic 実装」であることを書く。
+- 何を守るための clone か（bytecode / stack / frames / constants / functions を失敗時に巻き戻すため）を明記する。
+- `ForgeSession::codegen_chunk` 側にも、chunk 生成が clone ベース session と組み合わさっていることを補足する。
+
+テスト:
+- 既存の `push_atomic_*` unit test を維持する。
+
+完了条件:
+- hot path のコスト特性が API コメントから読める。
+- 将来最適化時に置き換えるべき箇所が明確になる。
+
+
+Task 5. REPL 向け差分 rollback 案の設計メモを追加
+--------------------------------------------------
+目的:
+- clone ベース実装を置き換える際の設計判断を先に固定する。
+
+対象:
+- doc/ 配下の設計メモ（新規作成でよい）
+- 参照元として crates/eldr/src/vm.rs
+- 参照元として crates/sigil/src/resolver.rs
+- 参照元として crates/scar/src/checker.rs
+- 参照元として crates/forge/src/codegen.rs
+
+作業:
+- 差分 rollback の候補を 2 案以上整理する。
+- 案 1: append-only journal + rollback cursor
+- 案 2: persistent state 風に bytecode/constants/functions/type_registry を層分離
+- どの層を先に最適化するか優先順を書く。
+- 第一候補は `eldr::VM::push_atomic` のみ差分化し、Sigil/Scar/Forge は当面 clone 維持、という段階導入案を明記する。
+
+テスト:
+- 文書タスクなので不要。
+- ただし適用候補として既存 unit test 名をメモに列挙するとよい。
+
+完了条件:
+- 次の実装者が迷わず spike を始められる粒度の比較メモが残る。
+
+
+Task 6. `TypeRegistry` getter を borrow ベースへ寄せる
+------------------------------------------------------
+目的:
+- 表示系の読み取り経路で不要 clone を減らす。
+
+対象:
+- crates/eldr/src/vm.rs
+- crates/forge/src/codegen.rs
+- crates/eldr/src/builtin.rs
+- crates/xldr/src/lib.rs
+
+作業:
+- `pub fn type_registry(&self) -> TypeRegistry` を `&TypeRegistry` 返しへ変更できるか確認する。
+- 呼び出し側の `inspect_value`、REPL 初期化、表示系コードを追従させる。
+- 所有権が本当に必要な箇所だけ局所的に clone する。
+
+テスト:
+- `cargo test`
+- REPL の表示系 integration test
+
+完了条件:
+- 読み取り専用経路で registry 全体 clone が発生しない。
+
+
+Task 7. `with_child_scope` の設計意図をコメントで固定
+-----------------------------------------------------
+目的:
+- 名前解決の unique_id 管理ルールを将来壊しにくくする。
+
+対象:
+- crates/sigil/src/resolver.rs
+- 必要なら crates/sigil/src/scope.rs
+
+作業:
+- `with_child_scope` に「binding は親へ戻さない」「next_id だけを親へ反映する」理由を書く。
+- `Scope::advance_next_id_to` にも単調増加の意図を書く。
+- block / pattern / closure でこのルールが必要な理由を短く補足する。
+
+テスト:
+- 挙動変更は不要。
+- 既存の unique_id 系テストがあれば維持確認のみ。
+
+完了条件:
+- コメントだけで invariant が理解できる。
+
+
+Task 8. 内部不変条件頼みの `unwrap` / `expect` を整理
+-----------------------------------------------------
+目的:
+- 将来の分岐追加で不変条件が崩れたときの panic を減らす。
+
+対象:
+- crates/sigil/src/resolver.rs
+- crates/spire/src/parser.rs
+
+作業:
+- `iter.next().expect("checked arg length")` は helper 化または `debug_assert!` 補助に置き換える。
+- `parsed.into_iter().next().unwrap()` も、直前条件と結び付いた helper に寄せる。
+- 「ここは外部入力エラーではなく内部 invariant」ということが分かる名前にする。
+
+テスト:
+- `cargo test`
+- 補間文字列 parse の既存 spec / compile_errors を再実行する。
+
+完了条件:
+- 単純な `unwrap` / `expect` ではなく、意図の分かる内部 invariant 表現になっている。
+
+
+Task 9. clone ベース session の hot path 測定
+--------------------------------------------
+目的:
+- 将来の最適化優先順位を体感ではなく計測で決める。
+
+対象:
+- crates/sigil
+- crates/scar
+- crates/forge
+- crates/eldr
+- 必要なら benches/ または簡易計測用 test
+
+作業:
+- REPL を想定した「小さな入力を 1000 回足す」ベンチを用意する。
+- `SigilSession::resolve`, `ScarSession::typecheck`, `ForgeSession::codegen_chunk`, `VM::push_atomic` の時間配分を測る。
+- alloc / clone 回数まで見るなら `-Z` 系や外部 profiler を使う方針をメモする。
+
+テスト:
+- ベンチまたは ignored test として追加する。
+
+完了条件:
+- 最適化の第一候補を計測結果で説明できる。
+
+
+結論
+====
+設計の方向性はかなり良いです。特に、
+- 静的型付き
+- 多段パイプライン
+- 増分実行
+- 診断改善の余地
+を全部同時に見据えている点は強いです。
+
+現状の主要課題は「正しさを優先した clone ベース実装を、どこまで本実装として残すか」です。
+ここを REPL hot path と診断共通化から順に詰めれば、かなり安定した基盤になります。

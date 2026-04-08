@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
 use crate::runtime::{TypeEntry, TypeRegistry};
 
 /// Surtr bytecode instructions.
@@ -7,8 +8,8 @@ use crate::runtime::{TypeEntry, TypeRegistry};
 pub enum Opcode {
     // Constants & locals
     LoadConst(u32),
-    LoadBuiltinRef(u16),
-    LoadFunctionRef(u32),
+    LoadBuiltinRef(BuiltinId),
+    LoadFunctionRef(FunctionId),
     LoadLocal(u32),
     StoreLocal(u32),
 
@@ -57,20 +58,28 @@ pub enum Opcode {
     // List
     ListNew(u32),
     ListEmpty,
+    ListNil,
+    ListCons,
+    ListIsEmpty,
+    ListHead,
+    ListTail,
+    ListFromItems(u32),
 
     // Struct / Tagged
     StructNew(u32),
     GetField(u32),
     GetTag,
+    EqTag,
 
     // Built-in function call
-    CallBuiltin(u16, u8),
+    CallBuiltin(BuiltinId, u8, u32, u32),
 
     // User-defined function call
-    Call(u32, u8, u32, u32),
+    Call(FunctionId, u8, u32, u32),
     CaptureClosure(u8),
     CapturePartial(u8),
     MakeError(u32),
+    MakeErrorLiteral(u32, u32),
     CallClosure(u8, u32, u32),
 
     // Control flow
@@ -142,16 +151,18 @@ pub struct BytecodeChunk {
 /// Function table entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionEntry {
-    pub fun_idx: u32,
+    pub fun_idx: FunctionId,
     pub entry_pc: u32,
     pub num_locals: u32,
     pub arity: u8,
+    pub qualified_name: Option<String>,
 }
 
 /// Constant pool entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Constant {
-    Int(i64),
+    Int(SurtrInt),
+    Tag(RuntimeTag),
     Float(f64),
     Str(String),
     Bool(bool),
@@ -268,7 +279,27 @@ struct LegacyBytecode {
     num_locals: usize,
     type_registry: TypeRegistry,
     error_templates: Vec<ErrTemplate>,
-    functions: Vec<FunctionEntry>,
+    functions: Vec<LegacyFunctionEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct LegacyFunctionEntry {
+    fun_idx: u32,
+    entry_pc: u32,
+    num_locals: u32,
+    arity: u8,
+}
+
+impl From<LegacyFunctionEntry> for FunctionEntry {
+    fn from(value: LegacyFunctionEntry) -> Self {
+        Self {
+            fun_idx: value.fun_idx,
+            entry_pc: value.entry_pc,
+            num_locals: value.num_locals,
+            arity: value.arity,
+            qualified_name: None,
+        }
+    }
 }
 
 impl From<LegacyBytecode> for Bytecode {
@@ -279,7 +310,11 @@ impl From<LegacyBytecode> for Bytecode {
             num_locals: value.num_locals,
             type_registry: value.type_registry,
             error_templates: value.error_templates,
-            functions: value.functions,
+            functions: value
+                .functions
+                .into_iter()
+                .map(FunctionEntry::from)
+                .collect(),
             source_map: None,
         }
     }
@@ -431,8 +466,10 @@ fn align4(len: usize) -> usize {
 mod tests {
     use super::{
         line_column_for_offset, populate_error_template_lines, Bytecode, BytecodeFormatError,
-        Constant, ErrTemplate, FunctionEntry, LegacyBytecode, Opcode, OpcodeSource, SourceMap,
+        Constant, ErrTemplate, FunctionEntry, LegacyBytecode, LegacyFunctionEntry, Opcode,
+        OpcodeSource, SourceMap,
     };
+    use crate::primitives::int;
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
 
     fn sample_registry() -> TypeRegistry {
@@ -449,7 +486,7 @@ mod tests {
     fn sample_bytecode(source_map: Option<SourceMap>) -> Bytecode {
         Bytecode {
             opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
-            constants: vec![Constant::Int(42)],
+            constants: vec![Constant::Int(int(42))],
             num_locals: 1,
             type_registry: sample_registry(),
             error_templates: vec![ErrTemplate {
@@ -467,6 +504,7 @@ mod tests {
                 entry_pc: 1,
                 num_locals: 0,
                 arity: 0,
+                qualified_name: Some("Main::entry".to_string()),
             }],
             source_map,
         }
@@ -515,11 +553,16 @@ mod tests {
     fn decode_legacy_payload_without_source_map() {
         let legacy = LegacyBytecode {
             opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
-            constants: vec![Constant::Int(7)],
+            constants: vec![Constant::Int(int(7))],
             num_locals: 0,
             type_registry: sample_registry(),
             error_templates: Vec::new(),
-            functions: Vec::new(),
+            functions: vec![LegacyFunctionEntry {
+                fun_idx: 0,
+                entry_pc: 1,
+                num_locals: 0,
+                arity: 0,
+            }],
         };
 
         let payload = bincode::serialize(&legacy).expect("legacy payload encode should succeed");
@@ -538,7 +581,8 @@ mod tests {
 
         let decoded = Bytecode::decode(&bytes).expect("legacy decode should succeed");
         assert_eq!(decoded.source_map, None);
-        assert_eq!(decoded.constants, vec![Constant::Int(7)]);
+        assert_eq!(decoded.constants, vec![Constant::Int(int(7))]);
+        assert_eq!(decoded.functions[0].qualified_name, None);
     }
 
     #[test]

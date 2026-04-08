@@ -2,6 +2,7 @@ use crate::error::RuntimeError;
 use crate::value::Value;
 use crate::vm::VM;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
+use sindr::primitives::{ToPrimitive, Zero};
 use sindr::runtime::{Location, RichError};
 
 /// Function pointer type for built-in implementations.
@@ -31,6 +32,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_eprint,
     },
+    BuiltinImpl {
+        func: builtin_set_exit_code,
+    },
+    BuiltinImpl { func: builtin_shl },
+    BuiltinImpl { func: builtin_shr },
 ];
 
 const _: () = {
@@ -89,7 +95,7 @@ fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError>
 fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match (&args[0], &args[1]) {
         (Value::Int(a), Value::Int(b)) => {
-            if *b == 0 {
+            if b.is_zero() {
                 Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
             } else {
                 Ok(ok_result(Value::Int(a / b)))
@@ -112,7 +118,7 @@ fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
 fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match (&args[0], &args[1]) {
         (Value::Int(a), Value::Int(b)) => {
-            if *b == 0 {
+            if b.is_zero() {
                 Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
             } else {
                 Ok(ok_result(Value::Int(a % b)))
@@ -166,6 +172,39 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
     Ok(Value::Unit)
 }
 
+fn builtin_set_exit_code(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Int(ref code) = args[0] else {
+        return Err(RuntimeError::new("set_exit_code expects Int"));
+    };
+    let exit_code = code.to_i32().ok_or_else(|| {
+        RuntimeError::new(format!("set_exit_code out of range for i32: {}", code))
+    })?;
+    vm.set_exit_code(exit_code);
+    Ok(Value::Unit)
+}
+
+fn builtin_shl(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("shl expects (Int, Int)"));
+    };
+    let amount = bits.to_usize().ok_or_else(|| {
+        RuntimeError::new(format!("shl shift amount must be non-negative: {}", bits))
+    })?;
+    let shifted = value << amount;
+    Ok(Value::Int(shifted))
+}
+
+fn builtin_shr(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("shr expects (Int, Int)"));
+    };
+    let amount = bits.to_usize().ok_or_else(|| {
+        RuntimeError::new(format!("shr shift amount must be non-negative: {}", bits))
+    })?;
+    let shifted = value >> amount;
+    Ok(Value::Int(shifted))
+}
+
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     let registry = vm.type_registry();
     value.to_display_string(&registry)
@@ -202,24 +241,20 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
 mod tests {
     use sindr::builtin::BUILTIN_METAS;
 
-    fn parse_builtin_decl(line: &str) -> (&str, u8, String) {
-        let rest = line
-            .strip_prefix("@builtin def ")
-            .expect("builtin line must start with @builtin def");
-        let (name, after_name) = rest
+    /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
+    fn parse_def_signature(def_rest: &str) -> (String, u8, String) {
+        let (name, after_name) = def_rest
             .split_once('(')
-            .expect("builtin declaration must include params");
-
+            .expect("def declaration must include params");
         let (params, after_params) = after_name
             .split_once(')')
-            .expect("builtin declaration must close params");
+            .expect("def declaration must close params");
         let ret_ty = after_params
             .trim()
             .strip_prefix("->")
-            .expect("builtin declaration must include return type")
+            .expect("def declaration must include return type")
             .trim();
-
-        let param_tys = if params.trim().is_empty() {
+        let param_tys: Vec<String> = if params.trim().is_empty() {
             Vec::new()
         } else {
             params
@@ -230,29 +265,58 @@ mod tests {
                         .expect("builtin params must have `name: Type` form");
                     ty.trim().to_string()
                 })
-                .collect::<Vec<_>>()
+                .collect()
         };
-
         let sig = format!("({}) -> {}", param_tys.join(", "), ret_ty);
-        (name.trim(), param_tys.len() as u8, sig)
+        (name.trim().to_string(), param_tys.len() as u8, sig)
     }
 
     #[test]
     fn builtin_srt_and_builtin_meta_are_aligned() {
-        let source = include_str!("../../../lib/builtin.srt");
-        let lines = source
-            .lines()
+        let sources = [
+            include_str!("../../../lib/bootstrap.srt"),
+            include_str!("../../../lib/int.srt"),
+        ];
+
+        // Collect all lines across all sources.
+        let all_lines: Vec<&str> = sources
+            .iter()
+            .flat_map(|s| s.lines())
             .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with("//"))
-            .collect::<Vec<_>>();
+            .collect();
 
-        assert_eq!(lines.len(), BUILTIN_METAS.len());
+        // For each @@builtin annotation, find the associated def signature.
+        // Annotation order is flexible: @@builtin may appear on its own line
+        // (int.srt style) or immediately before `def` on the same line
+        // (@@builtin def ..., bootstrap.srt style).
+        let mut entries: Vec<(String, u8, String)> = Vec::new();
+        let mut i = 0;
+        while i < all_lines.len() {
+            let line = all_lines[i];
+            if let Some(rest) = line.strip_prefix("@@builtin def ") {
+                // Inline form: @@builtin def name(params) -> ret
+                entries.push(parse_def_signature(rest));
+            } else if line == "@@builtin" {
+                // Standalone form: find the next `def` line.
+                let mut j = i + 1;
+                while j < all_lines.len() {
+                    let next = all_lines[j];
+                    if let Some(rest) = next.strip_prefix("def ") {
+                        entries.push(parse_def_signature(rest));
+                        break;
+                    }
+                    j += 1;
+                }
+            }
+            i += 1;
+        }
 
-        for (line, meta) in lines.iter().zip(BUILTIN_METAS.iter()) {
-            let (name, arity, sig_str) = parse_builtin_decl(line);
-            assert_eq!(name, meta.name);
-            assert_eq!(arity, meta.arity);
-            assert_eq!(sig_str, meta.sig_str);
+        assert_eq!(entries.len(), BUILTIN_METAS.len());
+
+        for ((name, arity, sig_str), meta) in entries.iter().zip(BUILTIN_METAS.iter()) {
+            assert_eq!(name, meta.name, "name mismatch");
+            assert_eq!(*arity, meta.arity, "arity mismatch for {name}");
+            assert_eq!(sig_str, &meta.sig_str, "sig mismatch for {name}");
         }
     }
 }

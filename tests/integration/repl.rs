@@ -24,10 +24,11 @@ fn surtr_bin() -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn run_repl_session(input: &str) -> Output {
+fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
     let bin = PathBuf::from(surtr_bin());
     let mut child = Command::new(bin)
         .arg("repl")
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -44,6 +45,30 @@ fn run_repl_session(input: &str) -> Output {
     child.wait_with_output().expect("failed to wait on repl")
 }
 
+fn run_repl_session(input: &str) -> Output {
+    run_repl_session_with_args(&[], input)
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+
+    out
+}
+
 #[test]
 fn repl_quit_exits_cleanly() {
     let output = run_repl_session(":quit\n");
@@ -52,6 +77,83 @@ fn repl_quit_exits_cleanly() {
         "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn repl_prints_light_banner_by_default() {
+    let output = run_repl_session(":quit\n");
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Surtr xldr"),
+        "expected lightweight banner in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_quiet_suppresses_banner() {
+    let output = run_repl_session_with_args(&["--quiet"], ":quit\n");
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Surtr xldr"),
+        "expected quiet mode to suppress the banner, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_banner_flag_prints_detailed_banner() {
+    let output = run_repl_session_with_args(&["--banner"], ":quit\n");
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("██\\   ██\\ ██\\      ██████\\  ██████\\"),
+        "expected detailed banner in repl output, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\\__|  \\__|\\_______|\\______/ \\__|  \\__|"),
+        "expected detailed banner command help in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_version_prints_version_and_exits() {
+    let output = run_repl_session_with_args(&["--version"], "");
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim() == "xldr 0.1.0",
+        "expected xldr version output, got:\n{}",
+        stdout
     );
 }
 
@@ -74,6 +176,34 @@ fn repl_keeps_bindings_between_inputs() {
     assert!(
         stdout.contains("42"),
         "expected expression result in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_echoes_bindings_even_with_trailing_semicolons() {
+    let output = run_repl_session("n = 1;w = 2; r = 3;\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("n: Int = 1"),
+        "expected semicolon-terminated binding n to be echoed, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("w: Int = 2"),
+        "expected semicolon-terminated binding w to be echoed, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("r: Int = 3"),
+        "expected semicolon-terminated binding r to be echoed, got:\n{}",
         stdout
     );
 }
@@ -210,6 +340,131 @@ fn repl_hides_internal_type_var_ids_in_result_display() {
 }
 
 #[test]
+fn repl_evaluates_main_result_err_immediately() {
+    let output = run_repl_session("Err(NoneError)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("> Err("),
+        "expected Err result to be evaluated immediately instead of echoed, got:\n{}",
+        stdout
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("NoneError"),
+        "expected evaluated Err to be reported in stderr, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn repl_safebind_constructor_pattern_echoes_binding() {
+    let output = run_repl_session("ret = Ok(1)\nrr = Ok(ret)\nOk(num) =? rr\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("num: Int = 1"),
+        "expected constructor-pattern safebind to echo num binding, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_safebind_list_pattern_echoes_all_bindings() {
+    let output = run_repl_session("rv: Result<List<Int>> = Ok([1, 2, 3])\n[h, ..t] =? rv\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("h: Int = 1"),
+        "expected list-pattern safebind to echo h binding, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("t: List<Int> = [2, 3]"),
+        "expected list-pattern safebind to echo t binding, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_safebind_list_pattern_accepts_plain_list_rhs() {
+    let output = run_repl_session("li = [1, 2, 3]\n[h, ..t] =? li\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("h: Int = 1"),
+        "expected list-pattern safebind on plain list rhs to echo h binding, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("t: List<Int> = [2, 3]"),
+        "expected list-pattern safebind on plain list rhs to echo t binding, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_safebind_list_pattern_accepts_nested_constructor_literals() {
+    let output = run_repl_session("lr = [Ok(1), Ok(2), Ok(3)]\n[Ok(1), Ok(2), _] =? lr\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("ParseError"),
+        "expected no parse error for nested constructor list pattern, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn repl_safebind_list_pattern_accepts_nested_constructor_with_tail() {
+    let output = run_repl_session("lr = [Ok(1), Ok(2), Ok(3)]\n[Ok(1), ..tail] =? lr\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("tail: List<Result<Int, Error>> = [Ok(2), Ok(3)]"),
+        "expected nested constructor with tail to bind tail, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_safe_xxx_zero_uses_zero_division_error() {
     let output =
         run_repl_session("print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))\n:quit\n");
@@ -233,6 +488,34 @@ fn repl_safe_xxx_zero_uses_zero_division_error() {
         2,
         "expected both safe_div and safe_mod to use ZeroDivisionError, got:\n{}",
         stdout
+    );
+}
+
+#[test]
+fn repl_safe_mod_runtime_error_highlights_the_full_call() {
+    let output = run_repl_session("safe_mod(10, 0)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("ZeroDivisionError"),
+        "expected zero division error in stderr, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("REPL:1:1"),
+        "expected runtime error to point at the start of the call, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("safe_mod(10, 0)"),
+        "expected diagnostic to include the full call site, got:\n{}",
+        stderr
     );
 }
 

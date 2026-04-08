@@ -1,0 +1,3 @@
+import Helper::add;
+
+print(to_string(add(1, 2)))

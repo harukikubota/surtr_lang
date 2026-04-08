@@ -1,38 +1,15 @@
+mod support;
+
 #[cfg(test)]
 mod e2e {
-    const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../lib/builtin.srt");
-
-    fn parse_with_builtin_prelude(source: &str) -> Result<Vec<spire::ast::Ast>, String> {
-        let mut ast = spire::parse(BUILTIN_PRELUDE_SOURCE)
-            .map_err(|e| format!("Parse (builtin.srt): {}", e))?;
-        let mut user_ast = spire::parse(source).map_err(|e| format!("Parse: {}", e))?;
-        ast.append(&mut user_ast);
-        Ok(ast)
-    }
+    use super::support;
 
     fn run_surtr(source: &str) -> Result<Vec<String>, String> {
-        let ast = parse_with_builtin_prelude(source)?;
-        let resolved = sigil::resolve(ast).map_err(|e| format!("Resolve: {}", e))?;
-        let typed = scar::typecheck(resolved).map_err(|e| format!("Typecheck: {}", e))?;
-        let bytecode = forge::codegen(typed).map_err(|e| format!("Codegen: {}", e))?;
-        let mut vm = eldr::VM::new(bytecode).with_output_capture();
-        vm.run().map_err(|e| format!("Runtime: {}", e))?;
-        Ok(vm.output.unwrap_or_default())
+        support::run_script("language_features.srt", source)
     }
 
     fn run_surtr_with_stderr(source: &str) -> Result<(Vec<String>, Vec<String>), String> {
-        let ast = parse_with_builtin_prelude(source)?;
-        let resolved = sigil::resolve(ast).map_err(|e| format!("Resolve: {}", e))?;
-        let typed = scar::typecheck(resolved).map_err(|e| format!("Typecheck: {}", e))?;
-        let bytecode = forge::codegen(typed).map_err(|e| format!("Codegen: {}", e))?;
-        let mut vm = eldr::VM::new(bytecode)
-            .with_output_capture()
-            .with_error_capture();
-        vm.run().map_err(|e| format!("Runtime: {}", e))?;
-        Ok((
-            vm.output.unwrap_or_default(),
-            vm.error_output.unwrap_or_default(),
-        ))
+        support::run_script_with_stderr("language_features.srt", source)
     }
 
     fn assert_output(source: &str, expected: &[&str]) {
@@ -206,8 +183,21 @@ print(to_string(strs))"#,
     }
 
     #[test]
+    fn list_cons_expr() {
+        assert_output(
+            "tail: List<Int> = [2, 3]\nnums = [1, ..tail]\nprint(to_string(nums))",
+            &["[1, 2, 3]"],
+        );
+    }
+
+    #[test]
     fn list_reject_mixed_types() {
         assert_compile_error(r#"mixed = [1, "two"]"#, "expected Int, got String");
+    }
+
+    #[test]
+    fn list_cons_rejects_non_list_tail() {
+        assert_compile_error("nums = [1, ..2]", "list tail must be List<...>");
     }
 
     // Closures and partial application
@@ -268,6 +258,16 @@ bad = &compose(inc(1))"#,
         );
     }
 
+    #[test]
+    fn function_forward_reference_succeeds() {
+        assert_output(
+            r#"print(to_string(double(21)))
+
+def double(x: Int) -> Int { x * 2 }"#,
+            &["42"],
+        );
+    }
+
     // Structs and records
 
     #[test]
@@ -304,6 +304,29 @@ print(to_string(point.x))"#,
 point2 = Point(y: 5.0, x: 3.0)
 print(to_string(point2.x))"#,
             &["3.0"],
+        );
+    }
+
+    #[test]
+    fn struct_record_forward_references_and_type_annotation_succeed() {
+        assert_output(
+            r#"user: User = make_user("alice")
+print(to_string(user.age))
+
+point = Point(y: 9.5, x: 3.0)
+print(to_string(point.x))
+
+def make_user(name: String) -> User {
+  User { name: name, age: 30 }
+}
+
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+defrecord Point(x: Float, y: Float)"#,
+            &["30", "3.0"],
         );
     }
 
@@ -460,6 +483,18 @@ print(match s {
     }
 
     #[test]
+    fn match_list_patterns() {
+        assert_output(
+            r#"nums: List<Int> = [1, 2, 3]
+print(match nums {
+  [] => "empty",
+  [head, ..tail] => to_string(head),
+})"#,
+            &["1"],
+        );
+    }
+
+    #[test]
     fn match_boolean_non_exhaustive_error() {
         assert_compile_error(
             r#"flag = True
@@ -599,6 +634,139 @@ print(to_string(num + 1))"#,
     }
 
     #[test]
+    fn safebind_list_pattern_ok() {
+        assert_output(
+            r#"value: Result<List<Int>> = Ok([1, 2, 3])
+[head, ..tail] =? value
+print(to_string(head))
+print(to_string(tail))"#,
+            &["1", "[2, 3]"],
+        );
+    }
+
+    #[test]
+    fn safebind_list_pattern_plain_list_ok() {
+        assert_output(
+            r#"value = [1, 2, 3]
+[head, ..tail] =? value
+print(to_string(head))
+print(to_string(tail))"#,
+            &["1", "[2, 3]"],
+        );
+    }
+
+    #[test]
+    fn safebind_list_pattern_plain_list_empty_propagates_empty_list() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"value: List<Int> = []
+[head, ..tail] =? value
+print("after")"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
+    }
+
+    #[test]
+    fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_longer_rhs() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"li = [1, 2]
+[f] =? li"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(
+            stderr,
+            vec!["Error: IndexOutOfBounds: LHS.len(1) < RHS.len(2)"]
+        );
+    }
+
+    #[test]
+    fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_shorter_rhs() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"li = [1]
+[e1, e2] =? li"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(
+            stderr,
+            vec!["Error: IndexOutOfBounds: LHS.len(2) > RHS.len(1)"]
+        );
+    }
+
+    #[test]
+    fn safebind_list_pattern_with_nested_constructor_literals_ok() {
+        assert_output(
+            r#"lr = [Ok(1), Ok(2), Ok(3)]
+[Ok(1), Ok(2), _] =? lr
+print("ok")"#,
+            &["ok"],
+        );
+    }
+
+    #[test]
+    fn safebind_list_pattern_with_nested_constructor_and_tail_ok() {
+        assert_output(
+            r#"lr = [Ok(1), Ok(2), Ok(3)]
+[Ok(1), ..tail] =? lr
+print(to_string(tail))"#,
+            &["[Ok(2), Ok(3)]"],
+        );
+    }
+
+    #[test]
+    fn safebind_top_ok_pattern_requires_nested_result() {
+        assert_compile_error(
+            r#"value: Result<Int> = Ok(5)
+Ok(num) =? value"#,
+            "`Ok(...)` pattern requires Result",
+        );
+    }
+
+    #[test]
+    fn safebind_top_ok_pattern_allows_nested_result() {
+        assert_output(
+            r#"value: Result<Result<Int>> = Ok(Ok(5))
+Ok(num) =? value
+print(to_string(num + 1))"#,
+            &["6"],
+        );
+    }
+
+    #[test]
+    fn safebind_nested_result_err_propagates() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"deferror Oops {
+  "oops"
+}
+
+value: Result<Result<Int>> = Ok(Err(Oops))
+Ok(num) =? value
+print("after")"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(stderr, vec!["Error: Oops: oops"]);
+    }
+
+    #[test]
+    fn safebind_list_pattern_empty_propagates_empty_list() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"def fun() -> Result<Int> {
+  value: Result<List<Int>> = Ok([])
+  [head, ..tail] =? value
+  Ok(head)
+}
+
+ret: Result<Int> = fun()
+match ret {
+  Ok(v) => print(to_string(v)),
+  Err(e) => eprint(e),
+}"#,
+        )
+        .expect("program should run");
+        assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
+    }
+
+    #[test]
     fn safebind_function_early_return_on_err() {
         let (stdout, stderr) = run_surtr_with_stderr(
             r#"deferror Oops {
@@ -670,7 +838,10 @@ print("after")"#,
 
     #[test]
     fn plain_bind_rejects_result_test_pattern() {
-        assert_compile_error("Ok(num) = Ok(1)", "Unexpected token: Bind");
+        assert_compile_error(
+            "Ok(num) = Ok(1)",
+            "Result destructuring patterns must use `=?`, not `=`",
+        );
     }
 
     // Errors
@@ -689,6 +860,26 @@ match err1 {
   Err(e)   => print("got error"),
 }"#;
         assert_output(source, &["got error"]);
+    }
+
+    #[test]
+    fn deferror_forward_reference_in_result_signature_succeeds() {
+        assert_output(
+            r#"ret: Result<Int> = load()
+match ret {
+  Ok(val) => print("ok"),
+  Err(e)  => print("err"),
+}
+
+def load() -> Result<Int, NotFound> {
+  Err(NotFound("/api"))
+}
+
+deferror NotFound(path: String) {
+  "Not Found: #{path}"
+}"#,
+            &["err"],
+        );
     }
 
     #[test]

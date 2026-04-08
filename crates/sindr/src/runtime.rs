@@ -1,4 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::rc::Rc;
+
+use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
 
 /// Kind of user-defined type at runtime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -10,7 +13,7 @@ pub enum TypeKind {
 /// Runtime metadata for a tagged type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypeEntry {
-    pub tag: u32,
+    pub tag: RuntimeTag,
     pub name: String,
     pub kind: TypeKind,
     pub field_names: Vec<String>,
@@ -33,7 +36,7 @@ impl TypeRegistry {
         self.entries.push(entry);
     }
 
-    pub fn lookup(&self, tag: u32) -> Option<&TypeEntry> {
+    pub fn lookup(&self, tag: RuntimeTag) -> Option<&TypeEntry> {
         self.entries.iter().find(|entry| entry.tag == tag)
     }
 }
@@ -41,15 +44,31 @@ impl TypeRegistry {
 /// Runtime value in the Surtr VM.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    Int(i64),
+    Int(SurtrInt),
+    Tag(RuntimeTag),
     Float(f64),
     Str(String),
     Bool(bool),
     Unit,
-    List(Vec<Value>),
+    List(ListHandle),
     Tagged { tag: u32, fields: Vec<Value> },
     Callable(Callable),
     Error(Box<RichError>),
+}
+
+pub type ListRef = Option<Rc<ListNode>>;
+
+/// Shared runtime handle for persistent cons-list values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListHandle {
+    pub head: ListRef,
+    pub len: usize,
+}
+
+/// Persistent list node for O(1) cons/uncons sharing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListNode {
+    Cons(Value, ListRef),
 }
 
 /// Callable runtime value.
@@ -63,8 +82,8 @@ pub struct Callable {
 /// Callable target reference.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallableTarget {
-    Builtin(u16),
-    Function(u32),
+    Builtin(BuiltinId),
+    Function(FunctionId),
 }
 
 impl Value {
@@ -72,6 +91,7 @@ impl Value {
     pub fn to_display_string(&self, registry: &TypeRegistry) -> String {
         match self {
             Value::Int(n) => n.to_string(),
+            Value::Tag(tag) => format!("<tag:{}>", tag),
             Value::Float(f) => {
                 let s = format!("{}", f);
                 if s.contains('.') {
@@ -89,8 +109,8 @@ impl Value {
                 }
             }
             Value::Unit => "()".to_string(),
-            Value::List(items) => {
-                let inner = items
+            Value::List(handle) => {
+                let inner = handle
                     .iter()
                     .map(|item| item.to_display_string(registry))
                     .collect::<Vec<_>>()
@@ -150,6 +170,76 @@ impl Value {
     }
 }
 
+impl ListHandle {
+    pub fn empty() -> Self {
+        Self { head: None, len: 0 }
+    }
+
+    pub fn cons(head: Value, tail: &ListHandle) -> Self {
+        Self {
+            head: Some(Rc::new(ListNode::Cons(head, tail.head.clone()))),
+            len: tail.len + 1,
+        }
+    }
+
+    pub fn from_items(items: Vec<Value>) -> Self {
+        let mut list = Self::empty();
+        for item in items.into_iter().rev() {
+            list = Self::cons(item, &list);
+        }
+        list
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn head_value(&self) -> Option<Value> {
+        match &self.head {
+            Some(node) => match node.as_ref() {
+                ListNode::Cons(value, _) => Some(value.clone()),
+            },
+            None => None,
+        }
+    }
+
+    pub fn tail_handle(&self) -> Option<Self> {
+        match &self.head {
+            Some(node) => match node.as_ref() {
+                ListNode::Cons(_, next) => Some(Self {
+                    head: next.clone(),
+                    len: self.len.saturating_sub(1),
+                }),
+            },
+            None => None,
+        }
+    }
+
+    pub fn iter(&self) -> ListIter {
+        ListIter {
+            next: self.head.clone(),
+        }
+    }
+}
+
+pub struct ListIter {
+    next: ListRef,
+}
+
+impl Iterator for ListIter {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.next.clone()?;
+        match current.as_ref() {
+            ListNode::Cons(value, next) => {
+                self.next = next.clone();
+                Some(value.clone())
+            }
+        }
+    }
+}
+
 /// Rich error value produced by `deferror`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RichError {
@@ -177,14 +267,15 @@ pub struct Location {
 
 #[cfg(test)]
 mod tests {
-    use super::{Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value};
+    use super::{ListHandle, Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value};
+    use crate::primitives::int;
 
     #[test]
     fn display_for_reserved_result_tags() {
         let registry = TypeRegistry::new();
         let ok = Value::Tagged {
             tag: 0,
-            fields: vec![Value::Int(42)],
+            fields: vec![Value::Int(int(42))],
         };
         let err = Value::Tagged {
             tag: 1,
@@ -212,11 +303,11 @@ mod tests {
 
         let user = Value::Tagged {
             tag: 10,
-            fields: vec![Value::Str("alice".into()), Value::Int(20)],
+            fields: vec![Value::Str("alice".into()), Value::Int(int(20))],
         };
         let pair = Value::Tagged {
             tag: 11,
-            fields: vec![Value::Int(1), Value::Int(2)],
+            fields: vec![Value::Int(int(1)), Value::Int(int(2))],
         };
 
         assert_eq!(
@@ -242,6 +333,17 @@ mod tests {
             },
         }));
         assert_eq!(value.to_display_string(&registry), "TestError(\"boom\")");
+    }
+
+    #[test]
+    fn list_display_uses_cons_handle_shape() {
+        let registry = TypeRegistry::new();
+        let value = Value::List(ListHandle::from_items(vec![
+            Value::Int(int(1)),
+            Value::Int(int(2)),
+            Value::Int(int(3)),
+        ]));
+        assert_eq!(value.to_display_string(&registry), "[1, 2, 3]");
     }
 
     #[test]

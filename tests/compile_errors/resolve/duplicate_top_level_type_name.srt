@@ -1,0 +1,5 @@
+defstruct User {
+  name: String,
+}
+
+def User() -> Int { 1 }

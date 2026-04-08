@@ -1,4 +1,5 @@
 use crate::ast::Span;
+use sindr::primitives::SurtrInt;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Spanned<T> {
@@ -9,7 +10,7 @@ pub struct Spanned<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     // ── Literals ──
-    Int(i64),
+    Int(SurtrInt),
     Float(f64),
     Str(String),
     True,
@@ -48,7 +49,9 @@ pub enum Token {
     // ── Punctuation ──
     Comma,     // ,
     Colon,     // :
+    At,        // @
     Dot,       // .
+    DotDot,    // ..
     FatArrow,  // =>
     Arrow,     // ->
     Semicolon, // ;
@@ -61,7 +64,10 @@ pub enum Token {
 
     // ── Keywords ──
     Def,
-    AtBuiltin, // @builtin
+    Defmod,
+    Import,
+    /// Generic annotator token: `@@builtin`, `@@foo`, ...
+    Annotator(String),
     Defstruct,
     Defrecord,
     Deferror,

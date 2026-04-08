@@ -1,3 +1,5 @@
+use sindr::primitives::SurtrInt;
+
 /// Source location — attached to every AST node for downstream error reporting.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Span {
@@ -12,7 +14,7 @@ pub type Symbol = String;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Lit {
-    Int(i64),
+    Int(SurtrInt),
     Float(f64),
     Str(String),
     Bool(bool),
@@ -41,10 +43,8 @@ pub enum BinOp {
 pub enum AstTy {
     /// `Int`, `String`, `Boolean`, `Unit`, `User`, ...
     Named(Span, Symbol),
-    /// `List<Int>`, `List<String>`, ...
-    ListOf(Span, Box<AstTy>),
-    /// `Result<Int>` or `Result<Int, ParseError>`
-    ResultOf(Span, Box<AstTy>, Option<Box<AstTy>>),
+    /// `List<T>`, `Result<T, E>`, user-defined generic types, ...
+    Generic(Span, Symbol, Vec<AstTy>),
     /// `(-> T)`, `(A -> B)`, `(A, B -> C)`
     Func(Span, Vec<AstTy>, Box<AstTy>),
 }
@@ -59,22 +59,42 @@ pub enum AstPattern {
     Annotated(Span, Symbol, AstTy),
     /// `_`
     Wildcard(Span),
+    /// `[]`
+    ListNil(Span),
+    /// `[head, ..tail]`
+    ListCons(Span, Box<AstPattern>, Box<AstPattern>),
+    /// Integer literal in pattern position.
+    IntLit(Span, SurtrInt),
+    /// String literal in pattern position.
+    StrLit(Span, String),
+    /// Boolean literal in pattern position.
+    BoolLit(Span, bool),
+    /// `Ok(inner)` in safe-bind patterns
+    Constructor(Span, Symbol, Box<AstPattern>),
+    /// `inner @ alias` / `inner @ alias: Ty`
+    As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
 }
 
 // ── Match patterns ──
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AstMatchPattern {
+    /// `x` inside pattern substructure
+    Binding(Span, Symbol),
     /// `_`
     Wildcard(Span),
     /// `True` / `False`
     BoolLit(Span, bool),
     /// Integer literal
-    IntLit(Span, i64),
+    IntLit(Span, SurtrInt),
     /// String literal
     StrLit(Span, String),
     /// `Ok(val)` / `Err(e)` — constructor with optional inner binding
     Constructor(Span, Symbol, Option<Symbol>),
+    /// `[]`
+    ListNil(Span),
+    /// `[head, ..tail]`
+    ListCons(Span, Box<AstMatchPattern>, Box<AstMatchPattern>),
 }
 
 // ── Struct / Record fields ──
@@ -105,6 +125,7 @@ pub struct FunParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureParam {
     pub name: Symbol,
+    pub ty: Option<AstTy>,
     pub span: Span,
 }
 
@@ -122,6 +143,24 @@ pub enum InterpolatedPart {
     Expr(Box<Ast>),
 }
 
+/// Qualified path: `Mod`, `Mod::Type`, `Mod::fun`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AstPath {
+    pub span: Span,
+    pub segments: Vec<Symbol>,
+}
+
+/// Import selector.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportSpec {
+    /// `import Mod;`
+    All,
+    /// `import Mod::fun1;`
+    Single(Symbol),
+    /// `import Mod::{fun1, fun2};`
+    List(Vec<Symbol>),
+}
+
 // ── AST ──
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,6 +170,9 @@ pub enum Ast {
 
     /// Variable reference: `x`, `print`
     Var(Span, Symbol),
+
+    /// Qualified path reference: `Kernel::add`
+    Path(Span, AstPath),
 
     /// Function application: `print("hello")`, `to_string(42)`, `add(y: 2, x: 1)`
     App(Span, Box<Ast>, Vec<RecordLitArg>),
@@ -147,8 +189,14 @@ pub enum Ast {
     /// Binary operation: `a + b`, `x == y`
     BinOp(Span, BinOp, Box<Ast>, Box<Ast>),
 
-    /// List literal: `[1, 2, 3]`, `[]`
-    List(Span, Vec<Ast>),
+    /// Empty list literal: `[]`
+    ListNil(Span),
+
+    /// Cons-style list construction: `[head, ..tail]`
+    ListCons(Span, Box<Ast>, Box<Ast>),
+
+    /// Fixed list literal: `[1, 2, 3]`
+    ListLiteral(Span, Vec<Ast>),
 
     /// Interpolated string: `"hi #{name}"`
     InterpolatedStr(Span, Vec<InterpolatedPart>),
@@ -177,8 +225,14 @@ pub enum Ast {
     /// Function definition: `def add(x: Int, y: Int) -> Int { x + y }`
     Def(Span, Symbol, Vec<FunParam>, Option<AstTy>, Box<Ast>),
 
-    /// Builtin declaration: `@builtin def print(a: String) -> Unit`
+    /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>),
+
+    /// Module declaration: `defmod Kernel { ... }`
+    Defmod(Span, Symbol, Vec<Ast>),
+
+    /// Import declaration
+    Import(Span, AstPath, ImportSpec),
 
     /// Closure literal: `{|x, y| expr}` / `{|| expr}`
     Closure(Span, Vec<ClosureParam>, Box<Ast>),
@@ -188,4 +242,49 @@ pub enum Ast {
 
     /// Semicolon — explicit Unit coercion marker (wraps the discarded expr)
     Semi(Span, Box<Ast>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Ast, AstPath, ImportSpec, Lit, Span};
+    use sindr::primitives::int;
+
+    #[test]
+    fn import_forms_are_distinct_in_ast() {
+        let span = Span { start: 0, end: 12 };
+        let mod_path = AstPath {
+            span: span.clone(),
+            segments: vec!["Kernel".to_string()],
+        };
+        let all = Ast::Import(span.clone(), mod_path.clone(), ImportSpec::All);
+        let single = Ast::Import(
+            span.clone(),
+            mod_path.clone(),
+            ImportSpec::Single("add".to_string()),
+        );
+        let list = Ast::Import(
+            span.clone(),
+            mod_path,
+            ImportSpec::List(vec!["add".to_string(), "sub".to_string()]),
+        );
+
+        assert!(matches!(all, Ast::Import(_, _, ImportSpec::All)));
+        assert!(matches!(single, Ast::Import(_, _, ImportSpec::Single(_))));
+        assert!(matches!(list, Ast::Import(_, _, ImportSpec::List(_))));
+    }
+
+    #[test]
+    fn defmod_keeps_body_nodes() {
+        let span = Span { start: 0, end: 20 };
+        let body = vec![Ast::Lit(span.clone(), Lit::Int(int(1)))];
+        let node = Ast::Defmod(span, "Kernel".to_string(), body.clone());
+
+        match node {
+            Ast::Defmod(_, name, inner) => {
+                assert_eq!(name, "Kernel");
+                assert_eq!(inner, body);
+            }
+            _ => panic!("expected defmod"),
+        }
+    }
 }
