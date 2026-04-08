@@ -1286,145 +1286,14 @@ impl Resolver {
 
     fn resolve_match_arm(
         &mut self,
-        pat: spire::ast::AstMatchPattern,
+        pat: AstPattern,
         body: Ast,
-    ) -> Result<(ResolvedMatchPattern, Resolved), ResolveError> {
-        self.with_child_scope(|child| match pat {
-            spire::ast::AstMatchPattern::Binding(span, name) => {
-                let uid = child.scope.define(&name, span.clone());
-                let resolved_body = child.resolve_node(body)?;
-                Ok((
-                    ResolvedMatchPattern::Binding(ResolvedId {
-                        name,
-                        qualified_name: None,
-                        unique_id: uid,
-                        span,
-                    }),
-                    resolved_body,
-                ))
-            }
-            spire::ast::AstMatchPattern::Wildcard(span) => {
-                let resolved_body = child.resolve_node(body)?;
-                Ok((ResolvedMatchPattern::Wildcard(span), resolved_body))
-            }
-            spire::ast::AstMatchPattern::BoolLit(span, b) => {
-                let resolved_body = child.resolve_node(body)?;
-                Ok((ResolvedMatchPattern::BoolLit(span, b), resolved_body))
-            }
-            spire::ast::AstMatchPattern::IntLit(span, n) => {
-                let resolved_body = child.resolve_node(body)?;
-                Ok((ResolvedMatchPattern::IntLit(span, n), resolved_body))
-            }
-            spire::ast::AstMatchPattern::StrLit(span, s) => {
-                let resolved_body = child.resolve_node(body)?;
-                Ok((ResolvedMatchPattern::StrLit(span, s), resolved_body))
-            }
-            spire::ast::AstMatchPattern::Constructor(span, ctor_name, inner_name) => {
-                let ctor_uid = child.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
-                    message: format!("Undefined constructor: {}", ctor_name),
-                    span: span.clone(),
-                })?;
-                let ctor_id = ResolvedId {
-                    name: ctor_name,
-                    qualified_name: None,
-                    unique_id: ctor_uid,
-                    span: span.clone(),
-                };
-                let inner_id = match inner_name {
-                    Some(name) => {
-                        let uid = child.scope.define(&name, span.clone());
-                        Some(ResolvedId {
-                            name,
-                            qualified_name: None,
-                            unique_id: uid,
-                            span: span.clone(),
-                        })
-                    }
-                    None => None,
-                };
-                let resolved_body = child.resolve_node(body)?;
-                Ok((
-                    ResolvedMatchPattern::Constructor(span, ctor_id, inner_id),
-                    resolved_body,
-                ))
-            }
-            spire::ast::AstMatchPattern::ListNil(span) => {
-                let resolved_body = child.resolve_node(body)?;
-                Ok((ResolvedMatchPattern::ListNil(span), resolved_body))
-            }
-            spire::ast::AstMatchPattern::ListCons(_, head, tail) => {
-                let head = child.resolve_match_pattern_node(*head)?;
-                let tail = child.resolve_match_pattern_node(*tail)?;
-                let resolved_body = child.resolve_node(body)?;
-                Ok((
-                    ResolvedMatchPattern::ListCons(Box::new(head), Box::new(tail)),
-                    resolved_body,
-                ))
-            }
+    ) -> Result<(ResolvedPattern, Resolved), ResolveError> {
+        self.with_child_scope(|child| {
+            let resolved_pat = child.resolve_pattern(pat)?;
+            let resolved_body = child.resolve_node(body)?;
+            Ok((resolved_pat, resolved_body))
         })
-    }
-
-    fn resolve_match_pattern_node(
-        &mut self,
-        pat: spire::ast::AstMatchPattern,
-    ) -> Result<ResolvedMatchPattern, ResolveError> {
-        match pat {
-            spire::ast::AstMatchPattern::Binding(span, name) => {
-                let uid = self.scope.define(&name, span.clone());
-                Ok(ResolvedMatchPattern::Binding(ResolvedId {
-                    name,
-                    qualified_name: None,
-                    unique_id: uid,
-                    span,
-                }))
-            }
-            spire::ast::AstMatchPattern::Wildcard(span) => Ok(ResolvedMatchPattern::Wildcard(span)),
-            spire::ast::AstMatchPattern::BoolLit(span, b) => {
-                Ok(ResolvedMatchPattern::BoolLit(span, b))
-            }
-            spire::ast::AstMatchPattern::IntLit(span, n) => {
-                Ok(ResolvedMatchPattern::IntLit(span, n))
-            }
-            spire::ast::AstMatchPattern::StrLit(span, s) => {
-                Ok(ResolvedMatchPattern::StrLit(span, s))
-            }
-            spire::ast::AstMatchPattern::Constructor(span, ctor_name, inner_name) => {
-                let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
-                    message: format!("Undefined constructor: {}", ctor_name),
-                    span: span.clone(),
-                })?;
-                let ctor_id = ResolvedId {
-                    name: ctor_name,
-                    qualified_name: None,
-                    unique_id: ctor_uid,
-                    span: span.clone(),
-                };
-                let inner_id = match inner_name {
-                    Some(name) => {
-                        let uid = self.scope.define(&name, span.clone());
-                        Some(ResolvedId {
-                            name,
-                            qualified_name: None,
-                            unique_id: uid,
-                            span,
-                        })
-                    }
-                    None => None,
-                };
-                Ok(ResolvedMatchPattern::Constructor(
-                    ctor_id.span.clone(),
-                    ctor_id,
-                    inner_id,
-                ))
-            }
-            spire::ast::AstMatchPattern::ListNil(span) => Ok(ResolvedMatchPattern::ListNil(span)),
-            spire::ast::AstMatchPattern::ListCons(_, head, tail) => {
-                Ok(ResolvedMatchPattern::ListCons(
-                    Box::new(self.resolve_match_pattern_node(*head)?),
-                    Box::new(self.resolve_match_pattern_node(*tail)?),
-                ))
-            }
-        }
     }
 }
 
@@ -1534,7 +1403,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(scrutinee, bound, free);
             for (pat, body) in arms {
                 let mut arm_bound = bound.clone();
-                collect_match_pattern_bindings(pat, &mut arm_bound);
+                collect_bind_pattern_bindings(pat, &mut arm_bound);
                 collect_captures_inner(body, &mut arm_bound, free);
             }
         }
@@ -1587,22 +1456,6 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
     }
 }
 
-fn collect_match_pattern_bindings(pat: &ResolvedMatchPattern, bound: &mut HashSet<u32>) {
-    match pat {
-        ResolvedMatchPattern::Binding(id) => {
-            bound.insert(id.unique_id);
-        }
-        ResolvedMatchPattern::Constructor(_, _, Some(inner)) => {
-            bound.insert(inner.unique_id);
-        }
-        ResolvedMatchPattern::ListCons(head, tail) => {
-            collect_match_pattern_bindings(head, bound);
-            collect_match_pattern_bindings(tail, bound);
-        }
-        _ => {}
-    }
-}
-
 fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>) {
     match pat {
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
@@ -1630,6 +1483,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spire::ast::AstTy;
     use sindr::primitives::int;
 
     fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
@@ -2115,11 +1969,9 @@ x = match s {
         match &resolved[1] {
             Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
                 Resolved::Match(_, _, arms) => {
-                    assert!(matches!(&arms[0].0, ResolvedMatchPattern::StrLit(_, s) if s == "a"));
-                    assert!(
-                        matches!(&arms[1].0, ResolvedMatchPattern::IntLit(_, n) if n == &int(2))
-                    );
-                    assert!(matches!(&arms[2].0, ResolvedMatchPattern::Wildcard(_)));
+                    assert!(matches!(&arms[0].0, ResolvedPattern::StrLit(_, s) if s == "a"));
+                    assert!(matches!(&arms[1].0, ResolvedPattern::IntLit(_, n) if n == &int(2)));
+                    assert!(matches!(&arms[2].0, ResolvedPattern::Wildcard(_)));
                 }
                 _ => panic!("Expected Match"),
             },
@@ -2780,8 +2632,12 @@ result = match value {
             Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
                 Resolved::Match(_, _, arms) => {
                     match &arms[0] {
-                        (ResolvedMatchPattern::Constructor(_, ctor_id, Some(binding_id)), body) => {
+                        (ResolvedPattern::Constructor(ctor_id, inner), body) => {
                             assert_eq!(ctor_id.name, "Ok");
+                            let binding_id = match inner.as_ref() {
+                                ResolvedPattern::Var(binding_id) => binding_id,
+                                _ => panic!("Expected constructor inner var binding"),
+                            };
                             assert_eq!(binding_id.name, "x");
                             // The arm body `x` must refer to the same uid as the pattern binding
                             match body {
@@ -2797,6 +2653,67 @@ result = match value {
                         _ => panic!("Expected Constructor arm pattern with binding"),
                     }
                 }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_match_first_binding_pattern_binds_and_is_visible_in_body() {
+        let resolved = parse_and_resolve(
+            r#"result = match 42 {
+  fallback => fallback,
+  _ => 0,
+}"#,
+        )
+        .unwrap();
+
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Match(_, _, arms) => match &arms[0] {
+                    (ResolvedPattern::Var(binding_id), Resolved::Var(_, body_id)) => {
+                        assert_eq!(binding_id.name, "fallback");
+                        assert_eq!(binding_id.unique_id, body_id.unique_id);
+                    }
+                    _ => panic!("Expected first arm to be a binding pattern"),
+                },
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_match_as_pattern_and_annotation_resolve_end_to_end() {
+        let resolved = parse_and_resolve(
+            r#"value = [1, 2]
+result = match value {
+  [head, ..tail] @ whole: List<Int> => head,
+  _ => 0,
+}"#,
+        )
+        .unwrap();
+
+        match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Match(_, _, arms) => match &arms[0] {
+                    (
+                        ResolvedPattern::As(
+                            inner,
+                            alias,
+                            Some(AstTy::Generic(_, ty_name, ty_args)),
+                        ),
+                        body,
+                    ) => {
+                        assert_eq!(alias.name, "whole");
+                        assert_eq!(ty_name, "List");
+                        assert_eq!(ty_args.len(), 1);
+                        assert!(matches!(inner.as_ref(), ResolvedPattern::ListCons(_, _)));
+                        assert!(matches!(body, Resolved::Var(_, id) if id.name == "head"));
+                    }
+                    _ => panic!("Expected as-pattern with generic annotation"),
+                },
                 _ => panic!("Expected Match"),
             },
             _ => panic!("Expected Bind"),

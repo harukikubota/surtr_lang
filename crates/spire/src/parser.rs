@@ -2058,197 +2058,9 @@ impl Parser {
         ))
     }
 
-    /// Match pattern: `_`, literals, `Ok(var)`, `Err(var)`
-    fn parse_match_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
-        let sp = self.peek_span();
-        match self.peek().clone() {
-            Token::LBrack => self.parse_match_list_pattern(),
-            Token::Ident(name) if name == "_" => {
-                self.advance();
-                Ok(AstMatchPattern::Wildcard(sp))
-            }
-            Token::True => {
-                self.advance();
-                Ok(AstMatchPattern::BoolLit(sp, true))
-            }
-            Token::False => {
-                self.advance();
-                Ok(AstMatchPattern::BoolLit(sp, false))
-            }
-            Token::Int(n) => {
-                self.advance();
-                Ok(AstMatchPattern::IntLit(sp, n))
-            }
-            Token::Minus => {
-                self.advance();
-                match self.peek().clone() {
-                    Token::Int(n) => {
-                        let int_span = self.peek_span();
-                        self.advance();
-                        Ok(AstMatchPattern::IntLit(
-                            Span {
-                                start: sp.start,
-                                end: int_span.end,
-                            },
-                            -n,
-                        ))
-                    }
-                    _ => Err(ParseError::syntax(
-                        "Expected integer after '-' in match pattern",
-                        sp,
-                    )),
-                }
-            }
-            Token::Str(s) => {
-                self.advance();
-                Ok(AstMatchPattern::StrLit(sp, s))
-            }
-            Token::Ident(name) => {
-                self.advance();
-                if name == "Ok" || name == "Err" {
-                    self.expect(&Token::LParen)?;
-                    let (inner_name, _) = self.expect_ident()?;
-                    let end = self.expect(&Token::RParen)?;
-                    Ok(AstMatchPattern::Constructor(
-                        Span {
-                            start: sp.start,
-                            end: end.end,
-                        },
-                        name,
-                        Some(inner_name),
-                    ))
-                } else {
-                    Err(ParseError::syntax(
-                        "Phase 1 match patterns only support `_`, booleans, integer/string literals, and `Ok(name)` / `Err(name)`; remove this test when CamelCase patterns are implemented",
-                        sp,
-                    ))
-                }
-            }
-            Token::Eof => Err(ParseError::incomplete("match pattern", sp)),
-            _ => Err(ParseError::syntax(
-                format!("Expected match pattern, got {:?}", self.peek()),
-                sp,
-            )),
-        }
-    }
-
-    fn parse_match_list_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
-        let sp = self.peek_span();
-        self.expect(&Token::LBrack)?;
-        self.skip_newlines();
-        if matches!(self.peek(), Token::RBrack) {
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(AstMatchPattern::ListNil(Span {
-                start: sp.start,
-                end: end.end,
-            }));
-        }
-
-        let first = self.parse_match_list_item_pattern()?;
-        self.skip_newlines();
-        let end = if matches!(self.peek(), Token::Comma) {
-            self.advance();
-            self.skip_newlines();
-            if matches!(self.peek(), Token::DotDot) {
-                self.advance();
-                self.skip_newlines();
-                let tail = self.parse_match_list_item_pattern()?;
-                self.skip_newlines();
-                let end = self.expect(&Token::RBrack)?;
-                return Ok(AstMatchPattern::ListCons(
-                    Span {
-                        start: sp.start,
-                        end: end.end,
-                    },
-                    Box::new(first),
-                    Box::new(tail),
-                ));
-            }
-
-            let mut items = vec![first];
-            items.push(self.parse_match_list_item_pattern()?);
-            while matches!(self.peek(), Token::Comma) {
-                self.advance();
-                self.skip_newlines();
-                if matches!(self.peek(), Token::RBrack) {
-                    break;
-                }
-                items.push(self.parse_match_list_item_pattern()?);
-            }
-            self.skip_newlines();
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(fixed_match_list_pattern(sp.start, end.end, items));
-        } else {
-            self.expect(&Token::RBrack)?
-        };
-
-        Ok(fixed_match_list_pattern(sp.start, end.end, vec![first]))
-    }
-
-    fn parse_match_list_item_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
-        let sp = self.peek_span();
-        match self.peek().clone() {
-            Token::Ident(name) if name == "_" => {
-                self.advance();
-                Ok(AstMatchPattern::Wildcard(sp))
-            }
-            Token::Ident(name) => {
-                self.advance();
-                if name == "Ok" || name == "Err" {
-                    self.expect(&Token::LParen)?;
-                    let (inner_name, _) = self.expect_ident()?;
-                    let end = self.expect(&Token::RParen)?;
-                    Ok(AstMatchPattern::Constructor(
-                        Span {
-                            start: sp.start,
-                            end: end.end,
-                        },
-                        name,
-                        Some(inner_name),
-                    ))
-                } else {
-                    Ok(AstMatchPattern::Binding(sp, name))
-                }
-            }
-            Token::LBrack => self.parse_match_list_pattern(),
-            Token::True => {
-                self.advance();
-                Ok(AstMatchPattern::BoolLit(sp, true))
-            }
-            Token::False => {
-                self.advance();
-                Ok(AstMatchPattern::BoolLit(sp, false))
-            }
-            Token::Int(n) => {
-                self.advance();
-                Ok(AstMatchPattern::IntLit(sp, n))
-            }
-            Token::Minus => {
-                self.advance();
-                match self.peek().clone() {
-                    Token::Int(n) => {
-                        let int_span = self.peek_span();
-                        self.advance();
-                        Ok(AstMatchPattern::IntLit(
-                            Span {
-                                start: sp.start,
-                                end: int_span.end,
-                            },
-                            -n,
-                        ))
-                    }
-                    _ => Err(ParseError::syntax(
-                        "Expected integer after '-' in list pattern item",
-                        sp,
-                    )),
-                }
-            }
-            Token::Str(s) => {
-                self.advance();
-                Ok(AstMatchPattern::StrLit(sp, s))
-            }
-            _ => Err(ParseError::syntax("Invalid list pattern item", sp)),
-        }
+    /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
+    fn parse_match_pattern(&mut self) -> Result<AstPattern, ParseError> {
+        self.parse_bind_pattern()
     }
 
     fn parse_string_or_interpolated(&mut self, span: Span, raw: String) -> Result<Ast, ParseError> {
@@ -2284,11 +2096,7 @@ impl Parser {
                 && chars[i + 1] == '{'
                 && (i == 0 || chars[i - 1] != '\\');
             if !is_interp_start {
-                if ch == '\\'
-                    && i + 2 < chars.len()
-                    && chars[i + 1] == '#'
-                    && chars[i + 2] == '{'
-                {
+                if ch == '\\' && i + 2 < chars.len() && chars[i + 1] == '#' && chars[i + 2] == '{' {
                     text.push('#');
                     has_escaped_interpolation = true;
                     i += 2;
@@ -2445,27 +2253,15 @@ fn fixed_bind_list_pattern(start: usize, end: usize, items: Vec<AstPattern>) -> 
         })
 }
 
-fn fixed_match_list_pattern(
-    start: usize,
-    end: usize,
-    items: Vec<AstMatchPattern>,
-) -> AstMatchPattern {
-    let span = Span { start, end };
-    items
-        .into_iter()
-        .rev()
-        .fold(AstMatchPattern::ListNil(span.clone()), |tail, head| {
-            AstMatchPattern::ListCons(span.clone(), Box::new(head), Box::new(tail))
-        })
-}
-
 fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
     match ty {
         AstTy::Named(span, name) => AstTy::Named(shift_span(span, delta), name),
         AstTy::Generic(span, name, args) => AstTy::Generic(
             shift_span(span, delta),
             name,
-            args.into_iter().map(|arg| shift_ast_ty(arg, delta)).collect(),
+            args.into_iter()
+                .map(|arg| shift_ast_ty(arg, delta))
+                .collect(),
         ),
         AstTy::Func(span, params, ret) => AstTy::Func(
             shift_span(span, delta),
@@ -2513,25 +2309,8 @@ fn shift_fun_param(param: FunParam, delta: usize) -> FunParam {
     }
 }
 
-fn shift_match_pattern(pat: AstMatchPattern, delta: usize) -> AstMatchPattern {
-    match pat {
-        AstMatchPattern::Binding(span, name) => {
-            AstMatchPattern::Binding(shift_span(span, delta), name)
-        }
-        AstMatchPattern::Wildcard(span) => AstMatchPattern::Wildcard(shift_span(span, delta)),
-        AstMatchPattern::BoolLit(span, b) => AstMatchPattern::BoolLit(shift_span(span, delta), b),
-        AstMatchPattern::IntLit(span, n) => AstMatchPattern::IntLit(shift_span(span, delta), n),
-        AstMatchPattern::StrLit(span, s) => AstMatchPattern::StrLit(shift_span(span, delta), s),
-        AstMatchPattern::Constructor(span, ctor, inner) => {
-            AstMatchPattern::Constructor(shift_span(span, delta), ctor, inner)
-        }
-        AstMatchPattern::ListNil(span) => AstMatchPattern::ListNil(shift_span(span, delta)),
-        AstMatchPattern::ListCons(span, head, tail) => AstMatchPattern::ListCons(
-            shift_span(span, delta),
-            Box::new(shift_match_pattern(*head, delta)),
-            Box::new(shift_match_pattern(*tail, delta)),
-        ),
-    }
+fn shift_match_pattern(pat: AstPattern, delta: usize) -> AstPattern {
+    shift_pattern(pat, delta)
 }
 
 fn shift_record_lit_arg(arg: RecordLitArg, delta: usize) -> RecordLitArg {
@@ -3424,8 +3203,8 @@ def noop() {()}"#,
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Match(_, _, arms) => {
-                    assert!(matches!(&arms[0].0, AstMatchPattern::IntLit(_, n) if n == &int(1)));
-                    assert!(matches!(&arms[1].0, AstMatchPattern::Wildcard(_)));
+                    assert!(matches!(&arms[0].0, AstPattern::IntLit(_, n) if n == &int(1)));
+                    assert!(matches!(&arms[1].0, AstPattern::Wildcard(_)));
                 }
                 _ => panic!("Expected Match"),
             },
@@ -3445,7 +3224,7 @@ def noop() {()}"#,
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Match(_, _, arms) => {
-                    assert!(matches!(&arms[0].0, AstMatchPattern::StrLit(_, s) if s == "a"));
+                    assert!(matches!(&arms[0].0, AstPattern::StrLit(_, s) if s == "a"));
                 }
                 _ => panic!("Expected Match"),
             },
@@ -3467,9 +3246,9 @@ def noop() {()}"#,
                 Ast::Match(_, _, arms) => {
                     assert!(matches!(
                         &arms[0].0,
-                        AstMatchPattern::ListCons(_, head, tail)
-                            if matches!(head.as_ref(), AstMatchPattern::IntLit(_, n) if n == &int(-1))
-                                && matches!(tail.as_ref(), AstMatchPattern::ListNil(_))
+                        AstPattern::ListCons(_, head, tail)
+                            if matches!(head.as_ref(), AstPattern::IntLit(_, n) if n == &int(-1))
+                                && matches!(tail.as_ref(), AstPattern::ListNil(_))
                     ));
                 }
                 _ => panic!("Expected Match"),
@@ -3487,33 +3266,79 @@ def noop() {()}"#,
     }
 
     #[test]
-    fn test_match_camel_case_pattern_is_rejected_for_now() {
-        // Remove this test when CamelCase match patterns are intentionally implemented.
-        let err = parse(
+    fn test_match_constructor_pattern_is_accepted() {
+        let ast = parse(
             r#"x = match value {
   Some(y) => y,
   _ => 0,
 }"#,
         )
-        .expect_err("Expected parse error");
-        assert!(err
-            .message()
-            .contains("remove this test when CamelCase patterns are implemented"));
+        .expect("constructor pattern should parse");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Match(_, _, arms) => {
+                    assert!(matches!(
+                        &arms[0].0,
+                        AstPattern::Constructor(_, name, inner)
+                            if name == "Some"
+                                && matches!(inner.as_ref(), AstPattern::Var(_, bound) if bound == "y")
+                    ));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
+        }
     }
 
     #[test]
-    fn test_match_bare_constructor_pattern_is_rejected_for_now() {
-        // Remove this test when CamelCase match patterns are intentionally implemented.
-        let err = parse(
+    fn test_match_bare_uppercase_identifier_is_binding_pattern() {
+        let ast = parse(
             r#"x = match value {
   ParseError => 0,
   _ => 1,
 }"#,
         )
-        .expect_err("Expected parse error");
-        assert!(err
-            .message()
-            .contains("remove this test when CamelCase patterns are implemented"));
+        .expect("bare uppercase identifier should parse as a binding pattern");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Match(_, _, arms) => {
+                    assert!(matches!(
+                        &arms[0].0,
+                        AstPattern::Var(_, name) if name == "ParseError"
+                    ));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
+        }
+    }
+
+    #[test]
+    fn test_match_as_and_annotated_pattern_is_accepted() {
+        let ast = parse(
+            r#"x = match value {
+  [head, ..tail] @ whole: List<Int> => head,
+  _ => 0,
+}"#,
+        )
+        .expect("as-pattern and annotation in match should parse");
+
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Match(_, _, arms) => {
+                    assert!(matches!(
+                        &arms[0].0,
+                        AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, ty_name, ty_args)))
+                            if alias == "whole"
+                                && ty_name == "List"
+                                && ty_args.len() == 1
+                                && matches!(inner.as_ref(), AstPattern::ListCons(_, _, _))
+                    ));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
+        }
     }
 
     #[test]

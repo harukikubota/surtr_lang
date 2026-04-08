@@ -75,28 +75,6 @@ pub enum AstPattern {
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
 }
 
-// ── Match patterns ──
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AstMatchPattern {
-    /// `x` inside pattern substructure
-    Binding(Span, Symbol),
-    /// `_`
-    Wildcard(Span),
-    /// `True` / `False`
-    BoolLit(Span, bool),
-    /// Integer literal
-    IntLit(Span, SurtrInt),
-    /// String literal
-    StrLit(Span, String),
-    /// `Ok(val)` / `Err(e)` — constructor with optional inner binding
-    Constructor(Span, Symbol, Option<Symbol>),
-    /// `[]`
-    ListNil(Span),
-    /// `[head, ..tail]`
-    ListCons(Span, Box<AstMatchPattern>, Box<AstMatchPattern>),
-}
-
 // ── Struct / Record fields ──
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,7 +180,7 @@ pub enum Ast {
     InterpolatedStr(Span, Vec<InterpolatedPart>),
 
     /// Match expression
-    Match(Span, Box<Ast>, Vec<(AstMatchPattern, Ast)>),
+    Match(Span, Box<Ast>, Vec<(AstPattern, Ast)>),
 
     /// Field access: `user.name`
     FieldAccess(Span, Box<Ast>, Symbol),

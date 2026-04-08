@@ -50,7 +50,7 @@ pub enum Resolved {
     If(Span, Box<Resolved>, Box<Resolved>, Option<Box<Resolved>>),
 
     /// Match expression
-    Match(Span, Box<Resolved>, Vec<(ResolvedMatchPattern, Resolved)>),
+    Match(Span, Box<Resolved>, Vec<(ResolvedPattern, Resolved)>),
 
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
@@ -117,26 +117,6 @@ pub enum ResolvedPattern {
     BoolLit(Span, bool),
     Constructor(ResolvedId, Box<ResolvedPattern>),
     As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
-}
-
-/// Match pattern (resolved).
-#[derive(Debug, Clone, PartialEq)]
-pub enum ResolvedMatchPattern {
-    Binding(ResolvedId),
-    /// `_`
-    Wildcard(Span),
-    /// `True` / `False`
-    BoolLit(Span, bool),
-    /// Integer literal
-    IntLit(Span, SurtrInt),
-    /// String literal
-    StrLit(Span, String),
-    /// `Ok(var)` / `Err(var)` — constructor tag resolved
-    Constructor(Span, ResolvedId, Option<ResolvedId>),
-    /// `[]`
-    ListNil(Span),
-    /// `[head, ..tail]`
-    ListCons(Box<ResolvedMatchPattern>, Box<ResolvedMatchPattern>),
 }
 
 /// Record literal argument (resolved).
