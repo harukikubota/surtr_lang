@@ -188,7 +188,7 @@ print(to_string(user.age))"#,
         assert!(bytecode
             .opcodes
             .iter()
-            .any(|op| matches!(op, Opcode::GetField(1))));
+            .any(|op| matches!(op, Opcode::GetField { field_index: 1 })));
     }
 
     #[test]

@@ -19,6 +19,7 @@ pub struct BuiltinTypeMeta {
     pub params: &'static [&'static str],
 }
 
+/// Builtin unique ids start after the first two scope-reserved ids.
 pub const BUILTIN_UID_BASE: u32 = 2;
 
 pub const BUILTIN_METAS: &[BuiltinMeta] = &[
@@ -138,7 +139,7 @@ pub fn builtin_uid(builtin_id: u16) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{builtin_uid, BUILTIN_METAS};
+    use super::{builtin_meta_by_id, builtin_meta_by_name, builtin_uid, BUILTIN_METAS};
 
     #[test]
     fn builtin_ids_match_definition_order() {
@@ -146,5 +147,11 @@ mod tests {
             assert_eq!(meta.builtin_id as usize, idx);
             assert_eq!(builtin_uid(meta.builtin_id), 2 + idx as u32);
         }
+    }
+
+    #[test]
+    fn builtin_lookup_returns_none_for_unknown_values() {
+        assert!(builtin_meta_by_id(u16::MAX).is_none());
+        assert!(builtin_meta_by_name("__missing__").is_none());
     }
 }

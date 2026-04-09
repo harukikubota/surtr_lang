@@ -251,7 +251,7 @@ fn localize_chunk_indices(
                 }
                 *idx = (idx_usize - const_base) as u32;
             }
-            Opcode::MakeError(template_id) => {
+            Opcode::MakeError { template_id } => {
                 let id_usize = *template_id as usize;
                 if id_usize < error_template_base {
                     return Err(CodegenError {
@@ -814,7 +814,7 @@ impl Codegen {
         self.in_function = true;
         self.emit_node(body)?;
         self.in_function = prev_in_function;
-        self.emit(Opcode::MakeError(template_id));
+        self.emit(Opcode::MakeError { template_id });
         self.emit(Opcode::Return);
 
         let num_locals = self.state.next_slot;
@@ -905,7 +905,9 @@ impl Codegen {
                 for elem in elems {
                     self.emit_node(elem)?;
                 }
-                self.emit(Opcode::ListFromItems(elems.len() as u32));
+                self.emit(Opcode::ListFromItems {
+                    len: elems.len() as u32,
+                });
             }
 
             TypedInner::InterpolatedStr(parts) => {
@@ -922,7 +924,7 @@ impl Codegen {
 
             TypedInner::FieldAccess(expr, idx) => {
                 self.emit_node(expr)?;
-                self.emit(Opcode::GetField(*idx));
+                self.emit(Opcode::GetField { field_index: *idx });
             }
 
             TypedInner::StructLit(tag, fields) => {
@@ -933,7 +935,9 @@ impl Codegen {
                     self.emit_node(field)?;
                 }
                 // StructNew expects tag + n fields on stack
-                self.emit(Opcode::StructNew(fields.len() as u32));
+                self.emit(Opcode::StructNew {
+                    field_count: fields.len() as u32,
+                });
             }
 
             TypedInner::ConstructorCall(tag, fields) => {
@@ -942,7 +946,9 @@ impl Codegen {
                 for field in fields {
                     self.emit_node(field)?;
                 }
-                self.emit(Opcode::StructNew(fields.len() as u32));
+                self.emit(Opcode::StructNew {
+                    field_count: fields.len() as u32,
+                });
             }
 
             TypedInner::Block(stmts) => {
@@ -1053,7 +1059,7 @@ impl Codegen {
         self.patch_label(ok_path);
 
         self.emit(Opcode::LoadLocal(result_slot));
-        self.emit(Opcode::GetField(0));
+        self.emit(Opcode::GetField { field_index: 0 });
         let payload_slot = self.state.next_slot;
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(payload_slot));
@@ -1250,12 +1256,12 @@ impl Codegen {
             message: "Unknown builtin: to_string".into(),
             span: span.clone(),
         })?;
-        self.emit(Opcode::CallBuiltin(
-            to_string_id,
-            1,
-            span.start as u32,
-            span.end as u32,
-        ));
+        self.emit(Opcode::CallBuiltin {
+            builtin_id: to_string_id,
+            arity: 1,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+        });
         self.emit(Opcode::ConcatStr);
         let suffix_idx = self.add_constant(Constant::Str(")".into()));
         self.emit(Opcode::LoadConst(suffix_idx));
@@ -1278,13 +1284,13 @@ impl Codegen {
             let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Return);
         } else if self.top_level_returns_result {
             let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Halt);
         } else {
             self.emit_error_value(kind, message, &span);
@@ -1292,12 +1298,12 @@ impl Codegen {
                 message: "Unknown builtin: eprint".into(),
                 span: span.clone(),
             })?;
-            self.emit(Opcode::CallBuiltin(
-                eprint_id,
-                1,
-                span.start as u32,
-                span.end as u32,
-            ));
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: eprint_id,
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
             self.emit(Opcode::Halt);
         }
         Ok(())
@@ -1317,7 +1323,7 @@ impl Codegen {
             self.emit(Opcode::LoadConst(tag_const));
             self.emit(Opcode::LoadLocal(msg_slot));
             self.emit_error_value_from_stack(kind, &span);
-            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Return);
         } else if self.top_level_returns_result {
             let msg_slot = self.state.next_slot;
@@ -1328,7 +1334,7 @@ impl Codegen {
             self.emit(Opcode::LoadConst(tag_const));
             self.emit(Opcode::LoadLocal(msg_slot));
             self.emit_error_value_from_stack(kind, &span);
-            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Halt);
         } else {
             self.emit_error_value_from_stack(kind, &span);
@@ -1336,12 +1342,12 @@ impl Codegen {
                 message: "Unknown builtin: eprint".into(),
                 span: span.clone(),
             })?;
-            self.emit(Opcode::CallBuiltin(
-                eprint_id,
-                1,
-                span.start as u32,
-                span.end as u32,
-            ));
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: eprint_id,
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
             self.emit(Opcode::Halt);
         }
         Ok(())
@@ -1351,13 +1357,23 @@ impl Codegen {
         if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
             match arity {
                 0 => {
-                    self.emit(Opcode::Call(fun_idx, 0, span.start as u32, span.end as u32));
+                    self.emit(Opcode::Call {
+                        fun_idx,
+                        arity: 0,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
                     return;
                 }
                 1 => {
                     let message_idx = self.add_constant(Constant::Str(message.into()));
                     self.emit(Opcode::LoadConst(message_idx));
-                    self.emit(Opcode::Call(fun_idx, 1, span.start as u32, span.end as u32));
+                    self.emit(Opcode::Call {
+                        fun_idx,
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
                     return;
                 }
                 _ => {
@@ -1368,19 +1384,32 @@ impl Codegen {
 
         let kind_idx = self.add_constant(Constant::Str(kind.into()));
         let message_idx = self.add_constant(Constant::Str(message.into()));
-        self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
+        self.emit(Opcode::MakeErrorLiteral {
+            kind_const_idx: kind_idx,
+            message_const_idx: message_idx,
+        });
     }
 
     fn emit_error_value_from_stack(&mut self, kind: &str, span: &Span) {
         if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
             match arity {
                 1 => {
-                    self.emit(Opcode::Call(fun_idx, 1, span.start as u32, span.end as u32));
+                    self.emit(Opcode::Call {
+                        fun_idx,
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
                     return;
                 }
                 0 => {
                     self.emit(Opcode::Pop);
-                    self.emit(Opcode::Call(fun_idx, 0, span.start as u32, span.end as u32));
+                    self.emit(Opcode::Call {
+                        fun_idx,
+                        arity: 0,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
                     return;
                 }
                 _ => {
@@ -1392,7 +1421,10 @@ impl Codegen {
         self.emit(Opcode::Pop);
         let kind_idx = self.add_constant(Constant::Str(kind.into()));
         let message_idx = self.add_constant(Constant::Str("Pattern did not match.".into()));
-        self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
+        self.emit(Opcode::MakeErrorLiteral {
+            kind_const_idx: kind_idx,
+            message_const_idx: message_idx,
+        });
     }
 
     fn collect_exact_list_pattern_items<'a>(
@@ -1578,7 +1610,7 @@ impl Codegen {
                 let inner_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::GetField { field_index: 0 });
                 self.emit(Opcode::StoreLocal(inner_slot));
                 self.emit_pattern_test_from_local_with_mode(
                     inner,
@@ -1633,7 +1665,7 @@ impl Codegen {
                 let inner_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::GetField { field_index: 0 });
                 self.emit(Opcode::StoreLocal(inner_slot));
                 self.emit_pattern_bind_from_local(inner, inner_slot)?;
             }
@@ -1652,17 +1684,17 @@ impl Codegen {
         } else if self.top_level_returns_result {
             self.emit(Opcode::Halt);
         } else {
-            self.emit(Opcode::GetField(0));
+            self.emit(Opcode::GetField { field_index: 0 });
             let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
                 message: "Unknown builtin: eprint".into(),
                 span: span.clone(),
             })?;
-            self.emit(Opcode::CallBuiltin(
-                eprint_id,
-                1,
-                span.start as u32,
-                span.end as u32,
-            ));
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: eprint_id,
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
             self.emit(Opcode::Halt);
         }
         Ok(())
@@ -1693,7 +1725,7 @@ impl Codegen {
         for ir in &mut self.ir {
             if let IrOp::Op(op) = ir {
                 match op {
-                    Opcode::LoadFunctionRef(fun_idx) | Opcode::Call(fun_idx, _, _, _) => {
+                    Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. } => {
                         if let Some(new_idx) = remap.get(fun_idx) {
                             *fun_idx = *new_idx;
                         }
@@ -1723,12 +1755,12 @@ impl Codegen {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::CallBuiltin(
+                self.emit(Opcode::CallBuiltin {
                     builtin_id,
-                    args.len() as u8,
-                    call_span.start as u32,
-                    call_span.end as u32,
-                ));
+                    arity: args.len() as u8,
+                    span_start: call_span.start as u32,
+                    span_end: call_span.end as u32,
+                });
             }
             Ty::UserFunc {
                 fun_idx, params, ..
@@ -1746,12 +1778,12 @@ impl Codegen {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::Call(
-                    *fun_idx,
-                    args.len() as u8,
-                    call_span.start as u32,
-                    call_span.end as u32,
-                ));
+                self.emit(Opcode::Call {
+                    fun_idx: *fun_idx,
+                    arity: args.len() as u8,
+                    span_start: call_span.start as u32,
+                    span_end: call_span.end as u32,
+                });
             }
             Ty::Func(params, _) => {
                 if args.len() != params.len() {
@@ -1768,11 +1800,11 @@ impl Codegen {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::CallClosure(
-                    args.len() as u8,
-                    call_span.start as u32,
-                    call_span.end as u32,
-                ));
+                self.emit(Opcode::CallClosure {
+                    arity: args.len() as u8,
+                    span_start: call_span.start as u32,
+                    span_end: call_span.end as u32,
+                });
             }
             _ => {
                 return Err(CodegenError {
@@ -1847,12 +1879,12 @@ impl Codegen {
                             message: "Unknown builtin: to_string".into(),
                             span: expr.span.clone(),
                         })?;
-                    self.emit(Opcode::CallBuiltin(
-                        to_string_id,
-                        1,
-                        expr.span.start as u32,
-                        expr.span.end as u32,
-                    ));
+                    self.emit(Opcode::CallBuiltin {
+                        builtin_id: to_string_id,
+                        arity: 1,
+                        span_start: expr.span.start as u32,
+                        span_end: expr.span.end as u32,
+                    });
                 }
             }
 
@@ -1952,7 +1984,7 @@ impl Codegen {
                 let inner_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::GetField { field_index: 0 });
                 self.emit(Opcode::StoreLocal(inner_slot));
                 self.emit_match_pattern_test(inner, inner_slot, fail_label)?;
             }
@@ -2010,7 +2042,7 @@ impl Codegen {
                 let inner_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::GetField { field_index: 0 });
                 self.emit(Opcode::StoreLocal(inner_slot));
                 self.emit_match_pattern_bind(inner, inner_slot)?;
             }

@@ -24,9 +24,18 @@ fn initialize_base_scope() -> Scope {
 fn initialize_scope() -> Scope {
     let mut scope = initialize_base_scope();
     for meta in BUILTIN_METAS {
-        scope.define_with_id(meta.name, builtin_uid(meta.builtin_id));
+        if is_global_runtime_builtin(meta.name) {
+            scope.define_with_id(meta.name, builtin_uid(meta.builtin_id));
+        }
     }
     scope
+}
+
+fn is_global_runtime_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "print" | "to_string" | "inspect" | "safe_div" | "safe_mod" | "eprint" | "set_exit_code"
+    )
 }
 
 fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
@@ -148,7 +157,7 @@ fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
 }
 
 fn build_global_scope(index: &DeclarationIndex, declaration_uids: &HashMap<String, u32>) -> Scope {
-    let mut scope = initialize_base_scope();
+    let mut scope = initialize_scope();
     for (fq_name, entry) in index {
         if entry.kind == DeclarationKind::BuiltinType {
             continue;

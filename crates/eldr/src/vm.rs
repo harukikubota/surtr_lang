@@ -492,7 +492,7 @@ impl VM {
                         )));
                     }
                 }
-                Opcode::MakeError(template_id) => {
+                Opcode::MakeError { template_id } => {
                     if *template_id as usize >= bytecode.error_templates.len() {
                         return Err(RuntimeError::new(format!(
                             "Unknown error template: {}",
@@ -578,7 +578,7 @@ impl VM {
                         )));
                     }
                 }
-                Opcode::MakeError(template_id) => {
+                Opcode::MakeError { template_id } => {
                     if *template_id as usize >= chunk.error_templates.len() {
                         return Err(RuntimeError::new(format!(
                             "Bytecode verifier: chunk error template out of bounds: {}",
@@ -761,7 +761,7 @@ impl VM {
                         ))
                     })?;
                 }
-                Opcode::MakeError(template_id) => {
+                Opcode::MakeError { template_id } => {
                     *template_id =
                         template_id
                             .checked_add(error_template_base)
@@ -913,9 +913,9 @@ impl VM {
             }
 
             // List
-            Opcode::ListNew(n) => {
-                let mut elems = Vec::with_capacity(n as usize);
-                for _ in 0..n {
+            Opcode::ListNew { len } => {
+                let mut elems = Vec::with_capacity(len as usize);
+                for _ in 0..len {
                     elems.push(self.pop_stack()?);
                 }
                 elems.reverse();
@@ -989,9 +989,9 @@ impl VM {
                     }
                 }
             }
-            Opcode::ListFromItems(n) => {
-                let mut elems = Vec::with_capacity(n as usize);
-                for _ in 0..n {
+            Opcode::ListFromItems { len } => {
+                let mut elems = Vec::with_capacity(len as usize);
+                for _ in 0..len {
                     elems.push(self.pop_stack()?);
                 }
                 elems.reverse();
@@ -999,9 +999,9 @@ impl VM {
             }
 
             // Struct / Tagged
-            Opcode::StructNew(num_fields) => {
-                let mut fields = Vec::with_capacity(num_fields as usize);
-                for _ in 0..num_fields {
+            Opcode::StructNew { field_count } => {
+                let mut fields = Vec::with_capacity(field_count as usize);
+                for _ in 0..field_count {
                     fields.push(self.pop_stack()?);
                 }
                 fields.reverse();
@@ -1017,12 +1017,12 @@ impl VM {
                 };
                 self.stack.push(Value::Tagged { tag, fields });
             }
-            Opcode::GetField(idx) => {
+            Opcode::GetField { field_index } => {
                 let val = self.pop_stack()?;
                 match val {
                     Value::Tagged { fields, .. } => {
-                        let field = fields.get(idx as usize).cloned().ok_or_else(|| {
-                            RuntimeError::new(format!("Field index {} out of bounds", idx))
+                        let field = fields.get(field_index as usize).cloned().ok_or_else(|| {
+                            RuntimeError::new(format!("Field index {} out of bounds", field_index))
                         })?;
                         self.stack.push(field);
                     }
@@ -1047,7 +1047,12 @@ impl VM {
             }
 
             // Built-in function call
-            Opcode::CallBuiltin(builtin_id, arity, span_start, span_end) => {
+            Opcode::CallBuiltin {
+                builtin_id,
+                arity,
+                span_start,
+                span_end,
+            } => {
                 let mut args = Vec::with_capacity(arity as usize);
                 for _ in 0..arity {
                     args.push(self.pop_stack()?);
@@ -1059,7 +1064,12 @@ impl VM {
                 self.stack.push(result);
             }
 
-            Opcode::Call(fun_idx, arity, span_start, span_end) => {
+            Opcode::Call {
+                fun_idx,
+                arity,
+                span_start,
+                span_end,
+            } => {
                 let entry = self.function_entry(fun_idx)?.clone();
                 if entry.arity != arity {
                     return Err(RuntimeError::new(format!(
@@ -1093,7 +1103,7 @@ impl VM {
                 *pc = entry.entry_pc as usize;
             }
 
-            Opcode::MakeError(template_id) => {
+            Opcode::MakeError { template_id } => {
                 let message = match self.pop_stack()? {
                     Value::Str(s) => s,
                     other => {
@@ -1138,8 +1148,11 @@ impl VM {
                     location,
                 })));
             }
-            Opcode::MakeErrorLiteral(kind_idx, message_idx) => {
-                let kind = match self.bytecode.constants.get(kind_idx as usize) {
+            Opcode::MakeErrorLiteral {
+                kind_const_idx,
+                message_const_idx,
+            } => {
+                let kind = match self.bytecode.constants.get(kind_const_idx as usize) {
                     Some(Constant::Str(s)) => s.clone(),
                     Some(other) => {
                         return Err(RuntimeError::new(format!(
@@ -1150,11 +1163,11 @@ impl VM {
                     None => {
                         return Err(RuntimeError::new(format!(
                             "MakeErrorLiteral kind index out of bounds: {}",
-                            kind_idx
+                            kind_const_idx
                         )))
                     }
                 };
-                let message = match self.bytecode.constants.get(message_idx as usize) {
+                let message = match self.bytecode.constants.get(message_const_idx as usize) {
                     Some(Constant::Str(s)) => s.clone(),
                     Some(other) => {
                         return Err(RuntimeError::new(format!(
@@ -1165,7 +1178,7 @@ impl VM {
                     None => {
                         return Err(RuntimeError::new(format!(
                             "MakeErrorLiteral message index out of bounds: {}",
-                            message_idx
+                            message_const_idx
                         )))
                     }
                 };
@@ -1232,7 +1245,11 @@ impl VM {
                 self.stack.push(Value::Callable(callable));
             }
 
-            Opcode::CallClosure(arity, span_start, span_end) => {
+            Opcode::CallClosure {
+                arity,
+                span_start,
+                span_end,
+            } => {
                 let mut args = Vec::with_capacity(arity as usize);
                 for _ in 0..arity {
                     args.push(self.pop_stack()?);
@@ -1550,7 +1567,15 @@ mod tests {
 
     #[test]
     fn unknown_function_index_is_runtime_error() {
-        let bytecode = base_bytecode(vec![Opcode::Call(1, 0, 0, 0), Opcode::Halt]);
+        let bytecode = base_bytecode(vec![
+            Opcode::Call {
+                fun_idx: 1,
+                arity: 0,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+        ]);
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("Unknown function index"));
     }
@@ -1559,7 +1584,12 @@ mod tests {
     fn call_initializes_locals_without_makeframe() {
         let mut bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),
-            Opcode::Call(0, 1, 0, 0),
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
             Opcode::Halt,
             Opcode::LoadLocal(0),
             Opcode::Return,
@@ -1587,7 +1617,15 @@ mod tests {
 
     #[test]
     fn function_table_mismatch_is_runtime_error() {
-        let mut bytecode = base_bytecode(vec![Opcode::Call(0, 0, 0, 0), Opcode::Halt]);
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 0,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+        ]);
         bytecode.functions = vec![FunctionEntry {
             fun_idx: 1,
             entry_pc: 1,
@@ -1665,7 +1703,11 @@ mod tests {
         let mut vm = VM::new(bytecode);
 
         let chunk = BytecodeChunk {
-            opcodes: vec![Opcode::LoadConst(0), Opcode::MakeError(0), Opcode::Halt],
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::MakeError { template_id: 0 },
+                Opcode::Halt,
+            ],
             source_map: None,
             const_base: 0,
             constants: vec![Constant::Str("new message".into())],
@@ -1705,7 +1747,11 @@ mod tests {
         vm.frames[0].call_site = Some((30, 36));
         let result = vm
             .push_atomic(BytecodeChunk {
-                opcodes: vec![Opcode::LoadConst(0), Opcode::MakeError(0), Opcode::Halt],
+                opcodes: vec![
+                    Opcode::LoadConst(0),
+                    Opcode::MakeError { template_id: 0 },
+                    Opcode::Halt,
+                ],
                 source_map: None,
                 const_base: 0,
                 constants: vec![Constant::Str("boom".into())],
@@ -1743,7 +1789,12 @@ mod tests {
         let bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),
             Opcode::LoadConst(1),
-            Opcode::CallBuiltin(4, 2, 0, span_end),
+            Opcode::CallBuiltin {
+                builtin_id: 4,
+                arity: 2,
+                span_start: 0,
+                span_end,
+            },
             Opcode::Halt,
         ]);
         let mut vm = VM::new(bytecode).with_source(source, "REPL".into());
@@ -1858,7 +1909,12 @@ mod tests {
         let chunk = BytecodeChunk {
             opcodes: vec![
                 Opcode::LoadConst(0),
-                Opcode::CallBuiltin(0, 1, 0, 0),
+                Opcode::CallBuiltin {
+                    builtin_id: 0,
+                    arity: 1,
+                    span_start: 0,
+                    span_end: 0,
+                },
                 Opcode::LoadLocal(9),
                 Opcode::Halt,
             ],
@@ -2149,7 +2205,7 @@ mod tests {
     fn get_field_on_non_tagged_value_is_runtime_error() {
         let mut bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),
-            Opcode::GetField(0),
+            Opcode::GetField { field_index: 0 },
             Opcode::Halt,
         ]);
         bytecode.constants = vec![Constant::Int(int(1))];

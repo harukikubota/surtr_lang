@@ -56,31 +56,58 @@ pub enum Opcode {
     NotBool,
 
     // List
-    ListNew(u32),
+    ListNew {
+        len: u32,
+    },
     ListEmpty,
     ListNil,
     ListCons,
     ListIsEmpty,
     ListHead,
     ListTail,
-    ListFromItems(u32),
+    ListFromItems {
+        len: u32,
+    },
 
     // Struct / Tagged
-    StructNew(u32),
-    GetField(u32),
+    StructNew {
+        field_count: u32,
+    },
+    GetField {
+        field_index: u32,
+    },
     GetTag,
     EqTag,
 
     // Built-in function call
-    CallBuiltin(BuiltinId, u8, u32, u32),
+    CallBuiltin {
+        builtin_id: BuiltinId,
+        arity: u8,
+        span_start: u32,
+        span_end: u32,
+    },
 
     // User-defined function call
-    Call(FunctionId, u8, u32, u32),
+    Call {
+        fun_idx: FunctionId,
+        arity: u8,
+        span_start: u32,
+        span_end: u32,
+    },
     CaptureClosure(u8),
     CapturePartial(u8),
-    MakeError(u32),
-    MakeErrorLiteral(u32, u32),
-    CallClosure(u8, u32, u32),
+    MakeError {
+        template_id: u32,
+    },
+    MakeErrorLiteral {
+        kind_const_idx: u32,
+        message_const_idx: u32,
+    },
+    CallClosure {
+        arity: u8,
+        span_start: u32,
+        span_end: u32,
+    },
 
     // Control flow
     Jump(u32),
@@ -293,16 +320,6 @@ pub struct EldrInspect {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct LegacyBytecode {
-    opcodes: Vec<Opcode>,
-    constants: Vec<Constant>,
-    num_locals: usize,
-    type_registry: TypeRegistry,
-    error_templates: Vec<ErrTemplate>,
-    functions: Vec<LegacyFunctionEntry>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct CodePayload {
     opcodes: Vec<Opcode>,
     constants: Vec<Constant>,
@@ -311,45 +328,6 @@ struct CodePayload {
     error_templates: Vec<ErrTemplate>,
     functions: Vec<FunctionEntry>,
     source_map: Option<SourceMap>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct LegacyFunctionEntry {
-    fun_idx: u32,
-    entry_pc: u32,
-    num_locals: u32,
-    arity: u8,
-}
-
-impl From<LegacyFunctionEntry> for FunctionEntry {
-    fn from(value: LegacyFunctionEntry) -> Self {
-        Self {
-            fun_idx: value.fun_idx,
-            entry_pc: value.entry_pc,
-            num_locals: value.num_locals,
-            arity: value.arity,
-            qualified_name: None,
-        }
-    }
-}
-
-impl From<LegacyBytecode> for Bytecode {
-    fn from(value: LegacyBytecode) -> Self {
-        Self {
-            opcodes: value.opcodes,
-            constants: value.constants,
-            num_locals: value.num_locals,
-            type_registry: value.type_registry,
-            error_templates: value.error_templates,
-            functions: value
-                .functions
-                .into_iter()
-                .map(FunctionEntry::from)
-                .collect(),
-            source_map: None,
-            docs: Vec::new(),
-        }
-    }
 }
 
 impl From<CodePayload> for Bytecode {
@@ -403,6 +381,11 @@ impl Bytecode {
             .as_ref()
             .map(|payload| align4(payload.len()))
             .unwrap_or(0);
+        let code_payload_len = checked_payload_len(code_payload.len())?;
+        let docs_payload_len = docs_payload
+            .as_ref()
+            .map(|payload| checked_payload_len(payload.len()))
+            .transpose()?;
         let total_len = Self::HEADER_LEN
             + (Self::CHUNK_HEADER_LEN * num_chunks as usize)
             + padded_code_payload_len
@@ -414,20 +397,16 @@ impl Bytecode {
         bytes.extend_from_slice(&Self::DEBUG_LEVEL.to_le_bytes());
         bytes.extend_from_slice(&num_chunks.to_le_bytes());
         bytes.extend_from_slice(&Self::CHUNK_CODE);
-        bytes.extend_from_slice(&(code_payload.len() as u32).to_le_bytes());
-        if let Some(docs_payload) = &docs_payload {
+        bytes.extend_from_slice(&code_payload_len.to_le_bytes());
+        if docs_payload.is_some() {
             bytes.extend_from_slice(&Self::CHUNK_DOCS);
-            bytes.extend_from_slice(&(docs_payload.len() as u32).to_le_bytes());
+            bytes.extend_from_slice(&docs_payload_len.unwrap_or(0).to_le_bytes());
         }
         bytes.extend_from_slice(&code_payload);
-        while bytes.len() % 4 != 0 {
-            bytes.push(0);
-        }
+        bytes.resize(align4(bytes.len()), 0);
         if let Some(docs_payload) = docs_payload {
             bytes.extend_from_slice(&docs_payload);
-            while bytes.len() % 4 != 0 {
-                bytes.push(0);
-            }
+            bytes.resize(align4(bytes.len()), 0);
         }
         Ok(bytes)
     }
@@ -445,7 +424,8 @@ impl Bytecode {
 
     /// Decode `.eldr` bytes into bytecode.
     pub fn decode(bytes: &[u8]) -> Result<Self, BytecodeFormatError> {
-        Self::inspect(bytes).map(|inspected| inspected.bytecode)
+        let (_, _, code_payload, docs_payload) = parse_container(bytes)?;
+        decode_payload_with_docs(code_payload, docs_payload)
     }
 }
 
@@ -453,18 +433,9 @@ fn decode_payload_with_docs(
     code_payload: &[u8],
     docs_payload: Option<&[u8]>,
 ) -> Result<Bytecode, BytecodeFormatError> {
-    let mut bytecode = match bincode::deserialize::<CodePayload>(code_payload) {
-        Ok(code) => Bytecode::from(code),
-        Err(err_new) => match bincode::deserialize::<LegacyBytecode>(code_payload) {
-            Ok(legacy) => legacy.into(),
-            Err(err_legacy) => {
-                return Err(BytecodeFormatError::DecodeFailed(format!(
-                    "new-format error: {}; legacy-format error: {}",
-                    err_new, err_legacy
-                )));
-            }
-        },
-    };
+    let mut bytecode = bincode::deserialize::<CodePayload>(code_payload)
+        .map(Bytecode::from)
+        .map_err(|e| BytecodeFormatError::DecodeFailed(e.to_string()))?;
 
     if let Some(payload) = docs_payload {
         bytecode.docs = bincode::deserialize::<Vec<DocEntry>>(payload)
@@ -563,12 +534,17 @@ fn align4(len: usize) -> usize {
     (len + 3) & !3
 }
 
+fn checked_payload_len(len: usize) -> Result<u32, BytecodeFormatError> {
+    u32::try_from(len)
+        .map_err(|_| BytecodeFormatError::EncodeFailed("payload too large".to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        line_column_for_offset, populate_error_template_lines, Bytecode, BytecodeFormatError,
-        Constant, DocEntry, DocKind, ErrTemplate, FunctionEntry, LegacyBytecode,
-        LegacyFunctionEntry, Opcode, OpcodeSource, SourceMap,
+        checked_payload_len, line_column_for_offset, populate_error_template_lines, Bytecode,
+        BytecodeFormatError, Constant, DocEntry, DocKind, ErrTemplate, FunctionEntry, Opcode,
+        OpcodeSource, SourceMap,
     };
     use crate::primitives::int;
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
@@ -658,39 +634,38 @@ mod tests {
     }
 
     #[test]
-    fn decode_legacy_payload_without_source_map() {
-        let legacy = LegacyBytecode {
-            opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
-            constants: vec![Constant::Int(int(7))],
-            num_locals: 0,
-            type_registry: sample_registry(),
-            error_templates: Vec::new(),
-            functions: vec![LegacyFunctionEntry {
-                fun_idx: 0,
-                entry_pc: 1,
-                num_locals: 0,
-                arity: 0,
-            }],
-        };
+    fn decode_rejects_unsupported_version() {
+        let bytes = b"ELDR\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let err = Bytecode::decode(bytes).expect_err("decode must fail");
+        assert!(matches!(err, BytecodeFormatError::UnsupportedVersion(2)));
+    }
 
-        let payload = bincode::serialize(&legacy).expect("legacy payload encode should succeed");
+    #[test]
+    fn decode_rejects_truncated_chunk_header() {
+        let bytes = b"ELDR\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00Code";
+        let err = Bytecode::decode(bytes).expect_err("decode must fail");
+        assert!(matches!(err, BytecodeFormatError::TruncatedChunkHeader));
+    }
 
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"ELDR");
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&0u32.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(b"Code");
-        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&payload);
-        while bytes.len() % 4 != 0 {
-            bytes.push(0);
-        }
+    #[test]
+    fn decode_rejects_truncated_chunk_data() {
+        let bytes = b"ELDR\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00Code\x04\x00\x00\x00\x01";
+        let err = Bytecode::decode(bytes).expect_err("decode must fail");
+        assert!(matches!(err, BytecodeFormatError::TruncatedChunkData));
+    }
 
-        let decoded = Bytecode::decode(&bytes).expect("legacy decode should succeed");
-        assert_eq!(decoded.source_map, None);
-        assert_eq!(decoded.constants, vec![Constant::Int(int(7))]);
-        assert_eq!(decoded.functions[0].qualified_name, None);
+    #[test]
+    fn inspect_reports_header_and_chunk_layout() {
+        let bytecode = sample_bytecode(None);
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let inspected = Bytecode::inspect(&bytes).expect("inspect should succeed");
+        assert_eq!(inspected.header.magic, "ELDR");
+        assert_eq!(inspected.header.version, 1);
+        assert_eq!(inspected.chunks.len(), 2);
+        assert_eq!(inspected.chunks[0].tag, "Code");
+        assert_eq!(inspected.chunks[1].tag, "Docs");
+        assert!(inspected.chunks[0].payload_offset >= 16);
+        assert!(inspected.chunks[0].padded_size >= inspected.chunks[0].size as usize);
     }
 
     #[test]
@@ -698,6 +673,13 @@ mod tests {
         let source = "deferror Boom {\n  \"boom\"\n}\n";
         assert_eq!(line_column_for_offset(source, 0), (1, 1));
         assert_eq!(line_column_for_offset(source, 16), (2, 1));
+    }
+
+    #[test]
+    fn line_column_for_offset_tracks_utf8_columns() {
+        let source = "あい\nうえお";
+        assert_eq!(line_column_for_offset(source, "あ".len()), (1, 2));
+        assert_eq!(line_column_for_offset(source, "あい\nう".len()), (2, 2));
     }
 
     #[test]
@@ -718,5 +700,11 @@ mod tests {
 
         assert_eq!(templates[0].line, 2);
         assert_eq!(templates[0].column, 1);
+    }
+
+    #[test]
+    fn checked_payload_len_rejects_values_larger_than_u32() {
+        let err = checked_payload_len(usize::MAX).expect_err("payload len must be rejected");
+        assert!(matches!(err, BytecodeFormatError::EncodeFailed(_)));
     }
 }

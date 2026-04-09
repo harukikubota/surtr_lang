@@ -267,7 +267,10 @@ pub struct Location {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListHandle, Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value};
+    use super::{
+        Callable, CallableTarget, ListHandle, Location, RichError, TypeEntry, TypeKind,
+        TypeRegistry, Value,
+    };
     use crate::primitives::int;
 
     #[test]
@@ -344,6 +347,33 @@ mod tests {
             Value::Int(int(3)),
         ]));
         assert_eq!(value.to_display_string(&registry), "[1, 2, 3]");
+    }
+
+    #[test]
+    fn empty_list_head_and_tail_return_none() {
+        let list = ListHandle::empty();
+        assert_eq!(list.head_value(), None);
+        assert_eq!(list.tail_handle(), None);
+    }
+
+    #[test]
+    fn display_for_callable_shows_target_and_capture_counts() {
+        let registry = TypeRegistry::new();
+        let builtin = Value::Callable(Callable {
+            target: CallableTarget::Builtin(3),
+            lexical_captures: Vec::new(),
+            partial_args: Vec::new(),
+        });
+        let function = Value::Callable(Callable {
+            target: CallableTarget::Function(7),
+            lexical_captures: vec![Value::Unit],
+            partial_args: vec![Value::Bool(true), Value::Bool(false)],
+        });
+        assert_eq!(builtin.to_display_string(&registry), "<builtin:3>");
+        assert_eq!(
+            function.to_display_string(&registry),
+            "<function:7; lexical_captures=1; partial_args=2>"
+        );
     }
 
     #[test]
