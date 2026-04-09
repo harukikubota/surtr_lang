@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use forge::bytecode::Bytecode;
+use forge::bytecode::{populate_error_template_lines, Bytecode};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -205,6 +205,11 @@ pub fn compile_script_sources(compile_sources: &xldr::CompileSources) -> Result<
     .map_err(|e| format!("phase=typecheck; message={}", e))?;
     let mut bytecode =
         forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
+    let user_source = compile_sources
+        .sources
+        .source(compile_sources.user_source_id)
+        .unwrap_or("");
+    populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;
     Ok(bytecode)
 }

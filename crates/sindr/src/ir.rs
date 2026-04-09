@@ -319,6 +319,14 @@ pub struct EldrInspect {
     pub bytecode: Bytecode,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct ParsedContainer<'a> {
+    header: EldrHeader,
+    chunks: Vec<EldrChunkInfo>,
+    code_payload: &'a [u8],
+    docs_payload: Option<&'a [u8]>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct CodePayload {
     opcodes: Vec<Opcode>,
@@ -413,19 +421,19 @@ impl Bytecode {
 
     /// Inspect `.eldr` bytes and decode embedded bytecode.
     pub fn inspect(bytes: &[u8]) -> Result<EldrInspect, BytecodeFormatError> {
-        let (header, chunks, code_payload, docs_payload) = parse_container(bytes)?;
-        let bytecode = decode_payload_with_docs(code_payload, docs_payload)?;
+        let parsed = parse_container(bytes)?;
+        let bytecode = decode_payload_with_docs(parsed.code_payload, parsed.docs_payload)?;
         Ok(EldrInspect {
-            header,
-            chunks,
+            header: parsed.header,
+            chunks: parsed.chunks,
             bytecode,
         })
     }
 
     /// Decode `.eldr` bytes into bytecode.
     pub fn decode(bytes: &[u8]) -> Result<Self, BytecodeFormatError> {
-        let (_, _, code_payload, docs_payload) = parse_container(bytes)?;
-        decode_payload_with_docs(code_payload, docs_payload)
+        let parsed = parse_container(bytes)?;
+        decode_payload_with_docs(parsed.code_payload, parsed.docs_payload)
     }
 }
 
@@ -445,9 +453,7 @@ fn decode_payload_with_docs(
     Ok(bytecode)
 }
 
-fn parse_container(
-    bytes: &[u8],
-) -> Result<(EldrHeader, Vec<EldrChunkInfo>, &[u8], Option<&[u8]>), BytecodeFormatError> {
+fn parse_container(bytes: &[u8]) -> Result<ParsedContainer<'_>, BytecodeFormatError> {
     if bytes.len() < Bytecode::HEADER_LEN {
         return Err(BytecodeFormatError::HeaderTooShort);
     }
@@ -527,7 +533,12 @@ fn parse_container(
         debug_level,
         num_chunks,
     };
-    Ok((header, chunks, payload, docs_payload))
+    Ok(ParsedContainer {
+        header,
+        chunks,
+        code_payload: payload,
+        docs_payload,
+    })
 }
 
 fn align4(len: usize) -> usize {

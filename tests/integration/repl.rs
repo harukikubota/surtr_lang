@@ -1,7 +1,9 @@
 use std::env;
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn surtr_bin() -> String {
     if let Ok(path) = env::var("CARGO_BIN_EXE_surtr") {
@@ -67,6 +69,16 @@ fn strip_ansi(input: &str) -> String {
     }
 
     out
+}
+
+fn temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after unix epoch")
+        .as_nanos();
+    let dir = env::temp_dir().join(format!("surtr-{prefix}-{nanos}"));
+    fs::create_dir_all(&dir).expect("failed to create temp dir");
+    dir
 }
 
 #[test]
@@ -279,6 +291,61 @@ fn repl_value_recall_by_line_number() {
         "expected original value and :v recall output, got:\n{}",
         stdout
     );
+}
+
+#[test]
+fn repl_doc_command_shows_builtin_docs() {
+    let output = run_repl_session(":doc print\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Kernel::print"),
+        "expected :doc to resolve the builtin symbol, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("sig: print(a: String) -> Unit"),
+        "expected :doc to print the builtin signature, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Print a string to stdout."),
+        "expected :doc to print the builtin summary, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_save_command_writes_decodable_eldr_snapshot() {
+    let dir = temp_dir("repl-save");
+    let save_base = dir.join("session");
+    let input = format!("x = 1\n:save {}\n:quit\n", save_base.to_string_lossy());
+    let output = run_repl_session(&input);
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let saved_path = save_base.with_extension("eldr");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!("saved to {}", saved_path.display())),
+        "expected :save to report the output path, got:\n{}",
+        stdout
+    );
+
+    let bytes = fs::read(&saved_path).expect("saved .eldr snapshot should exist");
+    forge::bytecode::Bytecode::decode(&bytes).expect("saved .eldr snapshot should decode");
+
+    fs::remove_dir_all(&dir).expect("failed to clean temp dir");
 }
 
 #[test]

@@ -44,6 +44,25 @@ Use `cargo-nextest` as the default test runner for this workspace.
 cargo nextest run
 ```
 
+For coverage runs, install the coverage toolchain once:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov
+```
+
+Then use the repository aliases:
+
+```bash
+cargo cov
+cargo cov-html
+cargo cov-json
+```
+
+- `cargo cov`: runs workspace tests through `cargo llvm-cov nextest --workspace`
+- `cargo cov-html`: writes an HTML report to `target/llvm-cov/html`
+- `cargo cov-json`: writes a machine-readable summary to `target/coverage-summary.json`
+
 For a clean baseline run that includes compilation:
 
 ```bash
