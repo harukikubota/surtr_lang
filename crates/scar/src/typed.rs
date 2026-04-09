@@ -61,9 +61,6 @@ pub enum TypedInner {
 
     /// Semicolon — explicit Unit coercion
     Semi(Box<TypedNode>),
-
-    /// Enum discriminant accessor: `value.idx`
-    EnumIdx(Box<TypedNode>),
 }
 
 /// Interpolated string fragment (typed).

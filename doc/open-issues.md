@@ -246,7 +246,9 @@
 - OOM / host failure policy
   - 上限値、停止文言、回復可否は host 依存方針のまま、詳細契約は将来確定する
 - Enum conversion helper
-  - `defenum` 本体（variant payload / discriminant / 条件付き循環）は `doc/Enum.md` へ反映済み
+  - `defenum` 本体（variant payload / discriminant / 条件付き循環）は正本 (`doc/要件定義v9.md`) と `docs/site/*` へ反映済み
+  - `.idx` アクセッサは廃止済み（Enum への field access は禁止）
+  - `doc/Enum.md` は廃止済み（内容は上記ドキュメントへ統合）
   - `Enum::from(Int)` / `Enum::try_from(Int)` の自動生成は未対応のため、仕様確定後に reopen する
 
 ---

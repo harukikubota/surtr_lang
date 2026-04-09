@@ -11,7 +11,7 @@
 - [言語ガイド](./language-guide.md)
   - Surtr の考え方
   - 基本文法
-  - 関数、構造体、レコード、Result、List
+  - 関数、構造体、レコード、Enum、Result、List
 - [言語リファレンス](./language-reference.md)
   - 構文の一覧
   - 型と組込み関数の一覧

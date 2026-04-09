@@ -28,6 +28,8 @@ defstruct Name {
 defrecord Name(field: Ty, ...)
 
 deferror Name(field: Ty, ...) { "message" }
+
+defenum Name { Variant, Variant(Ty), Variant = Int, ... }
 ```
 
 ### 制御構造
@@ -56,8 +58,16 @@ match expr {
 
 - `List<T>`
 - `Result<T>`
+- `Enum`
 - 関数型 `(T1, T2, ...) -> R`
 - ユーザ定義型
+
+### `Enum`
+
+- `defenum` で定義する
+- 値生成は `Enum::Variant(...)`
+- `match` は網羅必須
+- enum 値への field access（例: `.idx`）は不可
 
 ### `Result<T>`
 
@@ -66,7 +76,7 @@ match expr {
 
 現時点では、`match` で主に `Ok(...)` / `Err(...)` を扱います。  
 考え方としては `Either<Err, Ok>` に近く、失敗も値として明示的に運びます。
-内部表現は enum-like ですが、language surface では将来の一般 `Enum` と区別された専用 abstraction です。
+内部表現は enum-like ですが、language surface では `defenum` と区別された専用 abstraction です。
 
 ### 戻り値位置の `Result<T, E>`
 
@@ -156,7 +166,7 @@ False
 value.field
 ```
 
-`defstruct` と `defrecord` の両方で使えます。
+`defstruct` と `defrecord` の両方で使えます。`defenum` では使えません。
 
 ## 7. 組込み関数
 

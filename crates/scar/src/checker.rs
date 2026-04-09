@@ -1495,9 +1495,6 @@ impl Checker {
             TypedInner::FieldAccess(expr, idx) => {
                 TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
             }
-            TypedInner::EnumIdx(expr) => {
-                TypedInner::EnumIdx(Box::new(self.resolve_typed_node(*expr)))
-            }
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
                 fields
@@ -3088,21 +3085,6 @@ impl Checker {
         field: &str,
     ) -> Result<TypedNode, TypeError> {
         let typed_expr = self.check_node(expr)?;
-
-        if let Ty::Enum(_) = &typed_expr.ty {
-            if field != "idx" {
-                return Err(TypeError {
-                    message: format!("No field '{}' on {}", field, self.ty_name(&typed_expr.ty)),
-                    span: span.clone(),
-                    hint: Some("Enum field access supports only `.idx`".into()),
-                });
-            }
-            return Ok(TypedNode {
-                ty: Ty::Int,
-                span: span.clone(),
-                node: TypedInner::EnumIdx(Box::new(typed_expr)),
-            });
-        }
 
         let (idx, field_ty) = match &typed_expr.ty {
             Ty::Struct(_, fields) | Ty::Record(_, fields) => fields

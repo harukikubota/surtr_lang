@@ -7,8 +7,6 @@ defenum Direction {
 
 up: Direction = Direction::Up
 down: Direction = Direction::Down
-print(to_string(up.idx))
-print(to_string(down.idx))
 print(to_string(up == down))
 print(to_string(up != down))
 print(match up {
@@ -26,7 +24,12 @@ defenum KeyInput {
 
 key: KeyInput = KeyInput::Arrow(Direction::Left)
 print(match key {
-  KeyInput::Arrow(dir) => to_string(dir.idx),
+  KeyInput::Arrow(dir) => match dir {
+    Direction::Up => "U",
+    Direction::Down => "D",
+    Direction::Left => "L",
+    Direction::Right => "R",
+  },
   KeyInput::Enter => "E",
   KeyInput::Space => "S",
 })
@@ -38,5 +41,10 @@ defenum Code {
   D,
 }
 
-print(to_string(Code::B.idx))
-print(to_string(Code::D.idx))
+print(to_string(Code::B == Code::D))
+print(match Code::D {
+  Code::A => "A",
+  Code::B => "B",
+  Code::C => "C",
+  Code::D => "D",
+})

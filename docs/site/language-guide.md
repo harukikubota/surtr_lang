@@ -142,9 +142,9 @@ match result {
 }
 ```
 
-## 7. 構造体とレコード
+## 7. 構造体・レコード・Enum
 
-Surtr には `defstruct` と `defrecord` があります。
+Surtr には `defstruct` / `defrecord` / `defenum` があります。
 
 ### `defstruct`
 
@@ -176,6 +176,48 @@ print(to_string(point2.x))
 ```
 
 どちらもフィールドアクセスは `value.field` です。
+
+### `defenum`
+
+`defenum` はバリアントを持つ代数的データ型です。
+
+```surtr
+defenum Direction {
+  Up,
+  Down,
+  Left,
+  Right,
+}
+
+dir: Direction = Direction::Left
+print(match dir {
+  Direction::Up => "U",
+  Direction::Down => "D",
+  Direction::Left => "L",
+  Direction::Right => "R",
+})
+```
+
+タプル payload 付きバリアントも使えます。
+
+```surtr
+defenum KeyInput {
+  Arrow(Direction),
+  Enter,
+}
+
+key: KeyInput = KeyInput::Arrow(Direction::Up)
+print(match key {
+  KeyInput::Arrow(d) => "arrow",
+  KeyInput::Enter => "enter",
+})
+```
+
+補足:
+
+- `Enum::Variant(...)` で値を作る
+- `match` は網羅必須
+- enum 値への field access（例: `.idx`）はサポートしない
 
 ## 8. エラーと Result
 
@@ -232,7 +274,7 @@ def pick() -> Result<Int> {
 これは「`Ok` なら束縛し、`Err` なら現在の評価を中断して伝播する」という糖衣構文です。  
 例外送出ではなく、`Either` 的な分岐を短く書くための記法だと考えると追いやすくなります。
 
-`Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では将来の一般 `Enum` 機能と同じものとしては扱いません。  
+`Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では `defenum` と同一 contract にはしません。  
 あくまで `Result` は dedicated な失敗表現であり、`Ok` / `Err` もその専用 constructor として見せます。
 
 ## 9. リスト

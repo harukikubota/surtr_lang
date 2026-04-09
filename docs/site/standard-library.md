@@ -102,7 +102,7 @@ compiler はこの head 自体を契約として扱います。
 
 そのため、Surtr の error handling は「失敗も値として型に乗せる」ことが前提です。
 
-`Result` の内部表現は enum-like な tagged value ですが、言語仕様では将来の一般 `Enum` 機能と同一視しません。  
+`Result` の内部表現は enum-like な tagged value ですが、言語仕様では `defenum` と同一視しません。  
 利用者が見る surface contract は、専用の builtin type と専用 constructor contract です。
 
 ```surtr

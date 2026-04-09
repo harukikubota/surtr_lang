@@ -942,11 +942,6 @@ impl Codegen {
                 self.emit(Opcode::GetField { field_index: *idx });
             }
 
-            TypedInner::EnumIdx(expr) => {
-                self.emit_node(expr)?;
-                self.emit(Opcode::GetField { field_index: 0 });
-            }
-
             TypedInner::StructLit(tag, fields) => {
                 // Push tag first, then fields
                 let tag_const = self.add_constant(Constant::Tag(*tag));

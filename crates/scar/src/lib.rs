@@ -461,6 +461,20 @@ value: Loop = Loop::End"#,
     }
 
     #[test]
+    fn enum_field_access_is_rejected() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defenum Direction {
+  Up,
+  Down,
+}
+up: Direction = Direction::Up
+x = up.idx"#,
+        );
+        let err = typecheck(resolved).expect_err("enum field access must fail");
+        assert!(err.message.contains("Cannot access field on Direction"));
+    }
+
+    #[test]
     fn match_binding_pattern_is_treated_as_exhaustive() {
         let resolved = resolve_with_builtin_prelude(
             r#"flag = True
