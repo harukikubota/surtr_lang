@@ -1,0 +1,9 @@
+created: 2026-04-09T14:02:57.840Z
+updated: 2026-04-09T14:03:04.920Z
+update_count: 2
+last_field: diagram
+kind: nested-class
+title: rune-cli
+children:
+  - command-implementations
+parentPath: []

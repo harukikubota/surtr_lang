@@ -1,0 +1,9 @@
+created: 2026-04-09T14:02:57.838Z
+updated: 2026-04-09T14:03:44.586Z
+update_count: 2
+last_field: diagram
+kind: nested-class
+title: compilation-pipeline
+children:
+  - forge
+parentPath: []

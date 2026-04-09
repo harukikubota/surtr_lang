@@ -1,0 +1,1 @@
+Handles `surtr dump`. It can inspect an existing `.eldr` file or compile `.srt` source first, then serializes bytecode structure, header metadata, and entrypoint trace information as JSON for tooling or debugging.

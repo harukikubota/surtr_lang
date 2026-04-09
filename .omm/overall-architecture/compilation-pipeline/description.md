@@ -1,0 +1,1 @@
+The core compiler and runtime chain spanning `crates/spire`, `crates/sigil`, `crates/scar`, `crates/forge`, and `crates/eldr`. Each crate owns one phase boundary, moving from source text to executable bytecode and then execution.

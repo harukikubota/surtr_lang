@@ -1,0 +1,1 @@
+This perspective overlaps intentionally with the `rune-cli/command-implementations` group under `overall-architecture`, but keeps the emphasis on operational behavior instead of internal helper modules.

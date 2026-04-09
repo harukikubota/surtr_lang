@@ -1,0 +1,1 @@
+The name-resolution crate. `sigil` precollects declarations across staged modules, resolves identifiers and module paths, and lowers special forms such as `if` into resolved nodes that downstream phases can compile directly.

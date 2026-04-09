@@ -1,0 +1,1 @@
+Interactive interfaces built in `crates/xldr/`. They reuse the same parser, resolver, typechecker, code generator, and VM, but maintain incremental session state for the REPL and terminal UI workflows.

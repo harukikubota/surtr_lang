@@ -1,0 +1,10 @@
+graph LR
+    command-dispatch["Command Dispatch\ncrates/rune/src/main.rs"]
+    command-implementations["Command Implementations\ncrates/rune/src/commands/"]
+    compile-driver["Compile Driver\ncrates/rune/src/compile.rs"]
+    source-loader["Source Loader\ncrates/rune/src/loader.rs"]
+
+    command-dispatch -->|"routes subcommands and usage errors"| command-implementations
+    command-implementations -->|"invokes script compilation for source-based commands"| compile-driver
+    compile-driver -->|"requests std and user module inputs"| source-loader
+    source-loader -->|"supplies module descriptors and lib sources"| compile-driver

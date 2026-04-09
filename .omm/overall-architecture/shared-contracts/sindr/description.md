@@ -1,0 +1,1 @@
+The shared contract crate. `sindr` defines builtin metadata, core IR and bytecode structures, primitive and runtime-facing identifiers, and the cross-crate tables that keep Sigil, Scar, Forge, and Eldr aligned.

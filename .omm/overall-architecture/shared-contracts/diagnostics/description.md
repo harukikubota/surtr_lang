@@ -1,0 +1,1 @@
+The diagnostic rendering crate. It owns the source registry abstraction plus Ariadne-backed report generation so parse, resolve, typecheck, and runtime failures can all be presented with consistent spans and fallback formatting.

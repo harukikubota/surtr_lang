@@ -1,0 +1,1 @@
+The XLDR loader in `crates/xldr/src/loader.rs`. It materializes standard-module descriptors, assigns source kinds, builds pseudo module paths for scripts and REPL chunks, and detects duplicate or conflicting source registrations.

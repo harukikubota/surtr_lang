@@ -1,0 +1,1 @@
+The interactive engine in `crates/xldr/src/repl/logic/`. It bootstraps standard modules, keeps resolver, typechecker, forge, and VM sessions alive across inputs, supports loading `.eldr` images, and tracks symbols plus docs for completions and inspection.

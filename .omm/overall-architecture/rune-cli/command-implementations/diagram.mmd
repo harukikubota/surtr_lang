@@ -1,0 +1,12 @@
+graph LR
+    run-command["Run Command\ncrates/rune/src/commands/run.rs"]
+    build-command["Build Command\ncrates/rune/src/commands/build.rs"]
+    dump-command["Dump Command\ncrates/rune/src/commands/dump.rs"]
+    repl-command["REPL Command\ncrates/rune/src/commands/repl.rs"]
+    tui-command["TUI Command\ncrates/rune/src/commands/tui.rs"]
+    test-command["Test Command\ncrates/rune/src/commands/test.rs"]
+
+    run-command -->|"compiles or decodes and then executes"| build-command
+    build-command -->|"shares source compilation path"| dump-command
+    repl-command -->|"delegates to xldr interactive engine"| tui-command
+    test-command -->|"evaluates annotated functions via the compiler"| run-command

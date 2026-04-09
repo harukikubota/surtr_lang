@@ -1,0 +1,1 @@
+Surtr is a statically typed functional language compiler in Rust. The canonical contract lives in `doc/要件定義v9.md` and `doc/EldrVM_spec.md`, while the executable path is centered on `crates/rune` and the `spire -> sigil -> scar -> forge -> eldr` pipeline.

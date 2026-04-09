@@ -1,0 +1,1 @@
+The code generation crate. `forge` transforms typed nodes into bytecode, maintains the type registry and function table invariants, encodes `.eldr` payloads, and emits metadata needed by inspection, docs, and runtime error reporting.

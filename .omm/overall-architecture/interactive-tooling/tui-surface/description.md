@@ -1,0 +1,1 @@
+The terminal UI layer in `crates/xldr/src/repl/ui/tui/` and the re-export in `crates/xldr/src/tui.rs`. It wraps the REPL engine in a richer interactive shell for browsing execution state and handling user input visually.

@@ -1,0 +1,1 @@
+The shared compilation path in `crates/rune/src/compile.rs`. It prepares entrypoint-aware script plans, parses staged module sources, runs the resolver and typechecker with the right source rules, generates bytecode, and attaches docs plus diagnostic context.

@@ -1,0 +1,9 @@
+created: 2026-04-09T14:03:55.685Z
+updated: 2026-04-09T14:03:55.687Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: spire
+children: []
+parentPath:
+  - compilation-pipeline

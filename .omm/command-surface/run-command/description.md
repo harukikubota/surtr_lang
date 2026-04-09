@@ -1,0 +1,1 @@
+`surtr run` is the execution-oriented entrypoint. It compiles source files on demand, optionally rewrites the script for a selected entry function, or loads a prebuilt `.eldr` image before handing execution to Eldr.

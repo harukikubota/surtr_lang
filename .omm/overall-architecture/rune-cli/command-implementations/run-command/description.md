@@ -1,0 +1,1 @@
+Handles `surtr run`. It either compiles `.srt` input with optional entrypoint selection or decodes `.eldr` files directly, then executes bytecode in Eldr and surfaces final `Err` results or runtime errors.

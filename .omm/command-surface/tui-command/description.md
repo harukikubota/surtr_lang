@@ -1,0 +1,1 @@
+`surtr tui` opens the terminal UI around XLDR. It is the more visual sibling to `repl`, optionally seeded from an `.eldr` file, and is meant for interactive exploration rather than single-shot execution.

@@ -1,0 +1,1 @@
+Handles `surtr test`. It scans Surtr source for `@@test` annotations, resolves module and function selectors, compiles the target expressions, executes them, and prints pass or failure information with source locations.

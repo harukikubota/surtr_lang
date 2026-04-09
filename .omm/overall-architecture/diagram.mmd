@@ -1,0 +1,15 @@
+graph LR
+    rune-cli["Rune CLI\ncrates/rune/"]
+    compilation-pipeline["Compilation Pipeline\ncrates/spire/ -> crates/eldr/"]
+    shared-contracts["Shared Contracts\ncrates/sindr/ + crates/diagnostics/"]
+    interactive-tooling["Interactive Tooling\ncrates/xldr/"]
+    standard-library-source["Standard Library Source\nlib/*.srt"]
+    canonical-specs["Canonical Specs\ndoc/"]
+
+    canonical-specs -->|"define language and VM contracts"| compilation-pipeline
+    standard-library-source -->|"provides bootstrap and builtin surface declarations"| compilation-pipeline
+    shared-contracts -->|"supplies IR, builtin metadata, and diagnostics"| compilation-pipeline
+    rune-cli -->|"loads sources, drives compilation, and launches execution"| compilation-pipeline
+    rune-cli -->|"delegates REPL and TUI commands"| interactive-tooling
+    interactive-tooling -->|"reuses compiler and VM sessions incrementally"| compilation-pipeline
+    compilation-pipeline -->|"emits runtime-ready bytecode and executes it"| shared-contracts
