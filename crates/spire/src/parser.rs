@@ -66,6 +66,7 @@ pub enum TopLevelDeclKind {
     StructDef,
     RecordDef,
     DeferrorDef,
+    EnumDef,
     BuiltinDecl,
     BuiltinTypeDecl,
 }
@@ -120,6 +121,7 @@ impl SourceRules {
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::EnumDef,
             ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
@@ -135,6 +137,7 @@ impl SourceRules {
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::EnumDef,
                 TopLevelDeclKind::BuiltinDecl,
                 TopLevelDeclKind::BuiltinTypeDecl,
             ]),
@@ -438,6 +441,7 @@ impl Parser {
                     | Token::Defstruct
                     | Token::Defrecord
                     | Token::Deferror
+                    | Token::Defenum
             )
         {
             return Err(ParseError::syntax(
@@ -455,6 +459,7 @@ impl Parser {
             Token::Defstruct => self.parse_struct_def()?,
             Token::Defrecord => self.parse_record_def()?,
             Token::Deferror => self.parse_deferror_def()?,
+            Token::Defenum => self.parse_enum_def()?,
             _ => {
                 if self.is_pattern_bind_stmt_start() {
                     let save = self.pos;
@@ -528,6 +533,7 @@ impl Parser {
             Ast::StructDef(_, _, _) => Some(TopLevelDeclKind::StructDef),
             Ast::RecordDef(_, _, _) => Some(TopLevelDeclKind::RecordDef),
             Ast::DeferrorDef(_, _, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
+            Ast::EnumDef(_, _, _, _) => Some(TopLevelDeclKind::EnumDef),
             Ast::BuiltinDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
             Ast::BuiltinTypeDecl(_, _, _) => Some(TopLevelDeclKind::BuiltinTypeDecl),
             Ast::ResultCtorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
@@ -1021,6 +1027,12 @@ impl Parser {
         };
 
         if let Some(path_expr) = path_ast {
+            let path_name = path_segments.join("::");
+            let path_last_is_uppercase = path_segments
+                .last()
+                .and_then(|segment| segment.chars().next())
+                .map(|ch| ch.is_uppercase())
+                .unwrap_or(false);
             if matches!(self.peek(), Token::LParen) {
                 self.advance();
                 self.skip_newlines();
@@ -1038,24 +1050,35 @@ impl Parser {
                 }
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                return Ok(Ast::App(
-                    Span {
-                        start: name_span.start,
-                        end: end_span.end,
-                    },
-                    Box::new(path_expr),
-                    args,
-                ));
+                let span = Span {
+                    start: name_span.start,
+                    end: end_span.end,
+                };
+                if path_last_is_uppercase {
+                    return Ok(Ast::ConstructorCall(span, path_name, args));
+                }
+                return Ok(Ast::App(span, Box::new(path_expr), args));
             }
 
             if matches!(self.peek(), Token::Unit) {
                 let end_span = self.advance().span.clone();
-                return Ok(Ast::App(
+                let span = Span {
+                    start: name_span.start,
+                    end: end_span.end,
+                };
+                if path_last_is_uppercase {
+                    return Ok(Ast::ConstructorCall(span, path_name, Vec::new()));
+                }
+                return Ok(Ast::App(span, Box::new(path_expr), Vec::new()));
+            }
+
+            if path_last_is_uppercase {
+                return Ok(Ast::ConstructorCall(
                     Span {
                         start: name_span.start,
-                        end: end_span.end,
+                        end: path_end,
                     },
-                    Box::new(path_expr),
+                    path_name,
                     Vec::new(),
                 ));
             }
@@ -1464,41 +1487,81 @@ impl Parser {
                 Ok(AstPattern::BoolLit(sp, false))
             }
             Token::Ident(name) => {
-                if name
-                    .chars()
-                    .next()
-                    .map(|c| c.is_uppercase())
-                    .unwrap_or(false)
-                    && matches!(self.peek_n(1), Some(Token::LParen))
-                {
-                    self.advance();
-                    self.expect(&Token::LParen)?;
-                    self.skip_newlines();
-                    if matches!(self.peek(), Token::RParen) {
-                        return Err(ParseError::syntax(
-                            "Constructor pattern requires exactly one inner pattern",
-                            self.peek_span(),
+                self.advance();
+                let mut segments = vec![name.clone()];
+                let mut path_end = sp.end;
+                while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+                    self.consume_path_separator()?;
+                    let (seg, seg_span) = self.expect_ident()?;
+                    path_end = seg_span.end;
+                    segments.push(seg);
+                }
+
+                let is_ctor = segments
+                    .last()
+                    .and_then(|segment| segment.chars().next())
+                    .map(|ch| ch.is_uppercase())
+                    .unwrap_or(false);
+                if is_ctor {
+                    let ctor_name = segments.join("::");
+                    if matches!(self.peek(), Token::LParen) {
+                        self.advance();
+                        self.skip_newlines();
+                        let mut inners = Vec::new();
+                        if !matches!(self.peek(), Token::RParen) {
+                            inners.push(self.parse_bind_pattern()?);
+                            self.skip_newlines();
+                            while matches!(self.peek(), Token::Comma) {
+                                self.advance();
+                                self.skip_newlines();
+                                if matches!(self.peek(), Token::RParen) {
+                                    break;
+                                }
+                                inners.push(self.parse_bind_pattern()?);
+                                self.skip_newlines();
+                            }
+                        }
+                        let end = self.expect(&Token::RParen)?;
+                        return Ok(AstPattern::Constructor(
+                            Span {
+                                start: sp.start,
+                                end: end.end,
+                            },
+                            ctor_name,
+                            inners,
                         ));
                     }
-                    let inner = self.parse_bind_pattern()?;
-                    self.skip_newlines();
-                    if matches!(self.peek(), Token::Comma) {
-                        return Err(ParseError::syntax(
-                            "Constructor pattern supports exactly one inner pattern",
-                            self.peek_span(),
+                    if matches!(self.peek(), Token::Unit) {
+                        let end = self.advance().span.clone();
+                        return Ok(AstPattern::Constructor(
+                            Span {
+                                start: sp.start,
+                                end: end.end,
+                            },
+                            ctor_name,
+                            Vec::new(),
                         ));
                     }
-                    let end = self.expect(&Token::RParen)?;
                     return Ok(AstPattern::Constructor(
                         Span {
                             start: sp.start,
-                            end: end.end,
+                            end: path_end,
                         },
-                        name,
-                        Box::new(inner),
+                        ctor_name,
+                        Vec::new(),
                     ));
                 }
-                self.advance();
+
+                if segments.len() > 1 {
+                    return Err(ParseError::syntax(
+                        "Qualified patterns support constructor forms only",
+                        Span {
+                            start: sp.start,
+                            end: path_end,
+                        },
+                    ));
+                }
+
                 Ok(AstPattern::Var(sp, name))
             }
             Token::LBrack => self.parse_list_bind_pattern(),
@@ -1826,6 +1889,131 @@ impl Parser {
         ))
     }
 
+    fn parse_enum_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_enum_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_enum_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        start_override: Option<usize>,
+    ) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Defenum)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut variants = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            self.skip_newlines();
+            let variant_start = self.peek_span().start;
+            let (variant_name, _) = self.expect_ident()?;
+            let mut payload = Vec::new();
+
+            if matches!(self.peek(), Token::LParen) {
+                self.advance();
+                self.skip_newlines();
+                if !matches!(self.peek(), Token::RParen) {
+                    payload.push(self.parse_type()?);
+                    self.skip_newlines();
+                    while matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                        payload.push(self.parse_type()?);
+                        self.skip_newlines();
+                    }
+                }
+                self.expect(&Token::RParen)?;
+            }
+
+            let discriminant = if matches!(self.peek(), Token::Bind) {
+                self.advance();
+                self.skip_newlines();
+                Some(self.parse_enum_discriminant()?)
+            } else {
+                None
+            };
+
+            let variant_end = if self.pos > 0 {
+                self.tokens[self.pos - 1].span.end
+            } else {
+                variant_start
+            };
+            variants.push(EnumVariant {
+                name: variant_name,
+                payload,
+                discriminant,
+                span: Span {
+                    start: variant_start,
+                    end: variant_end,
+                },
+            });
+
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                continue;
+            }
+        }
+
+        if variants.is_empty() {
+            return Err(ParseError::syntax(
+                "Enum definition requires at least one variant",
+                Span {
+                    start: sp.start,
+                    end: sp.end,
+                },
+            ));
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::EnumDef(
+            Span {
+                start: start_override.unwrap_or(sp.start),
+                end: end.end,
+            },
+            name,
+            variants,
+            attrs,
+        ))
+    }
+
+    fn parse_enum_discriminant(&mut self) -> Result<sindr::primitives::SurtrInt, ParseError> {
+        let span = self.peek_span();
+        if matches!(self.peek(), Token::Minus) {
+            self.advance();
+            let int_span = self.peek_span();
+            let Token::Int(n) = self.peek().clone() else {
+                return Err(ParseError::syntax(
+                    "Expected integer literal after '-' in enum discriminant",
+                    int_span,
+                ));
+            };
+            self.advance();
+            return Ok(-n);
+        }
+        match self.peek().clone() {
+            Token::Int(n) => {
+                self.advance();
+                Ok(n)
+            }
+            Token::Eof => Err(ParseError::incomplete("integer literal", span)),
+            _ => Err(ParseError::syntax(
+                "Enum discriminant must be an integer literal",
+                span,
+            )),
+        }
+    }
+
     /// `deferror Name { expr }` or `deferror Name(fields) { expr }`
     fn parse_deferror_def(&mut self) -> Result<Ast, ParseError> {
         self.parse_deferror_def_with_attrs(DeclAttrs::default(), None)
@@ -2025,9 +2213,10 @@ impl Parser {
                 Token::Def => self.parse_def_with_attrs(attrs, Some(start)),
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
+                Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
-                    "@@doc must annotate `def`, `defmod`, `deferror`, or `@@builtin type/def`",
+                    "@@doc must annotate `def`, `defmod`, `deferror`, `defenum`, or `@@builtin type/def`",
                     self.peek_span(),
                 )),
             }
@@ -2582,10 +2771,13 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
         AstPattern::IntLit(span, n) => AstPattern::IntLit(shift_span(span, delta), n),
         AstPattern::StrLit(span, s) => AstPattern::StrLit(shift_span(span, delta), s),
         AstPattern::BoolLit(span, b) => AstPattern::BoolLit(shift_span(span, delta), b),
-        AstPattern::Constructor(span, name, inner) => AstPattern::Constructor(
+        AstPattern::Constructor(span, name, inners) => AstPattern::Constructor(
             shift_span(span, delta),
             name,
-            Box::new(shift_pattern(*inner, delta)),
+            inners
+                .into_iter()
+                .map(|inner| shift_pattern(inner, delta))
+                .collect(),
         ),
         AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
             shift_span(span, delta),
@@ -2759,6 +2951,24 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*show_expr, delta)),
             shift_decl_attrs(attrs),
         ),
+        Ast::EnumDef(span, name, variants, attrs) => Ast::EnumDef(
+            shift_span(span, delta),
+            name,
+            variants
+                .into_iter()
+                .map(|variant| EnumVariant {
+                    name: variant.name,
+                    payload: variant
+                        .payload
+                        .into_iter()
+                        .map(|ty| shift_ast_ty(ty, delta))
+                        .collect(),
+                    discriminant: variant.discriminant,
+                    span: shift_span(variant.span, delta),
+                })
+                .collect(),
+            shift_decl_attrs(attrs),
+        ),
         Ast::Def(span, name, params, ret_ty, body, attrs) => Ast::Def(
             shift_span(span, delta),
             name,
@@ -2849,6 +3059,7 @@ impl Ast {
             | Ast::StructLit(s, _, _)
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _, _)
+            | Ast::EnumDef(s, _, _, _)
             | Ast::Def(s, _, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)
@@ -3337,7 +3548,7 @@ Construct the error branch.
                     pattern,
                     AstPattern::Constructor(_, ctor, inner)
                         if ctor == "Ok"
-                        && matches!(inner.as_ref(), AstPattern::Var(_, name) if name == "num")
+                        && matches!(inner.as_slice(), [AstPattern::Var(_, name)] if name == "num")
                 ));
                 assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
             }
@@ -3379,7 +3590,7 @@ Construct the error branch.
                     AstPattern::ListCons(_, first, rest)
                         if matches!(first.as_ref(),
                             AstPattern::Constructor(_, ctor, inner)
-                            if ctor == "Ok" && matches!(inner.as_ref(), AstPattern::IntLit(_, n) if n == &int(1))
+                            if ctor == "Ok" && matches!(inner.as_slice(), [AstPattern::IntLit(_, n)] if n == &int(1))
                         )
                         && matches!(rhs.as_ref(), Ast::Var(_, name) if name == "lr")
                         && matches!(rest.as_ref(), AstPattern::ListCons(_, _, _))
@@ -3775,7 +3986,7 @@ Construct the error branch.
                         &arms[0].0,
                         AstPattern::Constructor(_, name, inner)
                             if name == "Some"
-                                && matches!(inner.as_ref(), AstPattern::Var(_, bound) if bound == "y")
+                                && matches!(inner.as_slice(), [AstPattern::Var(_, bound)] if bound == "y")
                     ));
                 }
                 _ => panic!("Expected Match"),
@@ -3785,20 +3996,20 @@ Construct the error branch.
     }
 
     #[test]
-    fn test_match_bare_uppercase_identifier_is_binding_pattern() {
+    fn test_match_bare_uppercase_identifier_is_constructor_pattern() {
         let ast = parse(
             r#"x = match value {
   ParseError => 0,
   _ => 1,
 }"#,
         )
-        .expect("bare uppercase identifier should parse as a binding pattern");
+        .expect("bare uppercase identifier should parse as a constructor pattern");
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Match(_, _, arms) => {
                     assert!(matches!(
                         &arms[0].0,
-                        AstPattern::Var(_, name) if name == "ParseError"
+                        AstPattern::Constructor(_, name, args) if name == "ParseError" && args.is_empty()
                     ));
                 }
                 _ => panic!("Expected Match"),
@@ -3876,6 +4087,52 @@ import Kernel::{add, sub};"#,
             ast[2],
             Ast::Import(_, AstPath { ref segments, .. }, ImportSpec::List(ref names))
                 if segments.as_slice() == ["Kernel"] && names.as_slice() == ["add", "sub"]
+        ));
+    }
+
+    #[test]
+    fn test_defenum_parses_variants_with_payload_and_discriminant() {
+        let ast = parse(
+            r#"defenum Direction {
+  Up = 1,
+  Down,
+  Arrow(Int, Int),
+}"#,
+        )
+        .expect("defenum should parse");
+
+        match ast.as_slice() {
+            [Ast::EnumDef(_, name, variants, _)] => {
+                assert_eq!(name, "Direction");
+                assert_eq!(variants.len(), 3);
+                assert_eq!(variants[0].name, "Up");
+                assert_eq!(variants[0].discriminant, Some(int(1)));
+                assert_eq!(variants[1].name, "Down");
+                assert_eq!(variants[1].payload.len(), 0);
+                assert_eq!(variants[2].name, "Arrow");
+                assert_eq!(variants[2].payload.len(), 2);
+            }
+            other => panic!("Expected enum definition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_qualified_constructor_call_and_unit_constructor_parse() {
+        let ast = parse(
+            r#"x = Direction::Up
+y = KeyInput::Arrow(Direction::Down)"#,
+        )
+        .expect("qualified constructors should parse");
+
+        assert!(matches!(
+            ast[0],
+            Ast::Bind(_, _, ref rhs)
+                if matches!(rhs.as_ref(), Ast::ConstructorCall(_, name, args) if name == "Direction::Up" && args.is_empty())
+        ));
+        assert!(matches!(
+            ast[1],
+            Ast::Bind(_, _, ref rhs)
+                if matches!(rhs.as_ref(), Ast::ConstructorCall(_, name, args) if name == "KeyInput::Arrow" && args.len() == 1)
         ));
     }
 

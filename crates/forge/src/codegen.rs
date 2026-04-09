@@ -37,6 +37,7 @@ pub enum ReplTypeKind {
     Struct,
     Record,
     Error,
+    Enum,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -338,6 +339,16 @@ fn collect_stmt_meta(
             });
             function_defs.push(id.name.clone());
         }
+        TypedInner::EnumDef(name, variants) => {
+            type_defs.push(TypeDefDisplay {
+                name: name.clone(),
+                kind: ReplTypeKind::Enum,
+                fields: variants
+                    .iter()
+                    .map(|variant| (variant.constructor_name.clone(), String::new()))
+                    .collect(),
+            });
+        }
         TypedInner::Def(_, id, _, _, _) => {
             function_defs.push(id.name.clone());
         }
@@ -399,7 +410,7 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Unit => "Unit".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
         Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
-        Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+        Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name) => name.clone(),
         Ty::Error => "Error".into(),
         // Hide internal type-variable IDs from REPL output.
         Ty::Var(_id) => "_".into(),
@@ -889,10 +900,14 @@ impl Codegen {
             }
 
             TypedInner::BinOp(op, left, right) => {
-                self.emit_node(left)?;
-                self.emit_node(right)?;
-                let opcode = self.binop_to_opcode(op, &left.ty)?;
-                self.emit(opcode);
+                if matches!(op, BinOp::Eq | BinOp::Neq) && matches!(left.ty, Ty::Enum(_)) {
+                    self.emit_enum_eq(op, left, right)?;
+                } else {
+                    self.emit_node(left)?;
+                    self.emit_node(right)?;
+                    let opcode = self.binop_to_opcode(op, &left.ty)?;
+                    self.emit(opcode);
+                }
             }
 
             TypedInner::ListNil => self.emit(Opcode::ListNil),
@@ -925,6 +940,11 @@ impl Codegen {
             TypedInner::FieldAccess(expr, idx) => {
                 self.emit_node(expr)?;
                 self.emit(Opcode::GetField { field_index: *idx });
+            }
+
+            TypedInner::EnumIdx(expr) => {
+                self.emit_node(expr)?;
+                self.emit(Opcode::GetField { field_index: 0 });
             }
 
             TypedInner::StructLit(tag, fields) => {
@@ -1026,6 +1046,19 @@ impl Codegen {
                     kind: TypeKind::Record,
                     field_names: field_names.clone(),
                 });
+                let unit_idx = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit_idx));
+            }
+
+            TypedInner::EnumDef(_, variants) => {
+                for variant in variants {
+                    self.state.type_registry.register(TypeEntry {
+                        tag: variant.tag,
+                        name: variant.constructor_name.clone(),
+                        kind: TypeKind::EnumVariant,
+                        field_names: variant.field_names.clone(),
+                    });
+                }
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
@@ -1973,7 +2006,11 @@ impl Codegen {
                 self.emit(Opcode::EqStr);
                 self.emit_jump_if_false(fail_label);
             }
-            TypedMatchPattern::Constructor(tag, inner) => {
+            TypedMatchPattern::Constructor {
+                tag,
+                fields,
+                field_offset,
+            } => {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::GetTag);
                 let tag_const = self.add_constant(Constant::Tag(*tag));
@@ -1981,12 +2018,16 @@ impl Codegen {
                 self.emit(Opcode::EqTag);
                 self.emit_jump_if_false(fail_label);
 
-                let inner_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::GetField { field_index: 0 });
-                self.emit(Opcode::StoreLocal(inner_slot));
-                self.emit_match_pattern_test(inner, inner_slot, fail_label)?;
+                for (idx, field_pat) in fields.iter().enumerate() {
+                    let inner_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetField {
+                        field_index: *field_offset + idx as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(inner_slot));
+                    self.emit_match_pattern_test(field_pat, inner_slot, fail_label)?;
+                }
             }
             TypedMatchPattern::ListNil => {
                 self.emit(Opcode::LoadLocal(slot));
@@ -2038,13 +2079,21 @@ impl Codegen {
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::ListNil => {}
-            TypedMatchPattern::Constructor(_, inner) => {
-                let inner_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::GetField { field_index: 0 });
-                self.emit(Opcode::StoreLocal(inner_slot));
-                self.emit_match_pattern_bind(inner, inner_slot)?;
+            TypedMatchPattern::Constructor {
+                fields,
+                field_offset,
+                ..
+            } => {
+                for (idx, field_pat) in fields.iter().enumerate() {
+                    let inner_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetField {
+                        field_index: *field_offset + idx as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(inner_slot));
+                    self.emit_match_pattern_bind(field_pat, inner_slot)?;
+                }
             }
             TypedMatchPattern::ListCons(head, tail) => {
                 let head_slot = self.state.next_slot;
@@ -2082,6 +2131,33 @@ impl Codegen {
             Lit::Bool(b) => Constant::Bool(*b),
             Lit::Unit => Constant::Unit,
         }
+    }
+
+    fn emit_enum_eq(
+        &mut self,
+        op: &BinOp,
+        left: &TypedNode,
+        right: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(left)?;
+        let left_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(left_slot));
+
+        self.emit_node(right)?;
+        let right_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(right_slot));
+
+        self.emit(Opcode::LoadLocal(left_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit(Opcode::LoadLocal(right_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit(Opcode::EqInt);
+        if matches!(op, BinOp::Neq) {
+            self.emit(Opcode::NotBool);
+        }
+        Ok(())
     }
 
     fn binop_to_opcode(&self, op: &BinOp, left_ty: &Ty) -> Result<Opcode, CodegenError> {

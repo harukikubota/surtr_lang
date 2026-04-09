@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use sindr::primitives::SurtrInt;
 use spire::ast::Symbol;
 
 use crate::types::Ty;
@@ -10,6 +11,7 @@ pub enum TypeKind {
     Struct,
     Record,
     Error,
+    Enum,
 }
 
 /// Metadata for a user-defined type (struct, record, error).
@@ -31,6 +33,16 @@ pub enum TypeDefState {
     SignatureResolved,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariantInfo {
+    pub constructor_name: Symbol,
+    pub short_name: Symbol,
+    pub enum_name: Symbol,
+    pub tag: u32,
+    pub payload: Vec<Ty>,
+    pub discriminant: SurtrInt,
+}
+
 /// Type environment — tracks variable types and type definitions.
 #[derive(Debug, Clone)]
 pub struct TypeEnv {
@@ -48,6 +60,12 @@ pub struct TypeEnv {
     pub error_type_names: HashSet<Symbol>,
     /// `deferror` constructor bindings by unique_id
     pub error_constructor_ids: HashSet<u32>,
+    /// enum constructor unique_id -> variant metadata
+    pub enum_constructor_ids: HashMap<u32, EnumVariantInfo>,
+    /// enum tag -> variant metadata
+    pub enum_variant_tags: HashMap<u32, EnumVariantInfo>,
+    /// enum type name -> variants
+    pub enum_variants_by_enum: HashMap<Symbol, Vec<EnumVariantInfo>>,
 }
 
 impl TypeEnv {
@@ -60,6 +78,9 @@ impl TypeEnv {
             next_tyvar: 0,
             error_type_names: HashSet::new(),
             error_constructor_ids: HashSet::new(),
+            enum_constructor_ids: HashMap::new(),
+            enum_variant_tags: HashMap::new(),
+            enum_variants_by_enum: HashMap::new(),
         }
     }
 
@@ -116,6 +137,13 @@ impl TypeEnv {
         Some(def.tag)
     }
 
+    /// Reserve a fresh runtime tag.
+    pub fn reserve_tag(&mut self) -> u32 {
+        let tag = self.next_tag;
+        self.next_tag += 1;
+        tag
+    }
+
     /// Register a type definition using the legacy single-step API.
     ///
     /// This keeps existing call-sites working while internally using the
@@ -163,6 +191,43 @@ impl TypeEnv {
 
     pub fn is_declared_error_type_name(&self, name: &str) -> bool {
         self.error_type_names.contains(name)
+    }
+
+    pub fn register_enum_variant(
+        &mut self,
+        constructor_id: u32,
+        variant: EnumVariantInfo,
+    ) -> Result<(), String> {
+        if self.enum_constructor_ids.contains_key(&constructor_id) {
+            return Err(format!(
+                "enum constructor id {} already registered",
+                constructor_id
+            ));
+        }
+        if self.enum_variant_tags.contains_key(&variant.tag) {
+            return Err(format!("enum tag {} already registered", variant.tag));
+        }
+
+        self.enum_constructor_ids
+            .insert(constructor_id, variant.clone());
+        self.enum_variant_tags.insert(variant.tag, variant.clone());
+        self.enum_variants_by_enum
+            .entry(variant.enum_name.clone())
+            .or_default()
+            .push(variant);
+        Ok(())
+    }
+
+    pub fn enum_variant_by_constructor_id(&self, unique_id: u32) -> Option<&EnumVariantInfo> {
+        self.enum_constructor_ids.get(&unique_id)
+    }
+
+    pub fn enum_variant_by_tag(&self, tag: u32) -> Option<&EnumVariantInfo> {
+        self.enum_variant_tags.get(&tag)
+    }
+
+    pub fn enum_variants_of(&self, enum_name: &str) -> Option<&Vec<EnumVariantInfo>> {
+        self.enum_variants_by_enum.get(enum_name)
     }
 }
 

@@ -1,0 +1,7 @@
+defenum Loop {
+  End,
+  Next(Loop),
+}
+
+value: Loop = Loop::End
+print(to_string(value.idx))

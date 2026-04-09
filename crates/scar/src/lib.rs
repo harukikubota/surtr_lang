@@ -434,6 +434,33 @@ right: String = str_id("ok")"#,
     }
 
     #[test]
+    fn enum_cycle_is_allowed_when_not_shared_by_all_variants() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defenum Loop {
+  End,
+  Next(Loop),
+}
+value: Loop = Loop::End"#,
+        );
+        let typed = typecheck(resolved).expect("enum should allow conditional recursion");
+        assert!(typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::EnumDef(_, _))));
+    }
+
+    #[test]
+    fn enum_cycle_is_rejected_when_shared_by_all_variants() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defenum Loop {
+  A(Loop),
+  B(Loop),
+}"#,
+        );
+        let err = typecheck(resolved).expect_err("enum cycle must fail");
+        assert!(err.message.contains("Cyclic type definition detected"));
+    }
+
+    #[test]
     fn match_binding_pattern_is_treated_as_exhaustive() {
         let resolved = resolve_with_builtin_prelude(
             r#"flag = True

@@ -210,6 +210,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "defstruct" => Token::Defstruct,
                 "defrecord" => Token::Defrecord,
                 "deferror" => Token::Deferror,
+                "defenum" => Token::Defenum,
                 "match" => Token::Match,
                 "type" => Token::Type,
                 _ => Token::Ident(text),
@@ -384,6 +385,12 @@ mod tests {
     fn test_defmod_keyword() {
         let tokens = tokenize("defmod Kernel { def add() -> Unit { () } }").unwrap();
         assert!(matches!(tokens[0].token, Token::Defmod));
+    }
+
+    #[test]
+    fn test_defenum_keyword() {
+        let tokens = tokenize("defenum Color { Red, Green }").unwrap();
+        assert!(matches!(tokens[0].token, Token::Defenum));
     }
 
     #[test]

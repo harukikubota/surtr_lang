@@ -72,6 +72,7 @@ pub enum Token {
     Defstruct,
     Defrecord,
     Deferror,
+    Defenum,
     Match,
     Type,
 

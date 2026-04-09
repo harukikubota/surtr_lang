@@ -83,8 +83,8 @@ pub enum AstPattern {
     StrLit(Span, String),
     /// Boolean literal in pattern position.
     BoolLit(Span, bool),
-    /// `Ok(inner)` in safe-bind patterns
-    Constructor(Span, Symbol, Box<AstPattern>),
+    /// `Ok(inner)` / `Color::Red` / `KeyInput::Arrow(dir)` in pattern position.
+    Constructor(Span, Symbol, Vec<AstPattern>),
     /// `inner @ alias` / `inner @ alias: Ty`
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
 }
@@ -102,6 +102,14 @@ pub struct StructField {
 pub struct RecordField {
     pub name: Symbol,
     pub ty: AstTy,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    pub name: Symbol,
+    pub payload: Vec<AstTy>,
+    pub discriminant: Option<SurtrInt>,
     pub span: Span,
 }
 
@@ -213,6 +221,9 @@ pub enum Ast {
 
     /// Error type definition: `deferror ParseError(term: String) { "..." }`
     DeferrorDef(Span, Symbol, Vec<RecordField>, Box<Ast>, DeclAttrs),
+
+    /// Enum definition: `defenum Color { Red, Green = 4, Blue(Int) }`
+    EnumDef(Span, Symbol, Vec<EnumVariant>, DeclAttrs),
 
     /// Function definition: `def add(x: Int, y: Int) -> Int { x + y }`
     Def(

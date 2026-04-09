@@ -38,6 +38,9 @@ pub enum Ty {
     /// Named record: `Point(x: Float, y: Float)`
     Record(Symbol, Vec<(Symbol, Ty)>),
 
+    /// Named enum: `Direction`
+    Enum(Symbol),
+
     /// `Result<Ok, Err>`
     Result(Box<Ty>, Box<Ty>),
 

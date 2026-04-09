@@ -315,6 +315,10 @@ impl Checker {
                     self.env
                         .predeclare_type_def(id.name.clone(), TypeKind::Error);
                 }
+                Resolved::EnumDef(_, id, _) => {
+                    self.env
+                        .predeclare_type_def(id.name.clone(), TypeKind::Enum);
+                }
                 _ => {}
             }
         }
@@ -382,6 +386,79 @@ impl Checker {
                             hint: None,
                         })?;
                 }
+                Resolved::EnumDef(_, id, variants) => {
+                    let _ = self
+                        .env
+                        .resolve_type_def_signature(&id.name, Vec::new())
+                        .ok_or_else(|| TypeError {
+                            message: format!("Unknown type declaration: {}", id.name),
+                            span: id.span.clone(),
+                            hint: None,
+                        })?;
+                    self.env.bind_var(id.unique_id, Ty::Enum(id.name.clone()));
+
+                    let mut next_discriminant = sindr::primitives::int(0);
+                    let mut seen_discriminants: HashSet<sindr::primitives::SurtrInt> =
+                        HashSet::new();
+                    let mut enum_variants = Vec::new();
+
+                    for variant in variants {
+                        let discriminant = if let Some(explicit) = &variant.discriminant {
+                            explicit.clone()
+                        } else {
+                            next_discriminant.clone()
+                        };
+                        if seen_discriminants.contains(&discriminant) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "Duplicate enum discriminant {} in {}",
+                                    discriminant, id.name
+                                ),
+                                span: variant.span.clone(),
+                                hint: None,
+                            });
+                        }
+                        seen_discriminants.insert(discriminant.clone());
+                        next_discriminant = discriminant.clone() + sindr::primitives::int(1);
+
+                        let payload = variant
+                            .payload
+                            .iter()
+                            .map(|ty| {
+                                self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::General)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+
+                        let tag = self.env.reserve_tag();
+                        let short_name = variant
+                            .id
+                            .name
+                            .rsplit("::")
+                            .next()
+                            .unwrap_or(variant.id.name.as_str())
+                            .to_string();
+                        let info = crate::env::EnumVariantInfo {
+                            constructor_name: variant.id.name.clone(),
+                            short_name,
+                            enum_name: id.name.clone(),
+                            tag,
+                            payload: payload.clone(),
+                            discriminant: discriminant.clone(),
+                        };
+                        self.env
+                            .register_enum_variant(variant.id.unique_id, info.clone())
+                            .map_err(|message| TypeError {
+                                message,
+                                span: variant.span.clone(),
+                                hint: None,
+                            })?;
+                        enum_variants.push(info);
+                    }
+
+                    self.env
+                        .enum_variants_by_enum
+                        .insert(id.name.clone(), enum_variants);
+                }
                 _ => {}
             }
         }
@@ -394,20 +471,46 @@ impl Checker {
         let mut edges: HashMap<String, HashSet<String>> = HashMap::new();
 
         for stmt in stmts {
-            let (id, fields) = match stmt {
+            match stmt {
                 Resolved::StructDef(_, id, fields)
                 | Resolved::RecordDef(_, id, fields)
-                | Resolved::DeferrorDef(_, id, fields, _) => (id, fields),
-                _ => continue,
-            };
-            decl_spans.insert(id.name.clone(), id.span.clone());
-            edges.entry(id.name.clone()).or_default();
-            for field in fields {
-                let mut refs = Vec::new();
-                Self::collect_type_ref_names(&field.ty, &mut refs);
-                for ref_name in refs {
-                    edges.entry(id.name.clone()).or_default().insert(ref_name);
+                | Resolved::DeferrorDef(_, id, fields, _) => {
+                    decl_spans.insert(id.name.clone(), id.span.clone());
+                    edges.entry(id.name.clone()).or_default();
+                    for field in fields {
+                        let mut refs = Vec::new();
+                        Self::collect_type_ref_names(&field.ty, &mut refs);
+                        for ref_name in refs {
+                            edges.entry(id.name.clone()).or_default().insert(ref_name);
+                        }
+                    }
                 }
+                Resolved::EnumDef(_, id, variants) => {
+                    decl_spans.insert(id.name.clone(), id.span.clone());
+                    edges.entry(id.name.clone()).or_default();
+                    let mut common_refs: Option<HashSet<String>> = None;
+                    for variant in variants {
+                        let mut variant_refs = HashSet::new();
+                        for payload_ty in &variant.payload {
+                            let mut refs = Vec::new();
+                            Self::collect_type_ref_names(payload_ty, &mut refs);
+                            for ref_name in refs {
+                                variant_refs.insert(ref_name);
+                            }
+                        }
+                        common_refs = Some(match common_refs {
+                            Some(existing) => existing
+                                .intersection(&variant_refs)
+                                .cloned()
+                                .collect::<HashSet<_>>(),
+                            None => variant_refs,
+                        });
+                    }
+                    for ref_name in common_refs.unwrap_or_default() {
+                        edges.entry(id.name.clone()).or_default().insert(ref_name);
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -577,23 +680,46 @@ impl Checker {
             }
 
             Resolved::Var(span, id) => {
-                let stored_ty =
-                    self.env
-                        .lookup_var(id.unique_id)
-                        .cloned()
-                        .ok_or_else(|| TypeError {
-                            message: format!("Undefined variable: {}", id.name),
+                if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
+                    let ty = match &stored_ty {
+                        Ty::BuiltinFunc { .. } => self.instantiate_builtin_ty(&stored_ty),
+                        _ => self.resolve_ty(&stored_ty),
+                    };
+                    return Ok(TypedNode {
+                        ty,
+                        span: span.clone(),
+                        node: TypedInner::Var(id.clone()),
+                    });
+                }
+
+                if let Some(variant) = self.env.enum_variant_by_constructor_id(id.unique_id) {
+                    if !variant.payload.is_empty() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Enum constructor {} expects {} argument(s)",
+                                id.name,
+                                variant.payload.len()
+                            ),
                             span: span.clone(),
-                            hint: None,
-                        })?;
-                let ty = match &stored_ty {
-                    Ty::BuiltinFunc { .. } => self.instantiate_builtin_ty(&stored_ty),
-                    _ => self.resolve_ty(&stored_ty),
-                };
-                Ok(TypedNode {
-                    ty,
+                            hint: Some("Call it as `Enum::Variant(...)`".into()),
+                        });
+                    }
+                    let idx_node = TypedNode {
+                        ty: Ty::Int,
+                        span: span.clone(),
+                        node: TypedInner::Lit(Lit::Int(variant.discriminant.clone())),
+                    };
+                    return Ok(TypedNode {
+                        ty: Ty::Enum(variant.enum_name.clone()),
+                        span: span.clone(),
+                        node: TypedInner::ConstructorCall(variant.tag, vec![idx_node]),
+                    });
+                }
+
+                Err(TypeError {
+                    message: format!("Undefined variable: {}", id.name),
                     span: span.clone(),
-                    node: TypedInner::Var(id.clone()),
+                    hint: None,
                 })
             }
 
@@ -683,6 +809,7 @@ impl Checker {
             // Pass-through for struct/record/error defs and constructor calls — phase 7+
             Resolved::StructDef(span, id, fields) => self.check_struct_def(span, id, fields),
             Resolved::RecordDef(span, id, fields) => self.check_record_def(span, id, fields),
+            Resolved::EnumDef(span, id, variants) => self.check_enum_def(span, id, variants),
             Resolved::StructLit(span, id, field_vals) => {
                 self.check_struct_lit(span, id, field_vals)
             }
@@ -790,7 +917,13 @@ impl Checker {
 
     fn contains_result_test_pattern(pat: &ResolvedPattern) -> bool {
         match pat {
-            ResolvedPattern::Constructor(_, _) => true,
+            ResolvedPattern::Constructor(ctor, inners) => {
+                ctor.name == "Ok"
+                    || ctor.name == "Err"
+                    || inners
+                        .iter()
+                        .any(|inner| Self::contains_result_test_pattern(inner))
+            }
             ResolvedPattern::As(inner, _, _) => Self::contains_result_test_pattern(inner),
             ResolvedPattern::ListCons(head, tail) => {
                 Self::contains_result_test_pattern(head) || Self::contains_result_test_pattern(tail)
@@ -868,6 +1001,7 @@ impl Checker {
                                 Ok(Ty::Record(def.name.clone(), def.fields.clone()))
                             }
                             crate::env::TypeKind::Error => Ok(Ty::Error),
+                            crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone())),
                         }
                     } else {
                         Err(TypeError {
@@ -1107,6 +1241,7 @@ impl Checker {
             }
             (Ty::Struct(n1, _), Ty::Struct(n2, _)) => n1 == n2,
             (Ty::Record(n1, _), Ty::Record(n2, _)) => n1 == n2,
+            (Ty::Enum(n1), Ty::Enum(n2)) => n1 == n2,
             _ => false,
         }
     }
@@ -1145,6 +1280,7 @@ impl Checker {
             Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
                 .iter()
                 .any(|(_, field_ty)| self.ty_contains_var(field_ty, needle)),
+            Ty::Enum(_) => false,
             _ => false,
         }
     }
@@ -1188,6 +1324,7 @@ impl Checker {
                     .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
                     .collect(),
             ),
+            Ty::Enum(name) => Ty::Enum(name.clone()),
             Ty::Result(ok, err) => Ty::Result(
                 Box::new(self.resolve_ty(ok)),
                 Box::new(self.resolve_ty(err)),
@@ -1249,6 +1386,7 @@ impl Checker {
                         })
                         .collect(),
                 ),
+                Ty::Enum(name) => Ty::Enum(name.clone()),
                 Ty::Result(ok, err) => Ty::Result(
                     Box::new(instantiate(checker, ok, fresh)),
                     Box::new(instantiate(checker, err, fresh)),
@@ -1272,7 +1410,7 @@ impl Checker {
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Result(ok, _) => format!("Result<{}>", self.ty_name(ok)),
             Ty::Var(n) => format!("${}", n),
-            Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+            Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name) => name.clone(),
             Ty::Func(params, ret) => format!("{}", {
                 let param_str = params
                     .iter()
@@ -1357,6 +1495,9 @@ impl Checker {
             TypedInner::FieldAccess(expr, idx) => {
                 TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
             }
+            TypedInner::EnumIdx(expr) => {
+                TypedInner::EnumIdx(Box::new(self.resolve_typed_node(*expr)))
+            }
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
                 fields
@@ -1420,6 +1561,7 @@ impl Checker {
             TypedInner::RecordDef(tag, name, field_names) => {
                 TypedInner::RecordDef(tag, name, field_names)
             }
+            TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::Semi(inner) => TypedInner::Semi(Box::new(self.resolve_typed_node(*inner))),
         };
 
@@ -1653,7 +1795,7 @@ impl Checker {
                 }
                 Ok((TypedPattern::BoolLit(Ty::Bool, *b), rhs_ty))
             }
-            ResolvedPattern::Constructor(ctor_id, inner) => {
+            ResolvedPattern::Constructor(ctor_id, inners) => {
                 if ctor_id.name != "Ok" {
                     return Err(TypeError {
                         message: format!(
@@ -1682,7 +1824,16 @@ impl Checker {
                     }
                 };
 
-                let (typed_inner, _) = self.check_pattern(inner, &ok_ty, span)?;
+                if inners.len() != 1 {
+                    return Err(TypeError {
+                        message: "SafeBind Ok(...) pattern requires exactly one inner pattern"
+                            .into(),
+                        span: ctor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+
+                let (typed_inner, _) = self.check_pattern(&inners[0], &ok_ty, span)?;
                 Ok((
                     TypedPattern::ResultOk(rhs_ty.clone(), Box::new(typed_inner)),
                     rhs_ty,
@@ -2274,7 +2425,24 @@ impl Checker {
                 }),
             },
             BinOp::Eq | BinOp::Neq => match (&lt, &rt) {
-                (Ty::Int, Ty::Int) | (Ty::Str, Ty::Str) | (Ty::Bool, Ty::Bool) => Ok(Ty::Bool),
+                (Ty::Int, Ty::Int)
+                | (Ty::Str, Ty::Str)
+                | (Ty::Bool, Ty::Bool)
+                | (Ty::Enum(_), Ty::Enum(_)) => {
+                    if self.types_compatible(&lt, &rt) {
+                        Ok(Ty::Bool)
+                    } else {
+                        Err(TypeError {
+                            message: format!(
+                                "Cannot compare {} and {}",
+                                self.ty_name(&lt),
+                                self.ty_name(&rt)
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        })
+                    }
+                }
                 _ => {
                     // Equality checks are intentionally restricted for now.
                     // Probe comparability without committing substitutions on failure.
@@ -2598,10 +2766,10 @@ impl Checker {
             Ty::Result(_, _) => {
                 let has_ok = arms
                     .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor(0, _)));
+                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor { tag: 0, .. }));
                 let has_err = arms
                     .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor(1, _)));
+                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor { tag: 1, .. }));
 
                 if has_ok && has_err {
                     Ok(())
@@ -2613,6 +2781,34 @@ impl Checker {
                     if !has_err {
                         missing.push("Err");
                     }
+                    Err(TypeError {
+                        message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
+                        span: span.clone(),
+                        hint: None,
+                    })
+                }
+            }
+            Ty::Enum(enum_name) => {
+                let variants = self
+                    .env
+                    .enum_variants_of(enum_name)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut missing = Vec::new();
+                for variant in variants {
+                    let covered = arms.iter().any(|(pat, _)| {
+                        matches!(
+                            pat,
+                            TypedMatchPattern::Constructor { tag, .. } if *tag == variant.tag
+                        )
+                    });
+                    if !covered {
+                        missing.push(variant.short_name);
+                    }
+                }
+                if missing.is_empty() {
+                    Ok(())
+                } else {
                     Err(TypeError {
                         message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
                         span: span.clone(),
@@ -2751,32 +2947,89 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::StrLit(s.clone()))
             }
-            ResolvedPattern::Constructor(ctor_id, inner_pat) => {
-                if !matches!(expected_ty, Ty::Result(_, _)) {
-                    return Err(TypeError {
-                        message: "Result constructor pattern on non-Result scrutinee".into(),
-                        span: ctor_id.span.clone(),
-                        hint: None,
-                    });
-                }
-                let tag = match ctor_id.name.as_str() {
-                    "Ok" => 0u32,
-                    "Err" => 1u32,
-                    _ => {
+            ResolvedPattern::Constructor(ctor_id, inner_pats) => {
+                if matches!(expected_ty, Ty::Result(_, _)) {
+                    let tag = match ctor_id.name.as_str() {
+                        "Ok" => 0u32,
+                        "Err" => 1u32,
+                        _ => {
+                            return Err(TypeError {
+                                message: format!("Unknown constructor: {}", ctor_id.name),
+                                span: ctor_id.span.clone(),
+                                hint: None,
+                            });
+                        }
+                    };
+                    if inner_pats.len() != 1 {
                         return Err(TypeError {
-                            message: format!("Unknown constructor: {}", ctor_id.name),
+                            message: format!(
+                                "{}(...) match pattern requires exactly one argument",
+                                ctor_id.name
+                            ),
                             span: ctor_id.span.clone(),
                             hint: None,
                         });
                     }
+                    let inner_ty = match (tag, expected_ty) {
+                        (0, Ty::Result(ok, _)) => ok.as_ref().clone(),
+                        (1, Ty::Result(_, err)) => err.as_ref().clone(),
+                        _ => unreachable!(),
+                    };
+                    let typed_inner = self.check_match_subpattern(&inner_pats[0], &inner_ty)?;
+                    return Ok(TypedMatchPattern::Constructor {
+                        tag,
+                        fields: vec![typed_inner],
+                        field_offset: 0,
+                    });
+                }
+
+                let Ty::Enum(expected_enum_name) = expected_ty else {
+                    return Err(TypeError {
+                        message: "Constructor pattern on non-enum/non-Result scrutinee".into(),
+                        span: ctor_id.span.clone(),
+                        hint: None,
+                    });
                 };
-                let inner_ty = match (tag, expected_ty) {
-                    (0, Ty::Result(ok, _)) => ok.as_ref().clone(),
-                    (1, Ty::Result(_, err)) => err.as_ref().clone(),
-                    _ => unreachable!(),
-                };
-                let typed_inner = self.check_match_subpattern(inner_pat, &inner_ty)?;
-                Ok(TypedMatchPattern::Constructor(tag, Box::new(typed_inner)))
+                let variant = self
+                    .env
+                    .enum_variant_by_constructor_id(ctor_id.unique_id)
+                    .ok_or_else(|| TypeError {
+                        message: format!("Unknown constructor: {}", ctor_id.name),
+                        span: ctor_id.span.clone(),
+                        hint: None,
+                    })?
+                    .clone();
+                if &variant.enum_name != expected_enum_name {
+                    return Err(TypeError {
+                        message: format!(
+                            "Constructor {} does not belong to enum {}",
+                            ctor_id.name, expected_enum_name
+                        ),
+                        span: ctor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+                if inner_pats.len() != variant.payload.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "{} pattern expects {} argument(s), got {}",
+                            ctor_id.name,
+                            variant.payload.len(),
+                            inner_pats.len()
+                        ),
+                        span: ctor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+                let mut typed_fields = Vec::new();
+                for (pat, field_ty) in inner_pats.iter().zip(variant.payload.iter()) {
+                    typed_fields.push(self.check_match_subpattern(pat, field_ty)?);
+                }
+                Ok(TypedMatchPattern::Constructor {
+                    tag: variant.tag,
+                    fields: typed_fields,
+                    field_offset: 1,
+                })
             }
             ResolvedPattern::ListNil(span) => {
                 if !matches!(expected_ty, Ty::List(_)) {
@@ -2820,7 +3073,7 @@ impl Checker {
             TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
-            | TypedMatchPattern::Constructor(_, _)
+            | TypedMatchPattern::Constructor { .. }
             | TypedMatchPattern::ListNil
             | TypedMatchPattern::ListCons(_, _) => false,
         }
@@ -2835,6 +3088,21 @@ impl Checker {
         field: &str,
     ) -> Result<TypedNode, TypeError> {
         let typed_expr = self.check_node(expr)?;
+
+        if let Ty::Enum(_) = &typed_expr.ty {
+            if field != "idx" {
+                return Err(TypeError {
+                    message: format!("No field '{}' on {}", field, self.ty_name(&typed_expr.ty)),
+                    span: span.clone(),
+                    hint: Some("Enum field access supports only `.idx`".into()),
+                });
+            }
+            return Ok(TypedNode {
+                ty: Ty::Int,
+                span: span.clone(),
+                node: TypedInner::EnumIdx(Box::new(typed_expr)),
+            });
+        }
 
         let (idx, field_ty) = match &typed_expr.ty {
             Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
@@ -3353,6 +3621,51 @@ impl Checker {
         })
     }
 
+    fn check_enum_def(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        variants: &[ResolvedEnumVariant],
+    ) -> Result<TypedNode, TypeError> {
+        let enum_variants = self
+            .env
+            .enum_variants_of(&id.name)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown enum type declaration: {}", id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
+
+        if enum_variants.len() != variants.len() {
+            return Err(TypeError {
+                message: format!("Enum variant metadata mismatch: {}", id.name),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let typed_variants = enum_variants
+            .into_iter()
+            .map(|variant| TypedEnumVariantDef {
+                tag: variant.tag,
+                constructor_name: variant.constructor_name,
+                field_names: variant
+                    .payload
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, _)| format!("_{}", idx))
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::EnumDef(id.name.clone(), typed_variants),
+        })
+    }
+
     fn check_record_def(
         &mut self,
         span: &Span,
@@ -3585,6 +3898,65 @@ impl Checker {
             });
         }
 
+        if let Some(variant) = self
+            .env
+            .enum_variant_by_constructor_id(id.unique_id)
+            .cloned()
+        {
+            if args.len() != variant.payload.len() {
+                return Err(TypeError {
+                    message: format!(
+                        "{} expects {} argument(s), got {}",
+                        id.name,
+                        variant.payload.len(),
+                        args.len()
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            let mut payload_values = Vec::new();
+            for (idx, arg) in args.iter().enumerate() {
+                let expected = &variant.payload[idx];
+                let typed = match arg {
+                    ResolvedRecordLitArg::Positional(expr) => self.check_node(expr)?,
+                    ResolvedRecordLitArg::Named(_, _) => {
+                        return Err(TypeError {
+                            message: "Enum constructors do not accept named arguments".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                };
+                if !self.types_compatible(expected, &typed.ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Argument type mismatch: expected {}, got {}",
+                            self.ty_name(expected),
+                            self.ty_name(&typed.ty)
+                        ),
+                        span: typed.span.clone(),
+                        hint: None,
+                    });
+                }
+                payload_values.push(typed);
+            }
+
+            let mut fields = Vec::with_capacity(payload_values.len() + 1);
+            fields.push(TypedNode {
+                ty: Ty::Int,
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Int(variant.discriminant)),
+            });
+            fields.extend(payload_values);
+
+            return Ok(TypedNode {
+                ty: Ty::Enum(variant.enum_name),
+                span: span.clone(),
+                node: TypedInner::ConstructorCall(variant.tag, fields),
+            });
+        }
+
         let def = self
             .env
             .lookup_type_def(&id.name)
@@ -3710,7 +4082,9 @@ impl Checker {
         let result_ty = match def.kind {
             crate::env::TypeKind::Record => Ty::Record(id.name.clone(), def.fields.clone()),
             crate::env::TypeKind::Error => Ty::Error,
-            crate::env::TypeKind::Struct => unreachable!("validated above"),
+            crate::env::TypeKind::Struct | crate::env::TypeKind::Enum => {
+                unreachable!("validated above")
+            }
         };
         Ok(TypedNode {
             ty: result_ty,

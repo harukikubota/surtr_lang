@@ -75,6 +75,9 @@ pub enum Resolved {
     /// Error type definition
     DeferrorDef(Span, ResolvedId, Vec<ResolvedField>, Box<Resolved>),
 
+    /// Enum definition
+    EnumDef(Span, ResolvedId, Vec<ResolvedEnumVariant>),
+
     /// Function definition
     Def(
         Span,
@@ -138,7 +141,7 @@ pub enum ResolvedPattern {
     IntLit(Span, SurtrInt),
     StrLit(Span, String),
     BoolLit(Span, bool),
-    Constructor(ResolvedId, Box<ResolvedPattern>),
+    Constructor(ResolvedId, Vec<ResolvedPattern>),
     As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
 }
 
@@ -170,4 +173,12 @@ pub struct ResolvedFunParam {
 pub struct ResolvedClosureParam {
     pub id: ResolvedId,
     pub ty: Option<AstTy>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedEnumVariant {
+    pub id: ResolvedId,
+    pub payload: Vec<AstTy>,
+    pub discriminant: Option<SurtrInt>,
+    pub span: Span,
 }

@@ -8,6 +8,7 @@ use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
 pub enum TypeKind {
     Struct,
     Record,
+    EnumVariant,
 }
 
 /// Runtime metadata for a tagged type.
@@ -129,6 +130,19 @@ impl Value {
                     match entry.kind {
                         TypeKind::Struct => format!("{} {{ {} }}", entry.name, pairs),
                         TypeKind::Record => format!("{}({})", entry.name, pairs),
+                        TypeKind::EnumVariant => {
+                            let payload = fields
+                                .iter()
+                                .skip(1)
+                                .map(|val| val.to_display_string(registry))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            if payload.is_empty() {
+                                entry.name.clone()
+                            } else {
+                                format!("{}({})", entry.name, payload)
+                            }
+                        }
                     }
                 } else {
                     // Fallback for reserved tags and unknown runtime tags.

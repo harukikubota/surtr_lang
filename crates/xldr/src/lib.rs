@@ -101,6 +101,30 @@ fn format_deferror_signature(name: &str, fields: &[spire::ast::RecordField]) -> 
     }
 }
 
+fn format_defenum_signature(name: &str, variants: &[spire::ast::EnumVariant]) -> String {
+    if variants.is_empty() {
+        return format!("defenum {name}");
+    }
+    let variants = variants
+        .iter()
+        .map(|variant| {
+            if variant.payload.is_empty() {
+                variant.name.clone()
+            } else {
+                let payload = variant
+                    .payload
+                    .iter()
+                    .map(format_ast_ty)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}({})", variant.name, payload)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("defenum {name} {{ {variants} }}")
+}
+
 fn qualified_name(module_path: &str, name: &str) -> String {
     if module_path.is_empty() {
         name.to_string()
@@ -167,6 +191,17 @@ fn collect_doc_entries_for_ast(
                         kind: DocKind::Type,
                         module_path: module_path.to_string(),
                         signature: Some(format_deferror_signature(name, fields)),
+                        doc: doc.clone(),
+                    });
+                }
+            }
+            spire::ast::Ast::EnumDef(_, name, variants, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, name),
+                        kind: DocKind::Type,
+                        module_path: module_path.to_string(),
+                        signature: Some(format_defenum_signature(name, variants)),
                         doc: doc.clone(),
                     });
                 }
@@ -364,6 +399,7 @@ pub fn lower_module_source_ast(
             spire::ast::Ast::StructDef(_, _, _)
             | spire::ast::Ast::RecordDef(_, _, _)
             | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
+            | spire::ast::Ast::EnumDef(_, _, _, _)
             | spire::ast::Ast::BuiltinDecl(_, _, _, _, _)
             | spire::ast::Ast::BuiltinTypeDecl(_, _, _) => {
                 // Std-module files are allowed to carry top-level declarations

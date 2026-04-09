@@ -133,6 +133,8 @@ pub enum DeclarationKind {
     Struct,
     Record,
     Deferror,
+    Enum,
+    EnumVariant,
     BuiltinType,
 }
 
@@ -473,6 +475,62 @@ pub fn precollect_declaration_index(
     for (stage_index, stage) in module_stages.iter().enumerate() {
         for module in stage {
             for stmt in &module.ast {
+                if let Ast::EnumDef(span, name, variants, _) = stmt {
+                    let fq_name = if module.module_path.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{}::{}", module.module_path, name)
+                    };
+                    if let Some(prev) = index.get(&fq_name) {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
+                                fq_name, prev.stage_index, prev.module_path
+                            ),
+                            span: span.clone(),
+                        });
+                    }
+                    index.insert(
+                        fq_name.clone(),
+                        DeclarationEntry {
+                            module_path: module.module_path.clone(),
+                            name: name.clone(),
+                            fq_name,
+                            kind: DeclarationKind::Enum,
+                            stage_index,
+                        },
+                    );
+
+                    for variant in variants {
+                        let variant_name = format!("{}::{}", name, variant.name);
+                        let variant_fq_name = if module.module_path.is_empty() {
+                            variant_name.clone()
+                        } else {
+                            format!("{}::{}", module.module_path, variant_name)
+                        };
+                        if let Some(prev) = index.get(&variant_fq_name) {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
+                                    variant_fq_name, prev.stage_index, prev.module_path
+                                ),
+                                span: variant.span.clone(),
+                            });
+                        }
+                        index.insert(
+                            variant_fq_name.clone(),
+                            DeclarationEntry {
+                                module_path: module.module_path.clone(),
+                                name: variant_name,
+                                fq_name: variant_fq_name,
+                                kind: DeclarationKind::EnumVariant,
+                                stage_index,
+                            },
+                        );
+                    }
+                    continue;
+                }
+
                 let (span, name, kind) = match stmt {
                     Ast::Def(span, name, _, _, _, _) => (span, name.as_str(), DeclarationKind::Def),
                     Ast::BuiltinDecl(span, name, _, _, _) => {
@@ -799,6 +857,64 @@ impl Resolver {
                         .push_back(uid);
                     self.scope.define_with_id(name, uid);
                 }
+                Ast::EnumDef(span, name, variants, _) => {
+                    if !declared_in_batch.insert(name.clone()) {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                    let uid = self
+                        .declaration_uids
+                        .get(&self.qualify_current_declaration_name(name))
+                        .copied()
+                        .unwrap_or_else(|| self.scope.reserve_id());
+                    self.predeclared_ids
+                        .entry(name.clone())
+                        .or_default()
+                        .push_back(uid);
+                    self.scope.define_with_id(name, uid);
+
+                    for variant in variants {
+                        let qualified_ctor = format!("{}::{}", name, variant.name);
+                        if !declared_in_batch.insert(qualified_ctor.clone()) {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "Duplicate top-level definition: {}",
+                                    qualified_ctor
+                                ),
+                                span: variant.span.clone(),
+                            });
+                        }
+                        if !self.allow_top_level_shadowing
+                            && self.scope.lookup(&qualified_ctor).is_some()
+                        {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "Duplicate top-level definition: {}",
+                                    qualified_ctor
+                                ),
+                                span: variant.span.clone(),
+                            });
+                        }
+                        let ctor_uid = self
+                            .declaration_uids
+                            .get(&self.qualify_current_declaration_name(&qualified_ctor))
+                            .copied()
+                            .unwrap_or_else(|| self.scope.reserve_id());
+                        self.predeclared_ids
+                            .entry(qualified_ctor.clone())
+                            .or_default()
+                            .push_back(ctor_uid);
+                        self.scope.define_with_id(&qualified_ctor, ctor_uid);
+                    }
+                }
                 _ => {}
             }
         }
@@ -1039,6 +1155,45 @@ impl Resolver {
                     rfields,
                     Box::new(resolved_show),
                 ))
+            }
+
+            Ast::EnumDef(span, name, variants, _) => {
+                let uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                self.scope.define_with_id(&name, uid);
+                let qualified_name = self.qualify_current_declaration_name(&name);
+                let rid = ResolvedId {
+                    name: name.clone(),
+                    qualified_name: Some(qualified_name),
+                    unique_id: uid,
+                    span: span.clone(),
+                };
+
+                let mut resolved_variants = Vec::new();
+                for variant in variants {
+                    let ctor_name = format!("{}::{}", name, variant.name);
+                    let ctor_uid = self
+                        .take_predeclared_id(&ctor_name)
+                        .or_else(|| self.scope.lookup(&ctor_name))
+                        .unwrap_or_else(|| self.scope.reserve_id());
+                    self.scope.define_with_id(&ctor_name, ctor_uid);
+                    let qualified_ctor_name = self.qualify_current_declaration_name(&ctor_name);
+                    resolved_variants.push(ResolvedEnumVariant {
+                        id: ResolvedId {
+                            name: ctor_name,
+                            qualified_name: Some(qualified_ctor_name),
+                            unique_id: ctor_uid,
+                            span: variant.span.clone(),
+                        },
+                        payload: variant.payload,
+                        discriminant: variant.discriminant,
+                        span: variant.span,
+                    });
+                }
+
+                Ok(Resolved::EnumDef(span, rid, resolved_variants))
             }
 
             Ast::Def(span, name, params, ret_ty, body, attrs) => {
@@ -1383,7 +1538,7 @@ impl Resolver {
             AstPattern::IntLit(span, n) => Ok(ResolvedPattern::IntLit(span, n)),
             AstPattern::StrLit(span, s) => Ok(ResolvedPattern::StrLit(span, s)),
             AstPattern::BoolLit(span, b) => Ok(ResolvedPattern::BoolLit(span, b)),
-            AstPattern::Constructor(span, ctor_name, inner) => {
+            AstPattern::Constructor(span, ctor_name, inners) => {
                 let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
                     span: span.clone(),
@@ -1395,7 +1550,10 @@ impl Resolver {
                         unique_id: ctor_uid,
                         span,
                     },
-                    Box::new(self.resolve_pattern_inner(*inner, seen)?),
+                    inners
+                        .into_iter()
+                        .map(|inner| self.resolve_pattern_inner(inner, seen))
+                        .collect::<Result<Vec<_>, _>>()?,
                 ))
             }
             AstPattern::As(span, inner, alias, alias_ty) => {
@@ -1556,6 +1714,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         Resolved::StructDef(_, _, _)
         | Resolved::RecordDef(_, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
+        | Resolved::EnumDef(_, _, _)
         | Resolved::BuiltinDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)
         | Resolved::ResultCtorDecl(_, _, _, _, _) => {}
@@ -1591,8 +1750,10 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
             bound.insert(id.unique_id);
         }
-        ResolvedPattern::Constructor(_, inner) => {
-            collect_bind_pattern_bindings(inner, bound);
+        ResolvedPattern::Constructor(_, inners) => {
+            for inner in inners {
+                collect_bind_pattern_bindings(inner, bound);
+            }
         }
         ResolvedPattern::As(inner, id, _) => {
             bound.insert(id.unique_id);
@@ -2201,7 +2362,7 @@ Ok(num) =? value"#,
         match &resolved[1] {
             Resolved::SafeBind(_, ResolvedPattern::Constructor(ctor, inner), rhs) => {
                 assert_eq!(ctor.name, "Ok");
-                assert!(matches!(inner.as_ref(), ResolvedPattern::Var(id) if id.name == "num"));
+                assert!(matches!(inner.as_slice(), [ResolvedPattern::Var(id)] if id.name == "num"));
                 assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
             }
             _ => panic!("Expected SafeBind with constructor pattern"),
@@ -2225,7 +2386,7 @@ Ok(num) =? value"#,
                     head.as_ref(),
                     ResolvedPattern::Constructor(ctor, inner)
                         if ctor.name == "Ok"
-                        && matches!(inner.as_ref(), ResolvedPattern::IntLit(_, n) if n == &int(1))
+                        && matches!(inner.as_slice(), [ResolvedPattern::IntLit(_, n)] if n == &int(1))
                 ));
                 assert!(matches!(tail.as_ref(), ResolvedPattern::Var(id) if id.name == "tail"));
                 assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "lr"));
@@ -2816,8 +2977,8 @@ result = match value {
                     match &arms[0] {
                         (ResolvedPattern::Constructor(ctor_id, inner), body) => {
                             assert_eq!(ctor_id.name, "Ok");
-                            let binding_id = match inner.as_ref() {
-                                ResolvedPattern::Var(binding_id) => binding_id,
+                            let binding_id = match inner.as_slice() {
+                                [ResolvedPattern::Var(binding_id)] => binding_id,
                                 _ => panic!("Expected constructor inner var binding"),
                             };
                             assert_eq!(binding_id.name, "x");

@@ -41,6 +41,9 @@ pub enum TypedInner {
     /// Error type definition — tag + binding id + params + show expression
     DeferrorDef(u32, u32, ResolvedId, Vec<TypedFunParam>, Box<TypedNode>),
 
+    /// Enum definition — enum type name + variants
+    EnumDef(String, Vec<TypedEnumVariantDef>),
+
     /// Function definition — tag + name + params + return type + body
     Def(u32, ResolvedId, Vec<TypedFunParam>, Ty, Box<TypedNode>),
 
@@ -58,6 +61,9 @@ pub enum TypedInner {
 
     /// Semicolon — explicit Unit coercion
     Semi(Box<TypedNode>),
+
+    /// Enum discriminant accessor: `value.idx`
+    EnumIdx(Box<TypedNode>),
 }
 
 /// Interpolated string fragment (typed).
@@ -96,8 +102,12 @@ pub enum TypedMatchPattern {
     IntLit(SurtrInt),
     /// String literal
     StrLit(String),
-    /// Constructor tag + inner pattern
-    Constructor(u32, Box<TypedMatchPattern>),
+    /// Constructor tag + field patterns + payload field offset.
+    Constructor {
+        tag: u32,
+        fields: Vec<TypedMatchPattern>,
+        field_offset: u32,
+    },
     /// `[]`
     ListNil,
     /// `[head, ..tail]`
@@ -116,4 +126,11 @@ pub struct TypedFunParam {
 pub struct TypedClosureParam {
     pub id: ResolvedId,
     pub ty: Ty,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedEnumVariantDef {
+    pub tag: u32,
+    pub constructor_name: String,
+    pub field_names: Vec<String>,
 }

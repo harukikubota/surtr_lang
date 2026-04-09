@@ -245,9 +245,9 @@
   - let-generalization を入れない current baseline を前提に reopen する
 - OOM / host failure policy
   - 上限値、停止文言、回復可否は host 依存方針のまま、詳細契約は将来確定する
-- Enum
-  - `doc/Enum.md` のメモを起点に reopen する
-  - 条件付き循環、variant payload、tag 戦略と合わせて設計する
+- Enum conversion helper
+  - `defenum` 本体（variant payload / discriminant / 条件付き循環）は `doc/Enum.md` へ反映済み
+  - `Enum::from(Int)` / `Enum::try_from(Int)` の自動生成は未対応のため、仕様確定後に reopen する
 
 ---
 
