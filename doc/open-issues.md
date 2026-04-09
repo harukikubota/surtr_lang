@@ -149,6 +149,85 @@
   - マクロ導入フェーズで `unit/spire|sigil` に段階境界テストを追加。
   - 展開後 IR の決定性比較テスト（同一入力で同一 ID/tag）を必須化。
 
+### OI-006 `defmod` の module path 導出を AST / lowering ベースに統一
+
+- 策定コミット: `2026-04-09 review follow-up`
+- 背景:
+  - `rune` の `derive_primary_module_path` は今回 AST / lowering を優先する形へ寄せたが、`defmod A::B` を扱うために token 走査 fallback をまだ残している。
+  - parser / lowering 側で qualified module path を正規化できれば、loader が token 仕様に依存しない単純な実装になる。
+- 2026-04-09 時点の未解決点:
+  - `spire` / `xldr` のどちらを module path 正本にするか
+  - `defmod A::B` を AST 上でどう保持するか
+- 受け入れ条件:
+  - `derive_primary_module_path` が token 走査 fallback なしで動作する。
+  - コメント、空行、字句仕様変更の影響を直接受けない。
+- テスト方針:
+  - `unit/spire` または `unit/xldr` に `defmod Kernel` / `defmod A::B` の module path 抽出テストを追加する。
+  - `rune` の unit test で fallback を使わず同じ結果になることを確認する。
+
+### OI-007 Rune / Xldr の CLI エラー契約統一
+
+- 策定コミット: `2026-04-09 review follow-up`
+- 背景:
+  - `rune` 側は `RuneError` へ統一したが、`xldr::cli_command` / `xldr::tui::run_command` は引き続き `i32` ベースの返却をしている。
+  - 現状は `rune` 境界で `RuneError::Message` に包んでいるため、REPL / TUI 系の診断契約が phase error と同じレイヤで表現されていない。
+- 2026-04-09 時点の未解決点:
+  - `xldr` 側に共通エラー型を持たせるか、`rune` 側 adapter を正式 API とみなすか
+  - interactive command の usage / message / diagnostic をどこまで typed に扱うか
+- 受け入れ条件:
+  - CLI / REPL / TUI の失敗経路が同じエラー契約で扱える。
+  - exit code と stderr 出力責務の境界が crate 間で明文化される。
+- テスト方針:
+  - `rune` integration で CLI / REPL / TUI 起点の失敗時に期待する exit code とメッセージが維持されることを確認する。
+  - `unit/xldr` または `unit/rune` で error adapter の変換テストを追加する。
+
+### OI-008 `TypeRegistry::lookup` の参照コスト最適化
+
+- 策定コミット: `2026-04-09 review follow-up`
+- 背景:
+  - `TypeRegistry::lookup` はまだ `entries.iter().find(...)` の線形探索で、`Value::to_display_string` のような表示系で繰り返し呼ばれる。
+  - 現行規模では許容できるが、型数やネストした値が増えると表示コストが読みやすくない形で増える。
+- 2026-04-09 時点の未解決点:
+  - `HashMap<u32, usize>` を併設するか、tag と配列位置を一致させる設計に寄せるか
+  - 決定性と serialize 形に影響を出さずに index を持つ方法
+- 受け入れ条件:
+  - `lookup` が O(1) 相当で引ける。
+  - 現行の tag 決定性と表示結果が変わらない。
+- テスト方針:
+  - 既存 display 系テストを維持したまま内部 index 導入後も同じ表示になることを確認する。
+  - `unit/sindr` に tag lookup の整合テストを追加する。
+
+### OI-009 List runtime 表現の簡素化
+
+- 策定コミット: `2026-04-09 review follow-up`
+- 背景:
+  - `ListNode` は単一バリアント enum のままで、`tail_handle()` も非空前提の箇所で `saturating_sub` を使っている。
+  - 挙動上の不具合ではないが、runtime の意図がコードから読み取りにくい。
+- 2026-04-09 時点の未解決点:
+  - `ListNode` を struct に寄せるか、将来空ノード等の variant 拡張余地を残すか
+  - `ListHandle` の不変条件を型とコメントのどちらで表現するか
+- 受け入れ条件:
+  - 非空リストの不変条件がコード上で明確になる。
+  - `head_value()` / `tail_handle()` の既存挙動と API は維持される。
+- テスト方針:
+  - 空リスト / 1 要素 / 複数要素で `head_value()` / `tail_handle()` の結果が変わらないことを `unit/sindr` で確認する。
+  - 必要なら `len` 更新の不変条件テストを追加する。
+
+### OI-010 `RichError` 表示形式の仕様化
+
+- 策定コミット: `2026-04-09 review follow-up`
+- 背景:
+  - `RichError::to_display_string` は message を `{:?}` で表示しており、現在は quoted form が仕様として固定されている。
+  - review では `{}` 表示、もしくは意図をコメントで明示する案が出たが、今回は挙動変更を見送った。
+- 2026-04-09 時点の未解決点:
+  - user-facing error と debug-like display のどちらを正本にするか
+  - quoted form を保つ場合、`doc/EldrVM_spec.md` か rustdoc のどちらで説明するか
+- 受け入れ条件:
+  - `RichError` の表示が仕様として文書化される。
+  - quoted / unquoted のどちらを採るかがテストとドキュメントで一致する。
+- テスト方針:
+  - `unit/sindr` に `display_for_rich_error_*` 系テストを固定し、採用形式が将来ぶれないようにする。
+
 ---
 
 ## 4. Deferred Topics
