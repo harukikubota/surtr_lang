@@ -6,6 +6,7 @@ use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_meta_by_name;
+use sindr::ir::DocEntry;
 use sindr::primitives::int;
 use spire::ast::{BinOp, Lit, Span};
 
@@ -27,6 +28,7 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         error_templates: state.error_templates,
         functions: state.functions,
         source_map: None,
+        docs: Vec::new(),
     })
 }
 
@@ -56,6 +58,7 @@ pub struct ChunkMeta {
     pub bindings: Vec<BindingInfo>,
     pub type_defs: Vec<TypeDefDisplay>,
     pub function_defs: Vec<String>,
+    pub docs: Vec<DocEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -292,6 +295,7 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
         bindings,
         type_defs,
         function_defs,
+        docs: Vec::new(),
     }
 }
 

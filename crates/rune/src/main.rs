@@ -322,7 +322,13 @@ fn collect_additional_std_module_inputs() -> Result<Vec<xldr::ModuleInput>, Stri
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| module_path_from_file_name(&path));
 
-        if module_path != "Bootstrap" && module_path != "Kernel" {
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if !xldr::is_default_std_module_file_name(file_name)
+            && !xldr::is_default_std_module_path(&module_path)
+        {
             module_inputs.push(xldr::ModuleInput {
                 file_name: file_path,
                 source,
@@ -626,7 +632,7 @@ fn evaluate_expression(
     vm.run()
         .map_err(|e| format!("runtime error while evaluating test expression: {}", e))?;
     let value = vm.last_value().cloned().unwrap_or(Value::Unit);
-    let display = value.to_display_string(&vm.type_registry());
+    let display = value.to_display_string(vm.type_registry());
     Ok((value, display))
 }
 
@@ -940,6 +946,11 @@ fn compile_source(
     if let Some(entry_name) = compile_plan.selected_entry_name.as_deref() {
         user_ast = rewrite_script_ast_for_entry(user_ast, entry_name);
     }
+    let docs = xldr::collect_doc_entries(
+        &module_stages,
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
 
     // Issue 6: precollect declaration index from staged modules before body resolution.
     let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
@@ -981,6 +992,7 @@ fn compile_source(
                 xldr::SourceKind::Script,
                 compile_plan.normalized_entrypoint.as_ref(),
             ),
+            enforce_builtin_type_contracts: true,
         },
     ) {
         Ok(t) => t,
@@ -1008,6 +1020,7 @@ fn compile_source(
     };
 
     populate_error_template_lines(&mut bytecode.error_templates, user_source);
+    bytecode.docs = docs;
 
     Ok(bytecode)
 }
@@ -1110,11 +1123,11 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
         .filter(|stmt| {
             matches!(
                 stmt,
-                Ast::Def(_, _, _, _, _)
-                    | Ast::BuiltinDecl(_, _, _, _)
+                Ast::Def(_, _, _, _, _, _)
+                    | Ast::BuiltinDecl(_, _, _, _, _)
                     | Ast::StructDef(_, _, _)
                     | Ast::RecordDef(_, _, _)
-                    | Ast::DeferrorDef(_, _, _, _)
+                    | Ast::DeferrorDef(_, _, _, _, _)
                     | Ast::Import(_, _, _)
             )
         })

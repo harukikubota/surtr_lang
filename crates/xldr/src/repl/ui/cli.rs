@@ -235,6 +235,24 @@ fn print_result(result: &ReplResult) {
                 println!("> {}", line);
             }
         }
+        ReplOutput::DocResolved {
+            symbol,
+            signature,
+            summary,
+            source_snippet,
+        } => {
+            println!("> {}", symbol);
+            if let Some(sig) = signature {
+                println!("> sig: {}", sig);
+            }
+            if let Some(text) = source_snippet.as_ref().or(summary.as_ref()) {
+                for line in text.lines() {
+                    if !line.trim().is_empty() {
+                        println!("> {}", line);
+                    }
+                }
+            }
+        }
         ReplOutput::EvalError { .. } | ReplOutput::StatusMessage(_) => {
             // Errors already printed to stderr by diagnostics / runtime reporter.
         }

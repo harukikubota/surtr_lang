@@ -95,7 +95,7 @@ Surtr では、標準モジュールも source として扱います。
 ロード順は固定です。
 
 ```text
-Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張
+Bootstrap -> [Kernel, 他標準モジュール] -> ユーザ拡張
 ```
 
 ### `Bootstrap`
@@ -108,17 +108,28 @@ Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張
 狙い:
 
 - 他の標準 API より先に解決できる土台を置く
-- builtin と汎用 error を先に確定させる
+- loader と auto import の起点を固定する
+- universally useful な concrete error を最初の標準ステージから使えるようにする
 
-### `Kernel`
+### stage 2: `Kernel` + type modules
 
 責務:
 
-- builtin 以外の標準 API
+- `Kernel`
+  - auto import される小さな標準 API
+  - `defmod Kernel` の中にある `print` のような cross-cutting builtin
+  - 専用 file を持たない `Unit` の type 宣言
+- type modules
+  - `Int`, `String`, `Boolean`, `Error`, `List`, `Result`, `Float`
+  - 各 file top-level の canonical builtin type head
+  - 各 `defmod Name` の module API
+  - source 上の `@@doc`
 
 狙い:
 
 - 「処理系に埋め込む最低限」と「Surtr で書ける標準 API」を分ける
+- builtin type contract を各 type file のトップレベル宣言へ寄せる
+- 標準モジュールの説明も `lib/*.srt` に同居させる
 
 ### なぜ分けるのか
 
@@ -128,6 +139,7 @@ Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張
   - builtin と標準ライブラリ相当のコードを分けられる
 - 将来拡張上の意味
   - 並列コンパイルや標準モジュール追加のときに依存順序を明確にできる
+  - type ごとの API と builtin type head を file 単位で保守できる
 
 ## 5. SourceKind と CompileUnitKind
 
@@ -167,6 +179,8 @@ Surtr の builtin は、ユーザーコードに直接埋め込まれた特殊�
 - builtin メタデータは共有テーブルで一元管理する
 - Sigil / Scar / Forge / Eldr が同じ定義を参照する
 - Surtr source 側の `@@builtin def ...` は、その共有定義の宣言層として扱う
+- `@@builtin type ...` は各対応 `lib/*.srt` のトップレベルで canonical head を宣言する
+- `@@doc` は標準ライブラリ source と `.eldr` metadata の橋渡しに使う
 
 この設計の利点は、段階ごとの builtin 解釈ズレを避けやすいことです。
 
@@ -190,6 +204,7 @@ Scar では、式の型だけでなく「言語としての整合性」を見ま
 たとえば次のようなものは Scar の責務です。
 
 - `Result` を返すべき位置で正しく `Result` になっているか
+- `Result<T, E>` の `Err` 側契約が値表現の `Result<T>` と矛盾しないか
 - `match` が網羅的か
 - field access がどの index を参照するか
 - builtin シグネチャと実際の呼び出しが合うか

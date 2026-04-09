@@ -1,0 +1,41 @@
+@@doc """
+Standard `Result` type declaration.
+`Result` represents success-or-error control flow as a value.
+The canonical builtin head is `Result<$T>`.
+This is the language's Either-oriented success/failure representation.
+Its runtime representation is enum-like, but the language treats `Result` as a
+dedicated built-in abstraction rather than exposing it as the future general
+`Enum` surface.
+"""
+@@builtin type Result<$T>
+
+@@doc """
+Construct the success branch of `Result`.
+This is a declaration-only surface contract for the constructor shape.
+The parser normalizes this special `@@builtin type` spelling into the internal
+Result-constructor declaration that later phases validate.
+"""
+@@builtin type Ok($T) -> Result<$T>
+
+@@doc """
+Construct the failure branch of `Result`.
+Concrete `deferror` values flow through the abstract `Error` type here.
+This keeps the language surface focused on `Result` as an Either-style value
+without exposing the runtime representation directly.
+"""
+@@builtin type Err(Error) -> Result<$T>
+
+@@doc """
+Result module.
+Groups documentation and future helpers around `Ok(...)` / `Err(...)`.
+Return-position `Result<T, E>` notation refines function contracts, while the
+builtin type declaration itself stays `Result<$T>` in this file.
+Although the implementation uses a tagged two-branch representation, the
+language keeps `Result` distinct from the future general `Enum` feature.
+"""
+defmod Result {
+  @@doc """
+  Placeholder entry that keeps the `Result` module present while the API grows.
+  """
+  def dummy() { () }
+}

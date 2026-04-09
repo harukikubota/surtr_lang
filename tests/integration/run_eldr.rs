@@ -233,7 +233,7 @@ match err_result {
 }
 
 #[test]
-fn run_source_deferror_compile_error_points_to_definition_site() {
+fn run_source_deferror_compile_error_points_to_show_expression() {
     let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_deferror_compile_location");
     let source_path = temp.join("sample.srt");
@@ -262,8 +262,8 @@ Err(BadMessage)"#,
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("sample.srt:1:"),
-        "expected deferror compile error to point at definition site on line 1, got:\n{}",
+        stderr.contains("sample.srt:2:"),
+        "expected deferror compile error to point at the show expression on line 2, got:\n{}",
         stderr
     );
 

@@ -18,6 +18,24 @@ struct CallFrame {
     locals: Vec<Value>,
 }
 
+#[derive(Debug, Clone)]
+struct VmCheckpoint {
+    stack: Vec<Value>,
+    frames: Vec<CallFrame>,
+    pc: usize,
+    exit_code: i32,
+    last_result: Option<Value>,
+    output_len: Option<usize>,
+    error_output_len: Option<usize>,
+    opcode_len: usize,
+    constant_len: usize,
+    type_entry_len: usize,
+    error_template_len: usize,
+    function_len: usize,
+    source_map_len: Option<usize>,
+    overwritten_functions: Vec<(usize, FunctionEntry)>,
+}
+
 /// The Surtr virtual machine — executes bytecode produced by Forge.
 #[derive(Clone)]
 pub struct VM {
@@ -74,6 +92,7 @@ impl VM {
             error_templates: Vec::new(),
             functions: Vec::new(),
             source_map: None,
+            docs: Vec::new(),
         })
     }
 
@@ -186,8 +205,8 @@ impl VM {
     }
 
     /// Access the type registry (used by builtins).
-    pub fn type_registry(&self) -> TypeRegistry {
-        self.bytecode.type_registry.clone()
+    pub fn type_registry(&self) -> &TypeRegistry {
+        &self.bytecode.type_registry
     }
 
     /// Read-only access to the accumulated bytecode.
@@ -341,11 +360,97 @@ impl VM {
     /// Execute a chunk atomically, preserving the existing VM state on failure.
     pub fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
         self.verify_chunk(&chunk)?;
-        let mut next = self.clone();
-        let result = next.execute_chunk(chunk)?;
-        next.verify_loaded_bytecode()?;
-        *self = next;
+        let checkpoint = self.checkpoint_for_chunk(&chunk);
+        let result = match self.execute_chunk(chunk) {
+            Ok(result) => result,
+            Err(err) => {
+                self.rollback_to_checkpoint(checkpoint);
+                return Err(err);
+            }
+        };
+
+        if let Err(err) = self.verify_loaded_bytecode() {
+            self.rollback_to_checkpoint(checkpoint);
+            return Err(err);
+        }
+
         Ok(result)
+    }
+
+    fn checkpoint_for_chunk(&self, chunk: &BytecodeChunk) -> VmCheckpoint {
+        let overwritten_functions = chunk
+            .functions
+            .iter()
+            .filter_map(|entry| {
+                let idx = entry.fun_idx as usize;
+                self.bytecode
+                    .functions
+                    .get(idx)
+                    .cloned()
+                    .map(|existing| (idx, existing))
+            })
+            .collect();
+
+        VmCheckpoint {
+            stack: self.stack.clone(),
+            frames: self.frames.clone(),
+            pc: self.pc,
+            exit_code: self.exit_code,
+            last_result: self.last_result.clone(),
+            output_len: self.output.as_ref().map(Vec::len),
+            error_output_len: self.error_output.as_ref().map(Vec::len),
+            opcode_len: self.bytecode.opcodes.len(),
+            constant_len: self.bytecode.constants.len(),
+            type_entry_len: self.bytecode.type_registry.entries.len(),
+            error_template_len: self.bytecode.error_templates.len(),
+            function_len: self.bytecode.functions.len(),
+            source_map_len: self
+                .bytecode
+                .source_map
+                .as_ref()
+                .map(|map| map.entries.len()),
+            overwritten_functions,
+        }
+    }
+
+    fn rollback_to_checkpoint(&mut self, checkpoint: VmCheckpoint) {
+        self.stack = checkpoint.stack;
+        self.frames = checkpoint.frames;
+        self.pc = checkpoint.pc;
+        self.exit_code = checkpoint.exit_code;
+        self.last_result = checkpoint.last_result;
+
+        if let (Some(buf), Some(len)) = (self.output.as_mut(), checkpoint.output_len) {
+            buf.truncate(len);
+        }
+        if let (Some(buf), Some(len)) = (self.error_output.as_mut(), checkpoint.error_output_len) {
+            buf.truncate(len);
+        }
+
+        self.bytecode.opcodes.truncate(checkpoint.opcode_len);
+        self.bytecode.constants.truncate(checkpoint.constant_len);
+        self.bytecode
+            .type_registry
+            .entries
+            .truncate(checkpoint.type_entry_len);
+        self.bytecode
+            .error_templates
+            .truncate(checkpoint.error_template_len);
+        self.bytecode.functions.truncate(checkpoint.function_len);
+        for (idx, entry) in checkpoint.overwritten_functions {
+            if idx < self.bytecode.functions.len() {
+                self.bytecode.functions[idx] = entry;
+            }
+        }
+
+        match checkpoint.source_map_len {
+            Some(len) => {
+                if let Some(source_map) = self.bytecode.source_map.as_mut() {
+                    source_map.entries.truncate(len);
+                }
+            }
+            None => self.bytecode.source_map = None,
+        }
     }
 
     fn verify_loaded_bytecode(&self) -> Result<(), RuntimeError> {
@@ -1398,6 +1503,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             source_map: None,
+            docs: Vec::new(),
         }
     }
 
@@ -1706,6 +1812,72 @@ mod tests {
     }
 
     #[test]
+    fn push_atomic_rolls_back_overwritten_function_entries() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.functions = vec![FunctionEntry {
+            fun_idx: 0,
+            entry_pc: 0,
+            num_locals: 0,
+            arity: 0,
+            qualified_name: Some("old".into()),
+        }];
+        let mut vm = VM::new(bytecode);
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![Opcode::LoadLocal(9), Opcode::Halt, Opcode::Return],
+            source_map: None,
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 2,
+                num_locals: 1,
+                arity: 0,
+                qualified_name: Some("new".into()),
+            }],
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("LoadLocal out of bounds"));
+        assert_eq!(
+            vm.bytecode.functions[0].qualified_name.as_deref(),
+            Some("old")
+        );
+        assert_eq!(vm.bytecode.functions[0].entry_pc, 0);
+    }
+
+    #[test]
+    fn push_atomic_rolls_back_captured_output() {
+        let bytecode = base_bytecode(vec![Opcode::Halt]);
+        let mut vm = VM::new(bytecode).with_output_capture();
+
+        let chunk = BytecodeChunk {
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::CallBuiltin(0, 1, 0, 0),
+                Opcode::LoadLocal(9),
+                Opcode::Halt,
+            ],
+            source_map: None,
+            const_base: 0,
+            constants: vec![Constant::Str("hello".into())],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("must fail");
+        assert!(err.message.contains("LoadLocal out of bounds"));
+        assert_eq!(vm.output.as_ref().map(Vec::as_slice), Some(&[][..]));
+    }
+
+    #[test]
     fn push_atomic_rejects_chunk_without_halt() {
         let bytecode = base_bytecode(vec![Opcode::Halt]);
         let mut vm = VM::new(bytecode);
@@ -1951,5 +2123,59 @@ mod tests {
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
         assert!(err.message.contains("duplicate type tag"));
+    }
+
+    #[test]
+    fn type_registry_getter_returns_shared_reference() {
+        let vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let _: &TypeRegistry = vm.type_registry();
+    }
+
+    #[test]
+    fn list_head_on_empty_list_is_runtime_error() {
+        let bytecode = base_bytecode(vec![Opcode::ListEmpty, Opcode::ListHead, Opcode::Halt]);
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("ListHead on empty list"));
+    }
+
+    #[test]
+    fn list_tail_on_empty_list_is_runtime_error() {
+        let bytecode = base_bytecode(vec![Opcode::ListEmpty, Opcode::ListTail, Opcode::Halt]);
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("ListTail on empty list"));
+    }
+
+    #[test]
+    fn get_field_on_non_tagged_value_is_runtime_error() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::GetField(0),
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(1))];
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("GetField on non-tagged value"));
+    }
+
+    #[test]
+    fn get_tag_on_non_tagged_value_is_runtime_error() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::GetTag, Opcode::Halt]);
+        bytecode.constants = vec![Constant::Bool(true)];
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("GetTag on non-tagged value"));
+    }
+
+    #[test]
+    fn capture_partial_requires_callable_target() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::CapturePartial(0),
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(1))];
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err
+            .message
+            .contains("CapturePartial expects a callable target"));
     }
 }

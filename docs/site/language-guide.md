@@ -101,7 +101,22 @@ greeting = if(flag, "hello", "goodbye")
 print(greeting)
 ```
 
-`if_then` は条件付きで `Unit` を返す用途です。
+`if` は値を返す分岐です。内部契約としては
+`if(Boolean, (-> A), (-> A)) -> A`
+のように branch が関数型で表されますが、通常の source では明示的な block を
+書く必要はありません。
+
+```surtr
+message = if(flag, "ok", "retry")
+print(message)
+```
+
+この関数型表記は「選ばれた branch だけが評価される」という言語特性を説明する
+ためのものです。
+
+`if_then` は条件付きで `Unit` を返す用途です。こちらも宣言上は
+`if_then(Boolean, (-> Unit)) -> Unit`
+ですが、普段はそのまま式を書けます。
 
 ```surtr
 if_then(flag, print("flag is true"))
@@ -164,10 +179,14 @@ print(to_string(point2.x))
 
 ## 8. エラーと Result
 
-Surtr では、失敗は `Result<T>` で表すのが基本です。
+Surtr では、失敗は例外ではなく `Result<T>` の値で表すのが基本です。  
+考え方としては `Either` に近く、「成功の枝」と「失敗の枝」を同じ式の中で明示的に扱います。
 
 - 成功: `Ok(value)`
 - 失敗: `Err(error)`
+
+`Error` は「失敗値が乗る抽象の受け口」です。  
+ユーザーコードが `Error(...)` のように直接作る具体型ではなく、`deferror` で作る個別 error がこの抽象に流れ込みます。
 
 独自エラーは `deferror` で定義します。
 
@@ -180,7 +199,7 @@ ok: Result<Int> = Ok(7)
 er: Result<Int> = Err(Boom)
 ```
 
-`match` で扱うのが基本形です。
+`match` で扱うのが基本形です。これは `Either` の左右を分岐するのと同じ感覚です。
 
 ```surtr
 print(match ok {
@@ -189,7 +208,7 @@ print(match ok {
 })
 ```
 
-標準で提供されるエラーもあります。たとえば `NoneError` は最初から使えます。
+標準で提供される具体 error もあります。たとえば `NoneError` は最初から使えます。
 
 ```surtr
 ret: Result<Int> = Err(NoneError)
@@ -210,7 +229,11 @@ def pick() -> Result<Int> {
 }
 ```
 
-これは「`Ok` なら束縛し、`Err` なら現在の評価を中断して伝播する」という糖衣構文です。
+これは「`Ok` なら束縛し、`Err` なら現在の評価を中断して伝播する」という糖衣構文です。  
+例外送出ではなく、`Either` 的な分岐を短く書くための記法だと考えると追いやすくなります。
+
+`Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では将来の一般 `Enum` 機能と同じものとしては扱いません。  
+あくまで `Result` は dedicated な失敗表現であり、`Ok` / `Err` もその専用 constructor として見せます。
 
 ## 9. リスト
 
@@ -241,17 +264,68 @@ empty: List<Int> = []
 
 ## 11. 標準モジュールの前提
 
-現在の Surtr では、`Bootstrap` と `Kernel` という標準モジュール層を先に読み込みます。
+現在の Surtr では、標準モジュールを次の順で先に読み込みます。
+
+```text
+Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user source
+```
+
+役割の分け方は次のとおりです。
 
 - `Bootstrap`
-  - builtin 宣言
-  - 汎用 error 定義
+  - auto-import の起点になる安定アンカー
+  - `NoneError` などの bootstrap concrete error
 - `Kernel`
-  - builtin 以外の標準 API
+  - auto import される最小の標準 API
+  - `defmod Kernel` 配下に置かれる `print` のような cross-cutting builtin
+  - 専用 file を持たない `Unit` の type 宣言
+- 各 type module
+  - `Int` や `String` のような型ごとの helper と説明
+  - その型自身の `@@builtin type` 宣言
 
-この 2 つは auto import 対象です。つまり、通常のユーザーコードでは明示 `import` しなくても使えます。
+auto import されるのは `Bootstrap` と `Kernel` だけです。  
+他の type module も標準モジュールとして一緒にロードされますが、名前空間としては別レイヤーで保ちます。
 
-## 12. 現時点のスコープ
+## 12. `@@doc` と source ドキュメント
+
+Surtr の標準モジュールは、説明文も source に載せます。
+
+```surtr
+@@doc """
+Standard `Int` type declaration.
+User-visible integer values backed by BigInt.
+"""
+@@builtin type Int
+```
+
+この `@@doc` は単なるコメントではなく、定義に紐付いた metadata として扱われます。  
+つまり、標準ライブラリの説明は `lib/*.srt` を開いた時点で読めるようにしておく、という設計です。
+
+利用者として押さえておくとよい点は次のとおりです。
+
+- canonical builtin type head は各対応 file のトップレベルに並ぶ
+- `Unit` だけは専用 module file を持たず `kernel.srt` に置かれる
+- 各 `defmod Name { ... }` がモジュール API になる
+- builtin type、module、関数、標準 error には `@@doc` を付けられる
+
+## 13. `Result<T>` と `Result<T, E>` の見え方
+
+Surtr の builtin type として宣言されるのは `Result<T>` です。
+
+```surtr
+value: Result<Int> = Ok(42)
+```
+
+一方で、関数の戻り値では `Result<T, E>` という書き方を使うことがあります。  
+これは「成功値 `T` に加えて、どの error 群を返す関数か」を Either の `Err` 側の契約として文書化するための表記で、型宣言そのものの head は `Result<T>` のままです。
+
+利用者目線では次の理解で十分です。
+
+- 値として扱うときは `Result<T>`
+- 関数契約を詳しく見せたいときは `Result<T, E>` が現れることがある
+- どちらも `Ok(...)` / `Err(...)` と `match` を中心に扱う
+
+## 14. 現時点のスコープ
 
 このガイドは、現時点で確定している範囲だけを対象にしています。
 
@@ -275,4 +349,4 @@ empty: List<Int> = []
 - マクロシステム拡張
 - 並列コンパイル
 
-細かい構文や外部契約を確認したい場合は、次に [言語リファレンス](./language-reference.md) を読むのがおすすめです。
+細かい構文や外部契約を確認したい場合は、次に [言語リファレンス](./language-reference.md) を読むのがおすすめです。標準モジュールの配置や `@@doc` の約束を見たい場合は [標準ライブラリガイド](./standard-library.md) を参照してください。

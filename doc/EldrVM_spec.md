@@ -30,6 +30,7 @@ Eldr は次を担わない。
 - ファイル実行と `.eldr` 入出力に使う完全な実行単位
 - `opcodes`, `constants`, `type_registry`, `error_templates`, `functions` を持つ
 - `source_map` は `Option<SourceMap>` で付与する
+- `docs` は `@@doc` 由来の symbol metadata を保持する
 
 ### 2.2 `BytecodeChunk`
 
@@ -78,6 +79,7 @@ Eldr は次を担わない。
 - Forge の chunk codegen は top-level 末尾へ必ず `Halt` を 1 つ挿入する
 - top-level 実行は append された `code_base` から開始し、最初の `Halt` で停止する
 - 関数本体は top-level `Halt` 後ろに配置され、top-level からは到達不能であり、`Call` / `CallClosure` でのみ到達する
+- 実装は VM 全体 clone ではなく、append した bytecode 断片と実行時状態の checkpoint / rollback で原子性を保つ
 - `push_atomic()` の返り値は chunk 実行終了時点の stack top 1 値のみとする。stack が空なら `Unit` を返す
 - `push_atomic()` 完了後、VM の operand stack は空に戻す。REPL は前回 chunk の stack 内容を次回 chunk へ持ち越さない
 - `push_atomic()` は chunk 実行を原子的に扱い、失敗時は VM 状態を更新しない
@@ -167,7 +169,7 @@ Opcode は以下のカテゴリを持つ。
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `Float` の厳密契約は `doc/float.md` を参照する
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel + 他標準モジュール] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.1 TypeRegistry
 
@@ -183,7 +185,9 @@ Opcode は以下のカテゴリを持つ。
 - マジック: `ELDR`
 - ヘッダ: `magic/version/debug_level/num_chunks`
 - 最低 1 つの `Code` チャンクを持つ
-- payload は Bytecode をシリアライズした実行可能データ
+- `Docs` チャンクは任意とし、存在する場合は symbol-level doc metadata を持つ
+- `Code` チャンクは実行 bytecode payload を持つ
+- `Docs` が無い旧形式 `.eldr` も decode 可能でなければならない
 
 詳細なエンコード/デコード仕様は `crates/forge/src/bytecode.rs` を正とする。
 

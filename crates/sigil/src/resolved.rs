@@ -1,6 +1,11 @@
 use sindr::primitives::SurtrInt;
 use spire::ast::{AstTy, BinOp, Lit, Span, Symbol};
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ResolvedDeclAttrs {
+    pub doc: Option<String>,
+}
+
 /// A resolved identifier — name + unique id + source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedId {
@@ -77,10 +82,28 @@ pub enum Resolved {
         Vec<ResolvedFunParam>,
         Option<AstTy>,
         Box<Resolved>,
+        ResolvedDeclAttrs,
     ),
 
     /// Builtin declaration
-    BuiltinDecl(Span, ResolvedId, Vec<ResolvedFunParam>, Option<AstTy>),
+    BuiltinDecl(
+        Span,
+        ResolvedId,
+        Vec<ResolvedFunParam>,
+        Option<AstTy>,
+        ResolvedDeclAttrs,
+    ),
+
+    /// Builtin type declaration
+    BuiltinTypeDecl(Span, ResolvedId, Vec<Symbol>, ResolvedDeclAttrs),
+
+    /// Declaration-only Result constructor contract from std modules.
+    ///
+    /// The parser accepts the surface form
+    /// `@@builtin type Ok(...) -> Result<...>` / `@@builtin type Err(...) -> Result<...>`
+    /// and normalizes both into this resolved node so later phases do not need
+    /// to care about the parser-only spelling trick.
+    ResultCtorDecl(Span, ResolvedId, AstTy, AstTy, ResolvedDeclAttrs),
 
     /// Closure literal
     Closure(
@@ -146,4 +169,5 @@ pub struct ResolvedFunParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedClosureParam {
     pub id: ResolvedId,
+    pub ty: Option<AstTy>,
 }

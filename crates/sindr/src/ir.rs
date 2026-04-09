@@ -130,6 +130,9 @@ pub struct Bytecode {
     pub error_templates: Vec<ErrTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub source_map: Option<SourceMap>,
+    /// Symbol-level documentation carried from `@@doc` through `.eldr`.
+    #[serde(default)]
+    pub docs: Vec<DocEntry>,
 }
 
 /// Incremental bytecode payload for REPL execution.
@@ -156,6 +159,23 @@ pub struct FunctionEntry {
     pub num_locals: u32,
     pub arity: u8,
     pub qualified_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DocKind {
+    Module,
+    Type,
+    Function,
+}
+
+/// Persisted documentation entry stored in `.eldr` `Docs` chunks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocEntry {
+    pub qualified_name: String,
+    pub kind: DocKind,
+    pub module_path: String,
+    pub signature: Option<String>,
+    pub doc: String,
 }
 
 /// Constant pool entry.
@@ -283,6 +303,17 @@ struct LegacyBytecode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct CodePayload {
+    opcodes: Vec<Opcode>,
+    constants: Vec<Constant>,
+    num_locals: usize,
+    type_registry: TypeRegistry,
+    error_templates: Vec<ErrTemplate>,
+    functions: Vec<FunctionEntry>,
+    source_map: Option<SourceMap>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct LegacyFunctionEntry {
     fun_idx: u32,
     entry_pc: u32,
@@ -316,6 +347,22 @@ impl From<LegacyBytecode> for Bytecode {
                 .map(FunctionEntry::from)
                 .collect(),
             source_map: None,
+            docs: Vec::new(),
+        }
+    }
+}
+
+impl From<CodePayload> for Bytecode {
+    fn from(value: CodePayload) -> Self {
+        Self {
+            opcodes: value.opcodes,
+            constants: value.constants,
+            num_locals: value.num_locals,
+            type_registry: value.type_registry,
+            error_templates: value.error_templates,
+            functions: value.functions,
+            source_map: value.source_map,
+            docs: Vec::new(),
         }
     }
 }
@@ -327,33 +374,68 @@ impl Bytecode {
     const HEADER_LEN: usize = 16;
     const CHUNK_HEADER_LEN: usize = 8;
     const CHUNK_CODE: [u8; 4] = *b"Code";
+    const CHUNK_DOCS: [u8; 4] = *b"Docs";
 
     /// Encode bytecode as `.eldr` bytes:
-    /// Header(16 bytes) + Code chunk(tag+size+payload+padding).
+    /// Header(16 bytes) + chunk table + payloads.
     pub fn encode(&self) -> Result<Vec<u8>, BytecodeFormatError> {
-        let payload = bincode::serialize(self)
-            .map_err(|e| BytecodeFormatError::EncodeFailed(e.to_string()))?;
-        let padded_payload_len = align4(payload.len());
-        let total_len = Self::HEADER_LEN + Self::CHUNK_HEADER_LEN + padded_payload_len;
+        let code_payload = bincode::serialize(&CodePayload {
+            opcodes: self.opcodes.clone(),
+            constants: self.constants.clone(),
+            num_locals: self.num_locals,
+            type_registry: self.type_registry.clone(),
+            error_templates: self.error_templates.clone(),
+            functions: self.functions.clone(),
+            source_map: self.source_map.clone(),
+        })
+        .map_err(|e| BytecodeFormatError::EncodeFailed(e.to_string()))?;
+        let docs_payload = if self.docs.is_empty() {
+            None
+        } else {
+            Some(
+                bincode::serialize(&self.docs)
+                    .map_err(|e| BytecodeFormatError::EncodeFailed(e.to_string()))?,
+            )
+        };
+        let num_chunks = if docs_payload.is_some() { 2u32 } else { 1u32 };
+        let padded_code_payload_len = align4(code_payload.len());
+        let padded_docs_payload_len = docs_payload
+            .as_ref()
+            .map(|payload| align4(payload.len()))
+            .unwrap_or(0);
+        let total_len = Self::HEADER_LEN
+            + (Self::CHUNK_HEADER_LEN * num_chunks as usize)
+            + padded_code_payload_len
+            + padded_docs_payload_len;
         let mut bytes = Vec::with_capacity(total_len);
 
         bytes.extend_from_slice(&Self::MAGIC);
         bytes.extend_from_slice(&Self::VERSION.to_le_bytes());
         bytes.extend_from_slice(&Self::DEBUG_LEVEL.to_le_bytes());
-        bytes.extend_from_slice(&1u32.to_le_bytes()); // num_chunks
+        bytes.extend_from_slice(&num_chunks.to_le_bytes());
         bytes.extend_from_slice(&Self::CHUNK_CODE);
-        bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&payload);
+        bytes.extend_from_slice(&(code_payload.len() as u32).to_le_bytes());
+        if let Some(docs_payload) = &docs_payload {
+            bytes.extend_from_slice(&Self::CHUNK_DOCS);
+            bytes.extend_from_slice(&(docs_payload.len() as u32).to_le_bytes());
+        }
+        bytes.extend_from_slice(&code_payload);
         while bytes.len() % 4 != 0 {
             bytes.push(0);
+        }
+        if let Some(docs_payload) = docs_payload {
+            bytes.extend_from_slice(&docs_payload);
+            while bytes.len() % 4 != 0 {
+                bytes.push(0);
+            }
         }
         Ok(bytes)
     }
 
     /// Inspect `.eldr` bytes and decode embedded bytecode.
     pub fn inspect(bytes: &[u8]) -> Result<EldrInspect, BytecodeFormatError> {
-        let (header, chunks, payload) = parse_container(bytes)?;
-        let bytecode = decode_payload(payload)?;
+        let (header, chunks, code_payload, docs_payload) = parse_container(bytes)?;
+        let bytecode = decode_payload_with_docs(code_payload, docs_payload)?;
         Ok(EldrInspect {
             header,
             chunks,
@@ -367,25 +449,34 @@ impl Bytecode {
     }
 }
 
-fn decode_payload(payload: &[u8]) -> Result<Bytecode, BytecodeFormatError> {
-    match bincode::deserialize::<Bytecode>(payload) {
-        Ok(bytecode) => Ok(bytecode),
-        Err(err_new) => {
-            // Backward-compatible path for payloads generated before `source_map` was added.
-            match bincode::deserialize::<LegacyBytecode>(payload) {
-                Ok(legacy) => Ok(legacy.into()),
-                Err(err_legacy) => Err(BytecodeFormatError::DecodeFailed(format!(
+fn decode_payload_with_docs(
+    code_payload: &[u8],
+    docs_payload: Option<&[u8]>,
+) -> Result<Bytecode, BytecodeFormatError> {
+    let mut bytecode = match bincode::deserialize::<CodePayload>(code_payload) {
+        Ok(code) => Bytecode::from(code),
+        Err(err_new) => match bincode::deserialize::<LegacyBytecode>(code_payload) {
+            Ok(legacy) => legacy.into(),
+            Err(err_legacy) => {
+                return Err(BytecodeFormatError::DecodeFailed(format!(
                     "new-format error: {}; legacy-format error: {}",
                     err_new, err_legacy
-                ))),
+                )));
             }
-        }
+        },
+    };
+
+    if let Some(payload) = docs_payload {
+        bytecode.docs = bincode::deserialize::<Vec<DocEntry>>(payload)
+            .map_err(|e| BytecodeFormatError::DecodeFailed(e.to_string()))?;
     }
+
+    Ok(bytecode)
 }
 
 fn parse_container(
     bytes: &[u8],
-) -> Result<(EldrHeader, Vec<EldrChunkInfo>, &[u8]), BytecodeFormatError> {
+) -> Result<(EldrHeader, Vec<EldrChunkInfo>, &[u8], Option<&[u8]>), BytecodeFormatError> {
     if bytes.len() < Bytecode::HEADER_LEN {
         return Err(BytecodeFormatError::HeaderTooShort);
     }
@@ -402,50 +493,60 @@ fn parse_container(
 
     let debug_level = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
     let num_chunks = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
-    let mut offset = Bytecode::HEADER_LEN;
-    let mut code_payload: Option<&[u8]> = None;
-    let mut chunks = Vec::new();
+    let mut table_offset = Bytecode::HEADER_LEN;
+    let table_len = Bytecode::CHUNK_HEADER_LEN * num_chunks as usize;
+    if table_offset + table_len > bytes.len() {
+        return Err(BytecodeFormatError::TruncatedChunkHeader);
+    }
 
+    let mut raw_chunks = Vec::with_capacity(num_chunks as usize);
     for _ in 0..num_chunks as usize {
-        if offset + Bytecode::CHUNK_HEADER_LEN > bytes.len() {
+        if table_offset + Bytecode::CHUNK_HEADER_LEN > bytes.len() {
             return Err(BytecodeFormatError::TruncatedChunkHeader);
         }
 
         let tag_bytes = [
-            bytes[offset],
-            bytes[offset + 1],
-            bytes[offset + 2],
-            bytes[offset + 3],
+            bytes[table_offset],
+            bytes[table_offset + 1],
+            bytes[table_offset + 2],
+            bytes[table_offset + 3],
         ];
         let size = u32::from_le_bytes([
-            bytes[offset + 4],
-            bytes[offset + 5],
-            bytes[offset + 6],
-            bytes[offset + 7],
+            bytes[table_offset + 4],
+            bytes[table_offset + 5],
+            bytes[table_offset + 6],
+            bytes[table_offset + 7],
         ]);
-        offset += Bytecode::CHUNK_HEADER_LEN;
+        raw_chunks.push((tag_bytes, size));
+        table_offset += Bytecode::CHUNK_HEADER_LEN;
+    }
 
-        if offset + size as usize > bytes.len() {
+    let mut payload_offset = Bytecode::HEADER_LEN + table_len;
+    let mut code_payload: Option<&[u8]> = None;
+    let mut docs_payload: Option<&[u8]> = None;
+    let mut chunks = Vec::with_capacity(raw_chunks.len());
+
+    for (tag_bytes, size) in raw_chunks {
+        if payload_offset + size as usize > bytes.len() {
             return Err(BytecodeFormatError::TruncatedChunkData);
         }
 
-        let payload_offset = offset;
+        let chunk_payload_offset = payload_offset;
         if tag_bytes == Bytecode::CHUNK_CODE {
-            code_payload = Some(&bytes[payload_offset..payload_offset + size as usize]);
+            code_payload = Some(&bytes[chunk_payload_offset..chunk_payload_offset + size as usize]);
+        } else if tag_bytes == Bytecode::CHUNK_DOCS {
+            docs_payload = Some(&bytes[chunk_payload_offset..chunk_payload_offset + size as usize]);
         }
 
         let padded_size = align4(size as usize);
         chunks.push(EldrChunkInfo {
             tag: String::from_utf8_lossy(&tag_bytes).to_string(),
             size,
-            payload_offset,
+            payload_offset: chunk_payload_offset,
             padded_size,
         });
 
-        offset += size as usize;
-        while offset % 4 != 0 && offset < bytes.len() {
-            offset += 1;
-        }
+        payload_offset += padded_size;
     }
 
     let payload = code_payload.ok_or(BytecodeFormatError::MissingCodeChunk)?;
@@ -455,7 +556,7 @@ fn parse_container(
         debug_level,
         num_chunks,
     };
-    Ok((header, chunks, payload))
+    Ok((header, chunks, payload, docs_payload))
 }
 
 fn align4(len: usize) -> usize {
@@ -466,8 +567,8 @@ fn align4(len: usize) -> usize {
 mod tests {
     use super::{
         line_column_for_offset, populate_error_template_lines, Bytecode, BytecodeFormatError,
-        Constant, ErrTemplate, FunctionEntry, LegacyBytecode, LegacyFunctionEntry, Opcode,
-        OpcodeSource, SourceMap,
+        Constant, DocEntry, DocKind, ErrTemplate, FunctionEntry, LegacyBytecode,
+        LegacyFunctionEntry, Opcode, OpcodeSource, SourceMap,
     };
     use crate::primitives::int;
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
@@ -507,6 +608,13 @@ mod tests {
                 qualified_name: Some("Main::entry".to_string()),
             }],
             source_map,
+            docs: vec![DocEntry {
+                qualified_name: "Bootstrap::Int".to_string(),
+                kind: DocKind::Type,
+                module_path: "Bootstrap".to_string(),
+                signature: Some("type Int".to_string()),
+                doc: "Builtin Int type.".to_string(),
+            }],
         }
     }
 

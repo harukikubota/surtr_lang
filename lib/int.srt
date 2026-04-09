@@ -1,11 +1,48 @@
+@@doc """
+Standard `Int` type declaration.
+User-visible integer values are backed by arbitrary-precision arithmetic across
+the pipeline.
+The compiler validates this top-level head as the canonical source-level
+contract for integers, so changing the shape here is a compile error rather
+than a local library tweak.
+"""
+@@builtin type Int
+
+@@doc """
+Int module.
+Groups integer-specific helpers and placeholder surface while the module API
+grows.
+The type declaration lives at the top level of this file, while the module body
+is reserved for integer-owned helpers.
+"""
 defmod Int {
-  @@builtin 
+  @@doc """
+  Divide two values and return `Err(ZeroDivisionError)` instead of trapping.
+  The success case keeps the same value type as the inputs.
+  This follows the `Result`/`Either` style of representing failure as a value.
+  """
+  @@builtin def safe_div(a: $A, b: $A) -> Result<$A>
+
+  @@doc """
+  Compute `a mod b` for integers and return `Err(ZeroDivisionError)` on zero.
+  Failure stays on the value side rather than becoming an implicit exception.
+  """
+  @@builtin def safe_mod(a: Int, b: Int) -> Result<Int>
+
+  @@doc """
+  Shift `value` left by `bits`.
+  This is part of the small bit-like helper surface kept in the `Int` module.
+  """
+  @@builtin
   @@test shl(1, 1) == 2
   @@test shl(1, 4) == 16
   @@test shl(8, 2) == 32
   def shl(value: Int, bits: Int) -> Int
 
-  @@builtin 
+  @@doc """
+  Shift `value` right by `bits`.
+  """
+  @@builtin
   @@test shr(1, 1) == 0
   @@test shr(16, 2) == 4
   @@test shr(1024, 10) == 1

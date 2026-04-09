@@ -103,7 +103,13 @@ fn collect_repo_std_modules() -> Result<Vec<xldr::ModuleInput>, String> {
                     .unwrap_or_default()
                     .to_string()
             });
-        if module_path != "Bootstrap" && module_path != "Kernel" {
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if !xldr::is_default_std_module_file_name(file_name)
+            && !xldr::is_default_std_module_path(&module_path)
+        {
             modules.push(xldr::ModuleInput {
                 file_name: path.to_string_lossy().replace('\\', "/"),
                 source,
@@ -171,6 +177,11 @@ pub fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, Strin
 
 pub fn compile_script_sources(compile_sources: &xldr::CompileSources) -> Result<Bytecode, String> {
     let (module_asts, user_ast) = parse_script_program(compile_sources)?;
+    let docs = xldr::collect_doc_entries(
+        &module_asts,
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
     let declaration_index = sigil::precollect_declaration_index(&module_asts)
         .map_err(|e| format!("phase=resolve; message={}", e))?;
     let resolved = sigil::resolve_staged_program(
@@ -188,10 +199,14 @@ pub fn compile_script_sources(compile_sources: &xldr::CompileSources) -> Result<
                 xldr::SourceKind::Script,
                 None,
             ),
+            enforce_builtin_type_contracts: true,
         },
     )
     .map_err(|e| format!("phase=typecheck; message={}", e))?;
-    forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))
+    let mut bytecode =
+        forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
+    bytecode.docs = docs;
+    Ok(bytecode)
 }
 
 pub fn run_script(source_name: &str, source: &str) -> Result<Vec<String>, String> {

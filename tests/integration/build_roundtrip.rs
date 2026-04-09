@@ -157,7 +157,9 @@ fn dump_outputs_valid_json_for_jq() {
     let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
     assert_eq!(json["header"]["magic"], "ELDR");
     assert_eq!(json["chunks"][0]["tag"], "Code");
+    assert_eq!(json["chunks"][1]["tag"], "Docs");
     assert!(json["summary"]["opcode_count"].as_u64().unwrap_or(0) > 0);
+    assert!(json["summary"]["doc_count"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(temp);
 }
@@ -198,6 +200,7 @@ def launch() -> Result<()> { Ok(()) }
     let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
     assert_eq!(json["entrypoint_trace"]["source"], "entry_file");
     assert_eq!(json["entrypoint_trace"]["selected_entry_name"], "launch");
+    assert!(json["summary"]["doc_count"].as_u64().unwrap_or(0) > 0);
     let normalized = json["entrypoint_trace"]["normalized_entrypoint"]
         .as_str()
         .expect("normalized entrypoint must be a string");

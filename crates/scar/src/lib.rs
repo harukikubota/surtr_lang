@@ -18,10 +18,28 @@ mod tests {
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+    const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
+    const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
+    const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
+    const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
+    const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
+    const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
+    const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
 
-    fn parse_std_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
+    fn strip_test_annotations(source: &str) -> String {
+        source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("@@test"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn parse_std_module_stage(
+        source: &str,
+        fallback_module_path: &str,
+    ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
-            source,
+            &strip_test_annotations(source),
             spire::ParserContext::module(0, None).with_rules(SourceRules::std_module()),
         )
         .expect("std module should parse");
@@ -34,40 +52,83 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut lowered = Vec::new();
-        let mut shared_defs = Vec::new();
+        let mut shared_global_defs = Vec::new();
+        let mut shared_result_ctor_contracts = Vec::new();
 
         for stmt in ast {
             match stmt {
-                Ast::Defmod(_, module_path, body) => {
+                Ast::Defmod(_, module_path, body, attrs) => {
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     lowered.push(sigil::StagedModuleAst {
                         module_path,
                         ast: module_ast,
+                        module_doc: attrs.doc,
                     });
                 }
                 Ast::Import(_, _, _) => {}
-                other => shared_defs.push(other),
+                Ast::ResultCtorDecl(_, _, _, _, _) => shared_result_ctor_contracts.push(stmt),
+                other => shared_global_defs.push(other),
             }
         }
 
-        if !shared_defs.is_empty() {
+        // Match the real xldr lowering strategy used by integration tests:
+        // keep normal top-level std declarations in the global declaration
+        // layer, but attach `Result` constructor contracts to the sole `defmod`
+        // when present so Scar sees `Result::Ok` / `Result::Err`.
+        if !shared_result_ctor_contracts.is_empty() && lowered.len() == 1 {
+            let insert_at = lowered[0]
+                .ast
+                .iter()
+                .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
+                .count();
+            lowered[0]
+                .ast
+                .splice(insert_at..insert_at, shared_result_ctor_contracts);
+        } else if !shared_result_ctor_contracts.is_empty() {
+            let mut global_ast = shared_imports.clone();
+            global_ast.extend(shared_result_ctor_contracts);
+            lowered.push(sigil::StagedModuleAst {
+                module_path: fallback_module_path.to_string(),
+                ast: global_ast,
+                module_doc: None,
+            });
+        }
+
+        if !shared_global_defs.is_empty() {
             let mut global_ast = shared_imports;
-            global_ast.extend(shared_defs);
+            global_ast.extend(shared_global_defs);
             lowered.push(sigil::StagedModuleAst {
                 module_path: String::new(),
                 ast: global_ast,
+                module_doc: None,
             });
         }
 
         lowered
     }
 
+    fn std_module_stages() -> Vec<Vec<sigil::StagedModuleAst>> {
+        vec![
+            parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
+            [
+                ("Kernel", KERNEL_PRELUDE_SOURCE),
+                ("Int", INT_MODULE_SOURCE),
+                ("String", STRING_MODULE_SOURCE),
+                ("Boolean", BOOLEAN_MODULE_SOURCE),
+                ("Error", ERROR_MODULE_SOURCE),
+                ("List", LIST_MODULE_SOURCE),
+                ("Result", RESULT_MODULE_SOURCE),
+                ("Float", FLOAT_MODULE_SOURCE),
+            ]
+            .into_iter()
+            .flat_map(|(name, source)| parse_std_module_stage(source, name))
+            .collect(),
+        ]
+    }
+
     fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
-        let module_stages = vec![
-            parse_std_module_stage(BUILTIN_PRELUDE_SOURCE),
-            parse_std_module_stage(KERNEL_PRELUDE_SOURCE),
-        ];
+        let module_stages = std_module_stages();
         let user_ast = spire::parse(source).expect("source should parse");
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");
@@ -85,7 +146,13 @@ mod tests {
         source_rules: SourceRules,
     ) -> Result<Vec<TypedNode>, crate::error::TypeError> {
         let resolved = resolve_with_builtin_prelude(source);
-        typecheck_with_context(resolved, TypecheckContext { source_rules })
+        typecheck_with_context(
+            resolved,
+            TypecheckContext {
+                source_rules,
+                enforce_builtin_type_contracts: false,
+            },
+        )
     }
 
     #[test]
@@ -317,6 +384,42 @@ deferror NotFound(code: String) {
             typed.last().map(|node| &node.node),
             Some(TypedInner::Bind(_, _))
         ));
+    }
+
+    #[test]
+    fn closure_param_annotation_without_expected_type_constrains_calls() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"id = {|value: Int| value}
+answer = id("oops")"#,
+        );
+        let err = typecheck(resolved).expect_err("annotation should reject String call");
+        assert!(err.message.contains("expected Int, got String"));
+    }
+
+    #[test]
+    fn closure_param_annotation_must_match_expected_signature() {
+        let resolved =
+            resolve_with_builtin_prelude(r#"id: (String -> String) = {|value: Int| value}"#);
+        let err = typecheck(resolved).expect_err("mismatched expected signature must fail");
+        assert!(err
+            .message
+            .contains("closure parameter `value` expected String, got Int"));
+    }
+
+    #[test]
+    fn sibling_closures_keep_substitution_state_local() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"int_id: (Int -> Int) = {|value| value}
+str_id: (String -> String) = {|value| value}
+left: Int = int_id(1)
+right: String = str_id("ok")"#,
+        );
+        assert!(typed.len() >= 4);
+        assert!(typed
+            .iter()
+            .rev()
+            .take(4)
+            .all(|node| matches!(node.node, TypedInner::Bind(_, _))));
     }
 
     #[test]

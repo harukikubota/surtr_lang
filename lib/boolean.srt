@@ -1,0 +1,21 @@
+@@doc """
+Standard `Boolean` type declaration.
+Represents `True` and `False`, the values used by `if` and boolean `match`.
+This exact top-level declaration is part of the compiler-checked builtin type
+contract.
+"""
+@@builtin type Boolean
+
+@@doc """
+Boolean module.
+Groups boolean-specific helpers and future convenience APIs.
+For now it mostly exists as a stable namespace and as the source home for
+boolean-oriented documentation.
+"""
+defmod Boolean {
+  @@doc """
+  Placeholder entry that keeps the module available as the boolean surface
+  grows.
+  """
+  def dummy() { () }
+}

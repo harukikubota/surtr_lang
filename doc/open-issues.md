@@ -1,18 +1,45 @@
 # Surtr Open Issues
 
-> 目的: 要件定義書で固定した前方参照ポリシーのうち、将来拡張で設計確定が必要な論点を追跡する。
+> 目的: V9 正本でまだ固定していない将来課題を追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md` を正本とする。
 
-最終更新日: 2026-04-05
+最終更新日: 2026-04-09
 
-2026-04-08 整理メモ:
+2026-04-09 整理メモ:
 
 - `BigInt` 採用、runtime 内部 ID 分離、`Float` 切り出しは open issue ではなく、`doc/要件定義v9.md` と `/Users/haruca/work/rust/surtr/作業フロー.md` 側で追跡する
-- 本ファイルは引き続き「前方参照・並列化・循環依存・マクロ段階」の未解決論点に限定する
+- `@@doc`, `.eldr` の `Docs` chunk, 標準モジュール分割, `@@builtin type` 契約は今回の baseline で確定したため、本ファイルでは追跡しない
+- 本ファイルは引き続き「宣言収集 / fixpoint / 循環依存 / マクロ段階 / 将来 UX」の未解決論点に限定する
 
 ---
 
-## 1. 策定トレーサビリティ（コミット基準）
+## 1. 今回クローズ済み
+
+以下は 2026-04-09 時点で open issue ではなくなった事項。
+
+- `type` の予約語化
+- `@@builtin type` の surface syntax 受理
+- builtin type canonical head の固定
+  - `Int`
+  - `Float`
+  - `String`
+  - `Boolean`
+  - `Unit`
+  - `Error`
+  - `List<$A>`
+  - `Result<$T>`
+- `@@doc """..."""` の導入
+- `.eldr` への `Docs` chunk 追加
+- 標準モジュールの type 単位分割
+  - `Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user`
+  - cross-cutting builtin は `kernel.srt` へ置く
+  - builtin type 宣言は各対応 `lib/*.srt` のトップレベルへ置く
+
+これらの正本は `doc/要件定義v9.md`, `doc/EldrVM_spec.md`, `doc/Xldr_spec.md`, `doc/テスト方針.md` を参照する。
+
+---
+
+## 2. 策定トレーサビリティ（コミット基準）
 
 前方参照ポリシー固定に関連する基盤コミット:
 
@@ -28,12 +55,12 @@
 
 ---
 
-## 2. Open Issues
+## 3. Open Issues
 
 補足:
 
 - `Bootstrap` / `Kernel` 分離
-- `Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張` のロード順
+- `Bootstrap -> [Kernel + 他標準モジュール] -> ユーザ拡張` のロード順
 - `Bootstrap` / `Kernel` の auto import と明示 import 禁止
 - `@@builtin` は `SourceKind::StdModule` のみ許可
 
@@ -45,9 +72,9 @@
 - 背景:
   - 現在は単一入力を順次処理しつつ、トップレベル事前登録で前方参照を解決している。
   - 並列コンパイルでは、ファイル本体解析前に「宣言のみ」を安価に収集する段階が必要。
-- 未確定点:
-  - 宣言インデックスの最小情報セット（名前、種別、シグネチャ、span、module path）
-  - 収集段階で許可する構文範囲（`def` の戻り値注釈、`deferror` の show など）
+- 2026-04-09 時点の固定事項:
+  - 初期収集情報は `name / kind / signature / span / module path / dependency-type list` とする
+  - 対象は top-level `def` header と型系定義（`defstruct` / `defrecord` / `deferror` / `@@builtin type` を含む）とする
 - 受け入れ条件:
   - 宣言収集フェーズ単体で、依存解決に必要な情報を欠落なく抽出できる。
   - 本体解析前でも `unique_id` / `tag` の割り当て順序を決定できる。
@@ -60,9 +87,12 @@
 - 策定コミット: `9262da8`, `aa7cd71`
 - 背景:
   - 現在の「Pending -> 後段で解決」方針はあるが、複数単位の依存関係を明示的には保持していない。
+- 2026-04-09 時点の固定事項:
+  - 粒度は定義単位（`defmod`, `impl T`, `struct`, `Error`, `type`, `def`）を基本とする
+  - 解決順は「宣言・依存型収集 -> macro slot(no-op) -> 関数/本体チェック」を基本線とする
 - 未確定点:
-  - ノード単位（関数/型/モジュール）の粒度
-  - 再試行キューの投入条件と優先度
+  - macro 導入後に queue 優先度をどう調整するか
+  - `impl Trait` や enum 導入後の依存ノード分割粒度
 - 受け入れ条件:
   - 依存が解決したノードのみを再評価できる。
   - 無関係ノードの再評価を抑制し、総コンパイルコストが悪化しない。
@@ -75,8 +105,9 @@
 - 策定コミット: `aa7cd71`
 - 背景:
   - 仕様上は「fixpoint 到達時に Pending 残存ならエラー」だが、実装レベルの終了判定が未標準化。
+- 2026-04-09 時点の固定事項:
+  - 進捗定義は Pending 集合の減少とする
 - 未確定点:
-  - 1 ラウンドでの「進捗」の定義（名前解決成功数、型解決成功数、制約消化数）
   - 進捗ゼロ時の診断集約ルール
 - 受け入れ条件:
   - 有限ステップで必ず停止し、停止理由（成功/fixpoint失敗）が説明可能。
@@ -90,8 +121,11 @@
 - 策定コミット: `aa7cd71`, `efcd4ee`
 - 背景:
   - 前方参照は許可したが、循環依存（関数循環、型循環、混合循環）の許容範囲は未確定。
+- 2026-04-09 時点の固定事項:
+  - 現 phase の struct / record / error / type 相当の型循環は一律禁止
+  - enum による条件付き循環や `impl Trait` が入る段階で再度 reopen する
 - 未確定点:
-  - 許可する循環（例: 関数シグネチャのみ循環）と禁止する循環（値レベル無限展開）
+  - 関数循環や将来 enum 導入後の許可境界
   - エラー時の責務点（cycle の最小閉路表示）
 - 受け入れ条件:
   - 許可/禁止が構文カテゴリごとに明文化される。
@@ -117,7 +151,28 @@
 
 ---
 
-## 3. 更新ルール
+## 4. Deferred Topics
+
+以下は今回の実装対象から外したが、正本からも落としたくない将来課題。
+
+- Project runner
+  - source 操作 API、runner DSL、init command を別途 reopen する
+  - compile unit / source rules との責務分離を保ったまま仕様化する
+- REPL command 拡張
+  - `:type`, `:browse`, file ingest UX、補完改善を Xldr 将来課題として扱う
+  - 今回入れた `:doc` の先に、どこまで interactive browsing を広げるかを整理する
+- closure の `expected=None` 推論強化
+  - 期待型や注釈なしでも強く推論する方向は別 issue で扱う
+  - let-generalization を入れない current baseline を前提に reopen する
+- OOM / host failure policy
+  - 上限値、停止文言、回復可否は host 依存方針のまま、詳細契約は将来確定する
+- Enum
+  - `doc/Enum.md` のメモを起点に reopen する
+  - 条件付き循環、variant payload、tag 戦略と合わせて設計する
+
+---
+
+## 5. 更新ルール
 
 - Open Issue をクローズしたら、本ファイルから削除せず `Status: Closed` に変更し、解決コミットを追記する。
 - 新規 Issue 追加時は、最低限 `策定コミット` と `テスト方針` を埋める。

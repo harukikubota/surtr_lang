@@ -8,6 +8,7 @@ use eldr::value::Value;
 use forge::bytecode::populate_error_template_lines;
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
+use sindr::ir::DocEntry;
 use spire::ast::{Ast, ImportSpec, Span};
 use spire::token::Token;
 
@@ -62,6 +63,7 @@ pub struct ReplEngine {
     results: Vec<Option<Value>>,
     result_metas: Vec<Option<forge::ChunkMeta>>,
     symbols: BTreeSet<String>,
+    docs: Vec<DocEntry>,
 }
 
 impl ReplEngine {
@@ -96,6 +98,7 @@ impl ReplEngine {
                 .map(str::to_string)
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
+            docs: Vec::new(),
         };
         engine.bootstrap_std_modules();
         Ok(engine)
@@ -124,6 +127,7 @@ impl ReplEngine {
         }
         .map_err(EldrLoadError::Load)?;
 
+        let docs = bytecode.docs.clone();
         let forge_session = forge::ForgeSession::from_bytecode(&bytecode);
         let vm = eldr::VM::new(bytecode);
 
@@ -160,6 +164,7 @@ impl ReplEngine {
             results: Vec::new(),
             result_metas: Vec::new(),
             symbols,
+            docs,
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
         engine.bootstrap_std_modules_scope_only();
@@ -237,6 +242,7 @@ impl ReplEngine {
                     SourceKind::StdModule,
                     None,
                 ),
+                enforce_builtin_type_contracts: true,
             },
         ) {
             Ok(t) => t,
@@ -256,7 +262,8 @@ impl ReplEngine {
             }
         };
 
-        let (mut chunk, meta) = match self.forge_session.codegen_chunk(typed) {
+        let docs = crate::collect_doc_entries(&module_stages, &[], None);
+        let (mut chunk, mut meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
                 let sid = find_source_id_for_span(
@@ -273,6 +280,7 @@ impl ReplEngine {
                 return;
             }
         };
+        meta.docs = docs.clone();
 
         for stage in &self.module_stages {
             for module in stage {
@@ -321,6 +329,7 @@ impl ReplEngine {
         for name in &meta.function_defs {
             self.symbols.insert(name.clone());
         }
+        self.append_docs(docs);
     }
 
     /// Bootstrap stdlib sigil / scar context WITHOUT re-executing bytecode.
@@ -401,6 +410,7 @@ impl ReplEngine {
                     SourceKind::StdModule,
                     None,
                 ),
+                enforce_builtin_type_contracts: true,
             },
         ) {
             let sid = find_source_id_for_span(
@@ -416,6 +426,7 @@ impl ReplEngine {
             );
             return;
         }
+        self.append_docs(crate::collect_doc_entries(&module_stages, &[], None));
 
         let scope = match sigil::build_scope_for_module(
             &module_stages,
@@ -676,6 +687,60 @@ impl ReplEngine {
         self.next_line += 1;
     }
 
+    fn handle_doc(&self, symbol: &str) -> ReplResult {
+        let trimmed = symbol.trim();
+        if trimmed.is_empty() {
+            return ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: vec!["Usage: :doc <symbol>".to_string()],
+            });
+        }
+
+        let match_doc = self.docs.iter().rev().find(|entry| {
+            entry.qualified_name == trimmed
+                || entry
+                    .qualified_name
+                    .rsplit("::")
+                    .next()
+                    .is_some_and(|tail| tail == trimmed)
+        });
+
+        match match_doc {
+            Some(entry) => {
+                let summary = entry
+                    .doc
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(ToString::to_string);
+                ReplResult::ok(ReplOutput::DocResolved {
+                    symbol: entry.qualified_name.clone(),
+                    signature: entry.signature.clone(),
+                    summary,
+                    source_snippet: Some(entry.doc.clone()),
+                })
+            }
+            None => ReplResult::ok(ReplOutput::EvalError {
+                idx: self.results.len(),
+                source: format!(":doc {trimmed}"),
+                rendered: vec![format!("No docs found for {}", trimmed)],
+            }),
+        }
+    }
+
+    fn append_docs(&mut self, docs: Vec<DocEntry>) {
+        for doc in docs {
+            let exists = self.docs.iter().any(|existing| {
+                existing.qualified_name == doc.qualified_name
+                    && existing.kind == doc.kind
+                    && existing.signature == doc.signature
+                    && existing.doc == doc.doc
+            });
+            if !exists {
+                self.docs.push(doc);
+            }
+        }
+    }
+
     /// Evaluate one line and return a structured `ReplResult`.
     ///
     /// The unified entry point used by both CLI and TUI.
@@ -689,6 +754,9 @@ impl ReplEngine {
                 match cmd {
                     ReplCommand::Quit => {
                         return ReplResult::exit(ReplOutput::StatusMessage("quit".to_string()));
+                    }
+                    ReplCommand::Doc { symbol } => {
+                        return self.handle_doc(&symbol);
                     }
                     ReplCommand::ValueRecall { arg } => {
                         let rendered = self.handle_value_recall(&arg);
@@ -778,6 +846,7 @@ impl ReplEngine {
             }
         };
 
+        let docs = crate::collect_doc_entries(&[], &ast, Some(self.repl_module_path.as_str()));
         let resolved = match self.sigil_session.resolve(ast) {
             Ok(r) => r,
             Err(e) => {
@@ -808,6 +877,7 @@ impl ReplEngine {
                     SourceKind::ReplChunk,
                     None,
                 ),
+                enforce_builtin_type_contracts: false,
             },
         ) {
             Ok(t) => t,
@@ -831,7 +901,7 @@ impl ReplEngine {
             }
         };
 
-        let (mut chunk, meta) = match self.forge_session.codegen_chunk_repl_result(typed) {
+        let (mut chunk, mut meta) = match self.forge_session.codegen_chunk_repl_result(typed) {
             Ok(c) => c,
             Err(e) => {
                 self.sigil_session.rollback(sigil_cp);
@@ -852,6 +922,7 @@ impl ReplEngine {
                 });
             }
         };
+        meta.docs = docs.clone();
 
         if let Some(repl_source) = self.sources.source(self.repl_source_id) {
             populate_error_template_lines(&mut chunk.error_templates, repl_source);
@@ -890,6 +961,7 @@ impl ReplEngine {
                 for name in &meta.function_defs {
                     self.symbols.insert(name.clone());
                 }
+                self.append_docs(docs);
                 self.bump_line(Some(value), Some(meta.clone()));
                 self.pending.clear();
                 ReplResult::ok(ReplOutput::EvalSuccess {
@@ -928,7 +1000,8 @@ impl ReplEngine {
             format!("{}.eldr", arg)
         };
 
-        let bytecode = self.vm.snapshot_bytecode();
+        let mut bytecode = self.vm.snapshot_bytecode();
+        bytecode.docs = self.docs.clone();
         match bytecode.encode() {
             Err(e) => vec![format!("Error encoding bytecode: {}", e)],
             Ok(bytes) => match fs::write(&path, bytes) {
@@ -1107,7 +1180,13 @@ fn collect_repl_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
         let module_path = derive_primary_module_path(&source)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| module_path_from_file_name(&path));
-        if REPL_AUTO_IMPORT_MODULES.contains(&module_path.as_str()) {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(crate::loader::is_default_std_module_file_name)
+            || crate::is_default_std_module_path(&module_path)
+            || REPL_AUTO_IMPORT_MODULES.contains(&module_path.as_str())
+        {
             continue;
         }
         module_inputs.push(ModuleInput {
@@ -1171,6 +1250,7 @@ pub(crate) fn parse_module_stages_from_sources(
                 stage_ast.push(sigil::StagedModuleAst {
                     module_path: lowered.module_path,
                     ast: lowered.ast,
+                    module_doc: lowered.module_doc,
                 });
             }
         }

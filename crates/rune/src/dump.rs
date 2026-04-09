@@ -181,7 +181,8 @@ fn build_dump_json(
             "constant_count": inspected.bytecode.constants.len(),
             "type_entry_count": inspected.bytecode.type_registry.entries.len(),
             "error_template_count": inspected.bytecode.error_templates.len(),
-            "num_locals": inspected.bytecode.num_locals
+            "num_locals": inspected.bytecode.num_locals,
+            "doc_count": inspected.bytecode.docs.len()
         },
         "entrypoint_trace": entrypoint_trace,
         "bytecode": bytecode

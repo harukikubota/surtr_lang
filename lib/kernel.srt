@@ -1,5 +1,99 @@
+@@doc """
+Standard `Unit` type declaration.
+`Unit` is the type of `()`, typically used for effectful functions that do not
+return a meaningful value.
+
+There is intentionally no dedicated `unit.srt`.
+Instead, `Unit` lives in `kernel.srt` because it behaves more like shared
+execution glue than a user-facing namespace with its own helper family.
+"""
+@@builtin type Unit
+
+@@doc """
+Kernel module.
+
+Provides the small auto-imported standard surface for cross-cutting builtins
+and lightweight helpers.
+Use this layer for operations that are not owned by a single primitive module
+such as conditional special forms, printing, textual conversion, debug
+inspection, and process-oriented entrypoint control.
+"""
 defmod Kernel {
-  def add(x: Int, y: Int) -> Int {
-    x + y
-  }
+  @@doc """
+  Conditional execution for side-effect-oriented code paths.
+
+  The declared type is:
+  `if_then(Boolean, (-> Unit)) -> Unit`
+
+  The function type on the second argument is a contract-level way to express
+  Surtr's evaluation rule: the branch is selected lazily and only the chosen
+  side is evaluated.
+  This does not mean everyday source code must wrap the argument in an explicit
+  closure or block.
+
+  Ordinary expression form stays available:
+  `if_then(flag, print("flag is true"))`
+
+  In other words, the signature describes the language semantics, while the
+  surface syntax keeps the convenient expression-oriented style.
+  """
+  @@builtin def if_then(cond: Boolean, then_branch: (-> Unit)) -> Unit
+
+  @@doc """
+  Branching expression that returns one value from two alternatives.
+
+  The declared type is:
+  `if(Boolean, (-> $A), (-> $A)) -> $A`
+
+  Both branches are written as zero-argument function types in the declaration
+  because Surtr treats `if` as a language-level special form.
+  Only the selected branch is evaluated, and both branches must agree on the
+  same result type.
+
+  This is a semantic contract, not a requirement that user code spell the
+  branches as explicit closures.
+  Plain expression style is valid and is the normal way to write code:
+
+  `if(flag, "ok", err_reason)`
+
+  When the branches both return `Unit`, prefer `if_then(...)` to make the
+  intent explicit.
+  """
+  @@builtin def if(cond: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
+
+  @@doc """
+  Print a string to stdout.
+  Use `to_string(...)` first when the value is not already `String`.
+  This builtin belongs under `Kernel` because printing is part of the shared
+  execution surface rather than a helper owned by one primitive type.
+  """
+  @@builtin def print(a: String) -> Unit
+
+  @@doc """
+  Convert any displayable value into `String`.
+  This is the standard bridge from typed values to user-visible text.
+  Because the input is polymorphic, it belongs under `Kernel` instead of a
+  single primitive module.
+  """
+  @@builtin def to_string(a: $A) -> String
+
+  @@doc """
+  Produce a debug-oriented textual representation of a value.
+  Prefer this when structure is more important than presentation polish.
+  """
+  @@builtin def inspect(a: $A) -> String
+
+  @@doc """
+  Print an `Error` value to stderr-oriented output.
+  This stays under `Kernel` because it is part of the cross-cutting runtime
+  surface, not an `Error`-specific helper family.
+  """
+  @@builtin def eprint(err: Error) -> Unit
+
+  @@doc """
+  Request a process exit code for the current entrypoint execution.
+  This is effectful and compile-unit aware, so it stays in the `Kernel`
+  surface instead of a primitive-type module.
+  """
+  @@builtin def set_exit_code(code: Int) -> Unit
 }

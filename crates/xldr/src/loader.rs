@@ -9,6 +9,27 @@ const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
 const KERNEL_PRELUDE_FILE: &str = "kernel.srt";
 const KERNEL_PRELUDE_MODULE_PATH: &str = "Kernel";
 const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+const TYPE_STD_MODULES: &[(&str, &str, &str)] = &[
+    ("int.srt", include_str!("../../../lib/int.srt"), "Int"),
+    (
+        "string.srt",
+        include_str!("../../../lib/string.srt"),
+        "String",
+    ),
+    (
+        "boolean.srt",
+        include_str!("../../../lib/boolean.srt"),
+        "Boolean",
+    ),
+    ("error.srt", include_str!("../../../lib/error.srt"), "Error"),
+    ("list.srt", include_str!("../../../lib/list.srt"), "List"),
+    (
+        "result.srt",
+        include_str!("../../../lib/result.srt"),
+        "Result",
+    ),
+    ("float.srt", include_str!("../../../lib/float.srt"), "Float"),
+];
 const REPL_MODULE_NAME: &str = "REPL";
 const SCRIPT_PSEUDO_MODULE_PREFIX: &str = "__Script";
 const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
@@ -16,7 +37,7 @@ const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
 /// Logical source categories that drive parser/typechecker policy selection.
 ///
 /// The loader always materializes standard sources in the fixed order
-/// `Bootstrap -> Kernel -> [other standard modules] -> user source`.
+/// `Bootstrap -> [Kernel + other standard modules] -> user source`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Script,
@@ -263,23 +284,47 @@ pub fn collect_module_sources_with_modules(
     collect_module_sources_with_module_stages(&[module_inputs.to_vec()])
 }
 
+pub fn is_default_std_module_path(module_path: &str) -> bool {
+    module_path == BUILTIN_PRELUDE_MODULE_PATH
+        || module_path == KERNEL_PRELUDE_MODULE_PATH
+        || TYPE_STD_MODULES
+            .iter()
+            .any(|(_, _, builtin_module_path)| *builtin_module_path == module_path)
+}
+
+pub fn is_default_std_module_file_name(file_name: &str) -> bool {
+    file_name == BUILTIN_PRELUDE_FILE
+        || file_name == KERNEL_PRELUDE_FILE
+        || TYPE_STD_MODULES
+            .iter()
+            .any(|(builtin_file_name, _, _)| *builtin_file_name == file_name)
+}
+
 pub fn collect_module_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
     // Stage 0/1 are reserved for the built-in standard layers. User-provided
-    // modules are appended afterwards so they can depend on Bootstrap/Kernel
-    // but never precede them.
+    // modules are appended afterwards so they can depend on
+    // `Bootstrap -> [Kernel + other std modules]` but never precede them.
     let mut stage_specs = vec![
         vec![SourceDescriptor::std_module(
             BUILTIN_PRELUDE_FILE,
             BUILTIN_PRELUDE_SOURCE,
             BUILTIN_PRELUDE_MODULE_PATH,
         )],
-        vec![SourceDescriptor::std_module(
+        std::iter::once(SourceDescriptor::std_module(
             KERNEL_PRELUDE_FILE,
             KERNEL_PRELUDE_SOURCE,
             KERNEL_PRELUDE_MODULE_PATH,
-        )],
+        ))
+        .chain(
+            TYPE_STD_MODULES
+                .iter()
+                .map(|(file_name, source, module_path)| {
+                    SourceDescriptor::std_module(*file_name, *source, *module_path)
+                }),
+        )
+        .collect(),
     ];
 
     for stage in module_input_stages {
@@ -348,11 +393,19 @@ pub fn collect_module_sources_with_std_module_stages(
             BUILTIN_PRELUDE_SOURCE,
             BUILTIN_PRELUDE_MODULE_PATH,
         )],
-        vec![SourceDescriptor::std_module(
+        std::iter::once(SourceDescriptor::std_module(
             KERNEL_PRELUDE_FILE,
             KERNEL_PRELUDE_SOURCE,
             KERNEL_PRELUDE_MODULE_PATH,
-        )],
+        ))
+        .chain(
+            TYPE_STD_MODULES
+                .iter()
+                .map(|(file_name, source, module_path)| {
+                    SourceDescriptor::std_module(*file_name, *source, *module_path)
+                }),
+        )
+        .collect(),
     ];
 
     for stage in module_input_stages {
@@ -560,11 +613,14 @@ mod tests {
             loaded.builtin_module_path.as_deref(),
             Some(BUILTIN_PRELUDE_MODULE_PATH)
         );
-        assert_eq!(loaded.module_source_ids.len(), 2);
+        assert_eq!(loaded.module_source_ids.len(), 2 + TYPE_STD_MODULES.len());
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
+        assert_eq!(loaded.module_stages[1].len(), 1 + TYPE_STD_MODULES.len());
         assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
+        assert_eq!(loaded.module_stages[1][1].module_path, "Int");
+        assert_eq!(loaded.module_stages[1][2].module_path, "String");
     }
 
     #[test]
@@ -624,7 +680,7 @@ mod tests {
 
         assert_eq!(loaded.module_stages.len(), 4);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap
-        assert_eq!(loaded.module_stages[1].len(), 1); // kernel
+        assert_eq!(loaded.module_stages[1].len(), 1 + TYPE_STD_MODULES.len()); // kernel + other std modules
         assert_eq!(loaded.module_stages[2].len(), 1);
         assert_eq!(loaded.module_stages[3].len(), 2);
         assert_eq!(
@@ -639,10 +695,15 @@ mod tests {
             loaded.module_stages[1][0].source_kind,
             SourceKind::StdModule
         );
+        assert_eq!(
+            loaded.module_stages[1][1].source_kind,
+            SourceKind::StdModule
+        );
         assert_eq!(loaded.module_stages[2][0].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[3][0].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
+        assert_eq!(loaded.module_stages[1][1].module_path, "Int");
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
         assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
         assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");

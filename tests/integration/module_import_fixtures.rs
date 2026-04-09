@@ -216,6 +216,11 @@ fn compile_multi_source_case(case_dir: &Path) -> Result<forge::bytecode::Bytecod
     );
 
     let (module_asts, user_ast) = parse_program_with_loader(&compile_sources)?;
+    let docs = xldr::collect_doc_entries(
+        &module_asts,
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
     let declaration_index = sigil::precollect_declaration_index(&module_asts)
         .map_err(|e| format!("phase=resolve; message={}", e))?;
 
@@ -234,10 +239,14 @@ fn compile_multi_source_case(case_dir: &Path) -> Result<forge::bytecode::Bytecod
                 xldr::SourceKind::Script,
                 None,
             ),
+            enforce_builtin_type_contracts: true,
         },
     )
     .map_err(|e| format!("phase=typecheck; message={}", e))?;
-    forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))
+    let mut bytecode =
+        forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
+    bytecode.docs = docs;
+    Ok(bytecode)
 }
 
 fn run_multi_source_case(case_dir: &Path) -> Result<Vec<String>, String> {

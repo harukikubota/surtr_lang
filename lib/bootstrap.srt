@@ -1,17 +1,51 @@
+@@doc """
+Bootstrap module.
+
+Auto-imported root of the standard surface.
+This file gives the loader a stable first stage and carries the smallest set of
+universally available standard declarations.
+Cross-cutting builtin values live in `kernel.srt`, builtin type declarations
+live at the top level of their corresponding files, and the abstract `Error`
+type itself lives in `error.srt`.
+"""
+
+# `defmod` introduces a module namespace.
+# Bootstrap is the first auto-imported standard module and acts as the fixed
+# stage-0 anchor for the loader.
 defmod Bootstrap {
-  @@builtin def print(a: String) -> Unit
-  @@builtin def to_string(a: $A) -> String
-  @@builtin def inspect(a: $A) -> String
-  @@builtin def safe_div(a: $A, b: $A) -> Result<$A>
-  @@builtin def safe_mod(a: Int, b: Int) -> Result<Int>
-  @@builtin def eprint(err: Error) -> Unit
-  @@builtin def set_exit_code(code: Int) -> Unit
+  # `def` introduces a named function declaration.
+  # `dummy` exists only to keep the module non-empty and to leave a minimal
+  # function-shaped example in the first standard source file.
+  def dummy() { () }
 }
 
+# `deferror` introduces a concrete recoverable error declaration.
+# Bootstrap carries the most universally useful standard errors so they are
+# available from the first standard-library stage.
+
+@@doc """
+Concrete bootstrap error for "no value" situations.
+`NoneError` is the standard failure used by optional-style sugar such as `T?`
+and `None`.
+"""
 deferror NoneError { "None Value." }
 
+@@doc """
+Concrete bootstrap error for division or modulo by zero.
+`safe_div` and `safe_mod` return this through `Err(...)` instead of trapping.
+"""
 deferror ZeroDivisionError { "division by zero" }
 
+@@doc """
+Concrete bootstrap error for operations that require at least one list element.
+Use this when a list-specific operation cannot proceed because the input is
+empty.
+"""
 deferror EmptyList { "Empty List." }
 
+@@doc """
+Concrete bootstrap error for index-based access outside the valid range.
+The `detail` field keeps the user-facing message flexible so the runtime can
+attach the relevant bounds information.
+"""
 deferror IndexOutOfBounds(detail: String) { detail }

@@ -17,10 +17,28 @@ mod tests {
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+    const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
+    const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
+    const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
+    const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
+    const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
+    const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
+    const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
 
-    fn parse_std_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
+    fn strip_test_annotations(source: &str) -> String {
+        source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("@@test"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn parse_std_module_stage(
+        source: &str,
+        fallback_module_path: &str,
+    ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
-            source,
+            &strip_test_annotations(source),
             spire::ParserContext::module(0, None).with_rules(spire::SourceRules::std_module()),
         )
         .expect("std module should parse");
@@ -33,40 +51,83 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mut lowered = Vec::new();
-        let mut shared_defs = Vec::new();
+        let mut shared_global_defs = Vec::new();
+        let mut shared_result_ctor_contracts = Vec::new();
 
         for stmt in ast {
             match stmt {
-                Ast::Defmod(_, module_path, body) => {
+                Ast::Defmod(_, module_path, body, attrs) => {
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     lowered.push(sigil::StagedModuleAst {
                         module_path,
                         ast: module_ast,
+                        module_doc: attrs.doc,
                     });
                 }
                 Ast::Import(_, _, _) => {}
-                other => shared_defs.push(other),
+                Ast::ResultCtorDecl(_, _, _, _, _) => shared_result_ctor_contracts.push(stmt),
+                other => shared_global_defs.push(other),
             }
         }
 
-        if !shared_defs.is_empty() {
+        // Keep std-file organization from changing the user-visible global
+        // builtin surface in unit tests, while still letting `Result::Ok` /
+        // `Result::Err` attach to the `Result` module where the checker expects
+        // their canonical contract.
+        if !shared_result_ctor_contracts.is_empty() && lowered.len() == 1 {
+            let insert_at = lowered[0]
+                .ast
+                .iter()
+                .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
+                .count();
+            lowered[0]
+                .ast
+                .splice(insert_at..insert_at, shared_result_ctor_contracts);
+        } else if !shared_result_ctor_contracts.is_empty() {
+            let mut global_ast = shared_imports.clone();
+            global_ast.extend(shared_result_ctor_contracts);
+            lowered.push(sigil::StagedModuleAst {
+                module_path: fallback_module_path.to_string(),
+                ast: global_ast,
+                module_doc: None,
+            });
+        }
+
+        if !shared_global_defs.is_empty() {
             let mut global_ast = shared_imports;
-            global_ast.extend(shared_defs);
+            global_ast.extend(shared_global_defs);
             lowered.push(sigil::StagedModuleAst {
                 module_path: String::new(),
                 ast: global_ast,
+                module_doc: None,
             });
         }
 
         lowered
     }
 
+    fn std_module_stages() -> Vec<Vec<sigil::StagedModuleAst>> {
+        vec![
+            parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
+            [
+                ("Kernel", KERNEL_PRELUDE_SOURCE),
+                ("Int", INT_MODULE_SOURCE),
+                ("String", STRING_MODULE_SOURCE),
+                ("Boolean", BOOLEAN_MODULE_SOURCE),
+                ("Error", ERROR_MODULE_SOURCE),
+                ("List", LIST_MODULE_SOURCE),
+                ("Result", RESULT_MODULE_SOURCE),
+                ("Float", FLOAT_MODULE_SOURCE),
+            ]
+            .into_iter()
+            .flat_map(|(name, source)| parse_std_module_stage(source, name))
+            .collect(),
+        ]
+    }
+
     fn typed_with_builtin_prelude(source: &str) -> Vec<scar::typed::TypedNode> {
-        let module_stages = vec![
-            parse_std_module_stage(BUILTIN_PRELUDE_SOURCE),
-            parse_std_module_stage(KERNEL_PRELUDE_SOURCE),
-        ];
+        let module_stages = std_module_stages();
         let user_ast = spire::parse(source).expect("source should parse");
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");

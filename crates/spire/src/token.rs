@@ -13,6 +13,7 @@ pub enum Token {
     Int(SurtrInt),
     Float(f64),
     Str(String),
+    DocString(String),
     True,
     False,
     Unit, // ()
@@ -72,6 +73,7 @@ pub enum Token {
     Defrecord,
     Deferror,
     Match,
+    Type,
 
     // ── End of file ──
     Eof,

@@ -3,7 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use sigil::resolved::*;
-use sindr::builtin::{builtin_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS};
+use sindr::builtin::{
+    builtin_meta_by_name, builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS,
+    BUILTIN_TYPE_METAS,
+};
 use spire::ast::{AstTy, BinOp, Lit, Span};
 use spire::{SetExitCodePolicy, SourceRules};
 
@@ -35,12 +38,14 @@ pub fn typecheck_with_context(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckContext {
     pub source_rules: SourceRules,
+    pub enforce_builtin_type_contracts: bool,
 }
 
 impl Default for TypecheckContext {
     fn default() -> Self {
         Self {
             source_rules: SourceRules::script(),
+            enforce_builtin_type_contracts: false,
         }
     }
 }
@@ -139,6 +144,14 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
     }
 }
 
+fn format_builtin_type_param_suffix(params: &[&str]) -> String {
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", params.join(", "))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ScarCheckpoint {
     env: TypeEnv,
@@ -203,6 +216,8 @@ struct Checker {
     user_func_params: HashMap<u32, Vec<String>>,
     substitutions: HashMap<u32, Ty>,
     source_rules: SourceRules,
+    enforce_builtin_type_contracts: bool,
+    seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
 }
 
 impl Checker {
@@ -214,6 +229,8 @@ impl Checker {
             user_func_params: HashMap::new(),
             substitutions: HashMap::new(),
             source_rules: context.source_rules,
+            enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
+            seen_builtin_type_decls: HashMap::new(),
         }
     }
 
@@ -229,7 +246,32 @@ impl Checker {
             user_func_params,
             substitutions: HashMap::new(),
             source_rules: context.source_rules,
+            enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
+            seen_builtin_type_decls: HashMap::new(),
         }
+    }
+
+    fn spawn_child_checker(&self, env: TypeEnv) -> Self {
+        let mut checker = Checker::with_env_and_params(
+            env,
+            self.user_func_params.clone(),
+            TypecheckContext {
+                source_rules: self.source_rules.clone(),
+                enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
+            },
+        );
+        checker.function_return_ty = self.function_return_ty.clone();
+        checker.current_function_symbol = self.current_function_symbol.clone();
+        checker.substitutions = self.substitutions.clone();
+        checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
+        checker
+    }
+
+    fn absorb_child_progress(&mut self, child: &Checker) {
+        self.substitutions = child.substitutions.clone();
+        self.env.next_tyvar = self.env.next_tyvar.max(child.env.next_tyvar);
+        self.env.next_tag = self.env.next_tag.max(child.env.next_tag);
+        self.seen_builtin_type_decls = child.seen_builtin_type_decls.clone();
     }
 
     fn into_parts(self) -> (TypeEnv, HashMap<u32, Vec<String>>) {
@@ -245,6 +287,7 @@ impl Checker {
             let node = self.check_node(&stmt)?;
             typed.push(self.resolve_typed_node(node));
         }
+        self.ensure_builtin_type_contracts()?;
         Ok(typed)
     }
 
@@ -436,7 +479,7 @@ impl Checker {
 
         for stmt in stmts {
             match stmt {
-                Resolved::BuiltinDecl(_, id, params, ret_ty) => {
+                Resolved::BuiltinDecl(_, id, params, ret_ty, _) => {
                     let mut tyvars = HashMap::new();
                     let param_tys = params
                         .iter()
@@ -465,7 +508,7 @@ impl Checker {
                         },
                     );
                 }
-                Resolved::Def(_, id, params, ret_ty, _) => {
+                Resolved::Def(_, id, params, ret_ty, _, _) => {
                     let param_tys = params
                         .iter()
                         .map(|param| {
@@ -512,6 +555,8 @@ impl Checker {
                     self.env.register_error_constructor(id.unique_id);
                     fun_idx += 1;
                 }
+                Resolved::BuiltinTypeDecl(_, _, _, _) => {}
+                Resolved::ResultCtorDecl(_, _, _, _, _) => {}
                 _ => {}
             }
         }
@@ -647,11 +692,17 @@ impl Checker {
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
             }
-            Resolved::Def(span, id, params, ret_ty, body) => {
+            Resolved::Def(span, id, params, ret_ty, body, _) => {
                 self.check_def(span, id, params, ret_ty, body)
             }
-            Resolved::BuiltinDecl(span, id, params, ret_ty) => {
+            Resolved::BuiltinDecl(span, id, params, ret_ty, _) => {
                 self.check_builtin_decl(span, id, params, ret_ty)
+            }
+            Resolved::BuiltinTypeDecl(span, id, params, attrs) => {
+                self.check_builtin_type_decl(span, id, params, attrs)
+            }
+            Resolved::ResultCtorDecl(span, id, param_ty, ret_ty, attrs) => {
+                self.check_result_ctor_decl(span, id, param_ty, ret_ty, attrs)
             }
             Resolved::Closure(span, params, captures, body) => {
                 self.check_closure(span, params, captures, body, None)
@@ -2000,7 +2051,7 @@ impl Checker {
         body: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let mut fun_env = self.env.clone();
+        let mut body_checker = self.spawn_child_checker(self.env.clone());
         let mut typed_params = Vec::new();
         let param_tys = match expected {
             Some(Ty::Func(expected_params, _)) => {
@@ -2024,37 +2075,60 @@ impl Checker {
                     hint: None,
                 });
             }
-            None => params.iter().map(|_| self.env.fresh_tyvar()).collect(),
+            None => params
+                .iter()
+                .map(|param| match &param.ty {
+                    Some(ast_ty) => {
+                        body_checker.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)
+                    }
+                    None => Ok(body_checker.env.fresh_tyvar()),
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         };
 
         for (param, param_ty) in params.iter().zip(param_tys.iter()) {
-            fun_env.bind_var(param.id.unique_id, param_ty.clone());
+            let param_ty = if let Some(ast_ty) = &param.ty {
+                let annotated =
+                    body_checker.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                if !body_checker.types_compatible(param_ty, &annotated) {
+                    return Err(TypeError {
+                        message: format!(
+                            "closure parameter `{}` expected {}, got {}",
+                            param.id.name,
+                            body_checker.ty_name(param_ty),
+                            body_checker.ty_name(&annotated)
+                        ),
+                        span: param.id.span.clone(),
+                        hint: None,
+                    });
+                }
+                body_checker.resolve_ty(&annotated)
+            } else {
+                body_checker.resolve_ty(param_ty)
+            };
+            body_checker
+                .env
+                .bind_var(param.id.unique_id, param_ty.clone());
             typed_params.push(TypedClosureParam {
                 id: param.id.clone(),
-                ty: param_ty.clone(),
+                ty: param_ty,
             });
         }
 
         for capture in captures {
             if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
-                fun_env.bind_var(capture.unique_id, ty);
+                body_checker
+                    .env
+                    .bind_var(capture.unique_id, body_checker.resolve_ty(&ty));
             }
         }
 
-        let mut body_checker = Checker::with_env_and_params(
-            fun_env,
-            self.user_func_params.clone(),
-            TypecheckContext {
-                source_rules: self.source_rules.clone(),
-            },
-        );
         if let Some(Ty::Func(_, expected_ret)) = expected {
             body_checker.function_return_ty = Some(expected_ret.as_ref().clone());
         }
         let typed_body = body_checker.check_node(body)?;
         let typed_body = body_checker.resolve_typed_node(typed_body);
-        self.env.next_tyvar = self.env.next_tyvar.max(body_checker.env.next_tyvar);
-        self.env.next_tag = self.env.next_tag.max(body_checker.env.next_tag);
+        self.absorb_child_progress(&body_checker);
 
         let param_tys = typed_params
             .iter()
@@ -2585,8 +2659,12 @@ impl Checker {
         scrut_ty: &Ty,
         span: &Span,
     ) -> Result<(TypedMatchPattern, TypedNode), TypeError> {
-        let typed_pat = self.check_match_subpattern(pat, scrut_ty)?;
-        let typed_body = self.check_node(body)?;
+        let mut arm_checker = self.spawn_child_checker(self.env.clone());
+        let typed_pat = arm_checker.check_match_subpattern(pat, scrut_ty)?;
+        let typed_body = arm_checker.check_node(body)?;
+        arm_checker.normalize_env_bindings();
+        let typed_body = arm_checker.resolve_typed_node(typed_body);
+        self.absorb_child_progress(&arm_checker);
         Ok((typed_pat, typed_body))
     }
 
@@ -2792,6 +2870,10 @@ impl Checker {
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
+        if Self::is_special_form_builtin_decl_name(&id.name) {
+            return self.check_special_form_builtin_decl(span, id, params, ret_ty);
+        }
+
         let meta = builtin_meta_by_name(&id.name).ok_or_else(|| TypeError {
             message: format!("Unknown builtin declaration: {}", id.name),
             span: span.clone(),
@@ -2834,6 +2916,271 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::Lit(Lit::Unit),
         })
+    }
+
+    fn check_special_form_builtin_decl(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        params: &[ResolvedFunParam],
+        ret_ty: &Option<AstTy>,
+    ) -> Result<TypedNode, TypeError> {
+        let expected_qname = match id.name.as_str() {
+            "if" => "Kernel::if",
+            "if_then" => "Kernel::if_then",
+            _ => unreachable!(),
+        };
+
+        if id.qualified_name.as_deref() != Some(expected_qname) {
+            return Err(TypeError {
+                message: format!(
+                    "Special-form declaration `{}` is only allowed in std module `Kernel`.",
+                    id.name
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let shape_ok = match id.name.as_str() {
+            "if" => {
+                params.len() == 3
+                    && Self::is_named_type(&params[0].ty, "Boolean")
+                    && Self::is_zero_arg_func_to_named(&params[1].ty, "$A")
+                    && Self::is_zero_arg_func_to_named(&params[2].ty, "$A")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_named_type(ty, "$A"))
+            }
+            "if_then" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "Boolean")
+                    && Self::is_zero_arg_func_to_unit(&params[1].ty)
+                    && ret_ty.as_ref().is_some_and(Self::is_unit_type)
+            }
+            _ => false,
+        };
+
+        if !shape_ok {
+            let expected = match id.name.as_str() {
+                "if" => "@@builtin def if(cond: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A",
+                "if_then" => "@@builtin def if_then(cond: Boolean, then_branch: (-> ())) -> ()",
+                _ => unreachable!(),
+            };
+            return Err(TypeError {
+                message: format!(
+                    "Special-form declaration must match the canonical contract: {}",
+                    expected
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let mut tyvars = HashMap::new();
+        let param_tys = params
+            .iter()
+            .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret = match ret_ty {
+            Some(ty) => self.resolve_builtin_ast_ty(ty, &mut tyvars)?,
+            None => Ty::Unit,
+        };
+
+        self.env.bind_var(
+            id.unique_id,
+            Ty::BuiltinFunc {
+                name: id.name.clone(),
+                params: param_tys,
+                ret: Box::new(ret),
+            },
+        );
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::Lit(Lit::Unit),
+        })
+    }
+
+    fn check_builtin_type_decl(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        params: &[String],
+        _attrs: &ResolvedDeclAttrs,
+    ) -> Result<TypedNode, TypeError> {
+        let Some(meta) = builtin_type_meta_by_name(&id.name) else {
+            return Err(TypeError {
+                message: format!("Unknown builtin type declaration: {}", id.name),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+
+        let exact_params_match = params.len() == meta.params.len()
+            && params
+                .iter()
+                .zip(meta.params.iter())
+                .all(|(actual, expected)| actual == expected);
+        if !exact_params_match {
+            return Err(TypeError {
+                message: format!(
+                    "Builtin type {} must be declared as {}{}",
+                    id.name,
+                    id.name,
+                    format_builtin_type_param_suffix(meta.params)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        if self.enforce_builtin_type_contracts {
+            if let Some((_, first_span)) = self.seen_builtin_type_decls.get(&id.name) {
+                return Err(TypeError {
+                    message: format!("Duplicate builtin type declaration: {}", id.name),
+                    span: span.clone(),
+                    hint: Some(format!(
+                        "Already declared at {}..{}",
+                        first_span.start, first_span.end
+                    )),
+                });
+            }
+            self.seen_builtin_type_decls
+                .insert(id.name.clone(), (params.to_vec(), span.clone()));
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::Lit(Lit::Unit),
+        })
+    }
+
+    fn check_result_ctor_decl(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        param_ty: &AstTy,
+        ret_ty: &AstTy,
+        _attrs: &ResolvedDeclAttrs,
+    ) -> Result<TypedNode, TypeError> {
+        // `Ok` / `Err` are intentionally specified through a declaration-only
+        // contract instead of a normal function body. By checking the exact
+        // source-level shape here, we keep the compiler honest about the
+        // standard-library contract while still letting the runtime own the
+        // actual constructor behavior.
+        let expected_qname = match id.name.as_str() {
+            "Ok" => "Result::Ok",
+            "Err" => "Result::Err",
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "Unknown Result constructor declaration: {}. Only Ok and Err are supported.",
+                        other
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        };
+
+        if id.qualified_name.as_deref() != Some(expected_qname) {
+            return Err(TypeError {
+                message: format!(
+                    "Result constructor declaration `{}` is only allowed in std module `Result`.",
+                    id.name
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let shape_ok = match id.name.as_str() {
+            "Ok" => Self::is_named_type(param_ty, "$T") && Self::is_result_t_of_t(ret_ty),
+            "Err" => Self::is_named_type(param_ty, "Error") && Self::is_result_t_of_t(ret_ty),
+            _ => false,
+        };
+
+        if !shape_ok {
+            let expected = match id.name.as_str() {
+                "Ok" => "@@builtin type Ok($T) -> Result<$T>",
+                "Err" => "@@builtin type Err(Error) -> Result<$T>",
+                _ => unreachable!(),
+            };
+            return Err(TypeError {
+                message: format!(
+                    "Result constructor declaration must match the canonical contract: {}",
+                    expected
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::Lit(Lit::Unit),
+        })
+    }
+
+    fn is_named_type(ast_ty: &AstTy, expected_name: &str) -> bool {
+        matches!(ast_ty, AstTy::Named(_, name) if name == expected_name)
+    }
+
+    fn is_unit_type(ast_ty: &AstTy) -> bool {
+        Self::is_named_type(ast_ty, "Unit")
+    }
+
+    fn is_zero_arg_func_to_named(ast_ty: &AstTy, expected_name: &str) -> bool {
+        matches!(
+            ast_ty,
+            AstTy::Func(_, params, ret)
+                if params.is_empty()
+                    && matches!(ret.as_ref(), AstTy::Named(_, name) if name == expected_name)
+        )
+    }
+
+    fn is_zero_arg_func_to_unit(ast_ty: &AstTy) -> bool {
+        Self::is_zero_arg_func_to_named(ast_ty, "Unit")
+    }
+
+    fn is_special_form_builtin_decl_name(name: &str) -> bool {
+        matches!(name, "if" | "if_then")
+    }
+
+    fn is_result_t_of_t(ast_ty: &AstTy) -> bool {
+        matches!(
+            ast_ty,
+            AstTy::Generic(_, name, args)
+                if name == "Result"
+                    && args.len() == 1
+                    && matches!(&args[0], AstTy::Named(_, param_name) if param_name == "$T")
+        )
+    }
+
+    fn ensure_builtin_type_contracts(&self) -> Result<(), TypeError> {
+        if !self.enforce_builtin_type_contracts {
+            return Ok(());
+        }
+
+        for meta in BUILTIN_TYPE_METAS {
+            if !self.seen_builtin_type_decls.contains_key(meta.name) {
+                return Err(TypeError {
+                    message: format!(
+                        "Missing builtin type declaration: {}{}",
+                        meta.name,
+                        format_builtin_type_param_suffix(meta.params)
+                    ),
+                    span: Span { start: 0, end: 0 },
+                    hint: None,
+                });
+            }
+        }
+
+        Ok(())
     }
 
     fn check_def(
@@ -2903,19 +3250,12 @@ impl Checker {
             }
         }
 
-        let mut body_checker = Checker::with_env_and_params(
-            fun_env,
-            self.user_func_params.clone(),
-            TypecheckContext {
-                source_rules: self.source_rules.clone(),
-            },
-        );
+        let mut body_checker = self.spawn_child_checker(fun_env);
         body_checker.function_return_ty = Some(expected_ret.clone());
         body_checker.current_function_symbol = Some(current_symbol);
         let typed_body = body_checker.check_node(body)?;
-
-        self.env.next_tyvar = self.env.next_tyvar.max(body_checker.env.next_tyvar);
-        self.env.next_tag = self.env.next_tag.max(body_checker.env.next_tag);
+        let typed_body = body_checker.resolve_typed_node(typed_body);
+        self.absorb_child_progress(&body_checker);
 
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
             let hint = if matches!(typed_body.ty, Ty::Unit) {
@@ -3450,13 +3790,7 @@ impl Checker {
         for (ty, resolved_id) in &ty_fields {
             show_env.bind_var(resolved_id.unique_id, ty.clone());
         }
-        let mut show_checker = Checker::with_env_and_params(
-            show_env,
-            self.user_func_params.clone(),
-            TypecheckContext {
-                source_rules: self.source_rules.clone(),
-            },
-        );
+        let mut show_checker = self.spawn_child_checker(show_env);
         show_checker.function_return_ty = Some(Ty::Str);
         let typed_show = show_checker
             .check_node(show_expr)
@@ -3465,8 +3799,8 @@ impl Checker {
                 span: err.span,
                 hint: err.hint,
             })?;
-        self.env.next_tyvar = self.env.next_tyvar.max(show_checker.env.next_tyvar);
-        self.env.next_tag = self.env.next_tag.max(show_checker.env.next_tag);
+        let typed_show = show_checker.resolve_typed_node(typed_show);
+        self.absorb_child_progress(&show_checker);
         if !self.types_compatible(&Ty::Str, &typed_show.ty) {
             return Err(TypeError {
                 message: format!(

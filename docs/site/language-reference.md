@@ -64,7 +64,23 @@ match expr {
 - 成功値: `Ok(value)`
 - 失敗値: `Err(error)`
 
-現時点では、`match` で主に `Ok(...)` / `Err(...)` を扱います。
+現時点では、`match` で主に `Ok(...)` / `Err(...)` を扱います。  
+考え方としては `Either<Err, Ok>` に近く、失敗も値として明示的に運びます。
+内部表現は enum-like ですが、language surface では将来の一般 `Enum` と区別された専用 abstraction です。
+
+### 戻り値位置の `Result<T, E>`
+
+関数シグネチャでは `Result<T, E>` という表記が現れることがあります。
+
+- builtin type declaration の canonical head は `Result<T>`
+- `E` は `Err` 側の error contract を説明する補助表記
+- 値として保持される型の中心は引き続き `Result<T>`
+
+### `Error`
+
+- recoverable failure を受ける抽象型
+- `deferror` で定義した具体 error がここへ流れ込む
+- `Error` 自体をユーザーが直接具体化する前提ではない
 
 ## 3. リテラル
 
@@ -123,6 +139,7 @@ False
 
 現時点で確定している `match` パターンは次のとおりです。
 
+- binding pattern
 - `True`
 - `False`
 - `Ok(x)`
@@ -130,6 +147,8 @@ False
 - `_`
 - `Int` リテラル
 - `String` リテラル
+- list pattern
+- 入れ子になった constructor pattern
 
 ## 6. フィールドアクセス
 
@@ -143,6 +162,8 @@ value.field
 
 | 名前 | 型 |
 |---|---|
+| `if` | `(Boolean, (-> $A), (-> $A)) -> $A` |
+| `if_then` | `(Boolean, (-> Unit)) -> Unit` |
 | `print` | `(String) -> Unit` |
 | `to_string` | `($A) -> String` |
 | `inspect` | `($A) -> String` |
@@ -153,6 +174,8 @@ value.field
 
 ### 補足
 
+- `if` / `if_then` の branch が関数型で書かれているのは、選ばれた側だけを評価する special form であることを型で表しているため
+- 普段の source では block を明示せず `if(flag, "ok", err_reason)` や `if_then(flag, print("ok"))` のように書ける
 - `safe_div` / `safe_mod` は失敗時に `Err(ZeroDivisionError)` を返す
 - `set_exit_code` は処理系側で使用位置制約を持つ
 
@@ -172,6 +195,8 @@ deferror EmptyList { "Empty List." }
 deferror IndexOutOfBounds(detail: String) { detail }
 ```
 
+これらは `Error` 抽象に乗る具体 error です。
+
 ## 9. モジュールと import
 
 ### 標準モジュール
@@ -179,7 +204,7 @@ deferror IndexOutOfBounds(detail: String) { detail }
 現在の標準モジュール層は次の順序でロードされます。
 
 ```text
-Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張
+Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張
 ```
 
 ### auto import
@@ -187,6 +212,26 @@ Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張
 - `Bootstrap` と `Kernel` は auto import 対象
 - `Bootstrap` / `Kernel` の明示 `import` は compile error
 - それ以外の標準モジュールは auto import しない
+
+### builtin type の置き場所
+
+各 builtin type は、対応する標準 module file のトップレベルで宣言します。
+
+```surtr
+// kernel.srt
+@@builtin type Unit
+
+// int.srt
+@@builtin type Int
+
+// list.srt
+@@builtin type List<$A>
+
+// result.srt
+@@builtin type Result<$T>
+```
+
+`unit.srt` は意図的に作らず、`Unit` だけは `kernel.srt` に置きます。
 
 ### import の重複
 
@@ -201,10 +246,10 @@ import Kernel;
 
 ```surtr
 import Kernel;
-import Kernel::add;
+import Kernel::print;
 ```
 
-## 10. `@@builtin`
+## 10. `@@builtin` と `@@doc`
 
 `@@builtin def ...` は標準モジュール source でのみ使えます。
 
@@ -213,6 +258,21 @@ import Kernel::add;
 - REPL でも使えない
 
 これは「builtin をユーザーが追加するための構文」ではなく、「処理系内の共有 builtin テーブルを Surtr source 側から宣言するための構文」です。
+
+`@@builtin type ...` も同じく標準モジュール source 専用です。  
+各標準 module file の top-level に置いて、compiler が canonical head と照合します。
+
+`@@doc """..."""` は `defmod` / `def` / `deferror` / `@@builtin type` / `@@builtin def` の直前に置けます。  
+標準ライブラリではこの仕組みを使って source に API 説明を埋め込みます。
+
+`Result` には declaration-only の special constructor head もあります。
+
+```surtr
+@@builtin type Ok($T) -> Result<$T>
+@@builtin type Err(Error) -> Result<$T>
+```
+
+これらは通常の関数本体付き `def` ではなく、標準モジュール `result.srt` で compiler が特別扱いする surface contract です。
 
 ## 11. 現在のスコープ外
 

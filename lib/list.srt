@@ -1,0 +1,23 @@
+@@doc """
+Standard `List` type declaration.
+`List` is the homogeneous sequence type used by list literals and list
+patterns.
+The canonical builtin head is `List<$A>`, and the compiler validates that exact
+shape at this file's top level.
+"""
+@@builtin type List<$A>
+
+@@doc """
+List module.
+Groups helpers for constructing, inspecting, and documenting list behavior.
+Empty lists usually need a type annotation such as `List<Int>`.
+The type declaration stays top-level while the module body is reserved for
+list-owned helpers and examples.
+"""
+defmod List {
+  @@doc """
+  Placeholder entry that keeps the `List` module visible while helper
+  functions are still being added.
+  """
+  def dummy() { () }
+}

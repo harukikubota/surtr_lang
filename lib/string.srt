@@ -1,0 +1,22 @@
+@@doc """
+Standard `String` type declaration.
+Text values produced by literals, interpolation, and textual conversion use this
+head.
+The compiler validates this exact top-level declaration as the canonical
+surface shape for strings.
+"""
+@@builtin type String
+
+@@doc """
+String module.
+Groups string-oriented helpers.
+This module is loaded with the standard library and documented from source so
+the module docs and the actual surface stay in one place.
+"""
+defmod String {
+  @@doc """
+  Placeholder entry that keeps the module shape stable while string helpers are
+  still being added.
+  """
+  def dummy() { () }
+}

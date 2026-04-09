@@ -72,6 +72,26 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
+        // Doc string — triple double quote
+        if c == '"' && i + 2 < len && chars[i + 1] == '"' && chars[i + 2] == '"' {
+            let start = i;
+            i += 3;
+            let content_start = i;
+            while i + 2 < len && !(chars[i] == '"' && chars[i + 1] == '"' && chars[i + 2] == '"') {
+                i += 1;
+            }
+            if i + 2 >= len {
+                return Err(ParseError::incomplete("\"\"\"", Span { start, end: len }));
+            }
+            let content: String = chars[content_start..i].iter().collect();
+            i += 3;
+            tokens.push(Spanned {
+                token: Token::DocString(content),
+                span: Span { start, end: i },
+            });
+            continue;
+        }
+
         // String — double quote
         if c == '"' {
             let start = i;
@@ -191,6 +211,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "defrecord" => Token::Defrecord,
                 "deferror" => Token::Deferror,
                 "match" => Token::Match,
+                "type" => Token::Type,
                 _ => Token::Ident(text),
             };
             tokens.push(Spanned {
@@ -310,6 +331,13 @@ mod tests {
     }
 
     #[test]
+    fn test_doc_string_token() {
+        let tokens = tokenize("@@doc \"\"\"\nHello\n\"\"\"").unwrap();
+        assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "doc"));
+        assert!(matches!(tokens[1].token, Token::DocString(ref s) if s == "\nHello\n"));
+    }
+
+    #[test]
     fn test_double_quote_string_escape_symmetry() {
         let tokens = tokenize(r#""a\n\t\"\'\\z""#).unwrap();
         assert!(matches!(
@@ -362,6 +390,12 @@ mod tests {
     fn test_import_keyword() {
         let tokens = tokenize("import Kernel::add").unwrap();
         assert!(matches!(tokens[0].token, Token::Import));
+    }
+
+    #[test]
+    fn test_type_keyword() {
+        let tokens = tokenize("type Int").unwrap();
+        assert!(matches!(tokens[0].token, Token::Type));
     }
 
     #[test]

@@ -10,6 +10,20 @@ pub struct Span {
 /// A plain identifier string. Kept as its own type for readability.
 pub type Symbol = String;
 
+/// Attributes attached to a declaration.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeclAttrs {
+    pub doc: Option<String>,
+}
+
+/// Surface builtin type head declaration: `List<$A>`, `Result<$T>`, `Int`, ...
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuiltinTypeHead {
+    pub span: Span,
+    pub name: Symbol,
+    pub params: Vec<Symbol>,
+}
+
 // ── Literals ──
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,16 +212,36 @@ pub enum Ast {
     ConstructorCall(Span, Symbol, Vec<RecordLitArg>),
 
     /// Error type definition: `deferror ParseError(term: String) { "..." }`
-    DeferrorDef(Span, Symbol, Vec<RecordField>, Box<Ast>),
+    DeferrorDef(Span, Symbol, Vec<RecordField>, Box<Ast>, DeclAttrs),
 
     /// Function definition: `def add(x: Int, y: Int) -> Int { x + y }`
-    Def(Span, Symbol, Vec<FunParam>, Option<AstTy>, Box<Ast>),
+    Def(
+        Span,
+        Symbol,
+        Vec<FunParam>,
+        Option<AstTy>,
+        Box<Ast>,
+        DeclAttrs,
+    ),
 
     /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
-    BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>),
+    BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
+
+    /// Builtin type declaration: `@@builtin type Int`
+    BuiltinTypeDecl(Span, BuiltinTypeHead, DeclAttrs),
+
+    /// Declaration-only Result constructor contracts used by std modules.
+    ///
+    /// Surface syntax is intentionally special-cased:
+    /// `@@builtin type Ok($T) -> Result<$T>`
+    /// `@@builtin type Err(Error) -> Result<$T>`
+    ///
+    /// These are not real type declarations, but this syntax keeps them in the
+    /// same declaration layer as the other std-module builtin contracts.
+    ResultCtorDecl(Span, Symbol, AstTy, AstTy, DeclAttrs),
 
     /// Module declaration: `defmod Kernel { ... }`
-    Defmod(Span, Symbol, Vec<Ast>),
+    Defmod(Span, Symbol, Vec<Ast>, DeclAttrs),
 
     /// Import declaration
     Import(Span, AstPath, ImportSpec),
@@ -224,7 +258,7 @@ pub enum Ast {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ast, AstPath, ImportSpec, Lit, Span};
+    use super::{Ast, AstPath, DeclAttrs, ImportSpec, Lit, Span};
     use sindr::primitives::int;
 
     #[test]
@@ -255,12 +289,18 @@ mod tests {
     fn defmod_keeps_body_nodes() {
         let span = Span { start: 0, end: 20 };
         let body = vec![Ast::Lit(span.clone(), Lit::Int(int(1)))];
-        let node = Ast::Defmod(span, "Kernel".to_string(), body.clone());
+        let node = Ast::Defmod(
+            span,
+            "Kernel".to_string(),
+            body.clone(),
+            DeclAttrs::default(),
+        );
 
         match node {
-            Ast::Defmod(_, name, inner) => {
+            Ast::Defmod(_, name, inner, attrs) => {
                 assert_eq!(name, "Kernel");
                 assert_eq!(inner, body);
+                assert_eq!(attrs, DeclAttrs::default());
             }
             _ => panic!("expected defmod"),
         }

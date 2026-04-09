@@ -1,7 +1,7 @@
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
 ///
-/// Surtr source files such as `lib/bootstrap.srt` may declare these builtins
-/// with `@@builtin`, but the canonical definition order and ids live here.
+/// Surtr source files under `lib/*.srt` may declare these builtins with
+/// `@@builtin`, but the canonical definition order and ids live here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltinMeta {
     pub name: &'static str,
@@ -9,6 +9,14 @@ pub struct BuiltinMeta {
     pub arity: u8,
     /// Type signature string used by type checker bootstrap and validation.
     pub sig_str: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinTypeMeta {
+    /// Canonical builtin type head that std-module `@@builtin type`
+    /// declarations must match exactly.
+    pub name: &'static str,
+    pub params: &'static [&'static str],
 }
 
 pub const BUILTIN_UID_BASE: u32 = 2;
@@ -70,6 +78,45 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     },
 ];
 
+/// Canonical builtin type declarations accepted from std-module sources.
+///
+/// These entries define the exact source-level heads the compiler accepts,
+/// including generic parameter names such as `List<$A>` and `Result<$T>`.
+pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
+    BuiltinTypeMeta {
+        name: "Int",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "Float",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "String",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "Boolean",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "Unit",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "Error",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "List",
+        params: &["$A"],
+    },
+    BuiltinTypeMeta {
+        name: "Result",
+        params: &["$T"],
+    },
+];
+
 pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
     BUILTIN_METAS.iter().find(|meta| meta.name == name)
 }
@@ -79,6 +126,10 @@ pub fn builtin_meta_by_id(builtin_id: u16) -> Option<&'static BuiltinMeta> {
     BUILTIN_METAS
         .get(idx)
         .filter(|meta| meta.builtin_id == builtin_id)
+}
+
+pub fn builtin_type_meta_by_name(name: &str) -> Option<&'static BuiltinTypeMeta> {
+    BUILTIN_TYPE_METAS.iter().find(|meta| meta.name == name)
 }
 
 pub fn builtin_uid(builtin_id: u16) -> u32 {

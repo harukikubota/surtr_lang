@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
-use spire::ast::{Ast, AstPattern, BinOp, ClosureParam, FunParam, Lit, RecordLitArg, Span};
+use spire::ast::{
+    Ast, AstPattern, BinOp, ClosureParam, DeclAttrs, FunParam, Lit, RecordLitArg, Span,
+};
 
 use crate::error::ResolveError;
 use crate::resolved::*;
@@ -25,6 +27,20 @@ fn initialize_scope() -> Scope {
         scope.define_with_id(meta.name, builtin_uid(meta.builtin_id));
     }
     scope
+}
+
+fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
+    ResolvedDeclAttrs {
+        doc: attrs.doc.clone(),
+    }
+}
+
+fn is_runtime_builtin_decl(name: &str) -> bool {
+    BUILTIN_METAS.iter().any(|meta| meta.name == name)
+}
+
+fn is_special_form_builtin_decl(name: &str) -> bool {
+    matches!(name, "if" | "if_then")
 }
 
 /// Resolve all identifiers in the AST to unique references.
@@ -99,6 +115,7 @@ pub fn build_scope_for_module(
 pub struct StagedModuleAst {
     pub module_path: String,
     pub ast: Vec<Ast>,
+    pub module_doc: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +124,7 @@ pub enum DeclarationKind {
     Struct,
     Record,
     Deferror,
+    BuiltinType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,7 +149,10 @@ fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
 
 fn build_global_scope(index: &DeclarationIndex, declaration_uids: &HashMap<String, u32>) -> Scope {
     let mut scope = initialize_base_scope();
-    for fq_name in index.keys() {
+    for (fq_name, entry) in index {
+        if entry.kind == DeclarationKind::BuiltinType {
+            continue;
+        }
         if let Some(uid) = declaration_uids.get(fq_name) {
             scope.define_with_id(fq_name, *uid);
         }
@@ -184,6 +205,9 @@ fn build_module_scope(
     if let Some(module_path) = current_module_path {
         for entry in declaration_index.values() {
             if entry.module_path == module_path {
+                if entry.kind == DeclarationKind::BuiltinType {
+                    continue;
+                }
                 if let Some(uid) = declaration_uids.get(&entry.fq_name) {
                     scope.define_with_id(&entry.name, *uid);
                 }
@@ -431,7 +455,7 @@ impl ImportState {
 ///
 /// The index key is fully-qualified name `ModulePath::Name`.
 /// Only declaration forms covered by Issue 6 are collected:
-/// `def`, `@@builtin def`, `defstruct`, `defrecord`, `deferror`.
+/// `def`, `@@builtin def`, `@@builtin type`, `defstruct`, `defrecord`, `deferror`.
 pub fn precollect_declaration_index(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<DeclarationIndex, ResolveError> {
@@ -441,13 +465,17 @@ pub fn precollect_declaration_index(
         for module in stage {
             for stmt in &module.ast {
                 let (span, name, kind) = match stmt {
-                    Ast::Def(span, name, _, _, _) => (span, name.as_str(), DeclarationKind::Def),
-                    Ast::BuiltinDecl(span, name, _, _) => {
+                    Ast::Def(span, name, _, _, _, _) => (span, name.as_str(), DeclarationKind::Def),
+                    Ast::BuiltinDecl(span, name, _, _, _) => {
                         (span, name.as_str(), DeclarationKind::Def)
+                    }
+                    Ast::ResultCtorDecl(_, _, _, _, _) => continue,
+                    Ast::BuiltinTypeDecl(span, head, _) => {
+                        (span, head.name.as_str(), DeclarationKind::BuiltinType)
                     }
                     Ast::StructDef(span, name, _) => (span, name.as_str(), DeclarationKind::Struct),
                     Ast::RecordDef(span, name, _) => (span, name.as_str(), DeclarationKind::Record),
-                    Ast::DeferrorDef(span, name, _, _) => {
+                    Ast::DeferrorDef(span, name, _, _, _) => {
                         (span, name.as_str(), DeclarationKind::Deferror)
                     }
                     _ => continue,
@@ -634,7 +662,7 @@ impl Resolver {
                         });
                     }
                 }
-                Ast::Defmod(_, _, body) => self.validate_auto_import_conflicts(body)?,
+                Ast::Defmod(_, _, body, _) => self.validate_auto_import_conflicts(body)?,
                 _ => {}
             }
         }
@@ -649,7 +677,7 @@ impl Resolver {
         let mut declared_in_batch = HashSet::new();
         for stmt in stmts {
             match stmt {
-                Ast::Def(span, name, _, _, _) => {
+                Ast::Def(span, name, _, _, _, _) => {
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
@@ -675,7 +703,7 @@ impl Resolver {
                     // so forward references resolve to the latest top-level definition.
                     self.scope.define_with_id(name, uid);
                 }
-                Ast::BuiltinDecl(_, name, _, _) => {
+                Ast::BuiltinDecl(_, name, _, _, _) => {
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
@@ -694,9 +722,51 @@ impl Resolver {
                         .push_back(uid);
                     self.scope.define_with_id(name, uid);
                 }
+                Ast::ResultCtorDecl(span, name, _, _, _) => {
+                    if !declared_in_batch.insert(name.clone()) {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                    let uid = self
+                        .scope
+                        .lookup(name)
+                        .unwrap_or_else(|| self.scope.reserve_id());
+                    self.predeclared_ids
+                        .entry(name.clone())
+                        .or_default()
+                        .push_back(uid);
+                    self.scope.define_with_id(name, uid);
+                }
+                Ast::BuiltinTypeDecl(span, head, _) => {
+                    if !declared_in_batch.insert(head.name.clone()) {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", head.name),
+                            span: span.clone(),
+                        });
+                    }
+                    if !self.allow_top_level_shadowing && self.scope.lookup(&head.name).is_some() {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", head.name),
+                            span: span.clone(),
+                        });
+                    }
+                    let uid = self.scope.reserve_id();
+                    self.predeclared_ids
+                        .entry(head.name.clone())
+                        .or_default()
+                        .push_back(uid);
+                }
                 Ast::StructDef(span, name, _)
                 | Ast::RecordDef(span, name, _)
-                | Ast::DeferrorDef(span, name, _, _) => {
+                | Ast::DeferrorDef(span, name, _, _, _) => {
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
@@ -922,7 +992,7 @@ impl Resolver {
                 Ok(Resolved::RecordDef(span, rid, rfields))
             }
 
-            Ast::DeferrorDef(span, name, fields, show_expr) => {
+            Ast::DeferrorDef(span, name, fields, show_expr, _) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -962,7 +1032,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::Def(span, name, params, ret_ty, body) => {
+            Ast::Def(span, name, params, ret_ty, body, attrs) => {
                 let fun_uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -994,11 +1064,12 @@ impl Resolver {
                     resolved_params,
                     ret_ty,
                     Box::new(resolved_body),
+                    resolve_decl_attrs(&attrs),
                 ))
             }
 
-            Ast::BuiltinDecl(span, name, params, ret_ty) => {
-                if !BUILTIN_METAS.iter().any(|meta| meta.name == name) {
+            Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => {
+                if !is_runtime_builtin_decl(&name) && !is_special_form_builtin_decl(&name) {
                     return Err(ResolveError {
                         message: format!("Unknown builtin declaration: {}", name),
                         span,
@@ -1023,9 +1094,54 @@ impl Resolver {
                     unique_id: builtin_uid,
                     span: span.clone(),
                 };
-                Ok(Resolved::BuiltinDecl(span, rid, resolved_params, ret_ty))
+                Ok(Resolved::BuiltinDecl(
+                    span,
+                    rid,
+                    resolved_params,
+                    ret_ty,
+                    resolve_decl_attrs(&attrs),
+                ))
             }
-            Ast::Defmod(span, name, _) => Err(ResolveError {
+            Ast::BuiltinTypeDecl(span, head, attrs) => {
+                let builtin_type_uid = self
+                    .take_predeclared_id(&head.name)
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                let qualified_name = self.qualify_current_declaration_name(&head.name);
+                let rid = ResolvedId {
+                    name: head.name,
+                    qualified_name: Some(qualified_name),
+                    unique_id: builtin_type_uid,
+                    span: span.clone(),
+                };
+                Ok(Resolved::BuiltinTypeDecl(
+                    span,
+                    rid,
+                    head.params,
+                    resolve_decl_attrs(&attrs),
+                ))
+            }
+            Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => {
+                let uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                self.scope.define_with_id(&name, uid);
+                let qualified_name = self.qualify_current_declaration_name(&name);
+                let rid = ResolvedId {
+                    name,
+                    qualified_name: Some(qualified_name),
+                    unique_id: uid,
+                    span: span.clone(),
+                };
+                Ok(Resolved::ResultCtorDecl(
+                    span,
+                    rid,
+                    param_ty,
+                    ret_ty,
+                    resolve_decl_attrs(&attrs),
+                ))
+            }
+            Ast::Defmod(span, name, _, _) => Err(ResolveError {
                 message: format!("Module resolution is not implemented yet: {}", name),
                 span,
             }),
@@ -1046,6 +1162,7 @@ impl Resolver {
                             unique_id: uid,
                             span: param.span,
                         },
+                        ty: param.ty,
                     });
                 }
 
@@ -1342,18 +1459,20 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                     Resolved::Bind(_, pat, _) | Resolved::SafeBind(_, pat, _) => {
                         collect_bind_pattern_bindings(pat, &mut local_bound);
                     }
-                    Resolved::Def(_, id, params, _, _) => {
+                    Resolved::Def(_, id, params, _, _, _) => {
                         local_bound.insert(id.unique_id);
                         for param in params {
                             local_bound.insert(param.id.unique_id);
                         }
                     }
-                    Resolved::BuiltinDecl(_, id, params, _) => {
+                    Resolved::BuiltinDecl(_, id, params, _, _) => {
                         local_bound.insert(id.unique_id);
                         for param in params {
                             local_bound.insert(param.id.unique_id);
                         }
                     }
+                    Resolved::BuiltinTypeDecl(_, _, _, _) => {}
+                    Resolved::ResultCtorDecl(_, _, _, _, _) => {}
                     Resolved::Closure(_, params, _, _) => {
                         for param in params {
                             local_bound.insert(param.id.unique_id);
@@ -1428,8 +1547,10 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         Resolved::StructDef(_, _, _)
         | Resolved::RecordDef(_, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
-        | Resolved::BuiltinDecl(_, _, _, _) => {}
-        Resolved::Def(_, id, params, _, body) => {
+        | Resolved::BuiltinDecl(_, _, _, _, _)
+        | Resolved::BuiltinTypeDecl(_, _, _, _)
+        | Resolved::ResultCtorDecl(_, _, _, _, _) => {}
+        Resolved::Def(_, id, params, _, body, _) => {
             let mut fun_bound = bound.clone();
             fun_bound.insert(id.unique_id);
             for param in params {
@@ -1496,14 +1617,22 @@ mod tests {
         resolve(ast)
     }
 
+    fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
+        StagedModuleAst {
+            module_path: module_path.to_string(),
+            ast,
+            module_doc: None,
+        }
+    }
+
     fn resolve_user_with_modules(
         user_src: &str,
         module_stages: &[Vec<StagedModuleAst>],
     ) -> Result<Vec<Resolved>, ResolveError> {
         let user_ast = spire::parse(user_src).expect("user script should parse");
-        let mut full_stages = vec![vec![StagedModuleAst {
-            module_path: "Bootstrap".to_string(),
-            ast: parse_module_ast(
+        let mut full_stages = vec![vec![staged_module(
+            "Bootstrap",
+            parse_module_ast(
                 r#"@@builtin def print(a: String) -> Unit
 @@builtin def to_string(a: $A) -> String
 @@builtin def inspect(a: $A) -> String
@@ -1517,7 +1646,7 @@ deferror EmptyList { "Empty List." }
 deferror IndexOutOfBounds(detail: String) { detail }"#,
                 "Bootstrap",
             ),
-        }]];
+        )]];
         full_stages.extend(module_stages.iter().cloned());
         let declaration_index =
             precollect_declaration_index(&full_stages).expect("precollect should succeed");
@@ -1531,15 +1660,15 @@ deferror IndexOutOfBounds(detail: String) { detail }"#,
 
     #[test]
     fn test_precollect_declaration_index_succeeds_without_body_resolution() {
-        let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Bootstrap".to_string(),
-            ast: parse_module_ast(
+        let module_stages = vec![vec![staged_module(
+            "Bootstrap",
+            parse_module_ast(
                 r#"def to_int(x: String) -> Int { unknown_name }
 defrecord Pair(left: Int, right: Int)
 deferror Oops(reason: String) { reason }"#,
                 "Bootstrap",
             ),
-        }]];
+        )]];
 
         let index =
             precollect_declaration_index(&module_stages).expect("precollect should succeed");
@@ -1550,10 +1679,10 @@ deferror Oops(reason: String) { reason }"#,
 
     #[test]
     fn test_precollect_builtin_decl_in_module() {
-        let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Int".to_string(),
-            ast: parse_module_ast(r#"@@builtin def shl(value: Int, bits: Int) -> Int"#, "Int"),
-        }]];
+        let module_stages = vec![vec![staged_module(
+            "Int",
+            parse_module_ast(r#"@@builtin def shl(value: Int, bits: Int) -> Int"#, "Int"),
+        )]];
 
         let index =
             precollect_declaration_index(&module_stages).expect("precollect should succeed");
@@ -1563,14 +1692,14 @@ deferror Oops(reason: String) { reason }"#,
     #[test]
     fn test_precollect_declaration_index_rejects_duplicate_fully_qualified_name() {
         let module_stages = vec![vec![
-            StagedModuleAst {
-                module_path: "Std::Math".to_string(),
-                ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Std::Math"),
-            },
-            StagedModuleAst {
-                module_path: "Std::Math".to_string(),
-                ast: parse_module_ast(r#"def add(a: Int, b: Int) -> Int { a + b }"#, "Std::Math"),
-            },
+            staged_module(
+                "Std::Math",
+                parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Std::Math"),
+            ),
+            staged_module(
+                "Std::Math",
+                parse_module_ast(r#"def add(a: Int, b: Int) -> Int { a + b }"#, "Std::Math"),
+            ),
         ]];
 
         let err = precollect_declaration_index(&module_stages)
@@ -1582,14 +1711,14 @@ deferror Oops(reason: String) { reason }"#,
 
     #[test]
     fn test_precollect_declaration_index_is_deterministic_when_stage_input_order_changes() {
-        let mod_a = StagedModuleAst {
-            module_path: "Std::A".to_string(),
-            ast: parse_module_ast(r#"def same(x: Int) -> Int { x }"#, "Std::A"),
-        };
-        let mod_b = StagedModuleAst {
-            module_path: "Std::B".to_string(),
-            ast: parse_module_ast(r#"def same(x: Int) -> Int { x }"#, "Std::B"),
-        };
+        let mod_a = staged_module(
+            "Std::A",
+            parse_module_ast(r#"def same(x: Int) -> Int { x }"#, "Std::A"),
+        );
+        let mod_b = staged_module(
+            "Std::B",
+            parse_module_ast(r#"def same(x: Int) -> Int { x }"#, "Std::B"),
+        );
 
         let index_first =
             precollect_declaration_index(&[vec![mod_a.clone(), mod_b.clone()]]).unwrap();
@@ -1604,18 +1733,18 @@ deferror Oops(reason: String) { reason }"#,
     #[test]
     fn test_precollect_declaration_index_tracks_bootstrap_std_user_stage_split() {
         let module_stages = vec![
-            vec![StagedModuleAst {
-                module_path: "Bootstrap".to_string(),
-                ast: parse_module_ast(r#"deferror NoneError { "none" }"#, "Bootstrap"),
-            }],
-            vec![StagedModuleAst {
-                module_path: "Std::Math".to_string(),
-                ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Std::Math"),
-            }],
-            vec![StagedModuleAst {
-                module_path: "User::Main".to_string(),
-                ast: parse_module_ast(r#"def main() -> Int { 1 }"#, "User::Main"),
-            }],
+            vec![staged_module(
+                "Bootstrap",
+                parse_module_ast(r#"deferror NoneError { "none" }"#, "Bootstrap"),
+            )],
+            vec![staged_module(
+                "Std::Math",
+                parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Std::Math"),
+            )],
+            vec![staged_module(
+                "User::Main",
+                parse_module_ast(r#"def main() -> Int { 1 }"#, "User::Main"),
+            )],
         ];
 
         let index =
@@ -1653,10 +1782,11 @@ deferror Oops(reason: String) { reason }"#,
     fn test_builtin_decl_resolution() {
         let resolved = parse_and_resolve("@@builtin def print(a: String) -> Unit").unwrap();
         match &resolved[0] {
-            Resolved::BuiltinDecl(_, id, params, ret_ty) => {
+            Resolved::BuiltinDecl(_, id, params, ret_ty, attrs) => {
                 assert_eq!(id.name, "print");
                 assert_eq!(id.unique_id, 2); // 0=Ok, 1=Err, 2=print
                 assert_eq!(params.len(), 1);
+                assert_eq!(attrs, &ResolvedDeclAttrs::default());
                 assert!(matches!(
                     ret_ty,
                     Some(spire::ast::AstTy::Named(_, ty)) if ty == "Unit"
@@ -1667,11 +1797,33 @@ deferror Oops(reason: String) { reason }"#,
     }
 
     #[test]
+    fn test_builtin_type_decl_resolution() {
+        let ast = spire::parse_with_context(
+            "@@builtin type Int",
+            spire::ParserContext::module(0, Some("Bootstrap".into()))
+                .with_rules(spire::SourceRules::std_module()),
+        )
+        .expect("std module should parse builtin type declarations");
+        let mut resolver = Resolver::new();
+        let resolved = resolver
+            .resolve_program(ast)
+            .expect("builtin type declaration should resolve");
+        match &resolved[0] {
+            Resolved::BuiltinTypeDecl(_, id, params, attrs) => {
+                assert_eq!(id.name, "Int");
+                assert!(params.is_empty());
+                assert_eq!(attrs, &ResolvedDeclAttrs::default());
+            }
+            _ => panic!("Expected BuiltinTypeDecl"),
+        }
+    }
+
+    #[test]
     fn test_module_builtin_can_be_resolved_by_qualified_name() {
-        let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Int".to_string(),
-            ast: parse_module_ast(r#"@@builtin def shl(value: Int, bits: Int) -> Int"#, "Int"),
-        }]];
+        let module_stages = vec![vec![staged_module(
+            "Int",
+            parse_module_ast(r#"@@builtin def shl(value: Int, bits: Int) -> Int"#, "Int"),
+        )]];
 
         let resolved = resolve_user_with_modules("value = Int::shl(2, 3)", &module_stages)
             .expect("qualified builtin should resolve");
@@ -1721,9 +1873,10 @@ print(to_string(1))"#,
         )
         .unwrap();
         match &resolved[0] {
-            Resolved::Def(_, id, params, ret_ty, body) => {
+            Resolved::Def(_, id, params, ret_ty, body, attrs) => {
                 assert_eq!(id.name, "add");
                 assert_eq!(params.len(), 2);
+                assert_eq!(attrs, &ResolvedDeclAttrs::default());
                 assert!(matches!(ret_ty, Some(spire::ast::AstTy::Named(_, ty)) if ty == "Int"));
                 assert!(
                     matches!(body.as_ref(), Resolved::Block(_, stmts) if matches!(stmts.as_slice(), [Resolved::BinOp(_, _, _, _)]))
@@ -1795,7 +1948,7 @@ def add(x: Int, y: Int) -> Int { x + y }"#,
         };
 
         let def_id = match &resolved[1] {
-            Resolved::Def(_, id, _, _, _) => id.unique_id,
+            Resolved::Def(_, id, _, _, _, _) => id.unique_id,
             _ => panic!("Expected Def"),
         };
 
@@ -1908,7 +2061,7 @@ deferror NotFound(code: String) {
                         }
                         _ => Vec::new(),
                     },
-                    Resolved::Def(_, id, _, _, _)
+                    Resolved::Def(_, id, _, _, _, _)
                     | Resolved::RecordDef(_, id, _)
                     | Resolved::StructDef(_, id, _)
                     | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
@@ -2167,6 +2320,26 @@ match value {
     }
 
     #[test]
+    fn test_closure_param_annotations_are_preserved() {
+        let resolved = parse_and_resolve(r#"f = {|x: Int, y| x}"#).unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Closure(_, params, captures, _) => {
+                    assert!(captures.is_empty());
+                    assert_eq!(params.len(), 2);
+                    assert!(matches!(
+                        params[0].ty.as_ref(),
+                        Some(AstTy::Named(_, name)) if name == "Int"
+                    ));
+                    assert_eq!(params[1].ty, None);
+                }
+                _ => panic!("Expected Closure"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
     fn test_explicit_auto_import_is_rejected() {
         let err = parse_and_resolve(
             r#"import Bootstrap;
@@ -2190,10 +2363,10 @@ print(to_string(add(1, 2)))"#,
 
     #[test]
     fn test_duplicate_module_import_is_rejected() {
-        let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Helper".to_string(),
-            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
-        }]];
+        let module_stages = vec![vec![staged_module(
+            "Helper",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+        )]];
 
         let err = resolve_user_with_modules(
             r#"import Helper;
@@ -2216,10 +2389,10 @@ print(to_string(add(1, 2)))"#,
 
     #[test]
     fn test_duplicate_module_then_member_import_is_rejected() {
-        let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Helper".to_string(),
-            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
-        }]];
+        let module_stages = vec![vec![staged_module(
+            "Helper",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+        )]];
 
         let err = resolve_user_with_modules(
             r#"import Helper;
@@ -2242,10 +2415,10 @@ print(to_string(add(1, 2)))"#,
 
     #[test]
     fn test_duplicate_member_then_module_import_is_rejected() {
-        let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Helper".to_string(),
-            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
-        }]];
+        let module_stages = vec![vec![staged_module(
+            "Helper",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+        )]];
 
         let err = resolve_user_with_modules(
             r#"import Helper::add;
@@ -2268,10 +2441,10 @@ print(to_string(add(1, 2)))"#,
 
     #[test]
     fn test_duplicate_member_import_is_rejected() {
-        let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Helper".to_string(),
-            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
-        }]];
+        let module_stages = vec![vec![staged_module(
+            "Helper",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+        )]];
 
         let err = resolve_user_with_modules(
             r#"import Helper::add;
@@ -2295,14 +2468,14 @@ print(to_string(add(1, 2)))"#,
     #[test]
     fn test_explicit_import_shadows_auto_imported_kernel_function() {
         let module_stages = vec![
-            vec![StagedModuleAst {
-                module_path: "Kernel".to_string(),
-                ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
-            }],
-            vec![StagedModuleAst {
-                module_path: "Helper".to_string(),
-                ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x - y }"#, "Helper"),
-            }],
+            vec![staged_module(
+                "Kernel",
+                parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+            )],
+            vec![staged_module(
+                "Helper",
+                parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x - y }"#, "Helper"),
+            )],
         ];
 
         let resolved = resolve_user_with_modules(
@@ -2315,7 +2488,7 @@ print(to_string(add(7, 3)))"#,
         let helper_add_uid = resolved
             .iter()
             .find_map(|node| match node {
-                Resolved::Def(_, id, _, _, _)
+                Resolved::Def(_, id, _, _, _, _)
                     if id.qualified_name.as_deref() == Some("Helper::add") =>
                 {
                     Some(id.unique_id)
@@ -2591,10 +2764,10 @@ val = p.x"#,
 
     #[test]
     fn test_unknown_import_member_is_error() {
-        let module_stages = vec![vec![StagedModuleAst {
-            module_path: "Helper".to_string(),
-            ast: parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
-        }]];
+        let module_stages = vec![vec![staged_module(
+            "Helper",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+        )]];
 
         let err = resolve_user_with_modules(
             r#"import Helper::nonexistent;
@@ -2725,14 +2898,14 @@ result = match value {
     #[test]
     fn test_build_scope_for_module_includes_prior_stage_declarations() {
         let module_stages = vec![
-            vec![StagedModuleAst {
-                module_path: "Util".to_string(),
-                ast: parse_module_ast(r#"def helper(x: Int) -> Int { x }"#, "Util"),
-            }],
-            vec![StagedModuleAst {
-                module_path: "App".to_string(),
-                ast: parse_module_ast(r#"def main() -> Int { 0 }"#, "App"),
-            }],
+            vec![staged_module(
+                "Util",
+                parse_module_ast(r#"def helper(x: Int) -> Int { x }"#, "Util"),
+            )],
+            vec![staged_module(
+                "App",
+                parse_module_ast(r#"def main() -> Int { 0 }"#, "App"),
+            )],
         ];
 
         // Stage index 1 (App) — Util::helper from stage 0 should appear by fully-qualified name

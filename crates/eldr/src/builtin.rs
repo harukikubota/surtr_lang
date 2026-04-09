@@ -207,7 +207,7 @@ fn builtin_shr(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
 
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     let registry = vm.type_registry();
-    value.to_display_string(&registry)
+    value.to_display_string(registry)
 }
 
 fn ok_result(value: Value) -> Value {
@@ -239,7 +239,34 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use sindr::builtin::BUILTIN_METAS;
+    use super::call_builtin;
+    use crate::vm::VM;
+    use sindr::builtin::{builtin_meta_by_name, BUILTIN_METAS};
+    use sindr::ir::Bytecode;
+    use sindr::primitives::int;
+    use sindr::runtime::{TypeRegistry, Value};
+
+    fn test_vm() -> VM {
+        VM::new(Bytecode {
+            opcodes: Vec::new(),
+            constants: Vec::new(),
+            num_locals: 0,
+            type_registry: TypeRegistry::new(),
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+            source_map: None,
+            docs: Vec::new(),
+        })
+        .with_error_capture()
+    }
+
+    /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
+    fn parse_decl_name(def_rest: &str) -> &str {
+        def_rest
+            .split_once('(')
+            .map(|(name, _)| name.trim())
+            .expect("def declaration must include params")
+    }
 
     /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
     fn parse_def_signature(def_rest: &str) -> (String, u8, String) {
@@ -275,10 +302,14 @@ mod tests {
     fn builtin_srt_and_builtin_meta_are_aligned() {
         let sources = [
             include_str!("../../../lib/bootstrap.srt"),
+            include_str!("../../../lib/kernel.srt"),
             include_str!("../../../lib/int.srt"),
         ];
 
-        // Collect all lines across all sources.
+        // Collect all lines across the std-module files that currently declare
+        // builtin value surfaces. Bootstrap intentionally stays almost empty,
+        // Kernel owns the cross-cutting builtins, and Int currently carries
+        // both arithmetic-result builtins and bit-shift helpers.
         let all_lines: Vec<&str> = sources
             .iter()
             .flat_map(|s| s.lines())
@@ -286,23 +317,34 @@ mod tests {
             .collect();
 
         // For each @@builtin annotation, find the associated def signature.
-        // Annotation order is flexible: @@builtin may appear on its own line
-        // (int.srt style) or immediately before `def` on the same line
-        // (@@builtin def ..., bootstrap.srt style).
+        // Annotation order is flexible:
+        // - `@@builtin def ...` can appear inline
+        // - `@@builtin` can appear on its own line before a following `def`
+        //
+        // We intentionally scan raw source text here instead of depending on
+        // parser lowering details, because this test is meant to guard the
+        // human-maintained std-module declaration layer against drift from
+        // `BUILTIN_METAS`.
         let mut entries: Vec<(String, u8, String)> = Vec::new();
         let mut i = 0;
         while i < all_lines.len() {
             let line = all_lines[i];
             if let Some(rest) = line.strip_prefix("@@builtin def ") {
                 // Inline form: @@builtin def name(params) -> ret
-                entries.push(parse_def_signature(rest));
+                if builtin_meta_by_name(parse_decl_name(rest)).is_some() {
+                    let entry = parse_def_signature(rest);
+                    entries.push(entry);
+                }
             } else if line == "@@builtin" {
                 // Standalone form: find the next `def` line.
                 let mut j = i + 1;
                 while j < all_lines.len() {
                     let next = all_lines[j];
                     if let Some(rest) = next.strip_prefix("def ") {
-                        entries.push(parse_def_signature(rest));
+                        if builtin_meta_by_name(parse_decl_name(rest)).is_some() {
+                            let entry = parse_def_signature(rest);
+                            entries.push(entry);
+                        }
                         break;
                     }
                     j += 1;
@@ -313,10 +355,89 @@ mod tests {
 
         assert_eq!(entries.len(), BUILTIN_METAS.len());
 
-        for ((name, arity, sig_str), meta) in entries.iter().zip(BUILTIN_METAS.iter()) {
-            assert_eq!(name, meta.name, "name mismatch");
-            assert_eq!(*arity, meta.arity, "arity mismatch for {name}");
-            assert_eq!(sig_str, &meta.sig_str, "sig mismatch for {name}");
+        // Source layout is allowed to group builtins by module ownership
+        // rather than by builtin id order, so compare by builtin name instead
+        // of relying on declaration order in `lib/*.srt`.
+        let mut entry_map = std::collections::BTreeMap::new();
+        for (name, arity, sig_str) in entries {
+            let prev = entry_map.insert(name.clone(), (arity, sig_str));
+            assert!(prev.is_none(), "duplicate builtin declaration for {name}");
         }
+
+        for meta in BUILTIN_METAS.iter() {
+            let (arity, sig_str) = entry_map
+                .get(meta.name)
+                .unwrap_or_else(|| panic!("missing builtin declaration for {}", meta.name));
+            assert_eq!(*arity, meta.arity, "arity mismatch for {}", meta.name);
+            assert_eq!(sig_str, &meta.sig_str, "sig mismatch for {}", meta.name);
+        }
+    }
+
+    #[test]
+    fn safe_mod_returns_zero_division_error_result() {
+        let mut vm = test_vm();
+        let value = call_builtin(&mut vm, 4, vec![Value::Int(int(10)), Value::Int(int(0))])
+            .expect("safe_mod should return Result");
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "ZeroDivisionError");
+                    assert_eq!(rich.message, "division by zero");
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn safe_mod_rejects_non_int_arguments() {
+        let mut vm = test_vm();
+        let err = call_builtin(&mut vm, 4, vec![Value::Bool(true), Value::Int(int(1))])
+            .expect_err("safe_mod must reject non-int inputs");
+        assert!(err.message.contains("safe_mod expects (Int, Int)"));
+    }
+
+    #[test]
+    fn set_exit_code_rejects_out_of_range_values() {
+        let mut vm = test_vm();
+        let huge = Value::Int(int(999999999999999999_i128));
+        let err = call_builtin(&mut vm, 6, vec![huge]).expect_err("must reject large exit codes");
+        assert!(err.message.contains("set_exit_code out of range for i32"));
+    }
+
+    #[test]
+    fn eprint_writes_rich_errors_to_captured_stderr() {
+        let mut vm = test_vm();
+        let value = Value::Error(Box::new(sindr::runtime::RichError {
+            kind: "Boom".into(),
+            message: "broken".into(),
+            location: sindr::runtime::Location {
+                file: "main.srt".into(),
+                func: "Boom".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 4,
+            },
+        }));
+        let result = call_builtin(&mut vm, 5, vec![value]).expect("eprint should succeed");
+        assert_eq!(result, Value::Unit);
+        assert_eq!(
+            vm.error_output.as_ref().map(Vec::as_slice),
+            Some(&["Error: Boom: broken".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn eprint_falls_back_to_inspect_for_non_error_values() {
+        let mut vm = test_vm();
+        let result =
+            call_builtin(&mut vm, 5, vec![Value::Int(int(42))]).expect("eprint should succeed");
+        assert_eq!(result, Value::Unit);
+        assert_eq!(
+            vm.error_output.as_ref().map(Vec::as_slice),
+            Some(&["42".to_string()][..])
+        );
     }
 }

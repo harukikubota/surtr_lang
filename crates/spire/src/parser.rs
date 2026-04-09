@@ -67,6 +67,7 @@ pub enum TopLevelDeclKind {
     RecordDef,
     DeferrorDef,
     BuiltinDecl,
+    BuiltinTypeDecl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +136,7 @@ impl SourceRules {
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::BuiltinDecl,
+                TopLevelDeclKind::BuiltinTypeDecl,
             ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
@@ -156,6 +158,7 @@ impl SourceRules {
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::BuiltinDecl,
+                TopLevelDeclKind::BuiltinTypeDecl,
             ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
@@ -344,6 +347,10 @@ impl Parser {
         }
     }
 
+    fn expect_builtin_decl_name(&mut self) -> Result<(Symbol, Span), ParseError> {
+        self.expect_ident()
+    }
+
     fn skip_newlines(&mut self) {
         while matches!(self.peek(), Token::Newline) {
             self.advance();
@@ -515,13 +522,15 @@ impl Parser {
 
     fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         match ast {
-            Ast::Def(_, _, _, _, _) => Some(TopLevelDeclKind::Def),
-            Ast::Defmod(_, _, _) => Some(TopLevelDeclKind::Defmod),
+            Ast::Def(_, _, _, _, _, _) => Some(TopLevelDeclKind::Def),
+            Ast::Defmod(_, _, _, _) => Some(TopLevelDeclKind::Defmod),
             Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
             Ast::StructDef(_, _, _) => Some(TopLevelDeclKind::StructDef),
             Ast::RecordDef(_, _, _) => Some(TopLevelDeclKind::RecordDef),
-            Ast::DeferrorDef(_, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
-            Ast::BuiltinDecl(_, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
+            Ast::DeferrorDef(_, _, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
+            Ast::BuiltinDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
+            Ast::BuiltinTypeDecl(_, _, _) => Some(TopLevelDeclKind::BuiltinTypeDecl),
+            Ast::ResultCtorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
             _ => None,
         }
     }
@@ -673,6 +682,14 @@ impl Parser {
     }
 
     fn parse_defmod(&mut self) -> Result<Ast, ParseError> {
+        self.parse_defmod_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_defmod_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         if self.context.module_path.is_some() {
             return Err(ParseError::syntax(
@@ -689,11 +706,12 @@ impl Parser {
 
         Ok(Ast::Defmod(
             Span {
-                start: sp.start,
+                start: annotator_start.unwrap_or(sp.start),
                 end: end.end,
             },
             name,
             body,
+            attrs,
         ))
     }
 
@@ -848,6 +866,10 @@ impl Parser {
                 self.advance();
                 self.parse_string_or_interpolated(sp, s)
             }
+            Token::DocString(_) => Err(ParseError::syntax(
+                "Doc strings are only allowed after @@doc",
+                sp,
+            )),
             Token::True => {
                 self.advance();
                 Ok(Ast::Lit(sp, Lit::Bool(true)))
@@ -1806,6 +1828,14 @@ impl Parser {
 
     /// `deferror Name { expr }` or `deferror Name(fields) { expr }`
     fn parse_deferror_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_deferror_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_deferror_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        start_override: Option<usize>,
+    ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Deferror)?;
         let (name, _) = self.expect_ident()?;
@@ -1854,21 +1884,33 @@ impl Parser {
 
         Ok(Ast::DeferrorDef(
             Span {
-                start: sp.start,
+                start: start_override.unwrap_or(sp.start),
                 end: end.end,
             },
             name,
             fields,
             Box::new(show_expr),
+            attrs,
         ))
     }
 
     fn parse_def_signature(
         &mut self,
     ) -> Result<(Span, Symbol, Vec<FunParam>, Option<AstTy>), ParseError> {
+        self.parse_def_signature_with_name_mode(false)
+    }
+
+    fn parse_def_signature_with_name_mode(
+        &mut self,
+        allow_builtin_keyword_name: bool,
+    ) -> Result<(Span, Symbol, Vec<FunParam>, Option<AstTy>), ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Def)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = if allow_builtin_keyword_name {
+            self.expect_builtin_decl_name()?
+        } else {
+            self.expect_ident()?
+        };
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
             self.advance();
@@ -1910,32 +1952,90 @@ impl Parser {
     }
 
     fn parse_annotated_decl(&mut self) -> Result<Ast, ParseError> {
-        let (annotator, annotator_span) = match self.peek().clone() {
-            Token::Annotator(name) => {
-                let span = self.peek_span();
-                self.advance();
-                (name, span)
-            }
-            _ => {
-                return Err(ParseError::syntax(
-                    "Expected annotator declaration",
-                    self.peek_span(),
-                ));
-            }
-        };
+        let mut attrs = DeclAttrs::default();
+        let mut saw_builtin = false;
+        let mut start_span: Option<Span> = None;
 
-        self.skip_newlines();
-        match annotator.as_str() {
-            "builtin" => self.parse_builtin_decl(annotator_span),
-            _ => Err(ParseError::syntax(
-                format!("Unknown annotator: @@{}", annotator),
-                annotator_span,
-            )),
+        while let Token::Annotator(name) = self.peek().clone() {
+            let annotator_span = self.peek_span();
+            if start_span.is_none() {
+                start_span = Some(annotator_span.clone());
+            }
+            self.advance();
+            self.skip_newlines();
+            match name.as_str() {
+                "builtin" => {
+                    if saw_builtin {
+                        return Err(ParseError::syntax(
+                            "@@builtin may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    saw_builtin = true;
+                }
+                "doc" => {
+                    if attrs.doc.is_some() {
+                        return Err(ParseError::syntax(
+                            "@@doc may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    let token = self.peek().clone();
+                    match token {
+                        Token::DocString(text) => {
+                            self.advance();
+                            attrs.doc = Some(text);
+                        }
+                        Token::Eof => {
+                            return Err(ParseError::incomplete("doc string", self.peek_span()));
+                        }
+                        _ => {
+                            return Err(ParseError::syntax(
+                                "@@doc expects a triple-quoted doc string",
+                                self.peek_span(),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown annotator: @@{}", name),
+                        annotator_span,
+                    ));
+                }
+            }
+            self.skip_newlines();
+        }
+
+        let start = start_span
+            .map(|span| span.start)
+            .unwrap_or_else(|| self.peek_span().start);
+
+        if saw_builtin {
+            match self.peek() {
+                Token::Def => self.parse_builtin_decl(start, attrs),
+                Token::Type => self.parse_builtin_type_decl(start, attrs),
+                _ => Err(ParseError::syntax(
+                    "Expected `def` or `type` after @@builtin",
+                    self.peek_span(),
+                )),
+            }
+        } else {
+            match self.peek() {
+                Token::Def => self.parse_def_with_attrs(attrs, Some(start)),
+                Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
+                Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
+                Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
+                _ => Err(ParseError::syntax(
+                    "@@doc must annotate `def`, `defmod`, `deferror`, or `@@builtin type/def`",
+                    self.peek_span(),
+                )),
+            }
         }
     }
 
-    fn parse_builtin_decl(&mut self, sp: Span) -> Result<Ast, ParseError> {
-        let (_def_span, name, params, ret_ty) = self.parse_def_signature()?;
+    fn parse_builtin_decl(&mut self, start: usize, attrs: DeclAttrs) -> Result<Ast, ParseError> {
+        let (_def_span, name, params, ret_ty) = self.parse_def_signature_with_name_mode(true)?;
 
         let mut lookahead = self.pos;
         while matches!(
@@ -1958,22 +2058,148 @@ impl Parser {
         let end = if self.pos > 0 {
             self.tokens[self.pos - 1].span.end
         } else {
-            sp.end
+            start
         };
 
         Ok(Ast::BuiltinDecl(
-            Span {
-                start: sp.start,
-                end,
-            },
+            Span { start, end },
             name,
             params,
             ret_ty,
+            attrs,
+        ))
+    }
+
+    fn parse_builtin_type_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Type)?;
+        self.skip_newlines();
+        let (name, name_span) = self.expect_ident()?;
+
+        // `Result` keeps `Ok` / `Err` as declaration-only constructor
+        // contracts. They intentionally live behind `@@builtin type ...` so
+        // the std-module declaration layer stays visually uniform, even though
+        // the payload that follows is function-shaped rather than type-shaped.
+        if (name == "Ok" || name == "Err") && matches!(self.peek(), Token::LParen) {
+            return self.parse_result_ctor_builtin_type_decl(start, name, attrs);
+        }
+
+        let mut params = Vec::new();
+        if matches!(self.peek(), Token::Lt) {
+            self.advance();
+            self.skip_newlines();
+            loop {
+                self.expect(&Token::Dollar)?;
+                let (param_name, _) = self.expect_ident()?;
+                params.push(format!("${}", param_name));
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                if matches!(self.peek(), Token::Gt) {
+                    let gt = self.expect(&Token::Gt)?;
+                    let end = if self.pos > 0 {
+                        self.tokens[self.pos - 1].span.end
+                    } else {
+                        gt.end
+                    };
+                    return Ok(Ast::BuiltinTypeDecl(
+                        Span { start, end },
+                        BuiltinTypeHead {
+                            span: Span {
+                                start: name_span.start,
+                                end,
+                            },
+                            name,
+                            params,
+                        },
+                        attrs,
+                    ));
+                }
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete(">", self.peek_span()));
+                }
+                return Err(ParseError::syntax(
+                    "Expected `,` or `>` in builtin type parameter list",
+                    self.peek_span(),
+                ));
+            }
+        }
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+
+        Ok(Ast::BuiltinTypeDecl(
+            Span { start, end },
+            BuiltinTypeHead {
+                span: Span { start, end },
+                name,
+                params,
+            },
+            attrs,
+        ))
+    }
+
+    fn parse_result_ctor_builtin_type_decl(
+        &mut self,
+        start: usize,
+        name: Symbol,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.skip_newlines();
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let param_ty = self.parse_type()?;
+        self.skip_newlines();
+        self.expect(&Token::RParen)?;
+        self.skip_newlines();
+        self.expect(&Token::Arrow)?;
+        self.skip_newlines();
+        let ret_ty = self.parse_type()?;
+
+        if matches!(self.peek(), Token::LBrace) {
+            return Err(ParseError::syntax(
+                "Result constructor builtin contracts in std modules must not have a function body",
+                self.peek_span(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+
+        Ok(Ast::ResultCtorDecl(
+            Span { start, end },
+            name,
+            param_ty,
+            ret_ty,
+            attrs,
         ))
     }
 
     /// `def name(arg: Type, ...) -> Type { expr }`
     fn parse_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
+        if self.should_parse_result_ctor_decl() {
+            return self.parse_result_ctor_decl_with_attrs(attrs, annotator_start);
+        }
+
         let (sp, name, params, ret_ty) = self.parse_def_signature()?;
 
         self.skip_newlines();
@@ -1996,13 +2222,82 @@ impl Parser {
 
         Ok(Ast::Def(
             Span {
-                start: sp.start,
+                start: annotator_start.unwrap_or(sp.start),
                 end: end.end,
             },
             name,
             params,
             ret_ty,
             Box::new(body),
+            attrs,
+        ))
+    }
+
+    fn should_parse_result_ctor_decl(&self) -> bool {
+        if self.context.level != DeclLevel::Top {
+            return false;
+        }
+        if self.context.module_path.is_some() {
+            return false;
+        }
+        if !self
+            .context
+            .source_rules
+            .allowed_top_level_decl_kinds
+            .allows(TopLevelDeclKind::BuiltinDecl)
+        {
+            return false;
+        }
+        if !matches!(self.peek(), Token::Def) {
+            return false;
+        }
+        matches!(
+            self.tokens.get(self.pos + 1).map(|sp| &sp.token),
+            Some(Token::Ident(name)) if name == "Ok" || name == "Err"
+        )
+    }
+
+    fn parse_result_ctor_decl_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Def)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let param_ty = self.parse_type()?;
+        self.skip_newlines();
+        self.expect(&Token::RParen)?;
+        self.skip_newlines();
+        self.expect(&Token::Arrow)?;
+        self.skip_newlines();
+        let ret_ty = self.parse_type()?;
+
+        if matches!(self.peek(), Token::LBrace) {
+            return Err(ParseError::syntax(
+                "Result constructor declarations in std modules must not have a function body",
+                self.peek_span(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            sp.start
+        };
+
+        Ok(Ast::ResultCtorDecl(
+            Span {
+                start: annotator_start.unwrap_or(sp.start),
+                end,
+            },
+            name,
+            param_ty,
+            ret_ty,
+            attrs,
         ))
     }
 
@@ -2313,6 +2608,18 @@ fn shift_match_pattern(pat: AstPattern, delta: usize) -> AstPattern {
     shift_pattern(pat, delta)
 }
 
+fn shift_decl_attrs(attrs: DeclAttrs) -> DeclAttrs {
+    attrs
+}
+
+fn shift_builtin_type_head(head: BuiltinTypeHead, delta: usize) -> BuiltinTypeHead {
+    BuiltinTypeHead {
+        span: shift_span(head.span, delta),
+        name: head.name,
+        params: head.params,
+    }
+}
+
 fn shift_record_lit_arg(arg: RecordLitArg, delta: usize) -> RecordLitArg {
     match arg {
         RecordLitArg::Positional(expr) => RecordLitArg::Positional(shift_ast_span(expr, delta)),
@@ -2438,7 +2745,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|a| shift_record_lit_arg(a, delta))
                 .collect(),
         ),
-        Ast::DeferrorDef(span, name, fields, show_expr) => Ast::DeferrorDef(
+        Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ast::DeferrorDef(
             shift_span(span, delta),
             name,
             fields
@@ -2450,8 +2757,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 })
                 .collect(),
             Box::new(shift_ast_span(*show_expr, delta)),
+            shift_decl_attrs(attrs),
         ),
-        Ast::Def(span, name, params, ret_ty, body) => Ast::Def(
+        Ast::Def(span, name, params, ret_ty, body, attrs) => Ast::Def(
             shift_span(span, delta),
             name,
             params
@@ -2460,8 +2768,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
             Box::new(shift_ast_span(*body, delta)),
+            shift_decl_attrs(attrs),
         ),
-        Ast::BuiltinDecl(span, name, params, ret_ty) => Ast::BuiltinDecl(
+        Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
             shift_span(span, delta),
             name,
             params
@@ -2469,11 +2778,25 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|p| shift_fun_param(p, delta))
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+            shift_decl_attrs(attrs),
         ),
-        Ast::Defmod(span, name, body) => Ast::Defmod(
+        Ast::BuiltinTypeDecl(span, head, attrs) => Ast::BuiltinTypeDecl(
+            shift_span(span, delta),
+            shift_builtin_type_head(head, delta),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
+            shift_span(span, delta),
+            name,
+            shift_ast_ty(param_ty, delta),
+            shift_ast_ty(ret_ty, delta),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::Defmod(span, name, body, attrs) => Ast::Defmod(
             shift_span(span, delta),
             name,
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
+            shift_decl_attrs(attrs),
         ),
         Ast::Import(span, path, spec) => {
             Ast::Import(shift_span(span, delta), shift_ast_path(path, delta), spec)
@@ -2525,10 +2848,12 @@ impl Ast {
             | Ast::RecordDef(s, _, _)
             | Ast::StructLit(s, _, _)
             | Ast::ConstructorCall(s, _, _)
-            | Ast::DeferrorDef(s, _, _, _)
-            | Ast::Def(s, _, _, _, _)
-            | Ast::BuiltinDecl(s, _, _, _)
-            | Ast::Defmod(s, _, _)
+            | Ast::DeferrorDef(s, _, _, _, _)
+            | Ast::Def(s, _, _, _, _, _)
+            | Ast::BuiltinDecl(s, _, _, _, _)
+            | Ast::BuiltinTypeDecl(s, _, _)
+            | Ast::ResultCtorDecl(s, _, _, _, _)
+            | Ast::Defmod(s, _, _, _)
             | Ast::Import(s, _, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
@@ -2635,9 +2960,10 @@ def noop() {()}"#,
         )
         .unwrap();
         match &ast[0] {
-            Ast::Def(_, name, params, ret_ty, body) => {
+            Ast::Def(_, name, params, ret_ty, body, attrs) => {
                 assert_eq!(name, "add");
                 assert_eq!(params.len(), 2);
+                assert_eq!(attrs, &DeclAttrs::default());
                 assert!(matches!(ret_ty, Some(AstTy::Named(_, ty)) if ty == "Int"));
                 assert!(
                     matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::BinOp(_, BinOp::Add, _, _)]))
@@ -2646,9 +2972,10 @@ def noop() {()}"#,
             _ => panic!("Expected Def"),
         }
         match &ast[1] {
-            Ast::Def(_, name, params, ret_ty, body) => {
+            Ast::Def(_, name, params, ret_ty, body, attrs) => {
                 assert_eq!(name, "noop");
                 assert_eq!(params.len(), 0);
+                assert_eq!(attrs, &DeclAttrs::default());
                 assert!(ret_ty.is_none());
                 assert!(
                     matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::Lit(_, Lit::Unit)]))
@@ -2662,9 +2989,10 @@ def noop() {()}"#,
     fn test_builtin_decl() {
         let ast = parse("@@builtin def to_string(a: $A) -> String").unwrap();
         match &ast[0] {
-            Ast::BuiltinDecl(_, name, params, ret_ty) => {
+            Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
                 assert_eq!(name, "to_string");
                 assert_eq!(params.len(), 1);
+                assert_eq!(attrs, &DeclAttrs::default());
                 assert!(matches!(
                     params[0].ty,
                     AstTy::Named(_, ref name) if name == "$A"
@@ -2676,9 +3004,175 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_builtin_type_decl() {
+        let ast = parse_with_context(
+            "@@builtin\ntype Int",
+            ParserContext::module(1, Some("Bootstrap".into()))
+                .with_rules(SourceRules::std_module()),
+        )
+        .expect("std module should accept builtin type declarations");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, params, .. }, attrs)]
+                if name == "Int" && params.is_empty() && attrs == &DeclAttrs::default()
+        ));
+    }
+
+    #[test]
+    fn test_doc_annotates_builtin_type_decl() {
+        let ast = parse_with_context(
+            "@@doc \"\"\"\nBuiltin Int.\n\"\"\"\n@@builtin type Int",
+            ParserContext::module(1, Some("Bootstrap".into()))
+                .with_rules(SourceRules::std_module()),
+        )
+        .expect("doc + builtin type should parse");
+
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, .. }, DeclAttrs { doc: Some(doc) })]
+                if name == "Int" && doc == "\nBuiltin Int.\n"
+        ));
+    }
+
+    #[test]
+    fn test_doc_annotates_defmod() {
+        let ast = parse(
+            "@@doc \"\"\"Kernel docs\"\"\"\ndefmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}",
+        )
+        .expect("doc + defmod should parse");
+
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Defmod(_, name, _, DeclAttrs { doc: Some(doc) })]
+                if name == "Kernel" && doc == "Kernel docs"
+        ));
+    }
+
+    #[test]
+    fn test_doc_annotates_deferror() {
+        let ast =
+            parse("@@doc \"\"\"Missing value error\"\"\"\ndeferror NoneError { \"None Value.\" }")
+                .expect("doc + deferror should parse");
+
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::DeferrorDef(_, name, _, _, DeclAttrs { doc: Some(doc) })]
+                if name == "NoneError" && doc == "Missing value error"
+        ));
+    }
+
+    #[test]
+    fn test_doc_requires_following_declaration() {
+        let err = parse("@@doc \"\"\"dangling\"\"\"").expect_err("expected parse error");
+        assert!(err.message().contains("declaration"));
+    }
+
+    #[test]
+    fn test_builtin_type_decl_preserves_generic_head() {
+        let ast = parse_with_context(
+            "@@builtin type Result<$T>",
+            ParserContext::module(1, Some("Bootstrap".into()))
+                .with_rules(SourceRules::std_module()),
+        )
+        .expect("generic builtin type should parse");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, params, .. }, _)]
+                if name == "Result" && params.as_slice() == ["$T"]
+        ));
+    }
+
+    #[test]
+    fn test_std_module_result_ctor_decls_are_accepted() {
+        let ast = parse_with_context(
+            r#"@@doc """
+Construct the success branch.
+"""
+def Ok($T) -> Result<$T>
+
+@@doc """
+Construct the error branch.
+"""
+def Err(Error) -> Result<$T>"#,
+            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("result constructor declarations should parse in std modules");
+
+        assert_eq!(ast.len(), 2);
+        assert!(matches!(
+            &ast[0],
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+                if name == "Ok" && param == "$T" && ret_name == "Result" && args.len() == 1 && doc.contains("success")
+        ));
+        assert!(matches!(
+            &ast[1],
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+                if name == "Err" && param == "Error" && ret_name == "Result" && args.len() == 1 && doc.contains("error")
+        ));
+    }
+
+    #[test]
+    fn test_std_module_result_ctor_builtin_type_contracts_are_accepted() {
+        let ast = parse_with_context(
+            r#"@@doc """
+Construct the success branch.
+"""
+@@builtin type Ok($T) -> Result<$T>
+
+@@doc """
+Construct the error branch.
+"""
+@@builtin type Err(Error) -> Result<$T>"#,
+            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("result constructor builtin contracts should parse in std modules");
+
+        assert_eq!(ast.len(), 2);
+        assert!(matches!(
+            &ast[0],
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+                if name == "Ok" && param == "$T" && ret_name == "Result" && args.len() == 1 && doc.contains("success")
+        ));
+        assert!(matches!(
+            &ast[1],
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+                if name == "Err" && param == "Error" && ret_name == "Result" && args.len() == 1 && doc.contains("error")
+        ));
+    }
+
+    #[test]
+    fn test_type_keyword_cannot_be_used_as_function_name() {
+        let err = parse("def type() -> Int { 0 }").expect_err("type should stay reserved");
+        assert!(err.message().contains("Expected identifier"));
+    }
+
+    #[test]
     fn test_builtin_decl_with_body_is_error() {
         let err = parse("@@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
         assert!(err.message().contains("must not have a function body"));
+    }
+
+    #[test]
+    fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
+        let ast = parse_with_context(
+            r#"defmod Kernel {
+  @@builtin def if(cond: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
+}"#,
+            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("builtin if declaration should parse");
+
+        match &ast[0] {
+            Ast::Defmod(_, name, body, _) => {
+                assert_eq!(name, "Kernel");
+                assert!(matches!(
+                    &body[0],
+                    Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                        if builtin_name == "if" && params.len() == 3 && ret == "$A"
+                ));
+            }
+            other => panic!("expected defmod, got {:?}", other),
+        }
     }
 
     #[test]
@@ -2911,7 +3405,7 @@ def noop() {()}"#,
     fn test_result_unit_type_annotation_uses_unit_token() {
         let ast = parse("def main() -> Result<()> { Ok(()) }").unwrap();
         match &ast[0] {
-            Ast::Def(_, _, _, Some(AstTy::Generic(_, name, args)), _) => {
+            Ast::Def(_, _, _, Some(AstTy::Generic(_, name, args)), _, _) => {
                 assert_eq!(name, "Result");
                 assert!(matches!(args.as_slice(), [AstTy::Named(_, n)] if n == "Unit"));
             }
@@ -3046,7 +3540,7 @@ def noop() {()}"#,
     fn test_function_body_trailing_semicolon_is_explicit_unit() {
         let ast = parse("def fun() -> Unit { print(\"x\"); }").unwrap();
         match &ast[0] {
-            Ast::Def(_, _, _, _, body) => {
+            Ast::Def(_, _, _, _, body, _) => {
                 assert!(matches!(
                     body.as_ref(),
                     Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::Semi(_, inner)] if matches!(inner.as_ref(), Ast::App(_, _, _)))
@@ -3351,9 +3845,9 @@ def noop() {()}"#,
         .expect("defmod should parse");
 
         match ast.as_slice() {
-            [Ast::Defmod(_, name, body)] => {
+            [Ast::Defmod(_, name, body, _)] => {
                 assert_eq!(name, "Kernel");
-                assert!(matches!(body.as_slice(), [Ast::Def(_, _, _, _, _)]));
+                assert!(matches!(body.as_slice(), [Ast::Def(_, _, _, _, _, _)]));
             }
             _ => panic!("Expected single defmod declaration"),
         }
@@ -3441,7 +3935,7 @@ import Kernel::{add, sub};"#,
             ParserContext::module(1, None),
         )
         .expect("module compile unit should accept defmod declarations");
-        assert!(matches!(ast.as_slice(), [Ast::Defmod(_, _, _)]));
+        assert!(matches!(ast.as_slice(), [Ast::Defmod(_, _, _, _)]));
     }
 
     #[test]
@@ -3481,6 +3975,15 @@ import Kernel::{add, sub};"#,
     }
 
     #[test]
+    fn test_module_compile_unit_rejects_builtin_type_decl() {
+        let err = parse_with_context("@@builtin type Int", ParserContext::module(1, None))
+            .expect_err("user module compile unit should reject builtin type declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
     fn test_std_module_compile_unit_accepts_builtin_decl() {
         let ast = parse_with_context(
             "defmod Bootstrap { @@builtin def print(a: String) -> Unit }",
@@ -3488,8 +3991,21 @@ import Kernel::{add, sub};"#,
         )
         .expect("std module compile unit should accept builtin declarations");
         assert!(
-            matches!(ast.as_slice(), [Ast::Defmod(_, name, body)] if name == "Bootstrap"
-            && matches!(body.as_slice(), [Ast::BuiltinDecl(_, _, _, _)]))
+            matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Bootstrap"
+            && matches!(body.as_slice(), [Ast::BuiltinDecl(_, _, _, _, _)]))
+        );
+    }
+
+    #[test]
+    fn test_std_module_compile_unit_accepts_builtin_type_decl() {
+        let ast = parse_with_context(
+            "defmod Bootstrap { @@builtin type Int }",
+            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("std module compile unit should accept builtin type declarations");
+        assert!(
+            matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Bootstrap"
+            && matches!(body.as_slice(), [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name: builtin_name, .. }, _)] if builtin_name == "Int"))
         );
     }
 

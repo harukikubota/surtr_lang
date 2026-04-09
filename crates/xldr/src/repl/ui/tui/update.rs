@@ -218,6 +218,20 @@ pub(super) fn submit_input(app: &mut App, engine: &mut ReplEngine) {
         ReplOutput::CommandOutput { rendered } => {
             app.push_result(&source, rendered, ResultEntryKind::CommandOutput);
         }
+        ReplOutput::DocResolved {
+            symbol,
+            signature,
+            summary,
+            ..
+        } => {
+            app.docs.push_back(super::app::DocEntry {
+                idx: app.docs.len(),
+                symbol,
+                signature,
+                summary,
+            });
+            app.selected_doc = Some(app.docs.len() - 1);
+        }
         ReplOutput::StatusMessage(_) => {
             if result.should_exit {
                 app.should_quit = true;
@@ -286,14 +300,38 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
                     ResultEntryKind::EvalError,
                 );
             } else {
-                // Placeholder: future work hooks into sigil doc resolution.
-                app.docs.push_back(super::app::DocEntry {
-                    idx: app.docs.len(),
-                    symbol: arg.to_string(),
-                    signature: None,
-                    summary: Some("(doc resolution not yet implemented)".to_string()),
-                });
-                app.selected_doc = Some(app.docs.len() - 1);
+                let result = engine.handle_line(&format!(":doc {arg}"));
+                match result.output {
+                    ReplOutput::DocResolved {
+                        symbol,
+                        signature,
+                        summary,
+                        ..
+                    } => {
+                        app.docs.push_back(super::app::DocEntry {
+                            idx: app.docs.len(),
+                            symbol,
+                            signature,
+                            summary,
+                        });
+                        app.selected_doc = Some(app.docs.len() - 1);
+                    }
+                    ReplOutput::EvalError { rendered, .. } => {
+                        app.push_result(
+                            format!(":doc {arg}"),
+                            rendered,
+                            ResultEntryKind::EvalError,
+                        );
+                    }
+                    ReplOutput::CommandOutput { rendered } => {
+                        app.push_result(
+                            format!(":doc {arg}"),
+                            rendered,
+                            ResultEntryKind::CommandOutput,
+                        );
+                    }
+                    _ => {}
+                }
             }
         }
         "sig" => {
