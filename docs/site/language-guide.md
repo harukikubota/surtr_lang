@@ -156,7 +156,13 @@ defstruct User {
   age: Int,
 }
 
-user: User = User { name: "alice", age: 30 }
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user: User = User("alice", 30)
 print(to_string(user.name))
 print(to_string(user.age))
 ```
@@ -274,6 +280,15 @@ def pick() -> Result<Int> {
 これは「`Ok` なら束縛し、`Err` なら現在の評価を中断して伝播する」という糖衣構文です。  
 例外送出ではなく、`Either` 的な分岐を短く書くための記法だと考えると追いやすくなります。
 
+`=?` は Result 専用というより、Surtr では「失敗を伝播する束縛」の入口です。  
+現在きちんと使える対象は `Result` と `List` です。
+
+```surtr
+[head, ..tail] =? [1, 2, 3]
+print(to_string(head))
+print(to_string(tail))
+```
+
 `Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では `defenum` と同一 contract にはしません。  
 あくまで `Result` は dedicated な失敗表現であり、`Ok` / `Err` もその専用 constructor として見せます。
 
@@ -290,7 +305,138 @@ empty: List<Int> = []
 
 空リストは要素型が分からないため、型注釈を付けるのが基本です。
 
-## 10. 組込み関数
+`List` にはパイプ / bind 系で使う helper surface もあります。
+
+```surtr
+List::wrap(1)                 # => [1]
+List::map([1, 2], &to_string)
+List::flat_map([1, 2], &dup)
+```
+
+ここでの単位元は `[]` です。  
+Surtr は一般化された `pure` を置かず、`List::wrap` と `[]` をはっきり分けています。
+
+## 10. パイプラインと合成
+
+Surtr のパイプ系は大きく 2 種類あります。
+
+- apply 系
+  - `|>`
+  - `|*>`
+  - `|>=`
+- compose 系
+  - `>>`
+  - `|=>`
+
+### 10.1 `|>` は「値を流す」
+
+一番基本の形はこれです。
+
+```surtr
+def add(x: Int, y: Int) -> Int { x + y }
+print(to_string(1 |> add(2)))
+```
+
+このとき `1 |> add(2)` は `add(1, 2)` と同じ意味です。  
+Surtr では call 式の第一引数へ左辺値を注入するので、Elixir に近い読み方ができます。
+
+capture や closure も使えます。
+
+```surtr
+print(to_string(4 |> &add(1)))
+print(to_string(4 |> {|x| x + 1}))
+```
+
+method path も同じです。
+
+```surtr
+user |> User::get_name()
+```
+
+これは `User::get_name(user)` の意味です。
+
+### 10.2 `|*>` は文脈の中身だけ変える
+
+`|*>` は `Result` や `List` の shape を保ったまま、中の値だけ変えます。
+
+```surtr
+Ok(1) |*> add(2)
+[1, 2, 3] |*> add(10)
+```
+
+読み方は次です。
+
+- `Ok(1) |*> add(2)` は `Ok(add(1, 2))`
+- `[1, 2, 3] |*> add(10)` は各要素へ `add(elem, 10)`
+
+右辺は plain function である必要があります。  
+`A -> Result<B>` や `A -> List<B>` を渡したいときは `|>=` を使います。
+
+### 10.3 `|>=` は次の文脈段階へ進む
+
+`|>=` は bind です。
+
+```surtr
+def require_at_least(x: Int, floor: Int) -> Result<Int, TooSmall> {
+  if(x >= floor, Ok(x), Err(TooSmall))
+}
+
+value: Result<Int> = Ok(11)
+checked = value |>= require_at_least(10)
+```
+
+ここでも右辺が call 式なら左辺値が第一引数へ注入されます。
+
+`List` では flat_map 的に動きます。
+
+```surtr
+def expand(n: Int) -> List<Int> { [n, n + 10] }
+print(to_string([1, 2, 3] |>= expand()))
+```
+
+### 10.4 `>>` と `|=>` は「関数値をつなぐ」
+
+ここが apply 系との一番大きな違いです。  
+compose 系は「値」ではなく「関数値」をつなぎます。
+
+```surtr
+pipeline = &trim >> &render
+result_pipeline = &parse |=> &validate
+```
+
+Surtr では、compose の左右は capture か closure だけです。
+
+```surtr
+&parse |=> &validate
+{|x| parse(x)} |=> {|y| validate(y)}
+```
+
+次のような call 式は compose できません。
+
+```surtr
+parse() |=> validate()   # 不可
+inc() >> render()        # 不可
+```
+
+理由は単純で、`parse()` は関数そのものではなく「実行結果の値」だからです。
+
+### 10.5 裸の関数参照は使わない
+
+Surtr では裸の関数参照を関数値として扱いません。
+
+```surtr
+value |> normalize       # 不可
+pipeline = parse |=> validate  # 不可
+```
+
+関数値がほしいなら `&` を付けます。
+
+```surtr
+value |> &normalize
+pipeline = &parse |=> &validate
+```
+
+## 11. 組込み関数
 
 現時点で公開済みとして扱える主な組込み関数は次のとおりです。
 
@@ -304,7 +450,7 @@ empty: List<Int> = []
 
 `safe_div` と `safe_mod` は、失敗を例外ではなく `Result` で返します。
 
-## 11. 標準モジュールの前提
+## 12. 標準モジュールの前提
 
 現在の Surtr では、標準モジュールを次の順で先に読み込みます。
 
@@ -328,7 +474,7 @@ Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user 
 auto import されるのは `Bootstrap` と `Kernel` だけです。  
 他の type module も標準モジュールとして一緒にロードされますが、名前空間としては別レイヤーで保ちます。
 
-## 12. `@@doc` と source ドキュメント
+## 13. `@@doc` と source ドキュメント
 
 Surtr の標準モジュールは、説明文も source に載せます。
 
@@ -350,7 +496,7 @@ User-visible integer values backed by BigInt.
 - 各 `defmod Name { ... }` がモジュール API になる
 - builtin type、module、関数、標準 error には `@@doc` を付けられる
 
-## 13. `Result<T>` と `Result<T, E>` の見え方
+## 14. `Result<T>` と `Result<T, E>` の見え方
 
 Surtr の builtin type として宣言されるのは `Result<T>` です。
 
@@ -367,7 +513,7 @@ value: Result<Int> = Ok(42)
 - 関数契約を詳しく見せたいときは `Result<T, E>` が現れることがある
 - どちらも `Ok(...)` / `Err(...)` と `match` を中心に扱う
 
-## 14. 現時点のスコープ
+## 15. 現時点のスコープ
 
 このガイドは、現時点で確定している範囲だけを対象にしています。
 
@@ -387,7 +533,6 @@ value: Result<Int> = Ok(42)
 
 - trait
 - 型エイリアス / NewType
-- パイプライン `|>`
 - マクロシステム拡張
 - 並列コンパイル
 

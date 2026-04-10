@@ -156,6 +156,117 @@ False
 
 - `++`
 
+### パイプ / bind / compose
+
+- `|>`
+- `|*>`
+- `|>=`
+- `>>`
+- `|=>`
+- `=?`
+
+#### `|>` 値 apply
+
+`|>` は左辺の値を右辺へ流します。
+
+- 右辺が capture / closure の場合は unary callable として適用する
+- 右辺が call 式の場合は、左辺値を第一引数へ注入する
+
+```surtr
+value |> &normalize
+value |> normalize(10)
+user |> User::get_name()
+```
+
+意味:
+
+```surtr
+value |> normalize(10)      # => normalize(value, 10)
+user |> User::get_name()    # => User::get_name(user)
+```
+
+#### `|*>` 文脈 map
+
+`|*>` は `Result` または `List` の中の値だけを変換します。
+
+- `Result<A> |*> (A -> B)` は `Result<B>`
+- `List<A> |*> (A -> B)` は `List<B>`
+- 右辺が call 式なら、文脈内部の値が第一引数へ注入される
+
+```surtr
+Ok(1) |*> add(2)            # => Ok(add(1, 2))
+["a", "b"] |*> wrap("[", "]")
+```
+
+`|*>` の右辺は plain function である必要があります。  
+`A -> Result<B>` や `A -> List<B>` のような文脈付き関数は受けません。
+
+#### `|>=` 文脈 bind
+
+`|>=` は `Result` / `List` の文脈を維持したまま次の段階へ接続します。
+
+- `Result<A> |>= (A -> Result<B>)`
+- `List<A> |>= (A -> List<B>)`
+
+```surtr
+Ok(11) |>= require_at_least(10)
+[1, 2, 3] |>= expand()
+```
+
+`|>=` の右辺が call 式なら、文脈内部の値を第一引数へ注入します。
+
+```surtr
+Ok(11) |>= require_at_least(10)   # => require_at_least(11, 10)
+```
+
+#### `>>` 通常関数合成
+
+`>>` は plain function / closure の合成です。
+
+```surtr
+pipeline = &trim >> &render
+```
+
+左右とも closure value でなければなりません。  
+`trim() >> render()` のような call 式は不許可です。
+
+#### `|=>` Kleisli 合成
+
+`|=>` は `Result` / `List` を返す関数同士を合成します。
+
+```surtr
+pipeline = &parse |=> &validate
+```
+
+- `Result` なら `(A -> Result<B>) |=> (B -> Result<C>)`
+- `List` なら `(A -> List<B>) |=> (B -> List<C>)`
+
+これも compose なので、左右とも capture または closure に限ります。  
+`parse() |=> validate()` は不許可です。
+
+#### `=?` SafeBind
+
+`=?` は「失敗したらそのまま伝播する束縛」です。
+
+```surtr
+value: Int =? parse_int("1")
+[head, ..tail] =? [1, 2, 3]
+[head, ..tail] =? Ok([1, 2, 3])
+```
+
+- `pattern =? Result<T, E>` は `Ok` を束縛し、`Err` を早期伝播する
+- `pattern =? expr` は SafeBind 対象の失敗しうるパターン入力を扱う
+- 現時点の対象は `Result` と `List`
+
+#### 共通制約
+
+- 裸の関数参照は許可しない
+- `value |> normalize` は不許可
+- `pipeline = parse |=> validate` も不許可
+- 関数値として保持できるのは capture または closure
+- `Result` と `List` を `|*>`, `|>=`, `|=>` で混在させない
+- `|>`, `|*>`, `|>=`, `|=>`, `=?` は同一優先度・左結合
+
 ## 5. パターン
 
 現時点で確定している `match` パターンは次のとおりです。
@@ -313,7 +424,6 @@ import Kernel::print;
 
 - trait
 - 型エイリアス / NewType
-- パイプライン `|>`
 - マクロシステム拡張
 - 並列コンパイル
 - 高度なモジュールシステム拡張

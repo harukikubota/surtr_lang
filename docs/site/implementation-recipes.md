@@ -334,3 +334,7 @@ sindr::builtin
 - `Bootstrap` と `Kernel` の責務を壊していないか
 - 既存の Phase 範囲外機能を混入させていないか
 - Rust 実装依存で進める箇所と、言語仕様として保証する箇所を混同していないか
+- 最適化検討を正本仕様へ混ぜていないか
+
+最適化方針が未確定なら、正本 (`doc/要件定義v9.md`) へは入れず、
+[`doc/open-issues.md`](/Users/haruca/work/rust/surtr/doc/open-issues.md) に open issue として追跡します。

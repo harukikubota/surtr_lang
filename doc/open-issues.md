@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない将来課題を追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md` を正本とする。
 
-最終更新日: 2026-04-09
+最終更新日: 2026-04-10
 
 2026-04-09 整理メモ:
 
@@ -227,6 +227,28 @@
   - quoted / unquoted のどちらを採るかがテストとドキュメントで一致する。
 - テスト方針:
   - `unit/sindr` に `display_for_rich_error_*` 系テストを固定し、採用形式が将来ぶれないようにする。
+
+### OI-011 apply / compose lowering 最適化方針
+
+- 策定コミット: `12b4406`
+- 背景:
+  - `|>`, `|*>`, `|>=`, `>>`, `|=>` の外部契約自体は確定した。
+  - 一方で lowering は現時点では正しさ優先で、compose 系は synthetic callable を使う経路を残している。
+  - 仕様として必要なのは「何が書けるか」と「どの値が返るか」であり、即時インライン化や branch chain 平坦化の閾値は未確定。
+- 2026-04-10 時点の固定事項:
+  - compose の外部契約は capture / closure 限定
+  - apply 系は第一引数注入
+  - `List::wrap`, `List::map`, `List::flat_map` を公開 surface とする
+- 未確定点:
+  - 即時適用される compose 式をどこまで branch chain へ直下ろしするか
+  - synthetic callable と直接 lower の選択基準
+  - 将来の最適化が debug 性能や span 診断へ与える影響
+- 受け入れ条件:
+  - 最適化前後で外部挙動とエラースパンが変わらない。
+  - codegen / VM の複雑化が段階責務を壊さない。
+- テスト方針:
+  - 既存の spec / compile_errors / integration を回帰基準にする。
+  - 追加最適化を入れる場合は opcode 列または IR 選択が変わるケースを unit で固定する。
 
 ---
 

@@ -12,14 +12,17 @@
   - Surtr の考え方
   - 基本文法
   - 関数、構造体、レコード、Enum、Result、List
+  - apply / compose / SafeBind の使い分け
 - [言語リファレンス](./language-reference.md)
   - 構文の一覧
   - 型と組込み関数の一覧
+  - pipeline / bind 演算子の外部契約
   - 現時点の制約
 - [標準ライブラリガイド](./standard-library.md)
   - 標準モジュールのロード順
   - `Kernel` と各 type file の役割
   - `@@doc` を source に載せる理由
+  - `List::wrap`, `List::map`, `List::flat_map` と pipeline の対応
 
 ### プログラミング言語を作りたい人
 
