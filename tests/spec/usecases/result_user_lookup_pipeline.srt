@@ -1,0 +1,34 @@
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+def parse_id(text: String) -> Result<Int> {
+  Ok(7)
+}
+
+def load_user(id: Int) -> Result<User> {
+  Ok(User("alice", 20))
+}
+
+def ensure_adult(user: User) -> Result<User> {
+  Ok(user)
+}
+
+def render(user: User) -> String {
+  user.name ++ ":" ++ to_string(user.age)
+}
+
+lookup = &parse_id |=> &load_user
+summary: Result<String> = lookup("7") |>= ensure_adult() |*> render()
+
+match summary {
+  Ok(v) => print(v),
+  Err(e) => print("err"),
+}

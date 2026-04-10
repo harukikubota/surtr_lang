@@ -1157,20 +1157,20 @@ match ok_val {
     }
 
     #[test]
-    fn pipe_accepts_capture_and_callable_marker() {
+    fn pipe_accepts_capture_and_injected_call() {
         assert_output(
-            r#"def inc(x: Int) -> Int {
-  x + 1
+            r#"def add(x: Int, y: Int) -> Int {
+  x + y
 }
 
-print(to_string(4 |> &inc))
-print(to_string(4 |> inc()))"#,
+print(to_string(4 |> add(1)))
+print(to_string(4 |> &add(1)))"#,
             &["5", "5"],
         );
     }
 
     #[test]
-    fn pipe_accepts_qualified_capture_and_callable_marker() {
+    fn pipe_accepts_qualified_capture_and_injected_call() {
         assert_output(
             r#"defstruct User {
   name: String,
@@ -1222,6 +1222,37 @@ match bound {
     }
 
     #[test]
+    fn result_pipeline_injects_left_value_into_call_rhs() {
+        assert_output(
+            r#"deferror TooSmall {
+  "too small"
+}
+
+def add(x: Int, y: Int) -> Int {
+  x + y
+}
+
+def require_at_least(x: Int, floor: Int) -> Result<Int, TooSmall> {
+  if(x >= floor, Ok(x), Err(TooSmall))
+}
+
+mapped: Result<Int> = Ok(1) |*> add(2)
+bound: Result<Int> = Ok(11) |>= require_at_least(10)
+
+match mapped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped err"),
+}
+
+match bound {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("bound err"),
+}"#,
+            &["3", "11"],
+        );
+    }
+
+    #[test]
     fn list_pipeline_helpers_and_compose_work() {
         assert_output(
             r#"def inc(x: Int) -> Int {
@@ -1244,7 +1275,7 @@ print(to_string(expand(2)))"#,
     }
 
     #[test]
-    fn kleisli_compose_builds_callable() {
+    fn compose_builds_callable_from_capture_only() {
         assert_output(
             r#"def parse(text: String) -> Result<Int> {
   Ok(1)
@@ -1254,19 +1285,13 @@ def render(x: Int) -> Result<String> {
   Ok(to_string(x + 2))
 }
 
-pipeline1 = &parse |=> &render
-pipeline2 = parse() |=> render()
+pipeline = &parse |=> &render
 
-match pipeline1("x") {
+match pipeline("x") {
   Ok(v) => print(v),
-  Err(e) => print("err1"),
-}
-
-match pipeline2("y") {
-  Ok(v) => print(v),
-  Err(e) => print("err2"),
+  Err(e) => print("err"),
 }"#,
-            &["3", "3"],
+            &["3"],
         );
     }
 
@@ -1278,7 +1303,7 @@ match pipeline2("y") {
 }
 
 value = 1 |> inc"#,
-            "requires an explicit callable",
+            "requires `&f`, closure, or a function call like `f(...)`",
         );
 
         assert_compile_error(
@@ -1291,7 +1316,32 @@ def render(x: Int) -> Result<String> {
 }
 
 pipeline = parse |=> render"#,
-            "requires an explicit callable",
+            "requires a closure or capture",
+        );
+    }
+
+    #[test]
+    fn compose_rejects_call_expressions() {
+        assert_compile_error(
+            r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+pipeline = parse() |=> render()"#,
+            "requires a closure or capture",
+        );
+
+        assert_compile_error(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+plain = inc() >> inc()"#,
+            "requires a closure or capture",
         );
     }
 
@@ -1315,6 +1365,92 @@ bad = value |*> lift()"#,
 value: Result<Int> = Ok(1)
 bad = value |>= expand()"#,
             "cannot mix Result and List context",
+        );
+    }
+
+    #[test]
+    fn result_pipeline_usecase_user_lookup_and_render() {
+        assert_output(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+def parse_id(text: String) -> Result<Int> {
+  Ok(7)
+}
+
+def load_user(id: Int) -> Result<User> {
+  Ok(User("alice", 20))
+}
+
+def ensure_adult(user: User) -> Result<User> {
+  Ok(user)
+}
+
+def render(user: User) -> String {
+  user.name ++ ":" ++ to_string(user.age)
+}
+
+lookup = &parse_id |=> &load_user
+summary: Result<String> = lookup("7") |>= ensure_adult() |*> render()
+
+match summary {
+  Ok(v) => print(v),
+  Err(e) => print("err"),
+}"#,
+            &["alice:20"],
+        );
+    }
+
+    #[test]
+    fn safebind_usecase_result_and_list_pipeline() {
+        assert_output(
+            r##"def parse_csv(text: String) -> Result<List<Int>> {
+  Ok([1, 2, 3])
+}
+
+def expand(n: Int) -> List<Int> {
+  [n, n + 10]
+}
+
+def show(n: Int) -> String {
+  "#" ++ to_string(n)
+}
+
+nums =? parse_csv("1,2,3")
+[head, ..tail] =? nums
+
+print(to_string(head))
+print(to_string(tail |>= expand()))
+print(to_string((head |> List::wrap()) |*> show()))"##,
+            &["1", "[2, 12, 3, 13]", "[#1]"],
+        );
+    }
+
+    #[test]
+    fn list_pipeline_usecase_expand_and_present_keywords() {
+        assert_output(
+            r#"def aliases(word: String) -> List<String> {
+  [word, word ++ "_alt"]
+}
+
+def wrap_bracket(word: String) -> String {
+  "[" ++ word ++ "]"
+}
+
+lift_and_expand = &List::wrap |=> &aliases
+
+words: List<String> = ["surtr", "vm"]
+print(to_string(words |>= aliases() |*> wrap_bracket()))
+print(to_string(lift_and_expand("bind") |*> wrap_bracket()))"#,
+            &["[[surtr], [surtr_alt], [vm], [vm_alt]]", "[[bind], [bind_alt]]"],
         );
     }
 

@@ -463,6 +463,13 @@ struct PendingCompose {
     span: Span,
 }
 
+#[derive(Debug, Clone)]
+struct PendingInjectCall {
+    fun_idx: u32,
+    extra_arg_count: usize,
+    span: Span,
+}
+
 struct Codegen {
     ir: Vec<IrOp>,
     state: CodegenState,
@@ -470,6 +477,7 @@ struct Codegen {
     label_positions: HashMap<Label, usize>, // label → IR index it points to
     pending_closures: Vec<PendingClosure>,
     pending_composes: Vec<PendingCompose>,
+    pending_inject_calls: Vec<PendingInjectCall>,
     in_function: bool,
     top_level_returns_result: bool,
     constant_dedup_start: usize,
@@ -488,6 +496,7 @@ impl Codegen {
             label_positions: HashMap::new(),
             pending_closures: Vec::new(),
             pending_composes: Vec::new(),
+            pending_inject_calls: Vec::new(),
             in_function: false,
             top_level_returns_result: false,
             constant_dedup_start: 0,
@@ -749,8 +758,55 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_inject_call_function(
+        &mut self,
+        fun_idx: u32,
+        extra_arg_count: usize,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        let saved_slot_map = self.state.slot_map.clone();
+        let saved_next_slot = self.state.next_slot;
+
+        self.state.slot_map = HashMap::new();
+        let func_slot = 0u32;
+        let input_slot = (extra_arg_count + 1) as u32;
+        self.state.next_slot = input_slot + 1;
+
+        let entry_pc = self.current_pos() as u32;
+        let prev_in_function = self.in_function;
+        self.in_function = true;
+
+        self.emit(Opcode::LoadLocal(func_slot));
+        self.emit(Opcode::LoadLocal(input_slot));
+        for offset in 0..extra_arg_count {
+            self.emit(Opcode::LoadLocal((offset + 1) as u32));
+        }
+        self.emit(Opcode::CallClosure {
+            arity: (extra_arg_count + 1) as u8,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+        });
+        self.in_function = prev_in_function;
+        self.emit(Opcode::Return);
+
+        self.state.functions.push(FunctionEntry {
+            fun_idx,
+            entry_pc,
+            num_locals: self.state.next_slot,
+            arity: (extra_arg_count + 2) as u8,
+            qualified_name: None,
+        });
+
+        self.state.slot_map = saved_slot_map;
+        self.state.next_slot = saved_next_slot;
+        Ok(())
+    }
+
     fn emit_pending_callables(&mut self) -> Result<(), CodegenError> {
-        while !self.pending_closures.is_empty() || !self.pending_composes.is_empty() {
+        while !self.pending_closures.is_empty()
+            || !self.pending_composes.is_empty()
+            || !self.pending_inject_calls.is_empty()
+        {
             if !self.pending_closures.is_empty() {
                 self.emit_pending_closures()?;
             }
@@ -758,6 +814,16 @@ impl Codegen {
                 let pending = std::mem::take(&mut self.pending_composes);
                 for compose in pending {
                     self.emit_compose_function(compose.fun_idx, &compose.flavor, &compose.span)?;
+                }
+            }
+            if !self.pending_inject_calls.is_empty() {
+                let pending = std::mem::take(&mut self.pending_inject_calls);
+                for inject_call in pending {
+                    self.emit_inject_call_function(
+                        inject_call.fun_idx,
+                        inject_call.extra_arg_count,
+                        &inject_call.span,
+                    )?;
                 }
             }
         }
@@ -1051,6 +1117,21 @@ impl Codegen {
 
             TypedInner::App(func, args) => {
                 self.emit_app(node.span.clone(), func, args)?;
+            }
+
+            TypedInner::InjectCall(func, args) => {
+                let fun_idx = self.reserve_fun_idx();
+                self.pending_inject_calls.push(PendingInjectCall {
+                    fun_idx,
+                    extra_arg_count: args.len(),
+                    span: node.span.clone(),
+                });
+                self.emit(Opcode::LoadFunctionRef(fun_idx));
+                self.emit_callable_ref(func)?;
+                for arg in args {
+                    self.emit_node(arg)?;
+                }
+                self.emit(Opcode::CaptureClosure((args.len() + 1) as u8));
             }
 
             TypedInner::BinOp(op, left, right) => {

@@ -1,0 +1,29 @@
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def get_name(self) -> String {
+    self.name
+  }
+
+  def rename_to(name: String, user: Self) -> Self {
+    User { name: name, age: user.age }
+  }
+}
+
+def trim_name(user: User) -> String {
+  user.name
+}
+
+user = User("alice", 30)
+rename = &User::rename_to("bob")
+print(user |> &User::get_name)
+print(user |> User::get_name())
+print(to_string(rename(user)))
+print(user |> trim_name())

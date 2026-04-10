@@ -1,0 +1,13 @@
+def aliases(word: String) -> List<String> {
+  [word, word ++ "_alt"]
+}
+
+def wrap_bracket(word: String) -> String {
+  "[" ++ word ++ "]"
+}
+
+lift_and_expand = &List::wrap |=> &aliases
+
+words: List<String> = ["surtr", "vm"]
+print(to_string(words |>= aliases() |*> wrap_bracket()))
+print(to_string(lift_and_expand("bind") |*> wrap_bracket()))

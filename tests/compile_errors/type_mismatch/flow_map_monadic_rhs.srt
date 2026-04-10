@@ -1,0 +1,6 @@
+def lift(x: Int) -> Result<Int> {
+  Ok(x + 1)
+}
+
+value: Result<Int> = Ok(1)
+bad = value |*> lift()

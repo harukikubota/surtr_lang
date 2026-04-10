@@ -55,7 +55,7 @@ Surtr ではモナド的な文脈を一般化せず、**`Result` と `List` の 
 - `[x]` `Pipe` / `ContextMap` / `ContextBind` / `Compose` / `KleisliCompose` を AST に保持
 - `[x]` `&qualified::path` を capture として parse
 - `[x]` `&qualified::path(args...)` を partial capture として parse
-- `[x]` flow / compose 位置の `foo()` / `Type::method()` を callable marker として受理
+- `[x]` apply 位置の `foo(...)` / `Type::method(...)` を第一引数注入 call として受理
 - `[x]` `Result<List<Int>>` のようなネスト型で `>>` を `>` `>` と誤解しないよう補正
 
 ### 名前解決 / 型検査
@@ -68,7 +68,7 @@ Surtr ではモナド的な文脈を一般化せず、**`Result` と `List` の 
 - `[x]` `>>` の通常関数合成型検査
 - `[x]` `Result` と `List` の混在チェインを拒否
 - `[x]` `|*>` の右辺が文脈付き関数の場合を拒否
-- `[x]` 裸の関数参照を flow / compose 右辺で拒否
+- `[x]` 裸の関数参照を apply / compose 右辺で拒否
 - `[x]` 変数代入で裸の関数参照を禁止する既存ルールを維持
 - `[x]` `SafeBind` を `Result` 専用ではなく `List` / `Result` 対象に整理
 
@@ -106,18 +106,18 @@ Surtr ではモナド的な文脈を一般化せず、**`Result` と `List` の 
 - `[x]` parser unit test: qualified capture
 - `[x]` parser unit test: flow 左結合
 - `[x]` parser unit test: nested generic + `>>`
-- `[x]` integration test: `|>` with capture / callable marker
+- `[x]` integration test: `|>` with capture / 第一引数注入 call
 - `[x]` integration test: `|*>` / `|>=` / `|=>` for `Result`
 - `[x]` integration test: `|*>` / `|>=` / `|=>` for `List`
 - `[x]` integration test: naked function ref rejection
 - `[x]` integration test: Result/List 混在 rejection
-- `[ ]` `tests/spec` / `tests/compile_errors` fixture への演算子ケース追加
+- `[x]` `tests/spec` / `tests/compile_errors` fixture への演算子ケース追加
 
 ### 文書反映
 
 - `[x]` `=?` が Result 専用ではない点を反映
 - `[x]` `&User::get_name` を許可する点を反映
-- `[x]` flow 位置の `foo()` / `Type::method()` を callable marker として反映
+- `[x]` apply 位置の `foo(...)` / `Type::method(...)` を第一引数注入として反映
 - `[x]` `List::wrap` と `[]` ベースの説明へ更新
 
 ---
@@ -531,14 +531,28 @@ result |>= validate
 
 ### 共通ルール
 
-Apply / Compose 系の右辺は、最終的に **1 引数 callable に解決可能な式** である必要がある。
+`|>`, `|*>`, `|>=` は apply 系であり、右辺が関数コールなら
+**左辺値を第一引数へ注入**する。
 
-flow / compose 位置では、`foo()` や `User::method()` は「即時呼び出し」ではなく
-**callable marker** として扱える。
-一方で通常の式位置では従来どおり zero-arg call である。
+```surtr
+x |> f(1, 2)          # => f(x, 1, 2)
+user |> User::get_name() # => User::get_name(user)
+```
+
+一方で `>>` / `|=>` は compose 系であり、右辺・左辺ともに
+**クロージャ値**である必要がある。
+許可するのは capture と closure のみ。
+
+```surtr
+&parse |=> &validate
+{|x| parse(x)} |=> {|y| validate(y)}
+```
+
+`parse() |=> validate()` のような関数コールは、callable ではなく
+式の実行結果なので compose には使えない。
 
 また、変数にそのまま保持できる関数値はクロージャかキャプチャに限る。
-裸の関数参照は `|>`, `|*>`, `|>=`, `|=>` の右辺でも代入でも許可しない。
+裸の関数参照は `|>`, `|*>`, `|>=`, `|=>`, `>>` の右辺でも代入でも許可しない。
 
 ```text
 lhs : A

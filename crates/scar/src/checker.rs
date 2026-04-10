@@ -1151,17 +1151,35 @@ impl Checker {
         self.function_ids_by_name.insert(key, id.clone());
     }
 
-    fn check_explicit_callable(
+    fn check_compose_callable(
         &mut self,
         node: &Resolved,
         op_name: &str,
     ) -> Result<TypedNode, TypeError> {
         match node {
             Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
-            Resolved::App(span, func, args) if args.is_empty() => self.check_capture(span, func, &[]),
             _ => Err(TypeError {
                 message: format!(
-                    "{} requires an explicit callable (`&f`, `f()`, `Type::method()`, or closure)",
+                    "{} requires a closure or capture (`&f`, `&Type::method`, or closure)",
+                    op_name
+                ),
+                span: self.resolved_span(node).clone(),
+                hint: None,
+            }),
+        }
+    }
+
+    fn check_apply_callable(
+        &mut self,
+        node: &Resolved,
+        op_name: &str,
+    ) -> Result<TypedNode, TypeError> {
+        match node {
+            Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
+            Resolved::App(span, func, args) => self.check_injected_call(span, func, args, op_name),
+            _ => Err(TypeError {
+                message: format!(
+                    "{} requires `&f`, closure, or a function call like `f(...)`",
                     op_name
                 ),
                 span: self.resolved_span(node).clone(),
@@ -1319,6 +1337,100 @@ impl Checker {
         })
     }
 
+    fn check_injected_call(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+        op_name: &str,
+    ) -> Result<TypedNode, TypeError> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: format!("{} does not support named arguments on the right-hand side", op_name),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let typed_func = self.check_node(func)?;
+        let typed_args: Vec<TypedNode> = args
+            .iter()
+            .map(|arg| match arg {
+                ResolvedRecordLitArg::Positional(expr) => self.check_node(expr),
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let (params, ret) = match self.resolve_ty(&typed_func.ty) {
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                (params, ret.as_ref().clone())
+            }
+            Ty::Func(params, ret) => (params, ret.as_ref().clone()),
+            other => {
+                return Err(TypeError {
+                    message: format!("{} right-hand side is not a function call target: {}", op_name, self.ty_name(&other)),
+                    span: span.clone(),
+                    hint: None,
+                })
+            }
+        };
+
+        if params.len() != typed_args.len() + 1 {
+            return Err(TypeError {
+                message: format!(
+                    "{} injects the left value as the first argument, so the call expects {} explicit argument(s), got {}",
+                    op_name,
+                    params.len().saturating_sub(1),
+                    typed_args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        for (expected, arg) in params.iter().skip(1).zip(&typed_args) {
+            if !self.types_compatible(expected, &arg.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "Argument type mismatch: expected {}, got {}",
+                        self.ty_name(expected),
+                        self.ty_name(&arg.ty)
+                    ),
+                    span: arg.span.clone(),
+                    hint: None,
+                });
+            }
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Func(vec![self.resolve_ty(&params[0])], Box::new(self.resolve_ty(&ret))),
+            span: span.clone(),
+            node: TypedInner::InjectCall(Box::new(typed_func), typed_args),
+        })
+    }
+
+    fn build_injected_app(
+        &mut self,
+        span: &Span,
+        injected_value: TypedNode,
+        callable: TypedNode,
+    ) -> Result<TypedNode, TypeError> {
+        let TypedInner::InjectCall(func, mut args) = callable.node else {
+            return Err(TypeError {
+                message: "internal error: expected injected call".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        let mut full_args = Vec::with_capacity(args.len() + 1);
+        full_args.push(injected_value);
+        full_args.append(&mut args);
+        self.build_typed_app(span, *func, full_args)
+    }
+
     fn list_helper_ref_by_name(
         &mut self,
         helper_name: &str,
@@ -1382,7 +1494,7 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
-        let typed_right = self.check_explicit_callable(right, "`|>`")?;
+        let typed_right = self.check_apply_callable(right, "`|>`")?;
         let (param, ret) = self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
         if !self.types_compatible(&param, &typed_left.ty) {
             return Err(TypeError {
@@ -1395,11 +1507,14 @@ impl Checker {
                 hint: None,
             });
         }
-        Ok(TypedNode {
-            ty: ret,
-            span: span.clone(),
-            node: TypedInner::Pipe(Box::new(typed_left), Box::new(typed_right)),
-        })
+        match typed_right.node {
+            TypedInner::InjectCall(_, _) => self.build_injected_app(span, typed_left, typed_right),
+            _ => Ok(TypedNode {
+                ty: ret,
+                span: span.clone(),
+                node: TypedInner::Pipe(Box::new(typed_left), Box::new(typed_right)),
+            }),
+        }
     }
 
     fn check_context_map(
@@ -1408,83 +1523,9 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_right = self.check_explicit_callable(right, "`|*>`")?;
+        let typed_right = self.check_apply_callable(right, "`|*>`")?;
         let (rhs_in, rhs_out) = self.unary_function_parts(&typed_right.ty, "`|*>`", &typed_right.span)?;
         self.ensure_plain_map_output(&rhs_out, "`|*>`", &typed_right.span)?;
-
-        let left_callable = match left {
-            Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => true,
-            Resolved::App(_, _, args) => args.is_empty(),
-            _ => false,
-        };
-        if left_callable {
-            let typed_left = self.check_explicit_callable(left, "`|*>`")?;
-            let (input_ty, left_ret) = self.unary_function_parts(&typed_left.ty, "`|*>`", &typed_left.span)?;
-            match self.resolve_ty(&left_ret) {
-                Ty::Result(ok, err) => {
-                    if !self.types_compatible(ok.as_ref(), &rhs_in) {
-                        return Err(TypeError {
-                            message: format!(
-                                "`|*>` type mismatch: expected {}, got {}",
-                                self.ty_name(ok.as_ref()),
-                                self.ty_name(&rhs_in)
-                            ),
-                            span: typed_right.span.clone(),
-                            hint: None,
-                        });
-                    }
-                    return Ok(TypedNode {
-                        ty: Ty::Func(
-                            vec![input_ty],
-                            Box::new(Ty::Result(
-                                Box::new(rhs_out),
-                                Box::new(self.resolve_ty(err.as_ref())),
-                            )),
-                        ),
-                        span: span.clone(),
-                        node: TypedInner::Compose(
-                            ComposeFlavor::ResultMap,
-                            Box::new(typed_left),
-                            Box::new(typed_right),
-                        ),
-                    });
-                }
-                Ty::List(item) => {
-                    if !self.types_compatible(item.as_ref(), &rhs_in) {
-                        return Err(TypeError {
-                            message: format!(
-                                "`|*>` type mismatch: expected {}, got {}",
-                                self.ty_name(item.as_ref()),
-                                self.ty_name(&rhs_in)
-                            ),
-                            span: typed_right.span.clone(),
-                            hint: None,
-                        });
-                    }
-                    return Ok(TypedNode {
-                        ty: Ty::Func(
-                            vec![input_ty],
-                            Box::new(Ty::List(Box::new(rhs_out))),
-                        ),
-                        span: span.clone(),
-                        node: TypedInner::Compose(
-                            ComposeFlavor::ListMap {
-                                helper: self.list_helper_ref_by_name("List::map", span)?,
-                            },
-                            Box::new(typed_left),
-                            Box::new(typed_right),
-                        ),
-                    });
-                }
-                other => {
-                    return Err(TypeError {
-                        message: format!("`|*>` requires Result or List on the left, got {}", self.ty_name(&other)),
-                        span: typed_left.span.clone(),
-                        hint: None,
-                    });
-                }
-            }
-        }
 
         let typed_left = self.check_node(left)?;
         match self.resolve_ty(&typed_left.ty) {
@@ -1534,90 +1575,8 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_right = self.check_explicit_callable(right, "`|>=`")?;
+        let typed_right = self.check_apply_callable(right, "`|>=`")?;
         let (rhs_in, rhs_ret) = self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span)?;
-
-        let left_callable = match left {
-            Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => true,
-            Resolved::App(_, _, args) => args.is_empty(),
-            _ => false,
-        };
-        if left_callable {
-            let typed_left = self.check_explicit_callable(left, "`|>=`")?;
-            let (input_ty, left_ret) = self.unary_function_parts(&typed_left.ty, "`|>=`", &typed_left.span)?;
-            match (self.resolve_ty(&left_ret), self.resolve_ty(&rhs_ret)) {
-                (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
-                    if !self.types_compatible(ok.as_ref(), &rhs_in)
-                        || !self.types_compatible(err.as_ref(), next_err.as_ref())
-                    {
-                        return Err(TypeError {
-                            message: "`|>=` requires matching Result context on both sides".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    return Ok(TypedNode {
-                        ty: Ty::Func(
-                            vec![input_ty],
-                            Box::new(Ty::Result(
-                                Box::new(self.resolve_ty(next_ok.as_ref())),
-                                Box::new(self.resolve_ty(err.as_ref())),
-                            )),
-                        ),
-                        span: span.clone(),
-                        node: TypedInner::Compose(
-                            ComposeFlavor::ResultBind,
-                            Box::new(typed_left),
-                            Box::new(typed_right),
-                        ),
-                    });
-                }
-                (Ty::List(item), Ty::List(next_item)) => {
-                    if !self.types_compatible(item.as_ref(), &rhs_in) {
-                        return Err(TypeError {
-                            message: format!(
-                                "`|>=` type mismatch: expected {}, got {}",
-                                self.ty_name(item.as_ref()),
-                                self.ty_name(&rhs_in)
-                            ),
-                            span: typed_right.span.clone(),
-                            hint: None,
-                        });
-                    }
-                    return Ok(TypedNode {
-                        ty: Ty::Func(
-                            vec![input_ty],
-                            Box::new(Ty::List(Box::new(self.resolve_ty(next_item.as_ref())))),
-                        ),
-                        span: span.clone(),
-                        node: TypedInner::Compose(
-                            ComposeFlavor::ListBind {
-                                helper: self.list_helper_ref_by_name("List::flat_map", span)?,
-                            },
-                            Box::new(typed_left),
-                            Box::new(typed_right),
-                        ),
-                    });
-                }
-                (Ty::Result(_, _), Ty::List(_)) | (Ty::List(_), Ty::Result(_, _)) => {
-                    return Err(TypeError {
-                        message: "`|>=` cannot mix Result and List context".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                (_, other) => {
-                    return Err(TypeError {
-                        message: format!(
-                            "`|>=` right-hand side must return Result or List, got {}",
-                            self.ty_name(&other)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: None,
-                    });
-                }
-            }
-        }
 
         let typed_left = self.check_node(left)?;
         match (self.resolve_ty(&typed_left.ty), self.resolve_ty(&rhs_ret)) {
@@ -1673,8 +1632,8 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_explicit_callable(left, "`>>`")?;
-        let typed_right = self.check_explicit_callable(right, "`>>`")?;
+        let typed_left = self.check_compose_callable(left, "`>>`")?;
+        let typed_right = self.check_compose_callable(right, "`>>`")?;
         let (left_in, left_out) = self.unary_function_parts(&typed_left.ty, "`>>`", &typed_left.span)?;
         let (right_in, right_out) = self.unary_function_parts(&typed_right.ty, "`>>`", &typed_right.span)?;
         if !self.types_compatible(&left_out, &right_in) {
@@ -1701,8 +1660,8 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_explicit_callable(left, "`|=>`")?;
-        let typed_right = self.check_explicit_callable(right, "`|=>`")?;
+        let typed_left = self.check_compose_callable(left, "`|=>`")?;
+        let typed_right = self.check_compose_callable(right, "`|=>`")?;
         let (left_in, left_out) = self.unary_function_parts(&typed_left.ty, "`|=>`", &typed_left.span)?;
         let (right_in, right_out) = self.unary_function_parts(&typed_right.ty, "`|=>`", &typed_right.span)?;
         match (self.resolve_ty(&left_out), self.resolve_ty(&right_out)) {
@@ -2290,6 +2249,12 @@ impl Checker {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
             TypedInner::App(func, args) => TypedInner::App(
+                Box::new(self.resolve_typed_node(*func)),
+                args.into_iter()
+                    .map(|arg| self.resolve_typed_node(arg))
+                    .collect(),
+            ),
+            TypedInner::InjectCall(func, args) => TypedInner::InjectCall(
                 Box::new(self.resolve_typed_node(*func)),
                 args.into_iter()
                     .map(|arg| self.resolve_typed_node(arg))

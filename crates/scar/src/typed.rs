@@ -33,6 +33,8 @@ pub enum TypedInner {
     Lit(Lit),
     Var(ResolvedId),
     App(Box<TypedNode>, Vec<TypedNode>),
+    /// Unary callable synthesized from `f(...)` for apply-style operators.
+    InjectCall(Box<TypedNode>, Vec<TypedNode>),
     Block(Vec<TypedNode>),
     Bind(TypedPattern, Box<TypedNode>),
     SafeBind(TypedPattern, Box<TypedNode>),

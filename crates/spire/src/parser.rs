@@ -4155,6 +4155,20 @@ Construct the error branch.
     }
 
     #[test]
+    fn test_pipe_rhs_call_stays_as_app() {
+        let ast = parse("out = user |> User::get_name()").expect("pipe with method call should parse");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Pipe(_, _, right) => {
+                    assert!(matches!(right.as_ref(), Ast::App(_, _, args) if args.is_empty()));
+                }
+                other => panic!("Expected pipe node, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_nested_generic_type_closes_without_confusing_compose() {
         let ast = parse("value: Result<List<Int>> = Ok([])").expect("nested generic type should parse");
         match &ast[0] {
@@ -4178,6 +4192,38 @@ Construct the error branch.
                 ));
             }
             other => panic!("Expected annotated Result<List<Int>> bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_qualified_partial_capture_parses() {
+        let ast = parse(r#"rename = &User::with_name("bob")"#).expect("qualified partial capture should parse");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Ast::Capture(_, target, args)
+                        if args.len() == 1
+                            && matches!(target.as_ref(), Ast::Path(_, path)
+                                if path.segments == vec!["User".to_string(), "with_name".to_string()])
+                ));
+            }
+            other => panic!("Expected qualified partial capture bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compose_chain_is_left_associative_at_same_precedence() {
+        let ast = parse("pipeline = parse() |=> validate() >> render()").expect("compose chain should parse");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Compose(_, left, right) => {
+                    assert!(matches!(right.as_ref(), Ast::App(_, _, args) if args.is_empty()));
+                    assert!(matches!(left.as_ref(), Ast::KleisliCompose(_, _, _)));
+                }
+                other => panic!("Expected outer compose node, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
         }
     }
 
