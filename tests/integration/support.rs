@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use forge::bytecode::{populate_error_template_lines, Bytecode};
 
 pub fn collect_script_compile_sources(
@@ -97,11 +95,8 @@ pub fn compile_script_sources(compile_sources: &xldr::CompileSources) -> Result<
 }
 
 pub fn run_script(source_name: &str, source: &str) -> Result<Vec<String>, String> {
-    let bytecode = compile_script(source_name, source)?;
-    let mut vm = eldr::VM::new(bytecode).with_output_capture();
-    vm.run()
-        .map_err(|e| format!("phase=runtime; message={}", e))?;
-    Ok(vm.output.unwrap_or_default())
+    let (stdout, _stderr) = run_script_with_stderr(source_name, source)?;
+    Ok(stdout)
 }
 
 pub fn run_script_with_stderr(

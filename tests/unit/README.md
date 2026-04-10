@@ -9,11 +9,7 @@ Current execution model:
 Run the current workspace test gate with:
 
 ```bash
-cargo test --workspace
-```
-
-Use the default runner for the wider workspace suite with:
-
-```bash
 cargo nextest run --workspace
 ```
+
+Use `cargo test --workspace` only when you specifically need the standard Cargo runner.

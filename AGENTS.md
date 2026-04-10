@@ -143,7 +143,7 @@ Forge は `GetField(idx)` を emit するだけでよい。
 
 ### ユニットテスト
 
-各クレートに `#[test]` を書く。`cargo test` ですべて通ること。
+各クレートに `#[test]` を書く。デフォルトのテストランナーは `cargo nextest run` とし、workspace 全体が通ること。
 
 将来仕様の先置きには `#[ignore]` テストを使ってよい。pending 理由をテスト名か ignore 理由で明記すること。
 
@@ -164,7 +164,8 @@ tests/compile_errors/
 実行方法:
 
 ```bash
-cargo test -p rune --test spec_fixture_tests
+cargo nextest run --workspace
+cargo nextest run -p rune --test run_srt
 ```
 
 `spec` は `stdout` を `.expected` と比較して一致すれば合格。

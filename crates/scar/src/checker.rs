@@ -1,5 +1,3 @@
-#![allow(unused_variables)]
-
 use std::collections::{HashMap, HashSet};
 
 use sigil::resolved::*;
@@ -3720,7 +3718,7 @@ impl Checker {
             .collect::<Result<Vec<_>, _>>()?;
 
         let elem_ty = typed_elems[0].ty.clone();
-        for (i, te) in typed_elems.iter().enumerate().skip(1) {
+        for te in typed_elems.iter().skip(1) {
             if !self.types_compatible(&elem_ty, &te.ty) {
                 return Err(TypeError {
                     message: format!(
@@ -4004,7 +4002,7 @@ impl Checker {
         pat: &ResolvedPattern,
         body: &Resolved,
         scrut_ty: &Ty,
-        span: &Span,
+        _span: &Span,
     ) -> Result<(TypedMatchPattern, TypedNode), TypeError> {
         let mut arm_checker = self.spawn_child_checker(self.env.clone());
         let typed_pat = arm_checker.check_match_subpattern(pat, scrut_ty)?;

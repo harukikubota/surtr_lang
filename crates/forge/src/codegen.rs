@@ -1,5 +1,3 @@
-#![allow(unused_imports, unused_variables)]
-
 use std::collections::HashMap;
 
 use scar::typed::*;
@@ -282,7 +280,7 @@ fn localize_chunk_indices(
 
 #[cfg(test)]
 mod tests {
-    use super::{Codegen, CodegenError, IrOp};
+    use super::Codegen;
     use crate::opcode::Opcode;
     use scar::typed::{TypedInner, TypedMatchPattern, TypedNode};
     use scar::types::Ty;
@@ -508,7 +506,6 @@ fn ty_to_string(ty: &Ty) -> String {
 // ── IR with labels (resolved to absolute addresses at the end) ──
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum IrOp {
     Op(Opcode),
     /// Jump to label (resolved later)
@@ -964,12 +961,10 @@ impl Codegen {
         self.ir.push(IrOp::JumpIfFalseLabel(label));
     }
 
-    #[allow(dead_code)]
     fn emit_jump_if_true(&mut self, label: Label) {
         self.ir.push(IrOp::JumpIfTrueLabel(label));
     }
 
-    #[allow(dead_code)]
     fn current_pos(&self) -> usize {
         self.ir.len()
     }

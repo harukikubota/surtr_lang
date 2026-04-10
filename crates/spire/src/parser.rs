@@ -419,20 +419,6 @@ impl Parser {
         }
     }
 
-    #[allow(dead_code)]
-    fn at_stmt_end(&self) -> bool {
-        matches!(
-            self.peek(),
-            Token::Newline
-                | Token::Semicolon
-                | Token::Eof
-                | Token::RBrace
-                | Token::RParen
-                | Token::RBrack
-                | Token::Comma
-        )
-    }
-
     fn has_path_separator(&self) -> bool {
         matches!(self.peek(), Token::Colon) && matches!(self.peek_n(1), Some(Token::Colon))
     }

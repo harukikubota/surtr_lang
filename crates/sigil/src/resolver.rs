@@ -1,10 +1,8 @@
-#![allow(unused_imports)]
-
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{
-    Ast, AstPattern, AstTy, BinOp, ClosureParam, DeclAttrs, FunParam, Lit, RecordLitArg, Span,
+    Ast, AstPattern, AstTy, ClosureParam, DeclAttrs, FunParam, RecordLitArg, Span,
 };
 
 use crate::error::ResolveError;
@@ -2317,7 +2315,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
 mod tests {
     use super::*;
     use sindr::primitives::int;
-    use spire::ast::AstTy;
+    use spire::ast::{AstTy, BinOp, Lit};
 
     fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
         let _ = module_path;
