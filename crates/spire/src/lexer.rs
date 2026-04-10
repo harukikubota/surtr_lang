@@ -347,8 +347,8 @@ mod tests {
 
     #[test]
     fn test_float() {
-        let tokens = tokenize("3.14").unwrap();
-        assert!(matches!(tokens[0].token, Token::Float(f) if (f - 3.14).abs() < 1e-10));
+        let tokens = tokenize("2.5").unwrap();
+        assert!(matches!(tokens[0].token, Token::Float(f) if (f - 2.5).abs() < 1e-10));
     }
 
     #[test]

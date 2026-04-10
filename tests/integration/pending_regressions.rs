@@ -32,8 +32,7 @@ def main() -> Result<()> {
 #[test]
 #[ignore = "pending: host-dependent OOM policy and reporting contract are not fixed yet"]
 fn pending_host_dependent_oom_policy_is_surfaced_consistently() {
-    let message = "future OOM policy should decide whether allocation failure is a runtime error, process failure, or host abort";
-    assert!(!message.is_empty());
+    let _message = "future OOM policy should decide whether allocation failure is a runtime error, process failure, or host abort";
 }
 
 #[test]

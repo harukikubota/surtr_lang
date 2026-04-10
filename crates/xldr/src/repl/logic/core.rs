@@ -1,6 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::path::Path;
 
 use diagnostics::{SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
@@ -10,14 +9,14 @@ use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
 use sindr::ir::DocEntry;
 use spire::ast::{Ast, ImportSpec, Span};
-use spire::token::Token;
 
 use super::command::{parse_repl_command, ReplCommand};
 use super::output::{ReplOutput, ReplResult};
 use super::render;
-use crate::loader::{self, ModuleInput, StagedModule};
+use crate::loader::{self, StagedModule};
 use crate::{
-    derive_source_rules, LoadError, ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
+    collect_additional_default_std_module_inputs, derive_source_rules, LoadError,
+    ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -68,7 +67,7 @@ pub struct ReplEngine {
 
 impl ReplEngine {
     pub(crate) fn new() -> Result<Self, LoadError> {
-        let std_module_inputs = collect_repl_std_module_inputs()?;
+        let std_module_inputs = collect_additional_default_std_module_inputs()?;
         let repl_sources = if std_module_inputs.is_empty() {
             loader::collect_repl_sources()?
         } else {
@@ -100,7 +99,7 @@ impl ReplEngine {
                 .collect(),
             docs: Vec::new(),
         };
-        engine.bootstrap_std_modules();
+        engine.bootstrap_std_modules()?;
         Ok(engine)
     }
 
@@ -119,7 +118,8 @@ impl ReplEngine {
     pub fn from_eldr(bytes: &[u8]) -> Result<Self, EldrLoadError> {
         let bytecode = sindr::ir::Bytecode::decode(bytes).map_err(EldrLoadError::Format)?;
 
-        let std_module_inputs = collect_repl_std_module_inputs().map_err(EldrLoadError::Load)?;
+        let std_module_inputs =
+            collect_additional_default_std_module_inputs().map_err(EldrLoadError::Load)?;
         let repl_sources = if std_module_inputs.is_empty() {
             loader::collect_repl_sources()
         } else {
@@ -167,46 +167,37 @@ impl ReplEngine {
             docs,
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
-        engine.bootstrap_std_modules_scope_only();
+        engine
+            .bootstrap_std_modules_scope_only()
+            .map_err(EldrLoadError::Load)?;
         Ok(engine)
     }
 
-    fn bootstrap_std_modules(&mut self) {
+    fn bootstrap_std_modules(&mut self) -> Result<(), LoadError> {
         let module_stages = match parse_module_stages_from_sources(
             &self.sources,
             &self.module_stages,
             spire::CompileUnitKind::Repl,
         ) {
             Ok(stages) => stages,
-            Err(e) => {
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    e.source_id,
-                    diagnostics::simple_error("ParseError", e.message(), e.span(), None),
-                );
-                return;
-            }
+            Err(e) => return Err(load_error_from_parse_failure(&self.sources, e)),
         };
 
         if module_stages.iter().all(|stage| stage.is_empty()) {
-            return;
+            return Ok(());
         }
 
         let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
             Ok(index) => index,
             Err(e) => {
-                let sid = find_source_id_for_span(
+                return Err(load_error_from_span_failure(
                     &self.sources,
                     &self.module_stages,
                     &e.span,
                     self.builtin_source_id,
-                );
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    sid,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-                );
-                return;
+                    "resolve",
+                    e.message,
+                ));
             }
         };
         self.declaration_index = declaration_index.clone();
@@ -219,18 +210,14 @@ impl ReplEngine {
         ) {
             Ok(r) => r,
             Err(e) => {
-                let sid = find_source_id_for_span(
+                return Err(load_error_from_span_failure(
                     &self.sources,
                     &self.module_stages,
                     &e.span,
                     self.builtin_source_id,
-                );
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    sid,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-                );
-                return;
+                    "resolve",
+                    e.message,
+                ));
             }
         };
 
@@ -247,18 +234,14 @@ impl ReplEngine {
         ) {
             Ok(t) => t,
             Err(e) => {
-                let sid = find_source_id_for_span(
+                return Err(load_error_from_span_failure(
                     &self.sources,
                     &self.module_stages,
                     &e.span,
                     self.builtin_source_id,
-                );
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    sid,
-                    diagnostics::type_error_spec_by_id(&self.sources, sid, &e),
-                );
-                return;
+                    "typecheck",
+                    e.message,
+                ));
             }
         };
 
@@ -266,18 +249,14 @@ impl ReplEngine {
         let (mut chunk, mut meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
-                let sid = find_source_id_for_span(
+                return Err(load_error_from_span_failure(
                     &self.sources,
                     &self.module_stages,
                     &e.span,
                     self.builtin_source_id,
-                );
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    sid,
-                    diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
-                );
-                return;
+                    "codegen",
+                    e.message,
+                ));
             }
         };
         meta.docs = docs.clone();
@@ -294,13 +273,16 @@ impl ReplEngine {
         }
 
         if let Err(e) = self.vm.push_atomic(chunk) {
-            eldr::report_runtime_error(
-                &e,
-                self.vm.source(),
-                self.vm.source_file(),
-                self.vm.runtime_error_location(),
-            );
-            return;
+            let file_name = self
+                .vm
+                .source_file()
+                .unwrap_or("<runtime>")
+                .to_string();
+            return Err(LoadError::BootstrapFailed {
+                phase: "runtime".into(),
+                file_name,
+                message: e.to_string(),
+            });
         }
         self.sync_scar_fun_index_with_vm();
 
@@ -311,18 +293,14 @@ impl ReplEngine {
         ) {
             Ok(scope) => scope,
             Err(e) => {
-                let sid = find_source_id_for_span(
+                return Err(load_error_from_span_failure(
                     &self.sources,
                     &self.module_stages,
                     &e.span,
                     self.builtin_source_id,
-                );
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    sid,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-                );
-                return;
+                    "resolve",
+                    e.message,
+                ));
             }
         };
         self.sigil_session.replace_scope(scope);
@@ -331,6 +309,7 @@ impl ReplEngine {
             self.symbols.insert(name.clone());
         }
         self.append_docs(docs);
+        Ok(())
     }
 
     /// Bootstrap stdlib sigil / scar context WITHOUT re-executing bytecode.
@@ -339,42 +318,31 @@ impl ReplEngine {
     /// stdlib code, so we only need the name-resolution and type-checking
     /// context that sigil and scar provide.  Forge codegen and vm.push_atomic
     /// are intentionally skipped.
-    fn bootstrap_std_modules_scope_only(&mut self) {
+    fn bootstrap_std_modules_scope_only(&mut self) -> Result<(), LoadError> {
         let module_stages = match parse_module_stages_from_sources(
             &self.sources,
             &self.module_stages,
             spire::CompileUnitKind::Repl,
         ) {
             Ok(stages) => stages,
-            Err(e) => {
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    e.source_id,
-                    diagnostics::simple_error("ParseError", e.message(), e.span(), None),
-                );
-                return;
-            }
+            Err(e) => return Err(load_error_from_parse_failure(&self.sources, e)),
         };
 
         if module_stages.iter().all(|stage| stage.is_empty()) {
-            return;
+            return Ok(());
         }
 
         let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
             Ok(index) => index,
             Err(e) => {
-                let sid = find_source_id_for_span(
+                return Err(load_error_from_span_failure(
                     &self.sources,
                     &self.module_stages,
                     &e.span,
                     self.builtin_source_id,
-                );
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    sid,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-                );
-                return;
+                    "resolve",
+                    e.message,
+                ));
             }
         };
         self.declaration_index = declaration_index.clone();
@@ -387,18 +355,14 @@ impl ReplEngine {
         ) {
             Ok(r) => r,
             Err(e) => {
-                let sid = find_source_id_for_span(
+                return Err(load_error_from_span_failure(
                     &self.sources,
                     &self.module_stages,
                     &e.span,
                     self.builtin_source_id,
-                );
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    sid,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-                );
-                return;
+                    "resolve",
+                    e.message,
+                ));
             }
         };
 
@@ -414,18 +378,14 @@ impl ReplEngine {
                 enforce_builtin_type_contracts: true,
             },
         ) {
-            let sid = find_source_id_for_span(
+            return Err(load_error_from_span_failure(
                 &self.sources,
                 &self.module_stages,
                 &e.span,
                 self.builtin_source_id,
-            );
-            diagnostics::report_error_by_id(
-                &self.sources,
-                sid,
-                diagnostics::type_error_spec_by_id(&self.sources, sid, &e),
-            );
-            return;
+                "typecheck",
+                e.message,
+            ));
         }
         self.sync_scar_fun_index_with_vm();
         self.append_docs(crate::collect_doc_entries(&module_stages, &[], None));
@@ -437,21 +397,18 @@ impl ReplEngine {
         ) {
             Ok(scope) => scope,
             Err(e) => {
-                let sid = find_source_id_for_span(
+                return Err(load_error_from_span_failure(
                     &self.sources,
                     &self.module_stages,
                     &e.span,
                     self.builtin_source_id,
-                );
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    sid,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-                );
-                return;
+                    "resolve",
+                    e.message,
+                ));
             }
         };
         self.sigil_session.replace_scope(scope);
+        Ok(())
     }
 
     fn bind_import_name(
@@ -1047,12 +1004,6 @@ impl ReplEngine {
     }
 }
 
-// ── Private helpers ───────────────────────────────────────────────────────────
-
-fn display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
 impl ReplEngine {
     fn sync_scar_fun_index_with_vm(&mut self) {
         let next_fun_idx = self
@@ -1066,55 +1017,6 @@ impl ReplEngine {
         self.scar_session
             .ensure_next_fun_idx_at_least(next_fun_idx);
     }
-}
-
-fn module_path_from_file_name(path: &Path) -> String {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(ToString::to_string)
-        .unwrap_or_default()
-}
-
-fn derive_primary_module_path(source: &str) -> Option<String> {
-    let tokens = spire::lexer::tokenize(source).ok()?;
-    for (idx, spanned) in tokens.iter().enumerate() {
-        if !matches!(spanned.token, Token::Defmod) {
-            continue;
-        }
-
-        let mut j = idx + 1;
-        while matches!(tokens.get(j).map(|t| &t.token), Some(Token::Newline)) {
-            j += 1;
-        }
-
-        let mut segments = Vec::new();
-        match tokens.get(j).map(|sp| &sp.token) {
-            Some(Token::Ident(name)) => {
-                segments.push(name.clone());
-                j += 1;
-            }
-            _ => return None,
-        }
-
-        while matches!(tokens.get(j).map(|t| &t.token), Some(Token::Colon))
-            && matches!(tokens.get(j + 1).map(|t| &t.token), Some(Token::Colon))
-        {
-            j += 2;
-            match tokens.get(j).map(|sp| &sp.token) {
-                Some(Token::Ident(name)) => {
-                    segments.push(name.clone());
-                    j += 1;
-                }
-                _ => return None,
-            }
-        }
-
-        if !segments.is_empty() {
-            return Some(segments.join("::"));
-        }
-    }
-
-    None
 }
 
 /// Find the source_id most likely to own `span`.
@@ -1144,7 +1046,7 @@ fn find_source_id_for_span(
                 }
                 let is_code = chars
                     .get(span.start)
-                    .map_or(false, |ch| !ch.is_ascii_whitespace());
+                    .is_some_and(|ch| !ch.is_ascii_whitespace());
                 if is_code {
                     match best_code {
                         None => best_code = Some((module.source_id, len)),
@@ -1163,57 +1065,36 @@ fn find_source_id_for_span(
     best_code.or(best_any).map(|(id, _)| id).unwrap_or(fallback)
 }
 
-fn collect_repl_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
-    let lib_dir = Path::new("lib");
-    if !lib_dir.exists() {
-        return Ok(Vec::new());
+fn load_error_from_parse_failure(
+    sources: &SourceRegistry,
+    error: ModuleStageParseError,
+) -> LoadError {
+    let file_name = sources
+        .file_name(error.source_id)
+        .unwrap_or("<unknown>")
+        .to_string();
+    LoadError::BootstrapFailed {
+        phase: "parse".into(),
+        file_name,
+        message: error.message().to_string(),
     }
+}
 
-    let entries = fs::read_dir(lib_dir).map_err(|e| LoadError::SourceReadFailed {
-        file_name: display_path(lib_dir),
-        message: e.to_string(),
-    })?;
-
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file()
-            && path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext == "srt")
-        {
-            files.push(path);
-        }
+fn load_error_from_span_failure(
+    sources: &SourceRegistry,
+    module_stages: &[Vec<StagedModule>],
+    span: &Span,
+    fallback: SourceId,
+    phase: &str,
+    message: impl Into<String>,
+) -> LoadError {
+    let source_id = find_source_id_for_span(sources, module_stages, span, fallback);
+    let file_name = sources.file_name(source_id).unwrap_or("<unknown>").to_string();
+    LoadError::BootstrapFailed {
+        phase: phase.to_string(),
+        file_name,
+        message: message.into(),
     }
-    files.sort();
-
-    let mut module_inputs = Vec::new();
-    for path in files {
-        let file_name = display_path(&path);
-        let source = fs::read_to_string(&path).map_err(|e| LoadError::SourceReadFailed {
-            file_name: file_name.clone(),
-            message: e.to_string(),
-        })?;
-        let module_path = derive_primary_module_path(&source)
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| module_path_from_file_name(&path));
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(crate::loader::is_default_std_module_file_name)
-            || crate::is_default_std_module_path(&module_path)
-            || REPL_AUTO_IMPORT_MODULES.contains(&module_path.as_str())
-        {
-            continue;
-        }
-        module_inputs.push(ModuleInput {
-            file_name,
-            source,
-            module_path,
-        });
-    }
-    Ok(module_inputs)
 }
 
 pub(crate) fn parse_module_stages_from_sources(
@@ -1280,4 +1161,134 @@ pub(crate) fn parse_module_stages_from_sources(
 
 pub(crate) fn xldr_version() -> &'static str {
     XLDR_VERSION
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
+        let repl_sources = loader::collect_repl_sources_with_std_module_stages(&[vec![
+            crate::ModuleInput {
+                file_name: "lib/bad.srt".into(),
+                source: source.into(),
+                module_path: module_path.into(),
+            },
+        ]])
+        .expect("test stdlib stage should load");
+        let forge_session = forge::ForgeSession::new();
+        let vm = eldr::VM::new_interactive(forge_session.type_registry());
+
+        ReplEngine {
+            sources: repl_sources.sources,
+            builtin_source_id: repl_sources.builtin_source_id,
+            module_stages: repl_sources.module_stages,
+            declaration_index: Default::default(),
+            repl_source_id: repl_sources.repl_source_id,
+            repl_module_path: repl_sources.repl_module_path.clone(),
+            sigil_session: sigil::SigilSession::with_module_path(Some(repl_sources.repl_module_path)),
+            scar_session: scar::ScarSession::new(),
+            forge_session,
+            vm,
+            pending: String::new(),
+            next_line: 1,
+            results: Vec::new(),
+            result_metas: Vec::new(),
+            symbols: ["Ok", "Err"]
+                .into_iter()
+                .map(str::to_string)
+                .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+                .collect(),
+            docs: Vec::new(),
+        }
+    }
+
+    fn expect_bootstrap_failure(
+        source: &str,
+        phase: &str,
+        message_fragment: &str,
+    ) -> LoadError {
+        let mut engine = bootstrap_engine_with_module(source, "Broken");
+        let err = engine
+            .bootstrap_std_modules()
+            .expect_err("bootstrap should fail");
+        match &err {
+            LoadError::BootstrapFailed {
+                phase: actual_phase,
+                file_name,
+                message,
+            } => {
+                assert_eq!(actual_phase, phase);
+                assert_eq!(file_name, "lib/bad.srt");
+                assert!(
+                    message.contains(message_fragment),
+                    "expected `{}` to contain `{}`",
+                    message,
+                    message_fragment
+                );
+            }
+            other => panic!("expected bootstrap failure, got {:?}", other),
+        }
+        err
+    }
+
+    #[test]
+    fn bootstrap_std_modules_returns_parse_failure() {
+        expect_bootstrap_failure("defmod Broken { def nope( }", "parse", "Expected");
+    }
+
+    #[test]
+    fn bootstrap_std_modules_returns_resolve_failure() {
+        expect_bootstrap_failure(
+            "defmod Broken { def nope() -> Int { missing } }",
+            "resolve",
+            "Undefined variable",
+        );
+    }
+
+    #[test]
+    fn bootstrap_std_modules_returns_typecheck_failure() {
+        expect_bootstrap_failure(
+            "defmod Broken { def nope() -> Int { \"bad\" } }",
+            "typecheck",
+            "expected Int",
+        );
+    }
+
+    #[test]
+    fn bootstrap_std_modules_returns_runtime_failure() {
+        let mut engine = bootstrap_engine_with_module(
+            "defmod Broken { def nope() -> Int { 1 } }",
+            "Broken",
+        );
+        engine.vm = eldr::VM::new_interactive(engine.forge_session.type_registry());
+        engine.vm.push_atomic(sindr::ir::BytecodeChunk {
+            opcodes: vec![sindr::ir::Opcode::Halt],
+            source_map: None,
+            const_base: 0,
+            constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+        })
+        .expect("vm bootstrap corruption setup should succeed");
+
+        let err = engine
+            .bootstrap_std_modules()
+            .expect_err("bootstrap should fail at runtime");
+        match err {
+            LoadError::BootstrapFailed {
+                phase,
+                file_name,
+                message,
+            } => {
+                assert_eq!(phase, "runtime");
+                assert_eq!(file_name, "bootstrap.srt");
+                assert!(message.contains("Chunk constant base mismatch"));
+            }
+            other => panic!("expected runtime bootstrap failure, got {:?}", other),
+        }
+    }
 }

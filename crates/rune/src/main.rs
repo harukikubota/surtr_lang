@@ -1,7 +1,6 @@
 mod commands;
 mod compile;
 mod error;
-mod loader;
 mod util;
 
 use std::env;

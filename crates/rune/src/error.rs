@@ -52,6 +52,13 @@ impl ExecutionEnv {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct RuneDiagnostic {
+    pub(crate) sources: SourceRegistry,
+    pub(crate) source_id: SourceId,
+    pub(crate) spec: DiagnosticSpec,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum RuneError {
     Usage {
         message: String,
@@ -62,9 +69,7 @@ pub(crate) enum RuneError {
     },
     Diagnostic {
         exit_code: i32,
-        sources: SourceRegistry,
-        source_id: SourceId,
-        spec: DiagnosticSpec,
+        diagnostic: Box<RuneDiagnostic>,
     },
 }
 
@@ -97,9 +102,11 @@ impl RuneError {
     ) -> Self {
         Self::Diagnostic {
             exit_code,
-            sources: sources.clone(),
-            source_id,
-            spec,
+            diagnostic: Box::new(RuneDiagnostic {
+                sources: sources.clone(),
+                source_id,
+                spec,
+            }),
         }
     }
 
@@ -124,11 +131,13 @@ impl RuneError {
                 }
             }
             Self::Diagnostic {
-                sources,
-                source_id,
-                spec,
+                diagnostic,
                 ..
-            } => diagnostics::report_error_by_id(sources, *source_id, spec.clone()),
+            } => diagnostics::report_error_by_id(
+                &diagnostic.sources,
+                diagnostic.source_id,
+                diagnostic.spec.clone(),
+            ),
         }
     }
 
@@ -149,17 +158,19 @@ impl RuneError {
                 }
             }
             Self::Diagnostic {
-                sources,
-                source_id,
-                spec,
+                diagnostic,
                 ..
             } => {
-                let file_name = sources.file_name(*source_id).unwrap_or("<unknown>");
-                let source = sources.source(*source_id).unwrap_or("");
-                let (line, column) = line_column_for_offset(source, spec.primary_span.start);
+                let file_name = diagnostic
+                    .sources
+                    .file_name(diagnostic.source_id)
+                    .unwrap_or("<unknown>");
+                let source = diagnostic.sources.source(diagnostic.source_id).unwrap_or("");
+                let (line, column) =
+                    line_column_for_offset(source, diagnostic.spec.primary_span.start);
                 format!(
                     "{} at {}:{}:{}: {}",
-                    spec.kind, file_name, line, column, spec.message
+                    diagnostic.spec.kind, file_name, line, column, diagnostic.spec.message
                 )
             }
         }

@@ -447,19 +447,16 @@ fn build_module_scope(
 ) -> Result<Scope, ResolveError> {
     let mut scope = global_scope.clone();
     let mut import_state = ImportState::default();
+    let mut import_context = ImportContext {
+        declaration_index,
+        declaration_uids,
+        current_stage_index,
+        import_state: &mut import_state,
+    };
 
     for stmt in stmts {
         if let Ast::Import(span, path, spec) = stmt {
-            apply_import_to_scope(
-                &mut scope,
-                declaration_index,
-                declaration_uids,
-                current_stage_index,
-                path,
-                spec,
-                &mut import_state,
-                span.clone(),
-            )?;
+            apply_import_to_scope(&mut scope, &mut import_context, path, spec, span.clone())?;
         }
     }
 
@@ -469,12 +466,9 @@ fn build_module_scope(
         }
         import_module_into_scope(
             &mut scope,
-            declaration_index,
-            declaration_uids,
+            &mut import_context,
             auto_import,
-            current_stage_index,
             true,
-            &mut import_state,
             Span { start: 0, end: 0 },
         )?;
     }
@@ -495,14 +489,18 @@ fn build_module_scope(
     Ok(scope)
 }
 
+struct ImportContext<'a> {
+    declaration_index: &'a DeclarationIndex,
+    declaration_uids: &'a HashMap<String, u32>,
+    current_stage_index: usize,
+    import_state: &'a mut ImportState,
+}
+
 fn apply_import_to_scope(
     scope: &mut Scope,
-    declaration_index: &DeclarationIndex,
-    declaration_uids: &HashMap<String, u32>,
-    current_stage_index: usize,
+    import_context: &mut ImportContext<'_>,
     path: &spire::ast::AstPath,
     spec: &spire::ast::ImportSpec,
-    import_state: &mut ImportState,
     span: Span,
 ) -> Result<(), ResolveError> {
     let module_name = path.segments.join("::");
@@ -521,34 +519,25 @@ fn apply_import_to_scope(
     match spec {
         spire::ast::ImportSpec::All => import_module_into_scope(
             scope,
-            declaration_index,
-            declaration_uids,
+            import_context,
             &module_name,
-            current_stage_index,
             false,
-            import_state,
             span,
         ),
         spire::ast::ImportSpec::Single(name) => import_single_into_scope(
             scope,
-            declaration_index,
-            declaration_uids,
+            import_context,
             &module_name,
             name,
-            current_stage_index,
-            import_state,
             span,
         ),
         spire::ast::ImportSpec::List(names) => {
             for name in names {
                 import_single_into_scope(
                     scope,
-                    declaration_index,
-                    declaration_uids,
+                    import_context,
                     &module_name,
                     name,
-                    current_stage_index,
-                    import_state,
                     span.clone(),
                 )?;
             }
@@ -559,31 +548,30 @@ fn apply_import_to_scope(
 
 fn import_module_into_scope(
     scope: &mut Scope,
-    declaration_index: &DeclarationIndex,
-    declaration_uids: &HashMap<String, u32>,
+    import_context: &mut ImportContext<'_>,
     module_name: &str,
-    current_stage_index: usize,
     auto_import: bool,
-    import_state: &mut ImportState,
     span: Span,
 ) -> Result<(), ResolveError> {
     if !auto_import {
-        import_state.record_module_import(module_name, &span)?;
+        import_context
+            .import_state
+            .record_module_import(module_name, &span)?;
     }
     let mut imported_any = false;
     let mut blocked_by_stage = false;
-    for entry in declaration_index.values() {
+    for entry in import_context.declaration_index.values() {
         if entry.module_path != module_name {
             continue;
         }
         if !is_importable_declaration(&entry.kind) {
             continue;
         }
-        if entry.stage_index >= current_stage_index {
+        if entry.stage_index >= import_context.current_stage_index {
             blocked_by_stage = true;
             continue;
         }
-        let uid = declaration_uids[&entry.fq_name];
+        let uid = import_context.declaration_uids[&entry.fq_name];
         bind_import_name(
             scope,
             &entry.name,
@@ -595,9 +583,7 @@ fn import_module_into_scope(
         imported_any = true;
     }
 
-    if imported_any {
-        Ok(())
-    } else if auto_import && AUTO_IMPORT_MODULES.contains(&module_name) {
+    if imported_any || (auto_import && AUTO_IMPORT_MODULES.contains(&module_name)) {
         Ok(())
     } else if blocked_by_stage {
         Err(ResolveError {
@@ -617,19 +603,19 @@ fn import_module_into_scope(
 
 fn import_single_into_scope(
     scope: &mut Scope,
-    declaration_index: &DeclarationIndex,
-    declaration_uids: &HashMap<String, u32>,
+    import_context: &mut ImportContext<'_>,
     module_name: &str,
     name: &str,
-    current_stage_index: usize,
-    import_state: &mut ImportState,
     span: Span,
 ) -> Result<(), ResolveError> {
-    import_state.record_member_import(module_name, name, &span)?;
+    import_context
+        .import_state
+        .record_member_import(module_name, name, &span)?;
 
     let fq_name = format!("{}::{}", module_name, name);
-    let Some(entry) = declaration_index.get(&fq_name) else {
-        let module_exists = declaration_index
+    let Some(entry) = import_context.declaration_index.get(&fq_name) else {
+        let module_exists = import_context
+            .declaration_index
             .values()
             .any(|entry| entry.module_path == module_name);
         return Err(ResolveError {
@@ -649,7 +635,7 @@ fn import_single_into_scope(
         });
     }
 
-    if entry.stage_index >= current_stage_index {
+    if entry.stage_index >= import_context.current_stage_index {
         return Err(ResolveError {
             message: format!(
                 "Import target `{}` is not available in the current stage",
@@ -662,7 +648,7 @@ fn import_single_into_scope(
     bind_import_name(
         scope,
         &entry.name,
-        declaration_uids[&entry.fq_name],
+        import_context.declaration_uids[&entry.fq_name],
         module_name,
         false,
         span,

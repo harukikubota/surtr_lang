@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 
 use diagnostics::{SourceId, SourceRegistry};
 
@@ -158,6 +159,11 @@ pub enum LoadError {
     EmptyModulePath {
         file_name: String,
     },
+    BootstrapFailed {
+        phase: String,
+        file_name: String,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for LoadError {
@@ -181,6 +187,15 @@ impl std::fmt::Display for LoadError {
             Self::EmptyModulePath { file_name } => {
                 write!(f, "empty module path derived from `{}`", file_name)
             }
+            Self::BootstrapFailed {
+                phase,
+                file_name,
+                message,
+            } => write!(
+                f,
+                "bootstrap failed during {} for `{}`: {}",
+                phase, file_name, message
+            ),
         }
     }
 }
@@ -246,6 +261,85 @@ pub struct ModuleInput {
     pub file_name: String,
     pub source: String,
     pub module_path: String,
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn lib_module_path_from_path(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
+pub fn derive_primary_module_path(source: &str) -> Option<String> {
+    let stripped = crate::strip_test_annotations(source);
+    let ast = spire::parse(&stripped).ok()?;
+    crate::lower_module_source_ast(ast, None)
+        .into_iter()
+        .find(|module| module.declared_span.is_some() && !module.module_path.is_empty())
+        .map(|module| module.module_path)
+}
+
+pub fn collect_lib_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
+    let lib_dir = Path::new("lib");
+    if !lib_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let entries = fs::read_dir(lib_dir).map_err(|e| LoadError::SourceReadFailed {
+        file_name: display_path(lib_dir),
+        message: e.to_string(),
+    })?;
+
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file()
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext == "srt")
+        {
+            files.push(path);
+        }
+    }
+    files.sort();
+
+    let mut module_inputs = Vec::with_capacity(files.len());
+    for path in files {
+        let file_name = display_path(&path);
+        let source = fs::read_to_string(&path).map_err(|e| LoadError::SourceReadFailed {
+            file_name: file_name.clone(),
+            message: e.to_string(),
+        })?;
+        let module_path = derive_primary_module_path(&source)
+            .filter(|module_path| !module_path.is_empty())
+            .unwrap_or_else(|| lib_module_path_from_path(&path));
+        module_inputs.push(ModuleInput {
+            file_name,
+            source,
+            module_path,
+        });
+    }
+
+    Ok(module_inputs)
+}
+
+pub fn collect_additional_default_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
+    Ok(collect_lib_module_inputs()?
+        .into_iter()
+        .filter(|module| {
+            let file_name = Path::new(&module.file_name)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            !is_default_std_module_file_name(file_name)
+                && !is_default_std_module_path(&module.module_path)
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -494,11 +588,11 @@ pub fn collect_module_sources_with_module_file_stages(
                     file_name: file_name.clone(),
                     message: e.to_string(),
                 })?;
-            let module_path = module_path_from_file_name(file_name).ok_or_else(|| {
-                LoadError::EmptyModulePath {
+            let module_path = derive_primary_module_path(&source)
+                .or_else(|| module_path_from_file_name(file_name))
+                .ok_or_else(|| LoadError::EmptyModulePath {
                     file_name: file_name.clone(),
-                }
-            })?;
+                })?;
             stage_inputs.push(ModuleInput {
                 file_name: file_name.clone(),
                 source,
@@ -720,5 +814,14 @@ mod tests {
             Some("bootstrap")
         );
         assert_eq!(module_path_from_file_name(""), None);
+    }
+
+    #[test]
+    fn derive_primary_module_path_ignores_test_annotations() {
+        let source = r#"@@test 1 == 1
+defmod Math {
+  def add(x: Int, y: Int) -> Int { x + y }
+}"#;
+        assert_eq!(derive_primary_module_path(source).as_deref(), Some("Math"));
     }
 }

@@ -430,7 +430,7 @@ mod tests {
         let result = call_builtin(&mut vm, 5, vec![value]).expect("eprint should succeed");
         assert_eq!(result, Value::Unit);
         assert_eq!(
-            vm.error_output.as_ref().map(Vec::as_slice),
+            vm.error_output.as_deref(),
             Some(&["Error: Boom: broken".to_string()][..])
         );
     }
@@ -442,7 +442,7 @@ mod tests {
             call_builtin(&mut vm, 5, vec![Value::Int(int(42))]).expect("eprint should succeed");
         assert_eq!(result, Value::Unit);
         assert_eq!(
-            vm.error_output.as_ref().map(Vec::as_slice),
+            vm.error_output.as_deref(),
             Some(&["42".to_string()][..])
         );
     }

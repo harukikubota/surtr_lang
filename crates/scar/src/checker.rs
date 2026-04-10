@@ -176,6 +176,13 @@ pub struct ScarSession {
     function_ids_by_name: HashMap<String, ResolvedId>,
 }
 
+struct CheckerParts {
+    env: TypeEnv,
+    user_func_params: HashMap<u32, Vec<String>>,
+    impl_method_uids: HashMap<String, u32>,
+    function_ids_by_name: HashMap<String, ResolvedId>,
+}
+
 impl ScarSession {
     pub fn new() -> Self {
         Self {
@@ -203,7 +210,12 @@ impl ScarSession {
             context,
         );
         let typed = checker.check_program(resolved)?;
-        let (env, user_func_params, impl_method_uids, function_ids_by_name) = checker.into_parts();
+        let CheckerParts {
+            env,
+            user_func_params,
+            impl_method_uids,
+            function_ids_by_name,
+        } = checker.into_parts();
         self.env = env;
         self.user_func_params = user_func_params;
         self.impl_method_uids = impl_method_uids;
@@ -320,20 +332,13 @@ impl Checker {
         self.impl_method_uids = child.impl_method_uids.clone();
     }
 
-    fn into_parts(
-        self,
-    ) -> (
-        TypeEnv,
-        HashMap<u32, Vec<String>>,
-        HashMap<String, u32>,
-        HashMap<String, ResolvedId>,
-    ) {
-        (
-            self.env,
-            self.user_func_params,
-            self.impl_method_uids,
-            self.function_ids_by_name,
-        )
+    fn into_parts(self) -> CheckerParts {
+        CheckerParts {
+            env: self.env,
+            user_func_params: self.user_func_params,
+            impl_method_uids: self.impl_method_uids,
+            function_ids_by_name: self.function_ids_by_name,
+        }
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
@@ -655,7 +660,7 @@ impl Checker {
                     span: decl_spans
                         .get(&head)
                         .cloned()
-                        .unwrap_or_else(|| Span { start: 0, end: 0 }),
+                        .unwrap_or(Span { start: 0, end: 0 }),
                     hint: None,
                 });
             }
@@ -1783,9 +1788,7 @@ impl Checker {
             ResolvedPattern::Constructor(ctor, inners) => {
                 ctor.name == "Ok"
                     || ctor.name == "Err"
-                    || inners
-                        .iter()
-                        .any(|inner| Self::contains_result_test_pattern(inner))
+                    || inners.iter().any(Self::contains_result_test_pattern)
             }
             ResolvedPattern::As(inner, _, _) => Self::contains_result_test_pattern(inner),
             ResolvedPattern::ListCons(head, tail) => {
@@ -2499,7 +2502,7 @@ impl Checker {
                     )
                 }
             }
-            Ty::Func(params, ret) => format!("{}", {
+            Ty::Func(params, ret) => {
                 let param_str = params
                     .iter()
                     .map(|ty| self.ty_name(ty))
@@ -2510,7 +2513,7 @@ impl Checker {
                 } else {
                     format!("({} -> {})", param_str, self.ty_name(ret))
                 }
-            }),
+            }
             Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
             Ty::UserFunc { .. } => "UserFunc".into(),
         }

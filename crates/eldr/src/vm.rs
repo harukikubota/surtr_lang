@@ -183,7 +183,10 @@ impl VM {
             context.call_site = err_context.call_site;
         }
         context.details.extend(err_context.details);
-        RuntimeError { message, context }
+        RuntimeError {
+            message,
+            context: Box::new(context),
+        }
     }
 
     /// Enable stdout capture (for testing).
@@ -201,72 +204,6 @@ impl VM {
     /// Access the type registry (used by builtins).
     pub fn type_registry(&self) -> &TypeRegistry {
         &self.bytecode.type_registry
-    }
-
-    pub(crate) fn invoke_callable(
-        &mut self,
-        callable: Callable,
-        args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
-        let mut full_args = callable.lexical_captures;
-        full_args.extend(callable.partial_args);
-        full_args.extend(args);
-        let call_site = self.frames.last().and_then(|frame| frame.call_site);
-
-        match callable.target {
-            CallableTarget::Builtin(builtin_id) => {
-                self.with_call_site(call_site, |vm| call_builtin(vm, builtin_id, full_args))
-            }
-            CallableTarget::Function(fun_idx) => {
-                let entry = self.function_entry(fun_idx)?.clone();
-                if entry.arity as usize != full_args.len() {
-                    return Err(RuntimeError::new(format!(
-                        "Call arity mismatch for function {}: expected {}, got {}",
-                        fun_idx,
-                        entry.arity,
-                        full_args.len()
-                    )));
-                }
-                if entry.entry_pc as usize >= self.bytecode.opcodes.len() {
-                    return Err(RuntimeError::new(format!(
-                        "Function {} entry_pc out of bounds: {}",
-                        fun_idx, entry.entry_pc
-                    )));
-                }
-
-                let locals = Self::build_locals_for_call(&entry, full_args)?;
-                let stack_base = self.stack.len();
-                let previous_depth = self.frames.len();
-                self.frames.push(CallFrame {
-                    return_pc: 0,
-                    stack_base,
-                    call_site,
-                    locals,
-                });
-
-                let mut pc = entry.entry_pc as usize;
-                while self.frames.len() > previous_depth {
-                    if pc >= self.bytecode.opcodes.len() {
-                        return Err(RuntimeError::new(
-                            "PC out of bounds during builtin callable",
-                        ));
-                    }
-                    let op = self.bytecode.opcodes[pc].clone();
-                    let mut next_pc = pc + 1;
-                    let halted = self
-                        .execute_opcode(op.clone(), &mut next_pc)
-                        .map_err(|err| self.enrich_runtime_error(err, pc, &op))?;
-                    if halted {
-                        return Err(RuntimeError::new(
-                            "Callable invoked from builtin halted unexpectedly",
-                        ));
-                    }
-                    pc = next_pc;
-                }
-
-                self.pop_stack()
-            }
-        }
     }
 
     /// Read-only access to the accumulated bytecode.
@@ -1181,9 +1118,8 @@ impl VM {
                         RuntimeError::new(format!("Unknown error template: {}", template_id))
                     })?;
                 let call_site = self.current_frame()?.call_site;
-                let (span_start, span_end) = call_site
-                    .map(|(start, end)| (start, end))
-                    .unwrap_or((template.span_start, template.span_end));
+                let (span_start, span_end) =
+                    call_site.unwrap_or((template.span_start, template.span_end));
                 let (line, column) = match call_site {
                     Some((span_start, _)) => self
                         .source()
@@ -1394,9 +1330,6 @@ impl VM {
                 }
             }
 
-            // Deprecated frame management opcodes are no-ops under the new calling convention.
-            Opcode::MakeFrame(_) | Opcode::PopFrame => {}
-
             // Return
             Opcode::Return => {
                 if self.frames.len() == 1 {
@@ -1579,6 +1512,26 @@ mod tests {
         }
     }
 
+    fn function_entry(
+        fun_idx: u32,
+        entry_pc: u32,
+        num_locals: u32,
+        arity: u8,
+        qualified_name: Option<&str>,
+    ) -> FunctionEntry {
+        FunctionEntry {
+            fun_idx,
+            entry_pc,
+            num_locals,
+            arity,
+            qualified_name: qualified_name.map(str::to_string),
+            end_pc: 0,
+            span_start: 0,
+            span_end: 0,
+            flags: Default::default(),
+        }
+    }
+
     #[test]
     fn top_level_return_is_runtime_error() {
         let bytecode = base_bytecode(vec![Opcode::Return]);
@@ -1650,13 +1603,7 @@ mod tests {
             Opcode::Return,
         ]);
         bytecode.constants = vec![Constant::Int(int(5))];
-        bytecode.functions = vec![FunctionEntry {
-            fun_idx: 0,
-            entry_pc: 3,
-            num_locals: 1,
-            arity: 1,
-            qualified_name: None,
-        }];
+        bytecode.functions = vec![function_entry(0, 3, 1, 1, None)];
 
         VM::new(bytecode).run().expect("run should succeed");
     }
@@ -1681,13 +1628,7 @@ mod tests {
             },
             Opcode::Halt,
         ]);
-        bytecode.functions = vec![FunctionEntry {
-            fun_idx: 1,
-            entry_pc: 1,
-            num_locals: 0,
-            arity: 0,
-            qualified_name: None,
-        }];
+        bytecode.functions = vec![function_entry(1, 1, 0, 0, None)];
 
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("Function table invariant violated"));
@@ -1920,13 +1861,7 @@ mod tests {
     #[test]
     fn push_atomic_rolls_back_overwritten_function_entries() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
-        bytecode.functions = vec![FunctionEntry {
-            fun_idx: 0,
-            entry_pc: 0,
-            num_locals: 0,
-            arity: 0,
-            qualified_name: Some("old".into()),
-        }];
+        bytecode.functions = vec![function_entry(0, 0, 0, 0, Some("old"))];
         let mut vm = VM::new(bytecode);
 
         let chunk = BytecodeChunk {
@@ -1938,13 +1873,7 @@ mod tests {
             type_entries: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
-            functions: vec![FunctionEntry {
-                fun_idx: 0,
-                entry_pc: 2,
-                num_locals: 1,
-                arity: 0,
-                qualified_name: Some("new".into()),
-            }],
+            functions: vec![function_entry(0, 2, 1, 0, Some("new"))],
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1985,7 +1914,7 @@ mod tests {
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
         assert!(err.message.contains("LoadLocal out of bounds"));
-        assert_eq!(vm.output.as_ref().map(Vec::as_slice), Some(&[][..]));
+        assert_eq!(vm.output.as_deref(), Some(&[][..]));
     }
 
     #[test]
@@ -2084,13 +2013,7 @@ mod tests {
     #[test]
     fn run_rejects_function_entry_before_top_level_halt() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::Return]);
-        bytecode.functions = vec![FunctionEntry {
-            fun_idx: 0,
-            entry_pc: 0,
-            num_locals: 0,
-            arity: 0,
-            qualified_name: None,
-        }];
+        bytecode.functions = vec![function_entry(0, 0, 0, 0, None)];
 
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("must be after top-level Halt"));

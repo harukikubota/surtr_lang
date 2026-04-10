@@ -43,9 +43,13 @@ Rune does not own REPL session internals (`xldr` owns REPL state/loop/commands).
 ## Usage
 
 ```bash
-cargo run -p rune -- run lib/hello.srt
+cat > main.srt <<'EOF'
+print("hello, Surtr")
+EOF
+
+cargo run -p rune -- run main.srt
 cargo run -p rune -- repl
-cargo run -p rune -- build lib/hello.srt lib/hello.eldr
-cargo run -p rune -- run lib/hello.eldr
-cargo run -p rune -- dump lib/hello.eldr --format json | jq .
+cargo run -p rune -- build main.srt main.eldr
+cargo run -p rune -- run main.eldr
+cargo run -p rune -- dump main.eldr --format json | jq .
 ```

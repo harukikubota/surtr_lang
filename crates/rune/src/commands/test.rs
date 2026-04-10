@@ -4,11 +4,7 @@ use spire::token::Token;
 
 use crate::compile::{compile_source, ScriptCompilePlan};
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
-use crate::loader::{
-    collect_additional_std_module_inputs, collect_lib_root_sources, derive_primary_module_path,
-    module_path_from_file_name,
-};
-use crate::util::{display_path, line_column_for_char_offset, slice_by_char_range};
+use crate::util::{line_column_for_char_offset, slice_by_char_range};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestOptions {
@@ -375,8 +371,17 @@ fn report_test_failure(
 }
 
 fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
-    let lib_sources = collect_lib_root_sources(env)?;
-    if lib_sources.is_empty() {
+    let lib_modules = xldr::collect_lib_module_inputs().map_err(|e| {
+        RuneError::message(
+            1,
+            format!(
+                "{}: failed to read `./lib`: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })?;
+    if lib_modules.is_empty() {
         return Err(RuneError::message(
             1,
             "test: no `.srt` files found under `./lib`",
@@ -384,12 +389,9 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
     }
 
     let mut all_tests = Vec::new();
-    for (path, source) in lib_sources {
-        let file_path = display_path(&path);
-        let module_path = derive_primary_module_path(&source)
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| module_path_from_file_name(&path));
-        let tests = collect_test_cases_from_source(&file_path, &source, &module_path)
+    for module in lib_modules {
+        let tests =
+            collect_test_cases_from_source(&module.file_name, &module.source, &module.module_path)
             .map_err(|message| RuneError::message(1, message))?;
         all_tests.extend(tests);
     }
@@ -409,7 +411,16 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
         return Ok(());
     }
 
-    let module_inputs = collect_additional_std_module_inputs(env)?;
+    let module_inputs = xldr::collect_additional_default_std_module_inputs().map_err(|e| {
+        RuneError::message(
+            1,
+            format!(
+                "{}: failed to collect module sources: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })?;
     let module_sources = if module_inputs.is_empty() {
         xldr::collect_module_sources_with_module_stages(&[])
     } else {

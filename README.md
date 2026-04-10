@@ -27,13 +27,17 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 ## Quick Start
 
 ```bash
-cargo run -p rune -- run lib/hello.srt
+cat > main.srt <<'EOF'
+print("hello, Surtr")
+EOF
+
+cargo run -p rune -- run main.srt
 ```
 
 ```bash
-cargo run -p rune -- build lib/hello.srt lib/hello.eldr
-cargo run -p rune -- run lib/hello.eldr
-cargo run -p rune -- dump lib/hello.eldr --format json | jq .
+cargo run -p rune -- build main.srt main.eldr
+cargo run -p rune -- run main.eldr
+cargo run -p rune -- dump main.eldr --format json | jq .
 ```
 
 ## Testing
@@ -81,7 +85,6 @@ cargo clean
   - [Test policy](./doc/テスト方針.md)
   - [Open issues](./doc/open-issues.md)
   - [Float memo](./doc/float.md)
-  - [Enum memo](./doc/Enum.md)
 - Public guides in `docs/site/`
   - [Docs index](./docs/site/README.md)
   - [Language guide](./docs/site/language-guide.md)

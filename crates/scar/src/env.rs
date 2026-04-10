@@ -70,6 +70,12 @@ pub struct TypeEnv {
     pub enum_variants_by_enum: HashMap<Symbol, Vec<EnumVariantInfo>>,
 }
 
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeEnv {
     pub fn new() -> Self {
         Self {
@@ -154,21 +160,6 @@ impl TypeEnv {
     pub fn reserve_tag(&mut self) -> u32 {
         let tag = self.next_tag;
         self.next_tag += 1;
-        tag
-    }
-
-    /// Register a type definition using the legacy single-step API.
-    ///
-    /// This keeps existing call-sites working while internally using the
-    /// predeclare/resolve flow.
-    pub fn register_type_def(
-        &mut self,
-        name: Symbol,
-        kind: TypeKind,
-        fields: Vec<(Symbol, Ty)>,
-    ) -> u32 {
-        let tag = self.predeclare_type_def(name.clone(), kind, Vec::new());
-        let _ = self.resolve_type_def_signature(&name, fields);
         tag
     }
 
@@ -288,15 +279,16 @@ mod tests {
     }
 
     #[test]
-    fn register_type_def_still_behaves_as_single_step_api() {
+    fn predeclare_and_resolve_replace_legacy_single_step_registration() {
         let mut env = TypeEnv::new();
-        let tag = env.register_type_def(
-            "Pair".into(),
-            TypeKind::Record,
+        let tag = env.predeclare_type_def("Pair".into(), TypeKind::Record, Vec::new());
+        let resolved = env.resolve_type_def_signature(
+            "Pair",
             vec![("first".into(), Ty::Int), ("second".into(), Ty::Str)],
         );
 
         assert_eq!(tag, 2);
+        assert_eq!(resolved, Some(2));
         let def = env.lookup_type_def("Pair").expect("must exist");
         assert_eq!(def.state, TypeDefState::SignatureResolved);
         assert_eq!(def.tag, 2);

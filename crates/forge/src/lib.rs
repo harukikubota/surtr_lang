@@ -143,17 +143,16 @@ mod tests {
     }
 
     #[test]
-    fn does_not_emit_deprecated_frame_opcodes() {
+    fn function_calls_compile_under_current_opcode_set() {
         let bytecode = codegen_source(
-            r#"x = 1
-if(True, print("ok"), print("ng"))
-print(to_string(x + 2))"#,
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+print(to_string(add(1, 2)))"#,
         );
 
-        assert!(!bytecode
+        assert!(bytecode
             .opcodes
             .iter()
-            .any(|op| matches!(op, Opcode::MakeFrame(_) | Opcode::PopFrame)));
+            .any(|op| matches!(op, Opcode::Call { arity: 2, .. })));
     }
 
     #[test]

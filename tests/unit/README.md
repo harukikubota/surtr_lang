@@ -6,8 +6,14 @@ Current execution model:
 - Rust unit tests run from each crate's source files via `#[cfg(test)]`.
 - This directory stores crate-by-crate viewpoints and TODOs for expansion.
 
-Run all current unit tests with:
+Run the current workspace test gate with:
 
 ```bash
-cargo test
+cargo test --workspace
+```
+
+Use the default runner for the wider workspace suite with:
+
+```bash
+cargo nextest run --workspace
 ```

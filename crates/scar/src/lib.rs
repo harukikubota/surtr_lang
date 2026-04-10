@@ -377,11 +377,10 @@ deferror NotFound(code: String) {
             rules.clone(),
         )
         .expect("entrypoint body should allow set_exit_code");
-        assert!(matches!(
-            ok.iter()
-                .find(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _))),
-            Some(_)
-        ));
+        assert!(ok
+            .iter()
+            .find(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _)))
+            .is_some());
 
         let err = typecheck_with_rules(
             r#"def helper() -> Result<()> {

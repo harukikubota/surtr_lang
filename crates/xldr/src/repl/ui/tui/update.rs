@@ -15,7 +15,7 @@ pub(super) fn current_token_prefix(buf: &InputBuffer) -> String {
     let before = &buf.text[..buf.cursor_byte];
     before
         .split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '{' | '}' | ',' | ':'))
-        .last()
+        .next_back()
         .unwrap_or("")
         .to_string()
 }

@@ -118,11 +118,6 @@ pub enum Opcode {
     // Stack management
     Pop,
 
-    // Deprecated frame opcodes (kept for bytecode compatibility only).
-    // New Forge codegen should not emit these.
-    MakeFrame(u32),
-    PopFrame,
-
     // Function return
     Return,
 

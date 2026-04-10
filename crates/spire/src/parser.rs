@@ -1032,15 +1032,10 @@ impl Parser {
     fn parse_binop_expr(&mut self, min_prec: u8) -> Result<Ast, ParseError> {
         let mut left = self.parse_postfix()?;
 
-        loop {
-            let (prec, op) = match Self::binop_precedence(self.peek()) {
-                Some(p) => p,
-                None => break,
-            };
+        while let Some((prec, op)) = Self::binop_precedence(self.peek()) {
             if prec < min_prec {
                 break;
             }
-            let op_span = self.peek_span();
             self.advance(); // consume operator
             let right = self.parse_binop_expr(prec + 1)?;
             let span = Span {
@@ -1048,7 +1043,6 @@ impl Parser {
                 end: right.span().end,
             };
             left = Ast::BinOp(span, op, Box::new(left), Box::new(right));
-            let _ = op_span;
         }
 
         Ok(left)

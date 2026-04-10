@@ -27,15 +27,22 @@ fn surtr_bin() -> String {
 }
 
 fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
+    run_repl_session_with_args_in_dir(args, input, None)
+}
+
+fn run_repl_session_with_args_in_dir(args: &[&str], input: &str, cwd: Option<&PathBuf>) -> Output {
     let bin = PathBuf::from(surtr_bin());
-    let mut child = Command::new(bin)
+    let mut command = Command::new(bin);
+    command
         .arg("repl")
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn surtr repl");
+        .stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    let mut child = command.spawn().expect("failed to spawn surtr repl");
 
     child
         .stdin
@@ -90,6 +97,27 @@ fn repl_quit_exits_cleanly() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn repl_fails_fast_when_additional_stdlib_bootstrap_fails() {
+    let dir = temp_dir("repl-bootstrap-failure");
+    let lib_dir = dir.join("lib");
+    fs::create_dir_all(&lib_dir).expect("failed to create lib dir");
+    fs::write(lib_dir.join("bad.srt"), "defmod Broken { def nope( }")
+        .expect("failed to write bad module");
+
+    let output = run_repl_session_with_args_in_dir(&["--quiet"], "", Some(&dir));
+    assert!(
+        !output.status.success(),
+        "repl init should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stderr.contains("bootstrap failed during parse"));
+    assert!(stderr.contains("lib/bad.srt"));
 }
 
 #[test]

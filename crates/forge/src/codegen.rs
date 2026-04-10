@@ -19,7 +19,7 @@ use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     let mut gene = Codegen::new();
     gene.emit_program(typed)?;
-    let (opcodes, state) = gene.finalize();
+    let (opcodes, state) = gene.finalize()?;
     Ok(Bytecode {
         opcodes,
         constants: state.constants,
@@ -202,7 +202,7 @@ impl ForgeSession {
         gene.set_chunk_constant_dedup_start(const_base);
         gene.set_top_level_returns_result(top_level_returns_result);
         gene.emit_program_chunk(typed)?;
-        let (mut opcodes, after) = gene.finalize();
+        let (mut opcodes, after) = gene.finalize()?;
         localize_chunk_indices(&mut opcodes, const_base, error_template_base)?;
 
         let new_constants = after.constants[before.constants.len()..].to_vec();
@@ -278,6 +278,71 @@ fn localize_chunk_indices(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Codegen, CodegenError, IrOp};
+    use crate::opcode::Opcode;
+    use scar::typed::{TypedInner, TypedMatchPattern, TypedNode};
+    use scar::types::Ty;
+    use spire::ast::{BinOp, Lit, Span};
+
+    fn span(start: usize, end: usize) -> Span {
+        Span { start, end }
+    }
+
+    fn lit_node(ty: Ty, node: Lit, span: Span) -> TypedNode {
+        TypedNode {
+            ty,
+            span: span.clone(),
+            node: TypedInner::Lit(node),
+        }
+    }
+
+    #[test]
+    fn finalize_rejects_unresolved_labels() {
+        let mut gene = Codegen::new();
+        let label = gene.fresh_label();
+        gene.emit_jump(label);
+
+        let err = gene.finalize().expect_err("unresolved label must fail");
+        assert!(err.message.contains("unresolved jump label"));
+    }
+
+    #[test]
+    fn emit_match_routes_last_failure_through_pattern_mismatch_path() {
+        let mut gene = Codegen::new();
+        let scrutinee = lit_node(Ty::Bool, Lit::Bool(false), span(1, 6));
+        let body = lit_node(Ty::Bool, Lit::Bool(true), span(10, 14));
+
+        gene.emit_match(&scrutinee, &[(TypedMatchPattern::BoolLit(true), body)])
+            .expect("match emission should succeed");
+
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        assert!(opcodes.iter().any(|opcode| {
+            matches!(
+                opcode,
+                Opcode::CallBuiltin {
+                    builtin_id: 5,
+                    arity: 1,
+                    ..
+                }
+            )
+        }));
+        assert!(matches!(opcodes.last(), Some(Opcode::Halt)));
+    }
+
+    #[test]
+    fn unsupported_binop_preserves_original_span() {
+        let gene = Codegen::new();
+        let err = gene
+            .binop_to_opcode(&BinOp::Add, &Ty::Bool, &span(23, 31))
+            .expect_err("bool addition must fail");
+
+        assert_eq!(err.span, span(23, 31));
+        assert!(err.message.contains("Unsupported binop"));
+    }
 }
 
 impl Default for ForgeSession {
@@ -1199,7 +1264,7 @@ impl Codegen {
                 } else {
                     self.emit_node(left)?;
                     self.emit_node(right)?;
-                    let opcode = self.binop_to_opcode(op, &left.ty)?;
+                    let opcode = self.binop_to_opcode(op, &left.ty, &node.span)?;
                     self.emit(opcode);
                 }
             }
@@ -1837,9 +1902,7 @@ impl Codegen {
         });
     }
 
-    fn collect_exact_list_pattern_items<'a>(
-        pat: &'a TypedPattern,
-    ) -> Option<Vec<&'a TypedPattern>> {
+    fn collect_exact_list_pattern_items(pat: &TypedPattern) -> Option<Vec<&TypedPattern>> {
         fn walk<'a>(pat: &'a TypedPattern, out: &mut Vec<&'a TypedPattern>) -> bool {
             match pat {
                 TypedPattern::As(_, inner, _) => walk(inner.as_ref(), out),
@@ -2133,14 +2196,9 @@ impl Codegen {
         }
 
         for ir in &mut self.ir {
-            if let IrOp::Op(op) = ir {
-                match op {
-                    Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. } => {
-                        if let Some(new_idx) = remap.get(fun_idx) {
-                            *fun_idx = *new_idx;
-                        }
-                    }
-                    _ => {}
+            if let IrOp::Op(Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. }) = ir {
+                if let Some(new_idx) = remap.get(fun_idx) {
+                    *fun_idx = *new_idx;
                 }
             }
         }
@@ -2314,6 +2372,10 @@ impl Codegen {
         scrutinee: &TypedNode,
         arms: &[(TypedMatchPattern, TypedNode)],
     ) -> Result<(), CodegenError> {
+        if arms.is_empty() {
+            return self.emit_pattern_mismatch_failure(scrutinee.span.clone());
+        }
+
         self.emit_node(scrutinee)?;
 
         let scrut_slot = self.state.next_slot;
@@ -2321,6 +2383,7 @@ impl Codegen {
         self.emit(Opcode::StoreLocal(scrut_slot));
 
         let end_label = self.fresh_label();
+        let mismatch_label = self.fresh_label();
         let mut arm_labels: Vec<Label> = Vec::new();
 
         for _ in arms {
@@ -2331,7 +2394,7 @@ impl Codegen {
             let next_arm = if i + 1 < arms.len() {
                 arm_labels[i + 1]
             } else {
-                end_label
+                mismatch_label
             };
 
             self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
@@ -2347,6 +2410,8 @@ impl Codegen {
             }
         }
 
+        self.patch_label(mismatch_label);
+        self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
         self.patch_label(end_label);
         Ok(())
     }
@@ -2537,8 +2602,12 @@ impl Codegen {
         Ok(())
     }
 
-    fn binop_to_opcode(&self, op: &BinOp, left_ty: &Ty) -> Result<Opcode, CodegenError> {
-        let dummy_span = Span { start: 0, end: 0 };
+    fn binop_to_opcode(
+        &self,
+        op: &BinOp,
+        left_ty: &Ty,
+        span: &Span,
+    ) -> Result<Opcode, CodegenError> {
         match (op, left_ty) {
             (BinOp::Add, Ty::Int) => Ok(Opcode::AddInt),
             (BinOp::Sub, Ty::Int) => Ok(Opcode::SubInt),
@@ -2565,14 +2634,14 @@ impl Codegen {
             (BinOp::Concat, Ty::Str) => Ok(Opcode::ConcatStr),
             _ => Err(CodegenError {
                 message: format!("Unsupported binop {:?} for type", op),
-                span: dummy_span,
+                span: span.clone(),
             }),
         }
     }
 
     // ── Finish: resolve labels → absolute addresses ──
 
-    fn finalize(self) -> (Vec<Opcode>, CodegenState) {
+    fn finalize(self) -> Result<(Vec<Opcode>, CodegenState), CodegenError> {
         // Resolve labels to absolute IR indices → opcode positions.
         // IR ops map 1:1 to opcodes, so IR index == opcode index.
         let mut opcodes = Vec::new();
@@ -2580,19 +2649,40 @@ impl Codegen {
             match ir_op {
                 IrOp::Op(op) => opcodes.push(op.clone()),
                 IrOp::JumpLabel(label) => {
-                    let pos = self.label_positions.get(label).copied().unwrap_or(0) as u32;
+                    let pos = self
+                        .label_positions
+                        .get(label)
+                        .copied()
+                        .ok_or_else(|| CodegenError {
+                            message: format!("unresolved jump label {:?}", label),
+                            span: Span { start: 0, end: 0 },
+                        })? as u32;
                     opcodes.push(Opcode::Jump(pos));
                 }
                 IrOp::JumpIfFalseLabel(label) => {
-                    let pos = self.label_positions.get(label).copied().unwrap_or(0) as u32;
+                    let pos = self
+                        .label_positions
+                        .get(label)
+                        .copied()
+                        .ok_or_else(|| CodegenError {
+                            message: format!("unresolved jump-if-false label {:?}", label),
+                            span: Span { start: 0, end: 0 },
+                        })? as u32;
                     opcodes.push(Opcode::JumpIfFalse(pos));
                 }
                 IrOp::JumpIfTrueLabel(label) => {
-                    let pos = self.label_positions.get(label).copied().unwrap_or(0) as u32;
+                    let pos = self
+                        .label_positions
+                        .get(label)
+                        .copied()
+                        .ok_or_else(|| CodegenError {
+                            message: format!("unresolved jump-if-true label {:?}", label),
+                            span: Span { start: 0, end: 0 },
+                        })? as u32;
                     opcodes.push(Opcode::JumpIfTrue(pos));
                 }
             }
         }
-        (opcodes, self.state)
+        Ok((opcodes, self.state))
     }
 }

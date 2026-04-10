@@ -1,9 +1,5 @@
 use std::path::Path;
 
-pub(crate) fn display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
 pub(crate) fn char_to_byte_index(source: &str, char_index: usize) -> usize {
     if char_index == 0 {
         return 0;

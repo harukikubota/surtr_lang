@@ -131,7 +131,6 @@ Opcode は以下のカテゴリを持つ。
 
 補足:
 
-- `MakeFrame` / `PopFrame` は互換目的の命令で、新規 codegen は emit しない
 - `CallBuiltin` は `builtin_id` ベースでディスパッチする
 
 実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。

@@ -413,8 +413,8 @@ fn enclosing_def_lines(
     let decl_idx = decl_idx?;
 
     let mut close_idx = None;
-    for idx in (focus_line + 1)..lines.len() {
-        let text = slice_chars(source, lines[idx].0, lines[idx].1);
+    for (idx, line) in lines.iter().enumerate().skip(focus_line + 1) {
+        let text = slice_chars(source, line.0, line.1);
         let trimmed = text.trim();
         if trimmed.starts_with("def ") {
             break;

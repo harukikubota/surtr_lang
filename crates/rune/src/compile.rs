@@ -6,7 +6,6 @@ use spire::ast::{Ast, Span};
 use spire::token::Token;
 
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
-use crate::loader::collect_additional_std_module_inputs;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ScriptCompilePlan {
@@ -66,7 +65,16 @@ pub(crate) fn collect_default_script_compile_sources(
     file_path: &str,
     source: &str,
 ) -> RuneResult<xldr::CompileSources> {
-    let module_inputs = collect_additional_std_module_inputs(env)?;
+    let module_inputs = xldr::collect_additional_default_std_module_inputs().map_err(|e| {
+        RuneError::message(
+            1,
+            format!(
+                "{}: failed to collect module sources: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })?;
     let module_sources = if module_inputs.is_empty() {
         xldr::collect_module_sources_with_module_stages(&[])
     } else {
