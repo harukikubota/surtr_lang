@@ -1,0 +1,41 @@
+defenum Light {
+  Red,
+  Yellow,
+  Green,
+}
+
+impl Light {
+  def next(self) -> Self {
+    match self {
+      Light::Red => Light::Green,
+      Light::Green => Light::Yellow,
+      Light::Yellow => Light::Red,
+    }
+  }
+
+  def advance(self: Self, steps: Int) -> Self {
+    if(steps == 0, self, Light::advance(Light::next(self), steps - 1))
+  }
+
+  def rebound_once(self) -> Self {
+    self = Light::next(self)
+    self
+  }
+
+  def is_stop(self) -> Boolean {
+    match self {
+      Light::Red => True,
+      _ => False,
+    }
+  }
+}
+
+initial = Light::Red
+once = Light::next(initial)
+twice = Light::advance(initial, 2)
+rebound = Light::rebound_once(Light::Yellow)
+
+print(to_string(Light::is_stop(initial)))
+print(to_string(Light::is_stop(once)))
+print(to_string(Light::is_stop(twice)))
+print(to_string(Light::is_stop(rebound)))

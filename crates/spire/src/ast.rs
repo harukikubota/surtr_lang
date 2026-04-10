@@ -254,6 +254,9 @@ pub enum Ast {
     /// Module declaration: `defmod Kernel { ... }`
     Defmod(Span, Symbol, Vec<Ast>, DeclAttrs),
 
+    /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
+    ImplDef(Span, Symbol, Vec<Ast>),
+
     /// Import declaration
     Import(Span, AstPath, ImportSpec),
 

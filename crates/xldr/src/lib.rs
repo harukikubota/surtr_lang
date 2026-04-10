@@ -400,6 +400,7 @@ pub fn lower_module_source_ast(
             | spire::ast::Ast::RecordDef(_, _, _)
             | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
             | spire::ast::Ast::EnumDef(_, _, _, _)
+            | spire::ast::Ast::ImplDef(_, _, _)
             | spire::ast::Ast::BuiltinDecl(_, _, _, _, _)
             | spire::ast::Ast::BuiltinTypeDecl(_, _, _) => {
                 // Std-module files are allowed to carry top-level declarations

@@ -3,7 +3,13 @@ defstruct User {
   age: Int,
 }
 
-user: User = User { name: "alice", age: 30 }
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user: User = User("alice", 30)
 print(to_string(user))
 print(to_string(user.name))
 print(to_string(user.age))

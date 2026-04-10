@@ -62,6 +62,7 @@ impl SetExitCodePolicy {
 pub enum TopLevelDeclKind {
     Def,
     Defmod,
+    ImplDef,
     Import,
     StructDef,
     RecordDef,
@@ -117,6 +118,7 @@ impl SourceRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
@@ -133,6 +135,7 @@ impl SourceRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
@@ -275,6 +278,7 @@ struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
     context: ParserContext,
+    impl_target_stack: Vec<Symbol>,
 }
 
 impl Parser {
@@ -283,6 +287,7 @@ impl Parser {
             tokens,
             pos: 0,
             context,
+            impl_target_stack: Vec::new(),
         }
     }
 
@@ -437,6 +442,7 @@ impl Parser {
                 Token::Annotator(_)
                     | Token::Def
                     | Token::Defmod
+                    | Token::Impl
                     | Token::Import
                     | Token::Defstruct
                     | Token::Defrecord
@@ -455,6 +461,7 @@ impl Parser {
             Token::Annotator(_) => self.parse_annotated_decl()?,
             Token::Def => self.parse_def()?,
             Token::Defmod => self.parse_defmod()?,
+            Token::Impl => self.parse_impl_def()?,
             Token::Import => self.parse_import()?,
             Token::Defstruct => self.parse_struct_def()?,
             Token::Defrecord => self.parse_record_def()?,
@@ -529,6 +536,7 @@ impl Parser {
         match ast {
             Ast::Def(_, _, _, _, _, _) => Some(TopLevelDeclKind::Def),
             Ast::Defmod(_, _, _, _) => Some(TopLevelDeclKind::Defmod),
+            Ast::ImplDef(_, _, _) => Some(TopLevelDeclKind::ImplDef),
             Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
             Ast::StructDef(_, _, _) => Some(TopLevelDeclKind::StructDef),
             Ast::RecordDef(_, _, _) => Some(TopLevelDeclKind::RecordDef),
@@ -689,6 +697,154 @@ impl Parser {
 
     fn parse_defmod(&mut self) -> Result<Ast, ParseError> {
         self.parse_defmod_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_impl_def(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Impl)?;
+        let (target, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut methods = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            if !matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    "impl body may only contain `def` declarations",
+                    self.peek_span(),
+                ));
+            }
+            let method = self.parse_impl_method(&target)?;
+            self.ensure_stmt_boundary(&method, true)?;
+            methods.push(method);
+            while matches!(self.peek(), Token::Newline) {
+                self.advance();
+            }
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::ImplDef(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            target,
+            methods,
+        ))
+    }
+
+    fn parse_impl_method(&mut self, target: &str) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Def)?;
+        let (name, _) = self.expect_ident()?;
+        let mut params = Vec::new();
+
+        if matches!(self.peek(), Token::Unit) {
+            self.advance();
+        } else {
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+            let mut first_param = true;
+            if !matches!(self.peek(), Token::RParen) {
+                loop {
+                    if matches!(self.peek(), Token::Eof) {
+                        return Err(ParseError::incomplete(")", self.peek_span()));
+                    }
+                    self.skip_newlines();
+                    let (param_name, param_span) = self.expect_ident()?;
+
+                    let param_ty = if param_name == "self" {
+                        if !first_param {
+                            return Err(ParseError::syntax(
+                                "`self` is only allowed as the first parameter of impl methods",
+                                param_span,
+                            ));
+                        }
+                        if matches!(self.peek(), Token::Colon) {
+                            self.advance();
+                            self.skip_newlines();
+                            let ty = self.parse_type_in_impl_context(Some(target.to_string()))?;
+                            if !Self::is_self_type(&ty) {
+                                return Err(ParseError::syntax(
+                                    "`self` receiver type must be `Self`",
+                                    ast_ty_span(&ty).clone(),
+                                ));
+                            }
+                            ty
+                        } else {
+                            AstTy::Named(param_span.clone(), "Self".to_string())
+                        }
+                    } else {
+                        self.expect(&Token::Colon)?;
+                        self.skip_newlines();
+                        self.parse_type_in_impl_context(Some(target.to_string()))?
+                    };
+
+                    params.push(FunParam {
+                        name: param_name,
+                        ty: param_ty,
+                        span: param_span,
+                    });
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                    first_param = false;
+                }
+            }
+            self.expect(&Token::RParen)?;
+        }
+
+        let ret_ty = if matches!(self.peek(), Token::Arrow) {
+            self.advance();
+            self.skip_newlines();
+            Some(self.parse_type_in_impl_context(Some(target.to_string()))?)
+        } else {
+            None
+        };
+
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.impl_target_stack.push(target.to_string());
+        let body_stmts = self.parse_block_stmts();
+        self.impl_target_stack.pop();
+        let body_stmts = body_stmts?;
+        if body_stmts.is_empty() {
+            return Err(ParseError::syntax(
+                "Function body must not be empty",
+                self.peek_span(),
+            ));
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let body = Ast::Block(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            body_stmts,
+        );
+
+        Ok(Ast::Def(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            name,
+            params,
+            ret_ty,
+            Box::new(body),
+            DeclAttrs::default(),
+        ))
     }
 
     fn parse_defmod_with_attrs(
@@ -999,6 +1155,13 @@ impl Parser {
         name: Symbol,
         name_span: Span,
     ) -> Result<Ast, ParseError> {
+        if name == "self" && self.impl_target_stack.is_empty() {
+            return Err(ParseError::syntax(
+                "`self` can only be used inside impl methods",
+                name_span,
+            ));
+        }
+
         let mut path_segments = vec![name.clone()];
         let mut path_end = name_span.end;
         while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
@@ -1421,6 +1584,12 @@ impl Parser {
             self.advance(); // '@'
             self.skip_newlines();
             let (alias, alias_span) = self.expect_ident()?;
+            if alias == "self" && self.impl_target_stack.is_empty() {
+                return Err(ParseError::syntax(
+                    "`self` can only be used inside impl methods",
+                    alias_span,
+                ));
+            }
             self.skip_newlines();
             let alias_ty = if matches!(self.peek(), Token::Colon) {
                 self.advance();
@@ -1487,6 +1656,12 @@ impl Parser {
                 Ok(AstPattern::BoolLit(sp, false))
             }
             Token::Ident(name) => {
+                if name == "self" && self.impl_target_stack.is_empty() {
+                    return Err(ParseError::syntax(
+                        "`self` can only be used inside impl methods",
+                        sp,
+                    ));
+                }
                 self.advance();
                 let mut segments = vec![name.clone()];
                 let mut path_end = sp.end;
@@ -1576,6 +1751,13 @@ impl Parser {
     // ── Type annotation parsing ──
 
     fn parse_type(&mut self) -> Result<AstTy, ParseError> {
+        self.parse_type_in_impl_context(self.impl_target_stack.last().cloned())
+    }
+
+    fn parse_type_in_impl_context(
+        &mut self,
+        impl_target: Option<String>,
+    ) -> Result<AstTy, ParseError> {
         self.skip_newlines();
         let sp = self.peek_span();
 
@@ -1584,7 +1766,7 @@ impl Parser {
             self.skip_newlines();
             if matches!(self.peek(), Token::Arrow) {
                 self.advance();
-                let ret = self.parse_type()?;
+                let ret = self.parse_type_in_impl_context(impl_target.clone())?;
                 self.skip_newlines();
                 let end = self.expect(&Token::RParen)?;
                 return Ok(AstTy::Func(
@@ -1598,16 +1780,16 @@ impl Parser {
             }
 
             let mut params = Vec::new();
-            params.push(self.parse_type()?);
+            params.push(self.parse_type_in_impl_context(impl_target.clone())?);
             self.skip_newlines();
             while matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
-                params.push(self.parse_type()?);
+                params.push(self.parse_type_in_impl_context(impl_target.clone())?);
                 self.skip_newlines();
             }
             self.expect(&Token::Arrow)?;
-            let ret = self.parse_type()?;
+            let ret = self.parse_type_in_impl_context(impl_target.clone())?;
             self.skip_newlines();
             let end = self.expect(&Token::RParen)?;
             return Ok(AstTy::Func(
@@ -1623,12 +1805,16 @@ impl Parser {
         if matches!(self.peek(), Token::Dollar) {
             self.advance();
             let (name, end) = self.expect_ident()?;
+            let name = format!("${}", name);
+            if name == "$Self" {
+                return Err(ParseError::syntax("Invalid type variable name: $Self", sp));
+            }
             return Ok(AstTy::Named(
                 Span {
                     start: sp.start,
                     end: end.end,
                 },
-                format!("${}", name),
+                name,
             ));
         }
 
@@ -1645,17 +1831,35 @@ impl Parser {
 
         // Named type, possibly with type args: Result<Int>, List<Int>, Option<Int>, ...
         let (name, _) = self.expect_ident()?;
+        if name == "Self" {
+            if impl_target.is_some() {
+                return Ok(AstTy::Named(
+                    Span {
+                        start: sp.start,
+                        end: sp.end,
+                    },
+                    "Self".to_string(),
+                ));
+            }
+            return Err(ParseError::syntax(
+                "`Self` can only be used inside impl methods",
+                sp,
+            ));
+        }
+        if name == "self" {
+            return Err(ParseError::syntax("`self` is not a type name", sp));
+        }
 
         // Check for type parameters: Name<T> or Name<T, E>
         if matches!(self.peek(), Token::Lt) {
             self.advance();
             self.skip_newlines();
-            let mut args = vec![self.parse_type()?];
+            let mut args = vec![self.parse_type_in_impl_context(impl_target.clone())?];
             self.skip_newlines();
             while matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
-                args.push(self.parse_type()?);
+                args.push(self.parse_type_in_impl_context(impl_target.clone())?);
                 self.skip_newlines();
             }
             let end = self.expect(&Token::Gt)?;
@@ -1676,6 +1880,10 @@ impl Parser {
             },
             name,
         ))
+    }
+
+    fn is_self_type(ty: &AstTy) -> bool {
+        matches!(ty, AstTy::Named(_, name) if name == "Self")
     }
 
     fn parse_closure_literal(&mut self, sp: Span) -> Result<Ast, ParseError> {
@@ -2492,6 +2700,12 @@ impl Parser {
 
     fn parse_fun_param(&mut self) -> Result<FunParam, ParseError> {
         let (name, span) = self.expect_ident()?;
+        if name == "self" {
+            return Err(ParseError::syntax(
+                "`self` is only allowed as the first parameter of impl methods",
+                span,
+            ));
+        }
         self.expect(&Token::Colon)?;
         let ty = self.parse_type()?;
         Ok(FunParam { name, ty, span })
@@ -3008,6 +3222,14 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
             shift_decl_attrs(attrs),
         ),
+        Ast::ImplDef(span, target, methods) => Ast::ImplDef(
+            shift_span(span, delta),
+            target,
+            methods
+                .into_iter()
+                .map(|method| shift_ast_span(method, delta))
+                .collect(),
+        ),
         Ast::Import(span, path, spec) => {
             Ast::Import(shift_span(span, delta), shift_ast_path(path, delta), spec)
         }
@@ -3065,6 +3287,7 @@ impl Ast {
             | Ast::BuiltinTypeDecl(s, _, _)
             | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)
+            | Ast::ImplDef(s, _, _)
             | Ast::Import(s, _, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
@@ -3194,6 +3417,109 @@ def noop() {()}"#,
             }
             _ => panic!("Expected Def"),
         }
+    }
+
+    #[test]
+    fn test_impl_parses_and_keeps_methods() {
+        let ast = parse(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+        )
+        .expect("impl should parse");
+
+        let impl_node = ast
+            .iter()
+            .find(|node| matches!(node, Ast::ImplDef(_, _, _)))
+            .expect("expected impl node");
+        match impl_node {
+            Ast::ImplDef(_, target, methods) => {
+                assert_eq!(target, "User");
+                assert_eq!(methods.len(), 2);
+                assert!(matches!(
+                    &methods[0],
+                    Ast::Def(_, name, _, Some(AstTy::Named(_, ret)), _, _)
+                        if name == "new" && ret == "Self"
+                ));
+                assert!(matches!(
+                    &methods[1],
+                    Ast::Def(_, name, _, Some(AstTy::Named(_, ret)), _, _)
+                        if name == "normalize" && ret == "Self"
+                ));
+            }
+            _ => panic!("Expected ImplDef"),
+        }
+    }
+
+    #[test]
+    fn test_impl_rejects_self_not_first_param() {
+        let err = parse(
+            r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  def bad(x: Int, self: Self) -> Self {
+    self
+  }
+}"#,
+        )
+        .expect_err("self after first parameter must fail");
+        assert!(err
+            .message()
+            .contains("`self` is only allowed as the first parameter of impl methods"));
+    }
+
+    #[test]
+    fn test_impl_allows_self_rebinding_syntax() {
+        let ast = parse(
+            r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  def bad(self) -> Self {
+    self = self
+    self
+  }
+}"#,
+        )
+        .expect("self rebinding should be parsed");
+        assert!(ast.iter().any(|node| matches!(node, Ast::ImplDef(_, _, _))));
+    }
+
+    #[test]
+    fn test_defmod_rejects_self_and_self_type() {
+        let err = parse(
+            r#"defmod UserTools {
+  def bad(self: Int) -> Int { self }
+}"#,
+        )
+        .expect_err("defmod must reject `self`");
+        assert!(err
+            .message()
+            .contains("`self` is only allowed as the first parameter of impl methods"));
+
+        let err = parse(
+            r#"defmod UserTools {
+  def bad(x: Self) -> Int { 1 }
+}"#,
+        )
+        .expect_err("defmod must reject `Self`");
+        assert!(err
+            .message()
+            .contains("`Self` can only be used inside impl methods"));
     }
 
     #[test]

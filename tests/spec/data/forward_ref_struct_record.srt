@@ -5,12 +5,18 @@ point = Point(y: 9.5, x: 3.0)
 print(to_string(point.x))
 
 def make_user(name: String) -> User {
-  User { name: name, age: 30 }
+  User(name, 30)
 }
 
 defstruct User {
   name: String,
   age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
 }
 
 defrecord Point(x: Float, y: Float)

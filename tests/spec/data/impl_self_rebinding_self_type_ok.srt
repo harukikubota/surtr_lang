@@ -1,0 +1,18 @@
+defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+
+  def shout(self) -> Self {
+    self = User { name: self.name ++ "!" }
+    self
+  }
+}
+
+user = User("alice")
+next = User::shout(user)
+print(to_string(next.name))

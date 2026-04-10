@@ -1,0 +1,14 @@
+defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+
+  def bad(self) -> Self {
+    self = 1
+    self
+  }
+}

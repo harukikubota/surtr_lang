@@ -1,0 +1,13 @@
+defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+
+  def normalize(self) -> Self {
+    self
+  }
+}

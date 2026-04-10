@@ -1,0 +1,14 @@
+defenum Light {
+  Red,
+  Yellow,
+  Green,
+}
+
+impl Light {
+  def with_steps(self: Self, steps: Int) -> Self {
+    self
+  }
+}
+
+light = Light::Green
+bad = Light::with_steps(light, steps: 1)

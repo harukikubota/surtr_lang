@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{
-    Ast, AstPattern, BinOp, ClosureParam, DeclAttrs, FunParam, Lit, RecordLitArg, Span,
+    Ast, AstPattern, AstTy, BinOp, ClosureParam, DeclAttrs, FunParam, Lit, RecordLitArg, Span,
 };
 
 use crate::error::ResolveError;
@@ -135,6 +135,8 @@ pub enum DeclarationKind {
     Deferror,
     Enum,
     EnumVariant,
+    ImplMethod,
+    ImplCtorNew,
     BuiltinType,
 }
 
@@ -148,6 +150,269 @@ pub struct DeclarationEntry {
 }
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
+
+fn is_importable_declaration(kind: &DeclarationKind) -> bool {
+    !matches!(
+        kind,
+        DeclarationKind::BuiltinType | DeclarationKind::ImplCtorNew
+    )
+}
+
+fn normalize_impl_method_name(target: &str, method_name: &str) -> String {
+    format!("{}::{}", target, method_name)
+}
+
+fn impl_method_module_path(module_path: &str, target: &str) -> String {
+    if module_path.is_empty() {
+        target.to_string()
+    } else {
+        format!("{}::{}", module_path, target)
+    }
+}
+
+fn rewrite_self_type(ty: AstTy, target: &str) -> AstTy {
+    match ty {
+        AstTy::Named(span, name) => {
+            if name == "Self" {
+                AstTy::Named(span, target.to_string())
+            } else {
+                AstTy::Named(span, name)
+            }
+        }
+        AstTy::Generic(span, name, args) => AstTy::Generic(
+            span,
+            name,
+            args.into_iter()
+                .map(|arg| rewrite_self_type(arg, target))
+                .collect(),
+        ),
+        AstTy::Func(span, params, ret) => AstTy::Func(
+            span,
+            params
+                .into_iter()
+                .map(|param| rewrite_self_type(param, target))
+                .collect(),
+            Box::new(rewrite_self_type(*ret, target)),
+        ),
+    }
+}
+
+fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
+    match pat {
+        AstPattern::Annotated(span, name, ty) => {
+            AstPattern::Annotated(span, name, rewrite_self_type(ty, target))
+        }
+        AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(
+            span,
+            Box::new(rewrite_self_pattern(*head, target)),
+            Box::new(rewrite_self_pattern(*tail, target)),
+        ),
+        AstPattern::Constructor(span, name, inners) => AstPattern::Constructor(
+            span,
+            name,
+            inners
+                .into_iter()
+                .map(|inner| rewrite_self_pattern(inner, target))
+                .collect(),
+        ),
+        AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
+            span,
+            Box::new(rewrite_self_pattern(*inner, target)),
+            alias,
+            alias_ty.map(|ty| rewrite_self_type(ty, target)),
+        ),
+        other => other,
+    }
+}
+
+fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
+    match node {
+        Ast::Block(span, stmts) => Ast::Block(
+            span,
+            stmts
+                .into_iter()
+                .map(|stmt| rewrite_self_ast(stmt, target))
+                .collect(),
+        ),
+        Ast::Bind(span, pat, rhs) => Ast::Bind(
+            span,
+            rewrite_self_pattern(pat, target),
+            Box::new(rewrite_self_ast(*rhs, target)),
+        ),
+        Ast::SafeBind(span, pat, rhs) => Ast::SafeBind(
+            span,
+            rewrite_self_pattern(pat, target),
+            Box::new(rewrite_self_ast(*rhs, target)),
+        ),
+        Ast::BinOp(span, op, left, right) => Ast::BinOp(
+            span,
+            op,
+            Box::new(rewrite_self_ast(*left, target)),
+            Box::new(rewrite_self_ast(*right, target)),
+        ),
+        Ast::ListCons(span, head, tail) => Ast::ListCons(
+            span,
+            Box::new(rewrite_self_ast(*head, target)),
+            Box::new(rewrite_self_ast(*tail, target)),
+        ),
+        Ast::ListLiteral(span, elems) => Ast::ListLiteral(
+            span,
+            elems
+                .into_iter()
+                .map(|elem| rewrite_self_ast(elem, target))
+                .collect(),
+        ),
+        Ast::InterpolatedStr(span, parts) => Ast::InterpolatedStr(
+            span,
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    spire::ast::InterpolatedPart::Text(text) => {
+                        spire::ast::InterpolatedPart::Text(text)
+                    }
+                    spire::ast::InterpolatedPart::Expr(expr) => spire::ast::InterpolatedPart::Expr(
+                        Box::new(rewrite_self_ast(*expr, target)),
+                    ),
+                })
+                .collect(),
+        ),
+        Ast::Match(span, scrutinee, arms) => Ast::Match(
+            span,
+            Box::new(rewrite_self_ast(*scrutinee, target)),
+            arms.into_iter()
+                .map(|(pat, body)| {
+                    (
+                        rewrite_self_pattern(pat, target),
+                        rewrite_self_ast(body, target),
+                    )
+                })
+                .collect(),
+        ),
+        Ast::FieldAccess(span, expr, field) => {
+            Ast::FieldAccess(span, Box::new(rewrite_self_ast(*expr, target)), field)
+        }
+        Ast::StructLit(span, name, fields) => Ast::StructLit(
+            span,
+            name,
+            fields
+                .into_iter()
+                .map(|(field_name, expr)| (field_name, rewrite_self_ast(expr, target)))
+                .collect(),
+        ),
+        Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(
+            span,
+            name,
+            args.into_iter()
+                .map(|arg| match arg {
+                    RecordLitArg::Positional(expr) => {
+                        RecordLitArg::Positional(rewrite_self_ast(expr, target))
+                    }
+                    RecordLitArg::Named(name, expr) => {
+                        RecordLitArg::Named(name, rewrite_self_ast(expr, target))
+                    }
+                })
+                .collect(),
+        ),
+        Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ast::DeferrorDef(
+            span,
+            name,
+            fields
+                .into_iter()
+                .map(|field| spire::ast::RecordField {
+                    name: field.name,
+                    ty: rewrite_self_type(field.ty, target),
+                    span: field.span,
+                })
+                .collect(),
+            Box::new(rewrite_self_ast(*show_expr, target)),
+            attrs,
+        ),
+        Ast::EnumDef(span, name, variants, attrs) => Ast::EnumDef(
+            span,
+            name,
+            variants
+                .into_iter()
+                .map(|variant| spire::ast::EnumVariant {
+                    name: variant.name,
+                    payload: variant
+                        .payload
+                        .into_iter()
+                        .map(|payload_ty| rewrite_self_type(payload_ty, target))
+                        .collect(),
+                    discriminant: variant.discriminant,
+                    span: variant.span,
+                })
+                .collect(),
+            attrs,
+        ),
+        Ast::Def(span, name, params, ret_ty, body, attrs) => Ast::Def(
+            span,
+            name,
+            params
+                .into_iter()
+                .map(|param| FunParam {
+                    name: param.name,
+                    ty: rewrite_self_type(param.ty, target),
+                    span: param.span,
+                })
+                .collect(),
+            ret_ty.map(|ret| rewrite_self_type(ret, target)),
+            Box::new(rewrite_self_ast(*body, target)),
+            attrs,
+        ),
+        Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
+            span,
+            name,
+            params
+                .into_iter()
+                .map(|param| FunParam {
+                    name: param.name,
+                    ty: rewrite_self_type(param.ty, target),
+                    span: param.span,
+                })
+                .collect(),
+            ret_ty.map(|ret| rewrite_self_type(ret, target)),
+            attrs,
+        ),
+        Ast::BuiltinTypeDecl(span, head, attrs) => Ast::BuiltinTypeDecl(
+            span,
+            spire::ast::BuiltinTypeHead {
+                span: head.span,
+                name: head.name,
+                params: head.params,
+            },
+            attrs,
+        ),
+        Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
+            span,
+            name,
+            rewrite_self_type(param_ty, target),
+            rewrite_self_type(ret_ty, target),
+            attrs,
+        ),
+        Ast::Closure(span, params, body) => Ast::Closure(
+            span,
+            params
+                .into_iter()
+                .map(|param| ClosureParam {
+                    name: param.name,
+                    ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
+                    span: param.span,
+                })
+                .collect(),
+            Box::new(rewrite_self_ast(*body, target)),
+        ),
+        Ast::Capture(span, capture_target, args) => Ast::Capture(
+            span,
+            Box::new(rewrite_self_ast(*capture_target, target)),
+            args.into_iter()
+                .map(|arg| rewrite_self_ast(arg, target))
+                .collect(),
+        ),
+        Ast::Semi(span, inner) => Ast::Semi(span, Box::new(rewrite_self_ast(*inner, target))),
+        other => other,
+    }
+}
 
 fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
     let mut scope = initialize_scope();
@@ -216,7 +481,7 @@ fn build_module_scope(
     if let Some(module_path) = current_module_path {
         for entry in declaration_index.values() {
             if entry.module_path == module_path {
-                if entry.kind == DeclarationKind::BuiltinType {
+                if !is_importable_declaration(&entry.kind) {
                     continue;
                 }
                 if let Some(uid) = declaration_uids.get(&entry.fq_name) {
@@ -310,6 +575,9 @@ fn import_module_into_scope(
         if entry.module_path != module_name {
             continue;
         }
+        if !is_importable_declaration(&entry.kind) {
+            continue;
+        }
         if entry.stage_index >= current_stage_index {
             blocked_by_stage = true;
             continue;
@@ -372,6 +640,13 @@ fn import_single_into_scope(
             span,
         });
     };
+
+    if !is_importable_declaration(&entry.kind) {
+        return Err(ResolveError {
+            message: format!("Import target `{}` is not importable", fq_name),
+            span,
+        });
+    }
 
     if entry.stage_index >= current_stage_index {
         return Err(ResolveError {
@@ -471,10 +746,117 @@ pub fn precollect_declaration_index(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<DeclarationIndex, ResolveError> {
     let mut index = DeclarationIndex::new();
+    let mut seen_impl_targets = HashSet::new();
 
     for (stage_index, stage) in module_stages.iter().enumerate() {
         for module in stage {
+            let mut local_types: HashMap<String, DeclarationKind> = HashMap::new();
             for stmt in &module.ast {
+                match stmt {
+                    Ast::StructDef(_, name, _) => {
+                        local_types.insert(name.clone(), DeclarationKind::Struct);
+                    }
+                    Ast::EnumDef(_, name, _, _) => {
+                        local_types.insert(name.clone(), DeclarationKind::Enum);
+                    }
+                    Ast::RecordDef(_, name, _) => {
+                        local_types.insert(name.clone(), DeclarationKind::Record);
+                    }
+                    Ast::DeferrorDef(_, name, _, _, _) => {
+                        local_types.insert(name.clone(), DeclarationKind::Deferror);
+                    }
+                    _ => {}
+                }
+            }
+
+            for stmt in &module.ast {
+                if let Ast::ImplDef(span, target, methods) = stmt {
+                    let Some(target_kind) = local_types.get(target) else {
+                        return Err(ResolveError {
+                            message: format!(
+                                "impl target `{}` must be a locally defined struct or enum",
+                                target
+                            ),
+                            span: span.clone(),
+                        });
+                    };
+                    if !matches!(
+                        target_kind,
+                        &DeclarationKind::Struct | &DeclarationKind::Enum
+                    ) {
+                        return Err(ResolveError {
+                            message: format!(
+                                "impl target `{}` must be struct or enum (record is not supported)",
+                                target
+                            ),
+                            span: span.clone(),
+                        });
+                    }
+
+                    let target_fq = if module.module_path.is_empty() {
+                        target.clone()
+                    } else {
+                        format!("{}::{}", module.module_path, target)
+                    };
+                    if !seen_impl_targets.insert(target_fq.clone()) {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Multiple impl blocks for `{}` are not allowed",
+                                target_fq
+                            ),
+                            span: span.clone(),
+                        });
+                    }
+
+                    let method_module_path = impl_method_module_path(&module.module_path, target);
+                    for method in methods {
+                        let Ast::Def(method_span, method_name, _, _, _, _) = method else {
+                            return Err(ResolveError {
+                                message: "impl body may only contain `def` declarations"
+                                    .to_string(),
+                                span: span.clone(),
+                            });
+                        };
+
+                        let kind = if method_name == "new" {
+                            if !matches!(target_kind, &DeclarationKind::Struct) {
+                                return Err(ResolveError {
+                                    message:
+                                        "`new` is only allowed in impl blocks for struct types"
+                                            .to_string(),
+                                    span: method_span.clone(),
+                                });
+                            }
+                            DeclarationKind::ImplCtorNew
+                        } else {
+                            DeclarationKind::ImplMethod
+                        };
+
+                        let fq_name = format!("{}::{}", method_module_path, method_name);
+                        if let Some(prev) = index.get(&fq_name) {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
+                                    fq_name, prev.stage_index, prev.module_path
+                                ),
+                                span: method_span.clone(),
+                            });
+                        }
+
+                        index.insert(
+                            fq_name.clone(),
+                            DeclarationEntry {
+                                module_path: method_module_path.clone(),
+                                name: method_name.clone(),
+                                fq_name,
+                                kind,
+                                stage_index,
+                            },
+                        );
+                    }
+                    continue;
+                }
+
                 if let Ast::EnumDef(span, name, variants, _) = stmt {
                     let fq_name = if module.module_path.is_empty() {
                         name.to_string()
@@ -536,6 +918,7 @@ pub fn precollect_declaration_index(
                     Ast::BuiltinDecl(span, name, _, _, _) => {
                         (span, name.as_str(), DeclarationKind::Def)
                     }
+                    Ast::ImplDef(_, _, _) => continue,
                     Ast::ResultCtorDecl(_, _, _, _, _) => continue,
                     Ast::BuiltinTypeDecl(span, head, _) => {
                         (span, head.name.as_str(), DeclarationKind::BuiltinType)
@@ -696,6 +1079,7 @@ impl Resolver {
     }
 
     fn resolve_program(&mut self, stmts: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
+        let stmts = self.lower_impl_defs(stmts)?;
         self.validate_auto_import_conflicts(&stmts)?;
         self.predeclare_functions(&stmts)?;
         let mut resolved = Vec::new();
@@ -709,6 +1093,112 @@ impl Resolver {
         }
         self.predeclared_ids.clear();
         Ok(resolved)
+    }
+
+    fn lower_impl_defs(&self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
+        let mut local_types: HashMap<String, DeclarationKind> = HashMap::new();
+        for stmt in &stmts {
+            match stmt {
+                Ast::StructDef(_, name, _) => {
+                    local_types.insert(name.clone(), DeclarationKind::Struct);
+                }
+                Ast::EnumDef(_, name, _, _) => {
+                    local_types.insert(name.clone(), DeclarationKind::Enum);
+                }
+                Ast::RecordDef(_, name, _) => {
+                    local_types.insert(name.clone(), DeclarationKind::Record);
+                }
+                Ast::DeferrorDef(_, name, _, _, _) => {
+                    local_types.insert(name.clone(), DeclarationKind::Deferror);
+                }
+                _ => {}
+            }
+        }
+
+        let mut lowered = Vec::new();
+        let mut seen_impl_targets = HashSet::new();
+
+        for stmt in stmts {
+            match stmt {
+                Ast::ImplDef(span, target, methods) => {
+                    let Some(target_kind) = local_types.get(&target) else {
+                        return Err(ResolveError {
+                            message: format!(
+                                "impl target `{}` must be a locally defined struct or enum",
+                                target
+                            ),
+                            span,
+                        });
+                    };
+                    if !matches!(
+                        target_kind,
+                        &DeclarationKind::Struct | &DeclarationKind::Enum
+                    ) {
+                        return Err(ResolveError {
+                            message: format!(
+                                "impl target `{}` must be struct or enum (record is not supported)",
+                                target
+                            ),
+                            span,
+                        });
+                    }
+                    if !seen_impl_targets.insert(target.clone()) {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Multiple impl blocks for `{}` are not allowed",
+                                target
+                            ),
+                            span,
+                        });
+                    }
+
+                    for method in methods {
+                        let Ast::Def(method_span, method_name, params, ret_ty, body, attrs) =
+                            method
+                        else {
+                            return Err(ResolveError {
+                                message: "impl body may only contain `def` declarations"
+                                    .to_string(),
+                                span: span.clone(),
+                            });
+                        };
+
+                        if method_name == "new" && !matches!(target_kind, &DeclarationKind::Struct)
+                        {
+                            return Err(ResolveError {
+                                message: "`new` is only allowed in impl blocks for struct types"
+                                    .to_string(),
+                                span: method_span,
+                            });
+                        }
+
+                        let lowered_name = normalize_impl_method_name(&target, &method_name);
+                        let lowered_params = params
+                            .into_iter()
+                            .map(|param| FunParam {
+                                name: param.name,
+                                ty: rewrite_self_type(param.ty, &target),
+                                span: param.span,
+                            })
+                            .collect::<Vec<_>>();
+                        let lowered_ret_ty = ret_ty.map(|ty| rewrite_self_type(ty, &target));
+                        let lowered_body = rewrite_self_ast(*body, &target);
+
+                        lowered.push(Ast::Def(
+                            method_span,
+                            lowered_name,
+                            lowered_params,
+                            lowered_ret_ty,
+                            Box::new(lowered_body),
+                            attrs,
+                        ));
+                    }
+                }
+                other => lowered.push(other),
+            }
+        }
+
+        Ok(lowered)
     }
 
     fn validate_auto_import_conflicts(&self, stmts: &[Ast]) -> Result<(), ResolveError> {
@@ -1313,6 +1803,10 @@ impl Resolver {
                 message: "Import resolution is not implemented yet".to_string(),
                 span,
             }),
+            Ast::ImplDef(span, target, _) => Err(ResolveError {
+                message: format!("impl lowering failed for target `{}`", target),
+                span,
+            }),
 
             Ast::Closure(span, params, body) => {
                 let mut closure_scope = self.scope.clone();
@@ -1376,12 +1870,23 @@ impl Resolver {
             }
 
             Ast::ConstructorCall(span, type_name, args) => {
-                let uid = self.scope.lookup(&type_name).ok_or_else(|| ResolveError {
-                    message: format!("Undefined type: {}", type_name),
-                    span: span.clone(),
-                })?;
+                let normalized_name = {
+                    let sugared = format!("{}::new", type_name);
+                    if self.scope.lookup(&sugared).is_some() {
+                        sugared
+                    } else {
+                        type_name
+                    }
+                };
+                let uid = self
+                    .scope
+                    .lookup(&normalized_name)
+                    .ok_or_else(|| ResolveError {
+                        message: format!("Undefined type: {}", normalized_name),
+                        span: span.clone(),
+                    })?;
                 let rid = ResolvedId {
-                    name: type_name,
+                    name: normalized_name,
                     qualified_name: None,
                     unique_id: uid,
                     span: span.clone(),
@@ -1922,6 +2427,149 @@ deferror Oops(reason: String) { reason }"#,
         assert_eq!(index["Bootstrap::NoneError"].stage_index, 0);
         assert_eq!(index["Std::Math::add"].stage_index, 1);
         assert_eq!(index["User::Main::main"].stage_index, 2);
+    }
+
+    #[test]
+    fn test_precollect_impl_methods_as_type_namespace_members() {
+        let module_stages = vec![vec![staged_module(
+            "",
+            parse_module_ast(
+                r#"defstruct User {
+  name: String,
+  age: Int,
+}
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+                "",
+            ),
+        )]];
+
+        let index =
+            precollect_declaration_index(&module_stages).expect("precollect should succeed");
+        let ctor = index.get("User::new").expect("new should be indexed");
+        assert_eq!(ctor.module_path, "User");
+        assert_eq!(ctor.name, "new");
+        assert_eq!(ctor.kind, DeclarationKind::ImplCtorNew);
+
+        let normalize = index
+            .get("User::normalize")
+            .expect("normalize should be indexed");
+        assert_eq!(normalize.module_path, "User");
+        assert_eq!(normalize.name, "normalize");
+        assert_eq!(normalize.kind, DeclarationKind::ImplMethod);
+    }
+
+    #[test]
+    fn test_precollect_rejects_multiple_impl_blocks_for_same_type() {
+        let module_stages = vec![vec![staged_module(
+            "",
+            parse_module_ast(
+                r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}
+impl User {
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+                "",
+            ),
+        )]];
+
+        let err =
+            precollect_declaration_index(&module_stages).expect_err("duplicate impl must fail");
+        assert!(err
+            .message
+            .contains("Multiple impl blocks for `User` are not allowed"));
+    }
+
+    #[test]
+    fn test_precollect_rejects_impl_target_for_record() {
+        let module_stages = vec![vec![staged_module(
+            "",
+            parse_module_ast(
+                r#"defrecord Pair(first: Int, second: Int)
+impl Pair {
+  def new(first: Int, second: Int) -> Self {
+    Pair(first, second)
+  }
+}"#,
+                "",
+            ),
+        )]];
+
+        let err = precollect_declaration_index(&module_stages)
+            .expect_err("record impl should be rejected");
+        assert!(err
+            .message
+            .contains("impl target `Pair` must be struct or enum"));
+    }
+
+    #[test]
+    fn test_import_new_from_impl_is_rejected() {
+        let module_stages = vec![vec![staged_module(
+            "",
+            parse_module_ast(
+                r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+                "",
+            ),
+        )]];
+
+        let err = resolve_user_with_modules(
+            r#"import User::new
+User("alice")"#,
+            &module_stages,
+        )
+        .expect_err("new import should fail");
+        assert!(err.message.contains("is not importable"));
+    }
+
+    #[test]
+    fn test_constructor_call_sugars_to_type_new_resolution() {
+        let resolved = parse_and_resolve(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+user = User("alice", 30)"#,
+        )
+        .expect("source should resolve");
+
+        let constructor_name = resolved.iter().find_map(|node| match node {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::ConstructorCall(_, rid, _) => Some(rid.name.clone()),
+                _ => None,
+            },
+            _ => None,
+        });
+        assert_eq!(constructor_name.as_deref(), Some("User::new"));
     }
 
     #[test]

@@ -30,6 +30,10 @@ defrecord Name(field: Ty, ...)
 deferror Name(field: Ty, ...) { "message" }
 
 defenum Name { Variant, Variant(Ty), Variant = Int, ... }
+
+impl Type {
+  def method(...) -> ... { ... }
+}
 ```
 
 ### 制御構造
@@ -68,6 +72,13 @@ match expr {
 - 値生成は `Enum::Variant(...)`
 - `match` は網羅必須
 - enum 値への field access（例: `.idx`）は不可
+
+### `impl` / `Self` / `self`
+
+- `impl` 対象は `defstruct` / `defenum` のみ
+- `Self` は `impl` 内の型位置でのみ使用可能
+- `self` は `impl` メソッド第一引数専用（再束縛不可）
+- メソッド呼び出しの正規形は `Type::method(...)`
 
 ### `Result<T>`
 
@@ -167,6 +178,18 @@ value.field
 ```
 
 `defstruct` と `defrecord` の両方で使えます。`defenum` では使えません。
+
+### `defstruct` の構築規約
+
+- `impl struct` では `new` を必須実装とする
+- `Type(...)` は `Type::new(...)` の糖衣として解決される
+- `Type { ... }` 構造体リテラルは `impl Type` の同型メソッド本体内でのみ使用可能
+- `Type::new` は import 対象外
+
+### 引数規約
+
+- 名前付き引数は利用可能
+- 位置引数と名前付き引数の混在は禁止
 
 ## 7. 組込み関数
 

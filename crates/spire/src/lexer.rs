@@ -211,6 +211,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "defrecord" => Token::Defrecord,
                 "deferror" => Token::Deferror,
                 "defenum" => Token::Defenum,
+                "impl" => Token::Impl,
                 "match" => Token::Match,
                 "type" => Token::Type,
                 _ => Token::Ident(text),
@@ -391,6 +392,12 @@ mod tests {
     fn test_defenum_keyword() {
         let tokens = tokenize("defenum Color { Red, Green }").unwrap();
         assert!(matches!(tokens[0].token, Token::Defenum));
+    }
+
+    #[test]
+    fn test_impl_keyword() {
+        let tokens = tokenize("impl User { def new(self) -> Self { self } }").unwrap();
+        assert!(matches!(tokens[0].token, Token::Impl));
     }
 
     #[test]

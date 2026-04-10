@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Struct literal `User` is only allowed inside

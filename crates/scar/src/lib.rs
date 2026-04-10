@@ -163,7 +163,13 @@ mod tests {
   age: Int,
 }
 
-user: User = User { name: "alice", age: 30 }
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user: User = User("alice", 30)
 age = user.age"#,
         );
 
@@ -267,10 +273,15 @@ Ok(num) =? value"#,
     #[test]
     fn forward_struct_type_annotation_and_literal_are_allowed() {
         let resolved = resolve_with_builtin_prelude(
-            r#"user: User = User { name: "alice", age: 30 }
+            r#"user: User = User("alice", 30)
 defstruct User {
   name: String,
   age: Int,
+}
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
 }"#,
         );
         let typed = typecheck(resolved).expect("forward struct reference should typecheck");
@@ -295,13 +306,19 @@ deferror NotFound {
 
     #[test]
     fn forward_reference_type_tags_are_deterministic_across_runs() {
-        let source = r#"user: User = User { name: "alice", age: 30 }
+        let source = r#"user: User = User("alice", 30)
 pair = Pair(first: 1, second: "two")
 ret: Result<Int> = Err(NotFound("404"))
 
 defstruct User {
   name: String,
   age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
 }
 
 defrecord Pair(first: Int, second: String)
@@ -496,7 +513,12 @@ answer = match flag {
   name: String,
   age: Int,
 }
-user = User { name: "alice", age: 20, extra: 1 }"#,
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age, extra: 1 }
+  }
+}
+user = User("alice", 20)"#,
         );
         let err = typecheck(resolved).expect_err("extra fields must fail");
         assert!(err.message.contains("Unknown field 'extra' in User"));
@@ -510,6 +532,95 @@ pair = Pair(first: 1, first: 2)"#,
         );
         let err = typecheck(resolved).expect_err("duplicate named args must fail");
         assert!(err.message.contains("Duplicate field 'first' in Pair"));
+    }
+
+    #[test]
+    fn struct_requires_impl_new() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+}
+user = User("alice")"#,
+        );
+        let err = typecheck(resolved).expect_err("struct without new should fail");
+        assert!(err.message.contains("must define `new` in its impl block"));
+    }
+
+    #[test]
+    fn struct_literal_is_rejected_outside_impl_body() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}
+user = User { name: "alice" }"#,
+        );
+        let err = typecheck(resolved).expect_err("struct literal outside impl should fail");
+        assert!(err
+            .message
+            .contains("Struct literal `User` is only allowed inside"));
+    }
+
+    #[test]
+    fn user_function_call_rejects_mixed_named_and_positional_args() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
+value = add3(1, y: 2, z: 3)"#,
+        );
+        let err = typecheck(resolved).expect_err("mixed args should fail");
+        assert!(err
+            .message
+            .contains("Cannot mix positional and named arguments"));
+    }
+
+    #[test]
+    fn impl_self_rebinding_allows_self_type() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+
+  def keep(self) -> Self {
+    self = self
+    self
+  }
+}
+
+user = User("alice")
+print(to_string(User::keep(user).name))"#,
+        );
+        let _typed = typecheck(resolved).expect("self rebinding with Self should pass");
+    }
+
+    #[test]
+    fn impl_self_rebinding_rejects_non_self_type() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+
+  def bad(self) -> Self {
+    self = 1
+    self
+  }
+}"#,
+        );
+        let err = typecheck(resolved).expect_err("self rebinding with non-Self must fail");
+        assert!(err.message.contains("`self` rebinding requires Self type"));
     }
 
     #[test]

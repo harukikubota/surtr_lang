@@ -278,7 +278,13 @@ def double(x: Int) -> Int { x * 2 }"#,
   age: Int,
 }
 
-user = User { name: "alice", age: 30 }
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user = User("alice", 30)
 print(to_string(user))
 print(to_string(user.name))
 print(to_string(user.age))"#,
@@ -317,7 +323,7 @@ point = Point(y: 9.5, x: 3.0)
 print(to_string(point.x))
 
 def make_user(name: String) -> User {
-  User { name: name, age: 30 }
+  User(name, 30)
 }
 
 defstruct User {
@@ -325,8 +331,178 @@ defstruct User {
   age: Int,
 }
 
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
 defrecord Point(x: Float, y: Float)"#,
             &["30", "3.0"],
+        );
+    }
+
+    #[test]
+    fn struct_property_update_via_associated_functions() {
+        assert_output(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def with_age(self: Self, age: Int) -> Self {
+    User { name: self.name, age: age }
+  }
+
+  def with_name(self, name: String) -> Self {
+    User { name: name, age: self.age }
+  }
+}
+
+original = User("alice", 30)
+aged = User::with_age(original, 31)
+renamed = User::with_name(aged, "bob")
+
+print(to_string(original.age))
+print(to_string(aged.age))
+print(to_string(renamed.name))
+print(to_string(renamed.age))"#,
+            &["30", "31", "bob", "31"],
+        );
+    }
+
+    #[test]
+    fn struct_constructor_sugar_mixed_named_positional_error() {
+        assert_compile_error(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user = User("alice", age: 30)"#,
+            "Cannot mix positional and named arguments",
+        );
+    }
+
+    #[test]
+    fn impl_method_call_mixed_named_positional_error() {
+        assert_compile_error(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def with_name_and_age(self, name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user = User("alice", 30)
+updated = User::with_name_and_age(user, "bob", age: 31)"#,
+            "Cannot mix positional and named arguments",
+        );
+    }
+
+    #[test]
+    fn enum_state_transition_via_associated_functions() {
+        assert_output(
+            r#"defenum Light {
+  Red,
+  Yellow,
+  Green,
+}
+
+impl Light {
+  def next(self) -> Self {
+    match self {
+      Light::Red => Light::Green,
+      Light::Green => Light::Yellow,
+      Light::Yellow => Light::Red,
+    }
+  }
+
+  def advance(self: Self, steps: Int) -> Self {
+    if(steps == 0, self, Light::advance(Light::next(self), steps - 1))
+  }
+
+  def rebound_once(self) -> Self {
+    self = Light::next(self)
+    self
+  }
+
+  def is_stop(self) -> Boolean {
+    match self {
+      Light::Red => True,
+      _ => False,
+    }
+  }
+}
+
+initial = Light::Red
+once = Light::next(initial)
+twice = Light::advance(initial, 2)
+rebound = Light::rebound_once(Light::Yellow)
+
+print(to_string(Light::is_stop(initial)))
+print(to_string(Light::is_stop(once)))
+print(to_string(Light::is_stop(twice)))
+print(to_string(Light::is_stop(rebound)))"#,
+            &["True", "False", "False", "True"],
+        );
+    }
+
+    #[test]
+    fn enum_impl_method_call_mixed_named_positional_error() {
+        assert_compile_error(
+            r#"defenum Light {
+  Red,
+  Yellow,
+  Green,
+}
+
+impl Light {
+  def with_steps(self: Self, steps: Int) -> Self {
+    self
+  }
+}
+
+light = Light::Green
+bad = Light::with_steps(light, steps: 1)"#,
+            "Cannot mix positional and named arguments",
+        );
+    }
+
+    #[test]
+    fn enum_self_rebinding_requires_self_type() {
+        assert_compile_error(
+            r#"defenum Light {
+  Red,
+  Green,
+}
+
+impl Light {
+  def bad(self) -> Self {
+    self = 1
+    self
+  }
+}"#,
+            "`self` rebinding requires Self type",
         );
     }
 
@@ -343,10 +519,10 @@ print(to_string(add(y: 2, x: 1)))"#,
 
     #[test]
     fn function_named_args_mixed_with_positional_first() {
-        assert_output(
+        assert_compile_error(
             r#"def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
 print(to_string(add3(1, z: 3, y: 2)))"#,
-            &["6"],
+            "Cannot mix positional and named arguments",
         );
     }
 
@@ -364,7 +540,7 @@ print(to_string(add(z: 1, y: 2)))"#,
         assert_compile_error(
             r#"def add(x: Int, y: Int) -> Int { x + y }
 print(to_string(add(1, x: 2)))"#,
-            "Duplicate argument 'x'",
+            "Cannot mix positional and named arguments",
         );
     }
 
@@ -373,7 +549,7 @@ print(to_string(add(1, x: 2)))"#,
         assert_compile_error(
             r#"def add(x: Int, y: Int) -> Int { x + y }
 print(to_string(add(y: 2, 1)))"#,
-            "Positional arguments must come before named arguments",
+            "Cannot mix positional and named arguments",
         );
     }
 
@@ -1004,7 +1180,12 @@ defstruct User {
   name: String,
   age: Int,
 }
-user = User { name: "alice", age: 30 }
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+user = User("alice", 30)
 print(to_string(user))
 print(to_string(user.name))
 defrecord Pair(first: Int, second: String)

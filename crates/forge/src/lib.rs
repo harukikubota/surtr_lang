@@ -181,7 +181,13 @@ print(to_string(add(1, 2)))"#,
   age: Int,
 }
 
-user: User = User { name: "alice", age: 30 }
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user: User = User("alice", 30)
 print(to_string(user.age))"#,
         );
 
@@ -198,6 +204,12 @@ print(to_string(user.age))"#,
             r#"defstruct User {
   name: String,
   age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
 }
 
 defrecord Point(x: Float, y: Float)

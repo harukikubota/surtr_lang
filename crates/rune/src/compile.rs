@@ -315,6 +315,7 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
                     | Ast::StructDef(_, _, _)
                     | Ast::RecordDef(_, _, _)
                     | Ast::DeferrorDef(_, _, _, _, _)
+                    | Ast::ImplDef(_, _, _)
                     | Ast::Import(_, _, _)
             )
         })

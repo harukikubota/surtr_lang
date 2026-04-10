@@ -156,12 +156,14 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
 pub struct ScarCheckpoint {
     env: TypeEnv,
     user_func_params: HashMap<u32, Vec<String>>,
+    impl_method_uids: HashMap<String, u32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ScarSession {
     env: TypeEnv,
     user_func_params: HashMap<u32, Vec<String>>,
+    impl_method_uids: HashMap<String, u32>,
 }
 
 impl ScarSession {
@@ -169,6 +171,7 @@ impl ScarSession {
         Self {
             env: initialize_env(),
             user_func_params: HashMap::new(),
+            impl_method_uids: HashMap::new(),
         }
     }
 
@@ -181,12 +184,17 @@ impl ScarSession {
         resolved: Vec<Resolved>,
         context: TypecheckContext,
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let mut checker =
-            Checker::with_env_and_params(self.env.clone(), self.user_func_params.clone(), context);
+        let mut checker = Checker::with_env_and_params(
+            self.env.clone(),
+            self.user_func_params.clone(),
+            self.impl_method_uids.clone(),
+            context,
+        );
         let typed = checker.check_program(resolved)?;
-        let (env, user_func_params) = checker.into_parts();
+        let (env, user_func_params, impl_method_uids) = checker.into_parts();
         self.env = env;
         self.user_func_params = user_func_params;
+        self.impl_method_uids = impl_method_uids;
         Ok(typed)
     }
 
@@ -194,12 +202,14 @@ impl ScarSession {
         ScarCheckpoint {
             env: self.env.clone(),
             user_func_params: self.user_func_params.clone(),
+            impl_method_uids: self.impl_method_uids.clone(),
         }
     }
 
     pub fn rollback(&mut self, checkpoint: ScarCheckpoint) {
         self.env = checkpoint.env;
         self.user_func_params = checkpoint.user_func_params;
+        self.impl_method_uids = checkpoint.impl_method_uids;
     }
 }
 
@@ -213,7 +223,9 @@ struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
     current_function_symbol: Option<String>,
+    current_impl_struct_target: Option<String>,
     user_func_params: HashMap<u32, Vec<String>>,
+    impl_method_uids: HashMap<String, u32>,
     substitutions: HashMap<u32, Ty>,
     source_rules: SourceRules,
     enforce_builtin_type_contracts: bool,
@@ -226,7 +238,9 @@ impl Checker {
             env: initialize_env(),
             function_return_ty: None,
             current_function_symbol: None,
+            current_impl_struct_target: None,
             user_func_params: HashMap::new(),
+            impl_method_uids: HashMap::new(),
             substitutions: HashMap::new(),
             source_rules: context.source_rules,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
@@ -237,13 +251,16 @@ impl Checker {
     fn with_env_and_params(
         env: TypeEnv,
         user_func_params: HashMap<u32, Vec<String>>,
+        impl_method_uids: HashMap<String, u32>,
         context: TypecheckContext,
     ) -> Self {
         Self {
             env,
             function_return_ty: None,
             current_function_symbol: None,
+            current_impl_struct_target: None,
             user_func_params,
+            impl_method_uids,
             substitutions: HashMap::new(),
             source_rules: context.source_rules,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
@@ -255,6 +272,7 @@ impl Checker {
         let mut checker = Checker::with_env_and_params(
             env,
             self.user_func_params.clone(),
+            self.impl_method_uids.clone(),
             TypecheckContext {
                 source_rules: self.source_rules.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
@@ -262,6 +280,8 @@ impl Checker {
         );
         checker.function_return_ty = self.function_return_ty.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
+        checker.current_impl_struct_target = self.current_impl_struct_target.clone();
+        checker.impl_method_uids = self.impl_method_uids.clone();
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker
@@ -272,16 +292,18 @@ impl Checker {
         self.env.next_tyvar = self.env.next_tyvar.max(child.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(child.env.next_tag);
         self.seen_builtin_type_decls = child.seen_builtin_type_decls.clone();
+        self.impl_method_uids = child.impl_method_uids.clone();
     }
 
-    fn into_parts(self) -> (TypeEnv, HashMap<u32, Vec<String>>) {
-        (self.env, self.user_func_params)
+    fn into_parts(self) -> (TypeEnv, HashMap<u32, Vec<String>>, HashMap<String, u32>) {
+        (self.env, self.user_func_params, self.impl_method_uids)
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
         self.predeclare_error_types(&stmts);
         self.predeclare_type_signatures(&stmts)?;
         self.predeclare_functions(&stmts)?;
+        self.ensure_struct_impl_new_contract(&stmts)?;
         let mut typed = Vec::new();
         for stmt in stmts {
             let node = self.check_node(&stmt)?;
@@ -577,6 +599,145 @@ impl Checker {
         Ok(())
     }
 
+    fn split_impl_method_name(name: &str) -> Option<(String, String)> {
+        let (target, method) = name.rsplit_once("::")?;
+        if target.is_empty() || method.is_empty() {
+            None
+        } else {
+            Some((target.to_string(), method.to_string()))
+        }
+    }
+
+    fn current_impl_self_ty(&self) -> Option<Ty> {
+        let symbol = self.current_function_symbol.as_deref()?;
+        let mut parts = symbol.split("::").collect::<Vec<_>>();
+        if parts.len() < 2 {
+            return None;
+        }
+        let target = parts.pop()?;
+        let _method = target;
+        let type_name = parts.pop()?;
+        let def = self.env.lookup_type_def(type_name)?;
+        match def.kind {
+            TypeKind::Struct => Some(Ty::Struct(def.name.clone(), def.fields.clone())),
+            TypeKind::Enum => Some(Ty::Enum(def.name.clone())),
+            TypeKind::Record | TypeKind::Error => None,
+        }
+    }
+
+    fn ensure_self_rebinding_types(
+        &mut self,
+        pattern: &TypedPattern,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let expected_self = self.current_impl_self_ty();
+        self.ensure_self_rebinding_types_inner(pattern, span, expected_self.as_ref())
+    }
+
+    fn ensure_self_rebinding_types_inner(
+        &mut self,
+        pattern: &TypedPattern,
+        span: &Span,
+        expected_self: Option<&Ty>,
+    ) -> Result<(), TypeError> {
+        match pattern {
+            TypedPattern::Var(bind_ty, id) => {
+                if id.name == "self" {
+                    let Some(expected) = expected_self else {
+                        return Err(TypeError {
+                            message: "`self` can only be rebound inside impl methods".to_string(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    };
+                    if !self.types_compatible(expected, bind_ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "`self` rebinding requires Self type ({}), got {}",
+                                self.ty_name(expected),
+                                self.ty_name(bind_ty)
+                            ),
+                            span: id.span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+                Ok(())
+            }
+            TypedPattern::As(alias_ty, inner, id) => {
+                if id.name == "self" {
+                    let Some(expected) = expected_self else {
+                        return Err(TypeError {
+                            message: "`self` can only be rebound inside impl methods".to_string(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    };
+                    if !self.types_compatible(expected, alias_ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "`self` rebinding requires Self type ({}), got {}",
+                                self.ty_name(expected),
+                                self.ty_name(alias_ty)
+                            ),
+                            span: id.span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+                self.ensure_self_rebinding_types_inner(inner, span, expected_self)
+            }
+            TypedPattern::ListCons(_, head, tail) => {
+                self.ensure_self_rebinding_types_inner(head, span, expected_self)?;
+                self.ensure_self_rebinding_types_inner(tail, span, expected_self)
+            }
+            TypedPattern::ResultOk(_, inner) => {
+                self.ensure_self_rebinding_types_inner(inner, span, expected_self)
+            }
+            TypedPattern::Wildcard(_)
+            | TypedPattern::ListNil(_)
+            | TypedPattern::IntLit(_, _)
+            | TypedPattern::StrLit(_, _)
+            | TypedPattern::BoolLit(_, _) => Ok(()),
+        }
+    }
+
+    fn ensure_struct_impl_new_contract(&self, stmts: &[Resolved]) -> Result<(), TypeError> {
+        let mut struct_decl_spans: HashMap<String, Span> = HashMap::new();
+        let mut structs_with_new: HashSet<String> = HashSet::new();
+
+        for stmt in stmts {
+            match stmt {
+                Resolved::StructDef(_, id, _) => {
+                    struct_decl_spans.insert(id.name.clone(), id.span.clone());
+                }
+                Resolved::Def(_, id, _, _, _, _) => {
+                    if let Some((target, method)) = Self::split_impl_method_name(&id.name) {
+                        if method == "new" {
+                            structs_with_new.insert(target);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for (struct_name, span) in struct_decl_spans {
+            if !structs_with_new.contains(&struct_name) {
+                return Err(TypeError {
+                    message: format!(
+                        "Struct `{}` must define `new` in its impl block (e.g. `impl {} {{ def new(...) -> Self {{ ... }} }}`)",
+                        struct_name, struct_name
+                    ),
+                    span,
+                    hint: None,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     fn predeclare_functions(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
         let mut fun_idx = self.env.next_fun_idx;
 
@@ -637,6 +798,9 @@ impl Checker {
                         },
                     );
                     self.user_func_params.insert(id.unique_id, param_names);
+                    if Self::split_impl_method_name(&id.name).is_some() {
+                        self.impl_method_uids.insert(id.name.clone(), id.unique_id);
+                    }
                     fun_idx += 1;
                 }
                 Resolved::DeferrorDef(_, id, fields, _) => {
@@ -752,6 +916,7 @@ impl Checker {
                     });
                 }
                 let (typed_pat, pat_ty) = self.check_pattern(pat, &typed_rhs.ty, span)?;
+                self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 // Store the binding type in env
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
@@ -867,6 +1032,7 @@ impl Checker {
         };
 
         let (typed_pat, pat_ty) = self.check_pattern(pat, &ok_ty, span)?;
+        self.ensure_self_rebinding_types(&typed_pat, span)?;
         if let Some(ret_ty) = self.function_return_ty.clone() {
             let fn_err_ty = match ret_ty {
                 Ty::Result(_, fn_err_ty) => fn_err_ty,
@@ -1908,6 +2074,129 @@ impl Checker {
 
     // ── Function application ──
 
+    fn typecheck_user_function_args(
+        &mut self,
+        span: &Span,
+        callee_uid: u32,
+        params: &[Ty],
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let has_named = args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)));
+        let has_positional = args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Positional(_)));
+        if has_named && has_positional {
+            return Err(TypeError {
+                message: "Cannot mix positional and named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let param_names = self.user_func_params.get(&callee_uid).cloned();
+        let mut typed_args = Vec::with_capacity(params.len());
+
+        if has_named {
+            let names = param_names.as_ref().ok_or_else(|| TypeError {
+                message: "This function value does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+
+            if args.len() != params.len() {
+                return Err(TypeError {
+                    message: format!(
+                        "function expects {} argument(s), got {}",
+                        params.len(),
+                        args.len()
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+
+            let mut reordered: Vec<Option<&Resolved>> = vec![None; params.len()];
+            for arg in args {
+                let ResolvedRecordLitArg::Named(name, expr) = arg else {
+                    unreachable!("validated argument form above")
+                };
+                let idx = names
+                    .iter()
+                    .position(|n| n == name)
+                    .ok_or_else(|| TypeError {
+                        message: format!("Unknown argument name '{}' for function", name),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                if reordered[idx].is_some() {
+                    return Err(TypeError {
+                        message: format!("Duplicate argument '{}'", name),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                reordered[idx] = Some(expr);
+            }
+
+            for (idx, expected_ty) in params.iter().enumerate() {
+                let expr = reordered[idx].ok_or_else(|| TypeError {
+                    message: format!("Missing argument '{}'", names[idx]),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+                let typed = self.check_node(expr)?;
+                if !self.types_compatible(expected_ty, &typed.ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Argument type mismatch: expected {}, got {}",
+                            self.ty_name(expected_ty),
+                            self.ty_name(&typed.ty)
+                        ),
+                        span: typed.span.clone(),
+                        hint: None,
+                    });
+                }
+                typed_args.push(typed);
+            }
+            return Ok(typed_args);
+        }
+
+        if args.len() != params.len() {
+            return Err(TypeError {
+                message: format!(
+                    "function expects {} argument(s), got {}",
+                    params.len(),
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        for (expected_ty, arg) in params.iter().zip(args) {
+            let ResolvedRecordLitArg::Positional(expr) = arg else {
+                unreachable!("validated argument form above")
+            };
+            let typed = self.check_node(expr)?;
+            if !self.types_compatible(expected_ty, &typed.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "Argument type mismatch: expected {}, got {}",
+                        self.ty_name(expected_ty),
+                        self.ty_name(&typed.ty)
+                    ),
+                    span: typed.span.clone(),
+                    hint: None,
+                });
+            }
+            typed_args.push(typed);
+        }
+
+        Ok(typed_args)
+    }
+
     fn check_app(
         &mut self,
         span: &Span,
@@ -2021,110 +2310,22 @@ impl Checker {
                 })
             }
             Ty::UserFunc { params, ret, .. } => {
-                let param_names = match func {
-                    Resolved::Var(_, id) => self.user_func_params.get(&id.unique_id).cloned(),
-                    _ => None,
-                };
-
-                let mut reordered = vec![None; params.len()];
-                let mut positional_idx = 0usize;
-                let mut seen_named = false;
-
-                for arg in args {
-                    match arg {
-                        ResolvedRecordLitArg::Positional(expr) => {
-                            if seen_named {
-                                return Err(TypeError {
-                                    message:
-                                        "Positional arguments must come before named arguments"
-                                            .into(),
-                                    span: span.clone(),
-                                    hint: None,
-                                });
-                            }
-                            if positional_idx >= params.len() {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "function expects {} argument(s), got {}",
-                                        params.len(),
-                                        args.len()
-                                    ),
-                                    span: span.clone(),
-                                    hint: None,
-                                });
-                            }
-                            reordered[positional_idx] = Some(expr);
-                            positional_idx += 1;
-                        }
-                        ResolvedRecordLitArg::Named(name, expr) => {
-                            seen_named = true;
-                            let names = param_names.as_ref().ok_or_else(|| TypeError {
-                                message: "This function value does not accept named arguments"
-                                    .into(),
-                                span: span.clone(),
-                                hint: None,
-                            })?;
-                            let idx =
-                                names
-                                    .iter()
-                                    .position(|n| n == name)
-                                    .ok_or_else(|| TypeError {
-                                        message: format!(
-                                            "Unknown argument name '{}' for function",
-                                            name
-                                        ),
-                                        span: span.clone(),
-                                        hint: None,
-                                    })?;
-                            if reordered[idx].is_some() {
-                                return Err(TypeError {
-                                    message: format!("Duplicate argument '{}'", name),
-                                    span: span.clone(),
-                                    hint: None,
-                                });
-                            }
-                            reordered[idx] = Some(expr);
-                        }
-                    }
-                }
-
-                if args.len() != params.len() {
-                    return Err(TypeError {
-                        message: format!(
-                            "function expects {} argument(s), got {}",
-                            params.len(),
-                            args.len()
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-
-                let mut typed_args = Vec::with_capacity(params.len());
-                for (idx, param) in params.iter().enumerate() {
-                    let expr = reordered[idx].ok_or_else(|| TypeError {
-                        message: if let Some(names) = param_names.as_ref() {
-                            format!("Missing argument '{}'", names[idx])
-                        } else {
-                            format!("Missing argument #{}", idx + 1)
-                        },
-                        span: span.clone(),
-                        hint: None,
-                    })?;
-                    let arg = self.check_node(expr)?;
-                    if !self.types_compatible(param, &arg.ty) {
+                let has_named = args
+                    .iter()
+                    .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)));
+                let callee_uid = match func {
+                    Resolved::Var(_, id) => id.unique_id,
+                    _ if !has_named => u32::MAX,
+                    _ => {
                         return Err(TypeError {
-                            message: format!(
-                                "Argument type mismatch: expected {}, got {}",
-                                self.ty_name(param),
-                                self.ty_name(&arg.ty)
-                            ),
-                            span: arg.span.clone(),
+                            message: "This function value does not accept named arguments".into(),
+                            span: span.clone(),
                             hint: None,
                         });
                     }
-                    typed_args.push(arg);
-                }
+                };
+                let typed_args =
+                    self.typecheck_user_function_args(span, callee_uid, params, args)?;
 
                 Ok(TypedNode {
                     ty: self.resolve_ty(ret),
@@ -3501,6 +3702,15 @@ impl Checker {
         }
 
         let mut body_checker = self.spawn_child_checker(fun_env);
+        if let Some((impl_target, _method)) = Self::split_impl_method_name(&id.name) {
+            if self
+                .env
+                .lookup_type_def(&impl_target)
+                .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
+            {
+                body_checker.current_impl_struct_target = Some(impl_target);
+            }
+        }
         body_checker.function_return_ty = Some(expected_ret.clone());
         body_checker.current_function_symbol = Some(current_symbol);
         let typed_body = body_checker.check_node(body)?;
@@ -3701,6 +3911,20 @@ impl Checker {
             })?
             .clone();
 
+        if self.current_impl_struct_target.as_deref() != Some(id.name.as_str()) {
+            return Err(TypeError {
+                message: format!(
+                    "Struct literal `{}` is only allowed inside `impl {} {{ ... }}` method bodies",
+                    id.name, id.name
+                ),
+                span: span.clone(),
+                hint: Some(format!(
+                    "Construct `{}` values via `{}(...)` / `{}::new(...)` outside the impl body.",
+                    id.name, id.name, id.name
+                )),
+            });
+        }
+
         let tag = def.tag;
 
         // Reject unknown/duplicate fields before type-checking values.
@@ -3767,9 +3991,7 @@ impl Checker {
         if let Some(ty) = self.env.lookup_var(id.unique_id).cloned() {
             match &ty {
                 Ty::BuiltinFunc { name, .. } if name == "Ok" || name == "Err" => {}
-                Ty::BuiltinFunc { params, ret, .. }
-                | Ty::UserFunc { params, ret, .. }
-                | Ty::Func(params, ret) => {
+                Ty::BuiltinFunc { params, ret, .. } => {
                     if args.len() != params.len() {
                         return Err(TypeError {
                             message: format!(
@@ -3806,6 +4028,78 @@ impl Checker {
                             });
                         }
                         typed_args.push(typed_val);
+                    }
+
+                    return Ok(TypedNode {
+                        ty: ret.as_ref().clone(),
+                        span: span.clone(),
+                        node: TypedInner::App(
+                            Box::new(TypedNode {
+                                ty: ty.clone(),
+                                span: id.span.clone(),
+                                node: TypedInner::Var(id.clone()),
+                            }),
+                            typed_args,
+                        ),
+                    });
+                }
+                Ty::UserFunc { params, ret, .. } => {
+                    let typed_args =
+                        self.typecheck_user_function_args(span, id.unique_id, params, args)?;
+                    return Ok(TypedNode {
+                        ty: ret.as_ref().clone(),
+                        span: span.clone(),
+                        node: TypedInner::App(
+                            Box::new(TypedNode {
+                                ty: ty.clone(),
+                                span: id.span.clone(),
+                                node: TypedInner::Var(id.clone()),
+                            }),
+                            typed_args,
+                        ),
+                    });
+                }
+                Ty::Func(params, ret) => {
+                    if args
+                        .iter()
+                        .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+                    {
+                        return Err(TypeError {
+                            message: "Function calls do not accept named arguments".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if args.len() != params.len() {
+                        return Err(TypeError {
+                            message: format!(
+                                "function expects {} argument(s), got {}",
+                                params.len(),
+                                args.len()
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+
+                    let mut typed_args = Vec::with_capacity(params.len());
+                    for (expected_ty, arg) in params.iter().zip(args) {
+                        let ResolvedRecordLitArg::Positional(expr) = arg else {
+                            unreachable!("validated argument form above")
+                        };
+                        let typed = self.check_node(expr)?;
+                        if !self.types_compatible(expected_ty, &typed.ty) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "Argument type mismatch: expected {}, got {}",
+                                    self.ty_name(expected_ty),
+                                    self.ty_name(&typed.ty)
+                                ),
+                                span: typed.span.clone(),
+                                hint: None,
+                            });
+                        }
+                        typed_args.push(typed);
                     }
 
                     return Ok(TypedNode {
@@ -3948,6 +4242,81 @@ impl Checker {
                 hint: None,
             })?
             .clone();
+
+        if matches!(def.kind, crate::env::TypeKind::Struct) {
+            let new_name = format!("{}::new", id.name);
+            let Some(new_uid) = self.impl_method_uids.get(&new_name).copied() else {
+                return Err(TypeError {
+                    message: format!(
+                        "Struct `{}` constructor call requires `{}` but no such method was found",
+                        id.name, new_name
+                    ),
+                    span: span.clone(),
+                    hint: Some(format!(
+                        "Define `impl {} {{ def new(...) -> Self {{ ... }} }}`.",
+                        id.name
+                    )),
+                });
+            };
+            let new_ty = self
+                .env
+                .lookup_var(new_uid)
+                .cloned()
+                .ok_or_else(|| TypeError {
+                    message: format!("Undefined function: {}", new_name),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+            let (params, ret_ty) = match new_ty.clone() {
+                Ty::UserFunc { params, ret, .. }
+                | Ty::BuiltinFunc { params, ret, .. }
+                | Ty::Func(params, ret) => (params, *ret),
+                other => {
+                    return Err(TypeError {
+                        message: format!(
+                            "`{}` is not callable (got {})",
+                            new_name,
+                            self.ty_name(&other)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            };
+
+            let typed_args = self.typecheck_user_function_args(span, new_uid, &params, args)?;
+            let expected_self_ty = Ty::Struct(id.name.clone(), def.fields.clone());
+            if !self.types_compatible(&expected_self_ty, &ret_ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "`{}` must return Self ({}), got {}",
+                        new_name,
+                        self.ty_name(&expected_self_ty),
+                        self.ty_name(&ret_ty)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+
+            return Ok(TypedNode {
+                ty: ret_ty.clone(),
+                span: span.clone(),
+                node: TypedInner::App(
+                    Box::new(TypedNode {
+                        ty: new_ty,
+                        span: id.span.clone(),
+                        node: TypedInner::Var(ResolvedId {
+                            name: new_name,
+                            qualified_name: None,
+                            unique_id: new_uid,
+                            span: id.span.clone(),
+                        }),
+                    }),
+                    typed_args,
+                ),
+            });
+        }
 
         if !matches!(
             def.kind,

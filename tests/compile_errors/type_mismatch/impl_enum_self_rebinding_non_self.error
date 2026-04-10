@@ -1,0 +1,2 @@
+phase: typecheck
+contains: `self` rebinding requires Self type

@@ -1,0 +1,27 @@
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def with_age(self: Self, age: Int) -> Self {
+    User { name: self.name, age: age }
+  }
+
+  def with_name(self, name: String) -> Self {
+    User { name: name, age: self.age }
+  }
+}
+
+original = User("alice", 30)
+aged = User::with_age(original, 31)
+renamed = User::with_name(aged, "bob")
+
+print(to_string(original.age))
+print(to_string(aged.age))
+print(to_string(renamed.name))
+print(to_string(renamed.age))

@@ -1,0 +1,17 @@
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def with_name_and_age(self, name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user = User("alice", 30)
+updated = User::with_name_and_age(user, "bob", age: 31)
