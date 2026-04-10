@@ -1,0 +1,4 @@
+def id(x: $A) -> $A { x }
+
+print(to_string(id(1)))
+print(id("ok"))

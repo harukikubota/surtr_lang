@@ -410,7 +410,7 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Unit => "Unit".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
         Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
-        Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name) => name.clone(),
+        Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.clone(),
         Ty::Error => "Error".into(),
         // Hide internal type-variable IDs from REPL output.
         Ty::Var(_id) => "_".into(),
@@ -1135,7 +1135,7 @@ impl Codegen {
             }
 
             TypedInner::BinOp(op, left, right) => {
-                if matches!(op, BinOp::Eq | BinOp::Neq) && matches!(left.ty, Ty::Enum(_)) {
+                if matches!(op, BinOp::Eq | BinOp::Neq) && matches!(left.ty, Ty::Enum(_, _)) {
                     self.emit_enum_eq(op, left, right)?;
                 } else {
                     self.emit_node(left)?;

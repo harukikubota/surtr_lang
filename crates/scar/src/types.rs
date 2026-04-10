@@ -25,6 +25,7 @@ pub enum Ty {
     /// User-defined function (phase 2)
     UserFunc {
         fun_idx: u32,
+        type_params: Vec<u32>,
         params: Vec<Ty>,
         ret: Box<Ty>,
     },
@@ -38,8 +39,8 @@ pub enum Ty {
     /// Named record: `Point(x: Float, y: Float)`
     Record(Symbol, Vec<(Symbol, Ty)>),
 
-    /// Named enum: `Direction`
-    Enum(Symbol),
+    /// Named enum: `Direction`, `ReduceStep<Int>`
+    Enum(Symbol, Vec<Ty>),
 
     /// `Result<Ok, Err>`
     Result(Box<Ty>, Box<Ty>),

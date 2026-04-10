@@ -1263,10 +1263,14 @@ def dup(x: Int) -> List<Int> {
   [x, x + 10]
 }
 
-nums: List<Int> = [1, 2, 3]
-expand = &List::wrap |=> &dup
+def singleton(x: Int) -> List<Int> {
+  [x]
+}
 
-print(to_string(List::wrap(5)))
+nums: List<Int> = [1, 2, 3]
+expand = &singleton |=> &dup
+
+print(to_string(singleton(5)))
 print(to_string(nums |*> inc()))
 print(to_string(nums |>= dup()))
 print(to_string(expand(2)))"#,
@@ -1424,12 +1428,16 @@ def show(n: Int) -> String {
   "#" ++ to_string(n)
 }
 
+def singleton(n: Int) -> List<Int> {
+  [n]
+}
+
 nums =? parse_csv("1,2,3")
 [head, ..tail] =? nums
 
 print(to_string(head))
 print(to_string(tail |>= expand()))
-print(to_string((head |> List::wrap()) |*> show()))"##,
+print(to_string((head |> singleton()) |*> show()))"##,
             &["1", "[2, 12, 3, 13]", "[#1]"],
         );
     }
@@ -1445,7 +1453,11 @@ def wrap_bracket(word: String) -> String {
   "[" ++ word ++ "]"
 }
 
-lift_and_expand = &List::wrap |=> &aliases
+def singleton(word: String) -> List<String> {
+  [word]
+}
+
+lift_and_expand = &singleton |=> &aliases
 
 words: List<String> = ["surtr", "vm"]
 print(to_string(words |>= aliases() |*> wrap_bracket()))

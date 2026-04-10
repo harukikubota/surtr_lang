@@ -159,7 +159,7 @@ defmod String {
   - recoverable failure 側の値を受ける抽象型
 - `List`
   - homogeneous sequence 型
-  - `[]` を Nil とし、`List::wrap`, `List::map`, `List::flat_map` を持つ
+  - `[]` を Nil とし、トップレベルの `cons`, `first`, `len` と `List` module helper を持つ
 - `Result`
   - `Ok` / `Err` を中心にした Either 指向の失敗表現
 - `Float`
@@ -176,15 +176,19 @@ defmod String {
 
 `List` は pipeline / bind 系の外部契約を支える最小 helper surface を持ちます。
 
-### `List::wrap`
+### `List` helpers
 
 ```surtr
-List::wrap(1)   # => [1]
+List::cons(1, [])     # => [1]
+List::first([1, 2])   # => Ok(1)
+List::len([1, 2, 3])  # => 3
 ```
 
-- 1 つの値を singleton list に包む
-- 一般化 `pure` は置かず、`List` 専用の `wrap` を使う
+- `List::cons` は先頭への prepend
+- `List::first` は `Result` で先頭要素を返す
+- `List::len` は O(1) 契約を保つ core helper
 - `[]` は Nil 側の単位元として扱う
+- `List` は先頭からの逐次処理と pattern 分解を主用途にする
 
 ### `List::map`
 
@@ -196,21 +200,51 @@ List::map([1, 2, 3], &to_string)
 - `|*>` の `List` 側意味と一致する
 - flatten はしない
 
-### `List::flat_map`
+### `List::reduce` / `List::reduce_while`
 
 ```surtr
-def expand(n: Int) -> List<Int> { [n, n + 10] }
-List::flat_map([1, 2, 3], &expand)
+List::reduce([1, 2, 3], 0, {|acc, x| acc + x })
+List::reduce_while([1, 2, 3], 0, {|acc, x|
+  if(x == 2, ReduceStep::Stop(acc), ReduceStep::Resume(acc + x))
+})
 ```
 
-- 各要素に `A -> List<B>` を適用し、1 段 flatten する
-- `|>=` と `|=>` の `List` 側意味と一致する
+- `reduce` は左畳み込み
+- `reduce_while` は `ReduceStep::Resume` / `ReduceStep::Stop` で途中終了できる
+
+### 推奨スタイル
+
+```surtr
+acc = List::reduce(xs, [], {|acc, x|
+  List::cons(f(x), acc)
+})
+
+ret = List::reverse(acc)
+```
+
+- `List` 構築は `List::cons + List::reverse` を基本にする
+- `acc ++ [x]` のような後方連結中心の構築は避ける
+
+### 最小 API に含めないもの
+
+- `uncons` 関数
+- `tail`
+- `append`
+- `concat`
+- `flat_map`
+- `zip`
+- `take`
+- `drop`
+- `sort`
+- indexed access
 
 ### どう使い分けるか
 
-- 値 1 個から `List` を作る: `List::wrap`
+- 値 1 個から `List` を作る: `[x]` または `List::cons(x, [])`
+- 要素数を見る: `List::len`
+- 先頭だけほしい: `List::first`
 - `List` の shape を保って中身だけ変える: `|*>` または `List::map`
-- `List` を展開しながら次へ進める: `|>=` または `List::flat_map`
+- 条件付き検索や途中終了をしたい: `List::find`, `List::find_map`, `List::any`, `List::all`, `List::reduce_while`
 
 ## 9. `Result` module の位置づけ
 
@@ -232,7 +266,7 @@ List::flat_map([1, 2, 3], &expand)
 |---|---|
 | `x |> f(1)` | call 式への第一引数注入 |
 | `list |*> f()` | `List::map` と同じ方向の変換 |
-| `list |>= f()` | `List::flat_map` と同じ方向の変換 |
+| `list |>= f()` | `List` の bind 方向の変換 |
 | `&f |=> &g` | `List` または `Result` を返す関数の合成 |
 
 重要なのは、compose 系の実装詳細ではなく surface contract です。

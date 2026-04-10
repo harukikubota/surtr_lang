@@ -575,7 +575,7 @@ impl Parser {
             Ast::StructDef(_, _, _) => Some(TopLevelDeclKind::StructDef),
             Ast::RecordDef(_, _, _) => Some(TopLevelDeclKind::RecordDef),
             Ast::DeferrorDef(_, _, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
-            Ast::EnumDef(_, _, _, _) => Some(TopLevelDeclKind::EnumDef),
+            Ast::EnumDef(_, _, _, _, _) => Some(TopLevelDeclKind::EnumDef),
             Ast::BuiltinDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
             Ast::BuiltinTypeDecl(_, _, _) => Some(TopLevelDeclKind::BuiltinTypeDecl),
             Ast::ResultCtorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
@@ -2183,7 +2183,8 @@ impl Parser {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defenum)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, name_span) = self.expect_ident()?;
+        let type_params = self.parse_decl_type_params()?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -2265,9 +2266,55 @@ impl Parser {
                 end: end.end,
             },
             name,
+            type_params
+                .into_iter()
+                .map(|name| TypeParam {
+                    name,
+                    span: name_span.clone(),
+                })
+                .collect(),
             variants,
             attrs,
         ))
+    }
+
+    fn parse_decl_type_params(&mut self) -> Result<Vec<Symbol>, ParseError> {
+        if !matches!(self.peek(), Token::Lt) {
+            return Ok(Vec::new());
+        }
+
+        self.advance();
+        self.skip_newlines();
+
+        let mut params = Vec::new();
+        loop {
+            self.expect(&Token::Dollar)?;
+            let (param_name, _) = self.expect_ident()?;
+            params.push(format!("${}", param_name));
+            self.skip_newlines();
+
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                continue;
+            }
+
+            if matches!(self.peek(), Token::Gt) {
+                self.expect(&Token::Gt)?;
+                break;
+            }
+
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete(">", self.peek_span()));
+            }
+
+            return Err(ParseError::syntax(
+                "Expected `,` or `>` in declaration type parameter list",
+                self.peek_span(),
+            ));
+        }
+
+        Ok(params)
     }
 
     fn parse_enum_discriminant(&mut self) -> Result<sindr::primitives::SurtrInt, ParseError> {
@@ -3265,9 +3312,16 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*show_expr, delta)),
             shift_decl_attrs(attrs),
         ),
-        Ast::EnumDef(span, name, variants, attrs) => Ast::EnumDef(
+        Ast::EnumDef(span, name, type_params, variants, attrs) => Ast::EnumDef(
             shift_span(span, delta),
             name,
+            type_params
+                .into_iter()
+                .map(|param| TypeParam {
+                    name: param.name,
+                    span: shift_span(param.span, delta),
+                })
+                .collect(),
             variants
                 .into_iter()
                 .map(|variant| EnumVariant {
@@ -3386,7 +3440,7 @@ impl Ast {
             | Ast::StructLit(s, _, _)
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _, _)
-            | Ast::EnumDef(s, _, _, _)
+            | Ast::EnumDef(s, _, _, _, _)
             | Ast::Def(s, _, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)
@@ -4627,8 +4681,9 @@ import Kernel::{add, sub};"#,
         .expect("defenum should parse");
 
         match ast.as_slice() {
-            [Ast::EnumDef(_, name, variants, _)] => {
+            [Ast::EnumDef(_, name, type_params, variants, _)] => {
                 assert_eq!(name, "Direction");
+                assert!(type_params.is_empty());
                 assert_eq!(variants.len(), 3);
                 assert_eq!(variants[0].name, "Up");
                 assert_eq!(variants[0].discriminant, Some(int(1)));
@@ -4638,6 +4693,27 @@ import Kernel::{add, sub};"#,
                 assert_eq!(variants[2].payload.len(), 2);
             }
             other => panic!("Expected enum definition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_defenum_parses_generic_header() {
+        let ast = parse(
+            r#"defenum ReduceStep<$A> {
+  Resume($A),
+  Stop($A),
+}"#,
+        )
+        .expect("generic defenum should parse");
+
+        match ast.as_slice() {
+            [Ast::EnumDef(_, name, type_params, variants, _)] => {
+                assert_eq!(name, "ReduceStep");
+                assert_eq!(type_params.len(), 1);
+                assert_eq!(type_params[0].name, "$A");
+                assert_eq!(variants.len(), 2);
+            }
+            other => panic!("Expected generic enum definition, got {:?}", other),
         }
     }
 

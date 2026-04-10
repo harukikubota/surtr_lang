@@ -22,7 +22,7 @@
   - 標準モジュールのロード順
   - `Kernel` と各 type file の役割
   - `@@doc` を source に載せる理由
-  - `List::wrap`, `List::map`, `List::flat_map` と pipeline の対応
+  - `cons`, `first`, `len`, `List::map`, `List::find_map` と pipeline の対応
 
 ### プログラミング言語を作りたい人
 

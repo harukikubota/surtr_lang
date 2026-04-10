@@ -302,6 +302,7 @@ impl ReplEngine {
             );
             return;
         }
+        self.sync_scar_fun_index_with_vm();
 
         let scope = match sigil::build_scope_for_module(
             &module_stages,
@@ -426,6 +427,7 @@ impl ReplEngine {
             );
             return;
         }
+        self.sync_scar_fun_index_with_vm();
         self.append_docs(crate::collect_doc_entries(&module_stages, &[], None));
 
         let scope = match sigil::build_scope_for_module(
@@ -933,6 +935,7 @@ impl ReplEngine {
 
         match self.vm.push_atomic(chunk) {
             Ok(value) => {
+                self.sync_scar_fun_index_with_vm();
                 if self.report_main_result_error_if_any(&value) {
                     let rendered = vec!["Error result".to_string()];
                     self.bump_line(None, None);
@@ -1048,6 +1051,21 @@ impl ReplEngine {
 
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+impl ReplEngine {
+    fn sync_scar_fun_index_with_vm(&mut self) {
+        let next_fun_idx = self
+            .vm
+            .bytecode()
+            .functions
+            .iter()
+            .map(|entry| entry.fun_idx + 1)
+            .max()
+            .unwrap_or(0);
+        self.scar_session
+            .ensure_next_fun_idx_at_least(next_fun_idx);
+    }
 }
 
 fn module_path_from_file_name(path: &Path) -> String {

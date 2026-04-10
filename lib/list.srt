@@ -8,29 +8,162 @@ shape at this file's top level.
 @@builtin type List<$A>
 
 @@doc """
+Stepper for `List::reduce_while`.
+`Resume(next)` continues with the next accumulator, while `Stop(done)` ends the
+reduction immediately.
+"""
+defenum ReduceStep<$A> {
+  Resume($A),
+  Stop($A),
+}
+
+@@doc """
 List module.
-Groups helpers for constructing and transforming list values.
+Groups helpers for transforming list values in source code.
 Empty lists usually need a type annotation such as `List<Int>`, and `[]` is the
 canonical Nil value.
-The type declaration stays top-level while the module body exposes the
-list-owned helper surface used by bind/pipeline lowering.
 """
 defmod List {
   @@doc """
-  Wrap one value into a singleton list.
-  This is the value-side constructor counterpart to `[]` as Nil.
+  Prepend one element onto the front of a list.
+  `cons` is the canonical value-level constructor for list growth.
   """
-  @@builtin def wrap(value: $A) -> List<$A>
+  def cons(head: $A, tail: List<$A>) -> List<$A> {
+    [head, ..tail]
+  }
+
+  @@doc """
+  Return the first element of a list, or `Err(NoneError)` for `[]`.
+  """
+  def first(values: List<$A>) -> Result<$A, NoneError> {
+    match values {
+      [head, .._] => Ok(head),
+      [] => Err(NoneError),
+    }
+  }
+
+  @@doc """
+  Return the number of elements in a list.
+  This stays a core helper so the runtime can keep the O(1) handle-based length
+  contract.
+  """
+  @@builtin def len(values: List<$A>) -> Int
+
+  def _list_reverse_go(values: List<$A>, acc: List<$A>) -> List<$A> {
+    match values {
+      [] => acc,
+      [head, ..tail] => List::_list_reverse_go(tail, List::cons(head, acc)),
+    }
+  }
+
+  def _append_reverse(values: List<$A>, acc: List<$A>) -> List<$A> {
+    match values {
+      [] => acc,
+      [head, ..tail] => List::_append_reverse(tail, List::cons(head, acc)),
+    }
+  }
+
+  def _list_flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B> {
+    List::reverse(
+      List::reduce(values, [], {|acc, x|
+        List::_append_reverse(f(x), acc)
+      }),
+    )
+  }
+
+  @@doc """
+  Reverse the order of a list.
+  """
+  def reverse(values: List<$A>) -> List<$A> {
+    List::_list_reverse_go(values, [])
+  }
+
+  @@doc """
+  Fold a list from left to right.
+  """
+  def reduce(values: List<$A>, init: $B, f: ($B, $A -> $B)) -> $B {
+    match values {
+      [] => init,
+      [head, ..tail] => List::reduce(tail, f(init, head), f),
+    }
+  }
+
+  @@doc """
+  Fold a list from left to right with early exit.
+  """
+  def reduce_while(values: List<$A>, init: $B, f: ($B, $A -> ReduceStep<$B>)) -> $B {
+    match values {
+      [] => init,
+      [head, ..tail] => match f(init, head) {
+        ReduceStep::Resume(next) => List::reduce_while(tail, next, f),
+        ReduceStep::Stop(done) => done,
+      },
+    }
+  }
 
   @@doc """
   Map a plain unary callable over each element and keep the list shape.
   This matches the semantics of `|*>` on `List`.
   """
-  @@builtin def map(values: List<$A>, f: ($A -> $B)) -> List<$B>
+  def map(values: List<$A>, f: ($A -> $B)) -> List<$B> {
+    List::reverse(
+      List::reduce(values, [], {|acc, x|
+        List::cons(f(x), acc)
+      }),
+    )
+  }
 
   @@doc """
-  Apply a unary callable that itself returns a list and flatten one level.
-  This matches the semantics of `|>=` / `|=>` on `List`.
+  Keep only the elements that satisfy `pred`.
   """
-  @@builtin def flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B>
+  def filter(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    List::reverse(
+      List::reduce(values, [], {|acc, x|
+        if(pred(x), List::cons(x, acc), acc)
+      }),
+    )
+  }
+
+  @@doc """
+  Return the first element that satisfies `pred`.
+  """
+  def find(values: List<$A>, pred: ($A -> Boolean)) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => if(pred(head), Ok(head), List::find(tail, pred)),
+    }
+  }
+
+  @@doc """
+  Return the first successful mapped value.
+  """
+  def find_map(values: List<$A>, f: ($A -> Result<$B>)) -> Result<$B, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => match f(head) {
+        Ok(value) => Ok(value),
+        Err(_) => List::find_map(tail, f),
+      },
+    }
+  }
+
+  @@doc """
+  Return `True` when at least one element satisfies `pred`.
+  """
+  def any(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
+    match values {
+      [] => False,
+      [head, ..tail] => if(pred(head), True, List::any(tail, pred)),
+    }
+  }
+
+  @@doc """
+  Return `True` when every element satisfies `pred`.
+  """
+  def all(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
+    match values {
+      [] => True,
+      [head, ..tail] => if(pred(head), List::all(tail, pred), False),
+    }
+  }
 }

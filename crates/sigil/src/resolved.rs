@@ -91,7 +91,7 @@ pub enum Resolved {
     DeferrorDef(Span, ResolvedId, Vec<ResolvedField>, Box<Resolved>),
 
     /// Enum definition
-    EnumDef(Span, ResolvedId, Vec<ResolvedEnumVariant>),
+    EnumDef(Span, ResolvedId, Vec<ResolvedTypeParam>, Vec<ResolvedEnumVariant>),
 
     /// Function definition
     Def(
@@ -195,5 +195,11 @@ pub struct ResolvedEnumVariant {
     pub id: ResolvedId,
     pub payload: Vec<AstTy>,
     pub discriminant: Option<SurtrInt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTypeParam {
+    pub name: Symbol,
     pub span: Span,
 }

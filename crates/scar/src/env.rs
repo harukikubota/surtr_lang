@@ -20,6 +20,7 @@ pub struct TypeDefInfo {
     pub tag: u32,
     pub kind: TypeKind,
     pub name: Symbol,
+    pub type_params: Vec<Symbol>,
     pub fields: Vec<(Symbol, Ty)>,
     pub state: TypeDefState,
 }
@@ -38,6 +39,7 @@ pub struct EnumVariantInfo {
     pub constructor_name: Symbol,
     pub short_name: Symbol,
     pub enum_name: Symbol,
+    pub enum_ty: Ty,
     pub tag: u32,
     pub payload: Vec<Ty>,
     pub discriminant: SurtrInt,
@@ -98,11 +100,21 @@ impl TypeEnv {
     ///
     /// Tags are assigned in declaration traversal order from the caller.
     /// Re-predeclaring the same type name reuses the already reserved tag.
-    pub fn predeclare_type_def(&mut self, name: Symbol, kind: TypeKind) -> u32 {
+    pub fn predeclare_type_def(
+        &mut self,
+        name: Symbol,
+        kind: TypeKind,
+        type_params: Vec<Symbol>,
+    ) -> u32 {
         if let Some(existing) = self.type_defs.get(&name) {
             debug_assert!(
                 existing.kind == kind,
                 "Type predeclared with different kind: {}",
+                name
+            );
+            debug_assert!(
+                existing.type_params == type_params,
+                "Type predeclared with different type params: {}",
                 name
             );
             return existing.tag;
@@ -116,6 +128,7 @@ impl TypeEnv {
                 tag,
                 kind,
                 name,
+                type_params,
                 fields: Vec::new(),
                 state: TypeDefState::Declared,
             },
@@ -154,7 +167,7 @@ impl TypeEnv {
         kind: TypeKind,
         fields: Vec<(Symbol, Ty)>,
     ) -> u32 {
-        let tag = self.predeclare_type_def(name.clone(), kind);
+        let tag = self.predeclare_type_def(name.clone(), kind, Vec::new());
         let _ = self.resolve_type_def_signature(&name, fields);
         tag
     }
@@ -240,9 +253,9 @@ mod tests {
     fn predeclare_type_def_assigns_deterministic_tags() {
         let mut env = TypeEnv::new();
 
-        let user_tag = env.predeclare_type_def("User".into(), TypeKind::Struct);
-        let point_tag = env.predeclare_type_def("Point".into(), TypeKind::Record);
-        let user_tag_again = env.predeclare_type_def("User".into(), TypeKind::Struct);
+        let user_tag = env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new());
+        let point_tag = env.predeclare_type_def("Point".into(), TypeKind::Record, Vec::new());
+        let user_tag_again = env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new());
 
         assert_eq!(user_tag, 2);
         assert_eq!(point_tag, 3);
@@ -253,7 +266,7 @@ mod tests {
     #[test]
     fn resolve_type_def_signature_finalizes_predeclared_entry() {
         let mut env = TypeEnv::new();
-        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::Error);
+        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::Error, Vec::new());
 
         let before = env.lookup_type_def("ApiError").expect("must exist");
         assert_eq!(before.state, TypeDefState::Declared);

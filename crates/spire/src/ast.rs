@@ -113,6 +113,12 @@ pub struct EnumVariant {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: Symbol,
+    pub span: Span,
+}
+
 /// Function parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunParam {
@@ -238,7 +244,7 @@ pub enum Ast {
     DeferrorDef(Span, Symbol, Vec<RecordField>, Box<Ast>, DeclAttrs),
 
     /// Enum definition: `defenum Color { Red, Green = 4, Blue(Int) }`
-    EnumDef(Span, Symbol, Vec<EnumVariant>, DeclAttrs),
+    EnumDef(Span, Symbol, Vec<TypeParam>, Vec<EnumVariant>, DeclAttrs),
 
     /// Function definition: `def add(x: Int, y: Int) -> Int { x + y }`
     Def(

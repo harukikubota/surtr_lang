@@ -404,6 +404,44 @@ deferror NotFound(code: String) {
     }
 
     #[test]
+    fn generic_def_signature_instantiates_per_call_site() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"def id(x: $A) -> $A { x }
+left: Int = id(1)
+right: String = id("ok")"#,
+        );
+        assert!(typed.len() >= 3);
+        assert!(typed
+            .iter()
+            .rev()
+            .take(3)
+            .all(|node| matches!(node.node, TypedInner::Bind(_, _) | TypedInner::Def(_, _, _, _, _))));
+    }
+
+    #[test]
+    fn generic_defenum_constructor_and_match_typecheck() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defenum StepSignal<$A> {
+  Resume($A),
+  Stop($A),
+}
+
+step: StepSignal<Int> = StepSignal::Resume(1)
+value = match step {
+  StepSignal::Resume(v) => v,
+  StepSignal::Stop(v) => v,
+}"#,
+        );
+        assert!(typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::EnumDef(_, _))));
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::Bind(_, _))
+        ));
+    }
+
+    #[test]
     fn closure_param_annotation_without_expected_type_constrains_calls() {
         let resolved = resolve_with_builtin_prelude(
             r#"id = {|value: Int| value}

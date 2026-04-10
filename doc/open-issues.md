@@ -34,6 +34,13 @@
   - `Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user`
   - cross-cutting builtin は `kernel.srt` へ置く
   - builtin type 宣言は各対応 `lib/*.srt` のトップレベルへ置く
+- `List` 最小 surface の固定
+  - 関数 surface は `defmod List` に置く
+  - `ReduceStep` はトップレベル enum として維持する
+  - `List::find*` / `any` / `all` の early-exit 基盤は `reduce_while` とする
+- List runtime 前提の固定
+  - cons cell + handle
+  - `len` は handle に保持して O(1)
 
 これらの正本は `doc/要件定義v9.md`, `doc/EldrVM_spec.md`, `doc/Xldr_spec.md`, `doc/テスト方針.md` を参照する。
 
@@ -201,7 +208,8 @@
 
 - 策定コミット: `2026-04-09 review follow-up`
 - 背景:
-  - `ListNode` は単一バリアント enum のままで、`tail_handle()` も非空前提の箇所で `saturating_sub` を使っている。
+  - runtime 前提としての `cons cell + handle` と `len` の O(1) 契約は固定済み。
+  - そのうえで Rust 実装上の `ListNode` は単一バリアント enum のままで、`tail_handle()` も非空前提の箇所で `saturating_sub` を使っている。
   - 挙動上の不具合ではないが、runtime の意図がコードから読み取りにくい。
 - 2026-04-09 時点の未解決点:
   - `ListNode` を struct に寄せるか、将来空ノード等の variant 拡張余地を残すか
@@ -238,7 +246,7 @@
 - 2026-04-10 時点の固定事項:
   - compose の外部契約は capture / closure 限定
   - apply 系は第一引数注入
-  - `List::wrap`, `List::map`, `List::flat_map` を公開 surface とする
+  - `cons`, `first`, `len` と `List::reverse / reduce / reduce_while / map / filter / find / find_map / any / all` を公開 surface とする
 - 未確定点:
   - 即時適用される compose 式をどこまで branch chain へ直下ろしするか
   - synthetic callable と直接 lower の選択基準

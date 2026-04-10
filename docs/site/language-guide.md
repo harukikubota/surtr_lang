@@ -305,16 +305,19 @@ empty: List<Int> = []
 
 空リストは要素型が分からないため、型注釈を付けるのが基本です。
 
-`List` にはパイプ / bind 系で使う helper surface もあります。
+`List` には値操作とパイプ / bind 系で使う helper surface があります。
 
 ```surtr
-List::wrap(1)                 # => [1]
+List::cons(1, [])             # => [1]
+List::first([1, 2, 3])        # => Ok(1)
+List::len([1, 2, 3])          # => 3
 List::map([1, 2], &to_string)
-List::flat_map([1, 2], &dup)
+List::find_map([1, 2], &lookup)
 ```
 
 ここでの単位元は `[]` です。  
-Surtr は一般化された `pure` を置かず、`List::wrap` と `[]` をはっきり分けています。
+Surtr は一般化された `pure` を置かず、`[]` と `List::cons` / `[x]` をはっきり分けています。
+`[head, ..tail]` の分解は pattern 位置専用で、値側の基本操作としては `List::cons` を使います。
 
 ## 10. パイプラインと合成
 

@@ -327,9 +327,10 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             Box::new(rewrite_self_ast(*show_expr, target)),
             attrs,
         ),
-        Ast::EnumDef(span, name, variants, attrs) => Ast::EnumDef(
+        Ast::EnumDef(span, name, type_params, variants, attrs) => Ast::EnumDef(
             span,
             name,
+            type_params,
             variants
                 .into_iter()
                 .map(|variant| spire::ast::EnumVariant {
@@ -756,7 +757,7 @@ pub fn precollect_declaration_index(
                     Ast::StructDef(_, name, _) => {
                         local_types.insert(name.clone(), DeclarationKind::Struct);
                     }
-                    Ast::EnumDef(_, name, _, _) => {
+                    Ast::EnumDef(_, name, _, _, _) => {
                         local_types.insert(name.clone(), DeclarationKind::Enum);
                     }
                     Ast::RecordDef(_, name, _) => {
@@ -857,7 +858,7 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::EnumDef(span, name, variants, _) = stmt {
+                if let Ast::EnumDef(span, name, _, variants, _) = stmt {
                     let fq_name = if module.module_path.is_empty() {
                         name.to_string()
                     } else {
@@ -1102,7 +1103,7 @@ impl Resolver {
                 Ast::StructDef(_, name, _) => {
                     local_types.insert(name.clone(), DeclarationKind::Struct);
                 }
-                Ast::EnumDef(_, name, _, _) => {
+                Ast::EnumDef(_, name, _, _, _) => {
                     local_types.insert(name.clone(), DeclarationKind::Enum);
                 }
                 Ast::RecordDef(_, name, _) => {
@@ -1347,7 +1348,7 @@ impl Resolver {
                         .push_back(uid);
                     self.scope.define_with_id(name, uid);
                 }
-                Ast::EnumDef(span, name, variants, _) => {
+                Ast::EnumDef(span, name, _, variants, _) => {
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
@@ -1677,7 +1678,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::EnumDef(span, name, variants, _) => {
+            Ast::EnumDef(span, name, type_params, variants, _) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -1690,6 +1691,13 @@ impl Resolver {
                     unique_id: uid,
                     span: span.clone(),
                 };
+                let resolved_type_params = type_params
+                    .into_iter()
+                    .map(|param| ResolvedTypeParam {
+                        name: param.name,
+                        span: param.span,
+                    })
+                    .collect::<Vec<_>>();
 
                 let mut resolved_variants = Vec::new();
                 for variant in variants {
@@ -1713,7 +1721,12 @@ impl Resolver {
                     });
                 }
 
-                Ok(Resolved::EnumDef(span, rid, resolved_variants))
+                Ok(Resolved::EnumDef(
+                    span,
+                    rid,
+                    resolved_type_params,
+                    resolved_variants,
+                ))
             }
 
             Ast::Def(span, name, params, ret_ty, body, attrs) => {
@@ -2257,7 +2270,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         Resolved::StructDef(_, _, _)
         | Resolved::RecordDef(_, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
-        | Resolved::EnumDef(_, _, _)
+        | Resolved::EnumDef(_, _, _, _)
         | Resolved::BuiltinDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)
         | Resolved::ResultCtorDecl(_, _, _, _, _) => {}

@@ -195,7 +195,7 @@ fn collect_doc_entries_for_ast(
                     });
                 }
             }
-            spire::ast::Ast::EnumDef(_, name, variants, attrs) => {
+            spire::ast::Ast::EnumDef(_, name, _, variants, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
@@ -399,7 +399,7 @@ pub fn lower_module_source_ast(
             spire::ast::Ast::StructDef(_, _, _)
             | spire::ast::Ast::RecordDef(_, _, _)
             | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
-            | spire::ast::Ast::EnumDef(_, _, _, _)
+            | spire::ast::Ast::EnumDef(_, _, _, _, _)
             | spire::ast::Ast::ImplDef(_, _, _)
             | spire::ast::Ast::BuiltinDecl(_, _, _, _, _)
             | spire::ast::Ast::BuiltinTypeDecl(_, _, _) => {

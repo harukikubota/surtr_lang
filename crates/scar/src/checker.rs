@@ -136,36 +136,12 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Int),
         },
-        "wrap" => {
+        "len" => {
             let a = env.fresh_tyvar();
             Ty::BuiltinFunc {
                 name: meta.name.into(),
-                params: vec![a.clone()],
-                ret: Box::new(Ty::List(Box::new(a))),
-            }
-        }
-        "map" => {
-            let a = env.fresh_tyvar();
-            let b = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![
-                    Ty::List(Box::new(a.clone())),
-                    Ty::Func(vec![a], Box::new(b.clone())),
-                ],
-                ret: Box::new(Ty::List(Box::new(b))),
-            }
-        }
-        "flat_map" => {
-            let a = env.fresh_tyvar();
-            let b = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![
-                    Ty::List(Box::new(a.clone())),
-                    Ty::Func(vec![a], Box::new(Ty::List(Box::new(b.clone())))),
-                ],
-                ret: Box::new(Ty::List(Box::new(b))),
+                params: vec![Ty::List(Box::new(a))],
+                ret: Box::new(Ty::Int),
             }
         }
         _ => Ty::BuiltinFunc {
@@ -249,6 +225,10 @@ impl ScarSession {
         self.user_func_params = checkpoint.user_func_params;
         self.impl_method_uids = checkpoint.impl_method_uids;
         self.function_ids_by_name = checkpoint.function_ids_by_name;
+    }
+
+    pub fn ensure_next_fun_idx_at_least(&mut self, next_fun_idx: u32) {
+        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
     }
 }
 
@@ -383,20 +363,32 @@ impl Checker {
         for stmt in stmts {
             match stmt {
                 Resolved::StructDef(_, id, _) => {
-                    self.env
-                        .predeclare_type_def(id.name.clone(), TypeKind::Struct);
+                    self.env.predeclare_type_def(
+                        id.name.clone(),
+                        TypeKind::Struct,
+                        Vec::new(),
+                    );
                 }
                 Resolved::RecordDef(_, id, _) => {
-                    self.env
-                        .predeclare_type_def(id.name.clone(), TypeKind::Record);
+                    self.env.predeclare_type_def(
+                        id.name.clone(),
+                        TypeKind::Record,
+                        Vec::new(),
+                    );
                 }
                 Resolved::DeferrorDef(_, id, _, _) => {
-                    self.env
-                        .predeclare_type_def(id.name.clone(), TypeKind::Error);
+                    self.env.predeclare_type_def(
+                        id.name.clone(),
+                        TypeKind::Error,
+                        Vec::new(),
+                    );
                 }
-                Resolved::EnumDef(_, id, _) => {
-                    self.env
-                        .predeclare_type_def(id.name.clone(), TypeKind::Enum);
+                Resolved::EnumDef(_, id, type_params, _) => {
+                    self.env.predeclare_type_def(
+                        id.name.clone(),
+                        TypeKind::Enum,
+                        type_params.iter().map(|param| param.name.clone()).collect(),
+                    );
                 }
                 _ => {}
             }
@@ -465,7 +457,7 @@ impl Checker {
                             hint: None,
                         })?;
                 }
-                Resolved::EnumDef(_, id, variants) => {
+                Resolved::EnumDef(_, id, type_params, variants) => {
                     let _ = self
                         .env
                         .resolve_type_def_signature(&id.name, Vec::new())
@@ -474,7 +466,18 @@ impl Checker {
                             span: id.span.clone(),
                             hint: None,
                         })?;
-                    self.env.bind_var(id.unique_id, Ty::Enum(id.name.clone()));
+                    let mut sig_tyvars = HashMap::new();
+                    let mut enum_ty_args = Vec::new();
+                    for param in type_params {
+                        let ty = self.env.fresh_tyvar();
+                        sig_tyvars.insert(param.name.clone(), ty.clone());
+                        enum_ty_args.push(ty);
+                    }
+
+                    self.env.bind_var(
+                        id.unique_id,
+                        Ty::Enum(id.name.clone(), enum_ty_args.clone()),
+                    );
 
                     let mut next_discriminant = sindr::primitives::int(0);
                     let mut seen_discriminants: HashSet<sindr::primitives::SurtrInt> =
@@ -504,7 +507,11 @@ impl Checker {
                             .payload
                             .iter()
                             .map(|ty| {
-                                self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::General)
+                                self.resolve_signature_ast_ty_in_context(
+                                    ty,
+                                    TypeSyntaxContext::General,
+                                    &mut sig_tyvars,
+                                )
                             })
                             .collect::<Result<Vec<_>, _>>()?;
 
@@ -520,6 +527,7 @@ impl Checker {
                             constructor_name: variant.id.name.clone(),
                             short_name,
                             enum_name: id.name.clone(),
+                            enum_ty: Ty::Enum(id.name.clone(), enum_ty_args.clone()),
                             tag,
                             payload: payload.clone(),
                             discriminant: discriminant.clone(),
@@ -564,7 +572,7 @@ impl Checker {
                         }
                     }
                 }
-                Resolved::EnumDef(_, id, variants) => {
+                Resolved::EnumDef(_, id, _, variants) => {
                     decl_spans.insert(id.name.clone(), id.span.clone());
                     edges.entry(id.name.clone()).or_default();
                     let mut common_refs: Option<HashSet<String>> = None;
@@ -677,7 +685,7 @@ impl Checker {
         let def = self.env.lookup_type_def(type_name)?;
         match def.kind {
             TypeKind::Struct => Some(Ty::Struct(def.name.clone(), def.fields.clone())),
-            TypeKind::Enum => Some(Ty::Enum(def.name.clone())),
+            TypeKind::Enum => Some(Ty::Enum(def.name.clone(), Vec::new())),
             TypeKind::Record | TypeKind::Error => None,
         }
     }
@@ -832,10 +840,15 @@ impl Checker {
                 }
                 Resolved::Def(_, id, params, ret_ty, _, _) => {
                     self.register_function_id(id);
+                    let mut tyvars = HashMap::new();
                     let param_tys = params
                         .iter()
                         .map(|param| {
-                            self.resolve_ast_ty_in_context(&param.ty, TypeSyntaxContext::General)
+                            self.resolve_signature_ast_ty_in_context(
+                                &param.ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            )
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let param_names = params
@@ -843,15 +856,25 @@ impl Checker {
                         .map(|param| param.id.name.clone())
                         .collect::<Vec<_>>();
                     let ret = match ret_ty {
-                        Some(ty) => {
-                            self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::FunctionReturn)?
-                        }
+                        Some(ty) => self.resolve_signature_ast_ty_in_context(
+                            ty,
+                            TypeSyntaxContext::FunctionReturn,
+                            &mut tyvars,
+                        )?,
                         None => Ty::Unit,
                     };
+                    let type_params = tyvars
+                        .values()
+                        .filter_map(|ty| match ty {
+                            Ty::Var(var) => Some(*var),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
                     self.env.bind_var(
                         id.unique_id,
                         Ty::UserFunc {
                             fun_idx,
+                            type_params,
                             params: param_tys,
                             ret: Box::new(ret),
                         },
@@ -875,6 +898,7 @@ impl Checker {
                         id.unique_id,
                         Ty::UserFunc {
                             fun_idx,
+                            type_params: Vec::new(),
                             params: param_tys,
                             ret: Box::new(Ty::Error),
                         },
@@ -906,7 +930,9 @@ impl Checker {
             Resolved::Var(span, id) => {
                 if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
                     let ty = match &stored_ty {
-                        Ty::BuiltinFunc { .. } => self.instantiate_builtin_ty(&stored_ty),
+                        Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
+                            self.instantiate_builtin_ty(&stored_ty)
+                        }
                         _ => self.resolve_ty(&stored_ty),
                     };
                     return Ok(TypedNode {
@@ -916,7 +942,12 @@ impl Checker {
                     });
                 }
 
-                if let Some(variant) = self.env.enum_variant_by_constructor_id(id.unique_id) {
+                if let Some(variant) = self
+                    .env
+                    .enum_variant_by_constructor_id(id.unique_id)
+                    .cloned()
+                {
+                    let variant = self.instantiate_enum_variant(&variant);
                     if !variant.payload.is_empty() {
                         return Err(TypeError {
                             message: format!(
@@ -934,7 +965,7 @@ impl Checker {
                         node: TypedInner::Lit(Lit::Int(variant.discriminant.clone())),
                     };
                     return Ok(TypedNode {
-                        ty: Ty::Enum(variant.enum_name.clone()),
+                        ty: self.resolve_ty(&variant.enum_ty),
                         span: span.clone(),
                         node: TypedInner::ConstructorCall(variant.tag, vec![idx_node]),
                     });
@@ -1043,7 +1074,9 @@ impl Checker {
             // Pass-through for struct/record/error defs and constructor calls — phase 7+
             Resolved::StructDef(span, id, fields) => self.check_struct_def(span, id, fields),
             Resolved::RecordDef(span, id, fields) => self.check_record_def(span, id, fields),
-            Resolved::EnumDef(span, id, variants) => self.check_enum_def(span, id, variants),
+            Resolved::EnumDef(span, id, type_params, variants) => {
+                self.check_enum_def(span, id, type_params, variants)
+            }
             Resolved::StructLit(span, id, field_vals) => {
                 self.check_struct_lit(span, id, field_vals)
             }
@@ -1069,6 +1102,19 @@ impl Checker {
                 self.check_closure(span, params, captures, body, None)
             }
             Resolved::Capture(span, target, args) => self.check_capture(span, target, args),
+        }
+    }
+
+    fn check_node_with_expected(
+        &mut self,
+        node: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        match (node, expected) {
+            (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
+                self.check_closure(span, params, captures, body, Some(expected_ty))
+            }
+            _ => self.check_node(node),
         }
     }
 
@@ -1214,7 +1260,7 @@ impl Checker {
             | Resolved::StructDef(span, _, _)
             | Resolved::RecordDef(span, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
-            | Resolved::EnumDef(span, _, _)
+            | Resolved::EnumDef(span, _, _, _)
             | Resolved::Def(span, _, _, _, _, _)
             | Resolved::BuiltinDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
@@ -1278,7 +1324,7 @@ impl Checker {
                 hint: None,
             })?;
         let ty = match &ty {
-            Ty::BuiltinFunc { .. } => self.instantiate_builtin_ty(&ty),
+            Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => self.instantiate_builtin_ty(&ty),
             _ => self.resolve_ty(&ty),
         };
         Ok(TypedNode {
@@ -1356,14 +1402,6 @@ impl Checker {
         }
 
         let typed_func = self.check_node(func)?;
-        let typed_args: Vec<TypedNode> = args
-            .iter()
-            .map(|arg| match arg {
-                ResolvedRecordLitArg::Positional(expr) => self.check_node(expr),
-                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
         let (params, ret) = match self.resolve_ty(&typed_func.ty) {
             Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
                 (params, ret.as_ref().clone())
@@ -1378,18 +1416,29 @@ impl Checker {
             }
         };
 
-        if params.len() != typed_args.len() + 1 {
+        if params.len() != args.len() + 1 {
             return Err(TypeError {
                 message: format!(
                     "{} injects the left value as the first argument, so the call expects {} explicit argument(s), got {}",
                     op_name,
                     params.len().saturating_sub(1),
-                    typed_args.len()
+                    args.len()
                 ),
                 span: span.clone(),
                 hint: None,
             });
         }
+
+        let typed_args: Vec<TypedNode> = args
+            .iter()
+            .zip(params.iter().skip(1))
+            .map(|(arg, expected)| match arg {
+                ResolvedRecordLitArg::Positional(expr) => {
+                    self.check_node_with_expected(expr, Some(expected))
+                }
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         for (expected, arg) in params.iter().skip(1).zip(&typed_args) {
             if !self.types_compatible(expected, &arg.ty) {
@@ -1611,7 +1660,7 @@ impl Checker {
                         hint: None,
                     });
                 }
-                self.build_list_helper_call("List::flat_map", span, typed_left, typed_right)
+                self.build_list_helper_call("List::_list_flat_map", span, typed_left, typed_right)
             }
             (Ty::Result(_, _), Ty::List(_)) | (Ty::List(_), Ty::Result(_, _)) => Err(TypeError {
                 message: "`|>=` cannot mix Result and List context".into(),
@@ -1707,7 +1756,7 @@ impl Checker {
                     span: span.clone(),
                     node: TypedInner::Compose(
                         ComposeFlavor::ListBind {
-                            helper: self.list_helper_ref_by_name("List::flat_map", span)?,
+                            helper: self.list_helper_ref_by_name("List::_list_flat_map", span)?,
                         },
                         Box::new(typed_left),
                         Box::new(typed_right),
@@ -1772,7 +1821,11 @@ impl Checker {
 
     fn collect_type_ref_names(ast_ty: &AstTy, out: &mut Vec<String>) {
         match ast_ty {
-            AstTy::Named(_, name) => out.push(name.clone()),
+            AstTy::Named(_, name) => {
+                if !name.starts_with('$') {
+                    out.push(name.clone());
+                }
+            }
             AstTy::Generic(_, _, args) => {
                 for arg in args {
                     Self::collect_type_ref_names(arg, out);
@@ -1815,7 +1868,21 @@ impl Checker {
                                 Ok(Ty::Record(def.name.clone(), def.fields.clone()))
                             }
                             crate::env::TypeKind::Error => Ok(Ty::Error),
-                            crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone())),
+                            crate::env::TypeKind::Enum => {
+                                if def.type_params.is_empty() {
+                                    Ok(Ty::Enum(def.name.clone(), Vec::new()))
+                                } else {
+                                    Err(TypeError {
+                                        message: format!(
+                                            "Type {} requires {} type argument(s)",
+                                            other,
+                                            def.type_params.len()
+                                        ),
+                                        span: span.clone(),
+                                        hint: None,
+                                    })
+                                }
+                            }
                         }
                     } else {
                         Err(TypeError {
@@ -1866,11 +1933,37 @@ impl Checker {
                     };
                     Ok(Ty::Result(Box::new(ok), Box::new(err)))
                 }
-                other => Err(TypeError {
-                    message: format!("Unknown generic type: {}", other),
-                    span: span.clone(),
-                    hint: None,
-                }),
+                other => {
+                    let def = self.env.lookup_type_def(other).ok_or_else(|| TypeError {
+                        message: format!("Unknown generic type: {}", other),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                    if def.type_params.len() != args.len() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Type {} requires {} type argument(s), got {}",
+                                other,
+                                def.type_params.len(),
+                                args.len()
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let resolved_args = args
+                        .iter()
+                        .map(|arg| self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    match def.kind {
+                        crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
+                        _ => Err(TypeError {
+                            message: format!("Generic type {} is not supported in this context", other),
+                            span: span.clone(),
+                            hint: None,
+                        }),
+                    }
+                }
             },
             AstTy::Func(_, params, ret) => {
                 let params = params
@@ -1889,6 +1982,135 @@ impl Checker {
         tyvars: &mut HashMap<String, Ty>,
     ) -> Result<Ty, TypeError> {
         self.resolve_builtin_ast_ty_in_context(ast_ty, TypeSyntaxContext::General, tyvars)
+    }
+
+    fn resolve_signature_ast_ty_in_context(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
+        match ast_ty {
+            AstTy::Named(_, name) if name.starts_with('$') => {
+                if context == TypeSyntaxContext::ErrorMarker {
+                    return Err(TypeError {
+                        message:
+                            "The error marker E in Result<T, E> must be a deferror-defined type."
+                                .into(),
+                        span: Self::ast_ty_span(ast_ty).clone(),
+                        hint: None,
+                    });
+                }
+                if let Some(existing) = tyvars.get(name) {
+                    return Ok(existing.clone());
+                }
+                let fresh = self.env.fresh_tyvar();
+                tyvars.insert(name.clone(), fresh.clone());
+                Ok(fresh)
+            }
+            AstTy::Generic(span, name, args) if name == "List" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "List<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::List(Box::new(inner)))
+            }
+            AstTy::Generic(span, name, args) if name == "Result" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(TypeError {
+                        message: "Result<T> or Result<T, E> requires 1 or 2 type arguments"
+                            .into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let ok = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                let err = if args.len() == 2 {
+                    if context != TypeSyntaxContext::FunctionReturn {
+                        return Err(TypeError {
+                            message:
+                                "Result<T, E> is only allowed in function return signatures."
+                                    .into(),
+                            span: span.clone(),
+                            hint: Some("Use Result<T> in local code.".into()),
+                        });
+                    }
+                    self.resolve_signature_ast_ty_in_context(
+                        &args[1],
+                        TypeSyntaxContext::ErrorMarker,
+                        tyvars,
+                    )?
+                } else {
+                    Ty::Error
+                };
+                Ok(Ty::Result(Box::new(ok), Box::new(err)))
+            }
+            AstTy::Generic(span, name, args) => {
+                let def = self.env.lookup_type_def(name).cloned().ok_or_else(|| TypeError {
+                    message: format!("Unknown generic type: {}", name),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+                if def.type_params.len() != args.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Type {} requires {} type argument(s), got {}",
+                            name,
+                            def.type_params.len(),
+                            args.len()
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let resolved_args = args
+                    .iter()
+                    .map(|arg| {
+                        self.resolve_signature_ast_ty_in_context(
+                            arg,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                match def.kind {
+                    crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
+                    _ => Err(TypeError {
+                        message: format!("Generic type {} is not supported in this context", name),
+                        span: span.clone(),
+                        hint: None,
+                    }),
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                let params = params
+                    .iter()
+                    .map(|param| {
+                        self.resolve_signature_ast_ty_in_context(
+                            param,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ret =
+                    self.resolve_signature_ast_ty_in_context(ret, TypeSyntaxContext::General, tyvars)?;
+                Ok(Ty::Func(params, Box::new(ret)))
+            }
+            _ => self.resolve_ast_ty_in_context(ast_ty, context),
+        }
     }
 
     fn resolve_builtin_ast_ty_in_context(
@@ -2055,7 +2277,14 @@ impl Checker {
             }
             (Ty::Struct(n1, _), Ty::Struct(n2, _)) => n1 == n2,
             (Ty::Record(n1, _), Ty::Record(n2, _)) => n1 == n2,
-            (Ty::Enum(n1), Ty::Enum(n2)) => n1 == n2,
+            (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
+                n1 == n2
+                    && args1.len() == args2.len()
+                    && args1
+                        .iter()
+                        .zip(args2.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
             _ => false,
         }
     }
@@ -2094,7 +2323,7 @@ impl Checker {
             Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
                 .iter()
                 .any(|(_, field_ty)| self.ty_contains_var(field_ty, needle)),
-            Ty::Enum(_) => false,
+            Ty::Enum(_, args) => args.iter().any(|arg| self.ty_contains_var(arg, needle)),
             _ => false,
         }
     }
@@ -2117,10 +2346,12 @@ impl Checker {
             },
             Ty::UserFunc {
                 fun_idx,
+                type_params,
                 params,
                 ret,
             } => Ty::UserFunc {
                 fun_idx: *fun_idx,
+                type_params: type_params.clone(),
                 params: params.iter().map(|param| self.resolve_ty(param)).collect(),
                 ret: Box::new(self.resolve_ty(ret)),
             },
@@ -2138,7 +2369,9 @@ impl Checker {
                     .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
                     .collect(),
             ),
-            Ty::Enum(name) => Ty::Enum(name.clone()),
+            Ty::Enum(name, args) => {
+                Ty::Enum(name.clone(), args.iter().map(|arg| self.resolve_ty(arg)).collect())
+            }
             Ty::Result(ok, err) => Ty::Result(
                 Box::new(self.resolve_ty(ok)),
                 Box::new(self.resolve_ty(err)),
@@ -2147,70 +2380,97 @@ impl Checker {
         }
     }
 
-    fn instantiate_builtin_ty(&mut self, ty: &Ty) -> Ty {
-        fn instantiate(checker: &mut Checker, ty: &Ty, fresh: &mut HashMap<u32, Ty>) -> Ty {
-            match ty {
-                Ty::Var(var) => fresh
-                    .entry(*var)
-                    .or_insert_with(|| checker.env.fresh_tyvar())
-                    .clone(),
-                Ty::List(inner) => Ty::List(Box::new(instantiate(checker, inner, fresh))),
-                Ty::Func(params, ret) => Ty::Func(
-                    params
-                        .iter()
-                        .map(|param| instantiate(checker, param, fresh))
-                        .collect(),
-                    Box::new(instantiate(checker, ret, fresh)),
-                ),
-                Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
-                    name: name.clone(),
-                    params: params
-                        .iter()
-                        .map(|param| instantiate(checker, param, fresh))
-                        .collect(),
-                    ret: Box::new(instantiate(checker, ret, fresh)),
-                },
-                Ty::UserFunc {
-                    fun_idx,
-                    params,
-                    ret,
-                } => Ty::UserFunc {
-                    fun_idx: *fun_idx,
-                    params: params
-                        .iter()
-                        .map(|param| instantiate(checker, param, fresh))
-                        .collect(),
-                    ret: Box::new(instantiate(checker, ret, fresh)),
-                },
-                Ty::Struct(name, fields) => Ty::Struct(
-                    name.clone(),
-                    fields
-                        .iter()
-                        .map(|(field, field_ty)| {
-                            (field.clone(), instantiate(checker, field_ty, fresh))
-                        })
-                        .collect(),
-                ),
-                Ty::Record(name, fields) => Ty::Record(
-                    name.clone(),
-                    fields
-                        .iter()
-                        .map(|(field, field_ty)| {
-                            (field.clone(), instantiate(checker, field_ty, fresh))
-                        })
-                        .collect(),
-                ),
-                Ty::Enum(name) => Ty::Enum(name.clone()),
-                Ty::Result(ok, err) => Ty::Result(
-                    Box::new(instantiate(checker, ok, fresh)),
-                    Box::new(instantiate(checker, err, fresh)),
-                ),
-                other => other.clone(),
-            }
+    fn instantiate_ty_with_fresh(&mut self, ty: &Ty, fresh: &mut HashMap<u32, Ty>) -> Ty {
+        match ty {
+            Ty::Var(var) => fresh
+                .entry(*var)
+                .or_insert_with(|| self.env.fresh_tyvar())
+                .clone(),
+            Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
+            Ty::Func(params, ret) => Ty::Func(
+                params
+                    .iter()
+                    .map(|param| self.instantiate_ty_with_fresh(param, fresh))
+                    .collect(),
+                Box::new(self.instantiate_ty_with_fresh(ret, fresh)),
+            ),
+            Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+                name: name.clone(),
+                params: params
+                    .iter()
+                    .map(|param| self.instantiate_ty_with_fresh(param, fresh))
+                    .collect(),
+                ret: Box::new(self.instantiate_ty_with_fresh(ret, fresh)),
+            },
+            Ty::UserFunc {
+                fun_idx,
+                type_params,
+                params,
+                ret,
+            } => Ty::UserFunc {
+                fun_idx: *fun_idx,
+                type_params: type_params.clone(),
+                params: params
+                    .iter()
+                    .map(|param| self.instantiate_ty_with_fresh(param, fresh))
+                    .collect(),
+                ret: Box::new(self.instantiate_ty_with_fresh(ret, fresh)),
+            },
+            Ty::Struct(name, fields) => Ty::Struct(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(field, field_ty)| {
+                        (field.clone(), self.instantiate_ty_with_fresh(field_ty, fresh))
+                    })
+                    .collect(),
+            ),
+            Ty::Record(name, fields) => Ty::Record(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(field, field_ty)| {
+                        (field.clone(), self.instantiate_ty_with_fresh(field_ty, fresh))
+                    })
+                    .collect(),
+            ),
+            Ty::Enum(name, args) => Ty::Enum(
+                name.clone(),
+                args.iter()
+                    .map(|arg| self.instantiate_ty_with_fresh(arg, fresh))
+                    .collect(),
+            ),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.instantiate_ty_with_fresh(ok, fresh)),
+                Box::new(self.instantiate_ty_with_fresh(err, fresh)),
+            ),
+            other => other.clone(),
         }
+    }
 
+    fn instantiate_builtin_ty(&mut self, ty: &Ty) -> Ty {
         let mut fresh = HashMap::new();
-        instantiate(self, ty, &mut fresh)
+        self.instantiate_ty_with_fresh(ty, &mut fresh)
+    }
+
+    fn instantiate_enum_variant(
+        &mut self,
+        variant: &crate::env::EnumVariantInfo,
+    ) -> crate::env::EnumVariantInfo {
+        let mut fresh = HashMap::new();
+        crate::env::EnumVariantInfo {
+            constructor_name: variant.constructor_name.clone(),
+            short_name: variant.short_name.clone(),
+            enum_name: variant.enum_name.clone(),
+            enum_ty: self.instantiate_ty_with_fresh(&variant.enum_ty, &mut fresh),
+            tag: variant.tag,
+            payload: variant
+                .payload
+                .iter()
+                .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
+                .collect(),
+            discriminant: variant.discriminant.clone(),
+        }
     }
 
     fn ty_name(&self, ty: &Ty) -> String {
@@ -2224,7 +2484,21 @@ impl Checker {
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Result(ok, _) => format!("Result<{}>", self.ty_name(ok)),
             Ty::Var(n) => format!("${}", n),
-            Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name) => name.clone(),
+            Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+            Ty::Enum(name, args) => {
+                if args.is_empty() {
+                    name.clone()
+                } else {
+                    format!(
+                        "{}<{}>",
+                        name,
+                        args.iter()
+                            .map(|arg| self.ty_name(arg))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            }
             Ty::Func(params, ret) => format!("{}", {
                 let param_str = params
                     .iter()
@@ -2817,7 +3091,7 @@ impl Checker {
                     span: span.clone(),
                     hint: None,
                 })?;
-                let typed = self.check_node(expr)?;
+                let typed = self.check_node_with_expected(expr, Some(expected_ty))?;
                 if !self.types_compatible(expected_ty, &typed.ty) {
                     return Err(TypeError {
                         message: format!(
@@ -2850,7 +3124,7 @@ impl Checker {
             let ResolvedRecordLitArg::Positional(expr) = arg else {
                 unreachable!("validated argument form above")
             };
-            let typed = self.check_node(expr)?;
+            let typed = self.check_node_with_expected(expr, Some(expected_ty))?;
             if !self.types_compatible(expected_ty, &typed.ty) {
                 return Err(TypeError {
                     message: format!(
@@ -2890,27 +3164,29 @@ impl Checker {
                     });
                 }
 
-                let typed_args: Vec<TypedNode> = args
-                    .iter()
-                    .map(|arg| match arg {
-                        ResolvedRecordLitArg::Positional(expr) => self.check_node(expr),
-                        ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
                 // Check arity
-                if typed_args.len() != params.len() {
+                if args.len() != params.len() {
                     return Err(TypeError {
                         message: format!(
                             "{} expects {} argument(s), got {}",
                             name,
                             params.len(),
-                            typed_args.len()
+                            args.len()
                         ),
                         span: span.clone(),
                         hint: None,
                     });
                 }
+                let typed_args: Vec<TypedNode> = args
+                    .iter()
+                    .zip(params.iter())
+                    .map(|(arg, expected)| match arg {
+                        ResolvedRecordLitArg::Positional(expr) => {
+                            self.check_node_with_expected(expr, Some(expected))
+                        }
+                        ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 // Check arg types (Var = polymorphic, accepts anything)
                 for (param, arg) in params.iter().zip(&typed_args) {
                     if !self.types_compatible(param, &arg.ty) {
@@ -3016,25 +3292,27 @@ impl Checker {
                     });
                 }
 
-                let typed_args: Vec<TypedNode> = args
-                    .iter()
-                    .map(|arg| match arg {
-                        ResolvedRecordLitArg::Positional(expr) => self.check_node(expr),
-                        ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                if typed_args.len() != params.len() {
+                if args.len() != params.len() {
                     return Err(TypeError {
                         message: format!(
                             "function expects {} argument(s), got {}",
                             params.len(),
-                            typed_args.len()
+                            args.len()
                         ),
                         span: span.clone(),
                         hint: None,
                     });
                 }
+                let typed_args: Vec<TypedNode> = args
+                    .iter()
+                    .zip(params.iter())
+                    .map(|(arg, expected)| match arg {
+                        ResolvedRecordLitArg::Positional(expr) => {
+                            self.check_node_with_expected(expr, Some(expected))
+                        }
+                        ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 for (param, arg) in params.iter().zip(&typed_args) {
                     if !self.types_compatible(param, &arg.ty) {
                         return Err(TypeError {
@@ -3178,11 +3456,6 @@ impl Checker {
         args: &[Resolved],
     ) -> Result<TypedNode, TypeError> {
         let typed_target = self.check_node(target)?;
-        let typed_args: Vec<TypedNode> = args
-            .iter()
-            .map(|a| self.check_node(a))
-            .collect::<Result<Vec<_>, _>>()?;
-
         let target_ty = self.resolve_ty(&typed_target.ty);
         let (params, ret) = match &target_ty {
             Ty::BuiltinFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
@@ -3197,17 +3470,23 @@ impl Checker {
             }
         };
 
-        if typed_args.len() > params.len() {
+        if args.len() > params.len() {
             return Err(TypeError {
                 message: format!(
                     "partial application expects at most {} argument(s), got {}",
                     params.len(),
-                    typed_args.len()
+                    args.len()
                 ),
                 span: span.clone(),
                 hint: None,
             });
         }
+
+        let typed_args: Vec<TypedNode> = args
+            .iter()
+            .zip(params.iter())
+            .map(|(arg, expected)| self.check_node_with_expected(arg, Some(expected)))
+            .collect::<Result<Vec<_>, _>>()?;
 
         for (param, arg) in params.iter().zip(&typed_args) {
             if !self.types_compatible(param, &arg.ty) {
@@ -3297,7 +3576,7 @@ impl Checker {
                 (Ty::Int, Ty::Int)
                 | (Ty::Str, Ty::Str)
                 | (Ty::Bool, Ty::Bool)
-                | (Ty::Enum(_), Ty::Enum(_)) => {
+                | (Ty::Enum(_, _), Ty::Enum(_, _)) => {
                     if self.types_compatible(&lt, &rt) {
                         Ok(Ty::Bool)
                     } else {
@@ -3657,7 +3936,7 @@ impl Checker {
                     })
                 }
             }
-            Ty::Enum(enum_name) => {
+            Ty::Enum(enum_name, _) => {
                 let variants = self
                     .env
                     .enum_variants_of(enum_name)
@@ -3852,7 +4131,7 @@ impl Checker {
                     });
                 }
 
-                let Ty::Enum(expected_enum_name) = expected_ty else {
+                let Ty::Enum(expected_enum_name, _) = expected_ty else {
                     return Err(TypeError {
                         message: "Constructor pattern on non-enum/non-Result scrutinee".into(),
                         span: ctor_id.span.clone(),
@@ -3868,11 +4147,23 @@ impl Checker {
                         hint: None,
                     })?
                     .clone();
+                let variant = self.instantiate_enum_variant(&variant);
                 if &variant.enum_name != expected_enum_name {
                     return Err(TypeError {
                         message: format!(
                             "Constructor {} does not belong to enum {}",
                             ctor_id.name, expected_enum_name
+                        ),
+                        span: ctor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+                if !self.types_compatible(&variant.enum_ty, expected_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Constructor {} does not match expected type {}",
+                            ctor_id.name,
+                            self.ty_name(expected_ty)
                         ),
                         span: ctor_id.span.clone(),
                         hint: None,
@@ -3892,7 +4183,8 @@ impl Checker {
                 }
                 let mut typed_fields = Vec::new();
                 for (pat, field_ty) in inner_pats.iter().zip(variant.payload.iter()) {
-                    typed_fields.push(self.check_match_subpattern(pat, field_ty)?);
+                    let resolved_field_ty = self.resolve_ty(field_ty);
+                    typed_fields.push(self.check_match_subpattern(pat, &resolved_field_ty)?);
                 }
                 Ok(TypedMatchPattern::Constructor {
                     tag: variant.tag,
@@ -4315,9 +4607,14 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let mut fun_env = self.env.clone();
         let mut typed_params = Vec::new();
+        let mut tyvars = HashMap::new();
 
         for param in params {
-            let param_ty = self.resolve_ast_ty_in_context(&param.ty, TypeSyntaxContext::General)?;
+            let param_ty = self.resolve_signature_ast_ty_in_context(
+                &param.ty,
+                TypeSyntaxContext::General,
+                &mut tyvars,
+            )?;
             fun_env.bind_var(param.id.unique_id, param_ty.clone());
             typed_params.push(TypedFunParam {
                 id: param.id.clone(),
@@ -4326,7 +4623,11 @@ impl Checker {
         }
 
         let expected_ret = match ret_ty {
-            Some(ty) => self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::FunctionReturn)?,
+            Some(ty) => self.resolve_signature_ast_ty_in_context(
+                ty,
+                TypeSyntaxContext::FunctionReturn,
+                &mut tyvars,
+            )?,
             None => Ty::Unit,
         };
 
@@ -4488,6 +4789,7 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
+        _type_params: &[ResolvedTypeParam],
         variants: &[ResolvedEnumVariant],
     ) -> Result<TypedNode, TypeError> {
         let enum_variants = self
@@ -4850,6 +5152,7 @@ impl Checker {
             .enum_variant_by_constructor_id(id.unique_id)
             .cloned()
         {
+            let variant = self.instantiate_enum_variant(&variant);
             if args.len() != variant.payload.len() {
                 return Err(TypeError {
                     message: format!(
@@ -4898,7 +5201,7 @@ impl Checker {
             fields.extend(payload_values);
 
             return Ok(TypedNode {
-                ty: Ty::Enum(variant.enum_name),
+                ty: self.resolve_ty(&variant.enum_ty),
                 span: span.clone(),
                 node: TypedInner::ConstructorCall(variant.tag, fields),
             });
@@ -5177,6 +5480,7 @@ impl Checker {
             id.unique_id,
             Ty::UserFunc {
                 fun_idx,
+                type_params: Vec::new(),
                 params: typed_params.iter().map(|p| p.ty.clone()).collect(),
                 ret: Box::new(Ty::Error),
             },

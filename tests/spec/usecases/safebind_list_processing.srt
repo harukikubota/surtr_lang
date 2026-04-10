@@ -10,9 +10,13 @@ def show(n: Int) -> String {
   "#" ++ to_string(n)
 }
 
+def singleton(n: Int) -> List<Int> {
+  [n]
+}
+
 nums =? parse_csv("1,2,3")
 [head, ..tail] =? nums
 
 print(to_string(head))
 print(to_string(tail |>= expand()))
-print(to_string((head |> List::wrap()) |*> show()))
+print(to_string((head |> singleton()) |*> show()))
