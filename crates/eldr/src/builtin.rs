@@ -3,7 +3,7 @@ use crate::value::Value;
 use crate::vm::VM;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
 use sindr::primitives::{ToPrimitive, Zero};
-use sindr::runtime::{Location, RichError};
+use sindr::runtime::{ListHandle, Location, RichError};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -37,6 +37,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl { func: builtin_shl },
     BuiltinImpl { func: builtin_shr },
+    BuiltinImpl { func: builtin_list_wrap },
+    BuiltinImpl { func: builtin_list_map },
+    BuiltinImpl {
+        func: builtin_list_flat_map,
+    },
 ];
 
 const _: () = {
@@ -203,6 +208,52 @@ fn builtin_shr(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     })?;
     let shifted = value >> amount;
     Ok(Value::Int(shifted))
+}
+
+fn builtin_list_wrap(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Ok(Value::List(ListHandle::from_items(vec![args[0].clone()])))
+}
+
+fn builtin_list_map(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new("List::map expects List as first argument"));
+    };
+    let Value::Callable(callable) = &args[1] else {
+        return Err(RuntimeError::new(
+            "List::map expects a callable as second argument",
+        ));
+    };
+
+    let mut items = Vec::with_capacity(list.len);
+    for item in list.iter() {
+        items.push(vm.invoke_callable(callable.clone(), vec![item])?);
+    }
+    Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_list_flat_map(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new(
+            "List::flat_map expects List as first argument",
+        ));
+    };
+    let Value::Callable(callable) = &args[1] else {
+        return Err(RuntimeError::new(
+            "List::flat_map expects a callable as second argument",
+        ));
+    };
+
+    let mut items = Vec::new();
+    for item in list.iter() {
+        let mapped = vm.invoke_callable(callable.clone(), vec![item])?;
+        let Value::List(mapped_list) = mapped else {
+            return Err(RuntimeError::new(
+                "List::flat_map callback must return List",
+            ));
+        };
+        items.extend(mapped_list.iter());
+    }
+    Ok(Value::List(ListHandle::from_items(items)))
 }
 
 pub fn inspect_value(vm: &VM, value: &Value) -> String {

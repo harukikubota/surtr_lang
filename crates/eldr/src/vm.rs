@@ -209,6 +209,70 @@ impl VM {
         &self.bytecode.type_registry
     }
 
+    pub(crate) fn invoke_callable(
+        &mut self,
+        callable: Callable,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        let mut full_args = callable.lexical_captures;
+        full_args.extend(callable.partial_args);
+        full_args.extend(args);
+        let call_site = self.frames.last().and_then(|frame| frame.call_site);
+
+        match callable.target {
+            CallableTarget::Builtin(builtin_id) => {
+                self.with_call_site(call_site, |vm| call_builtin(vm, builtin_id, full_args))
+            }
+            CallableTarget::Function(fun_idx) => {
+                let entry = self.function_entry(fun_idx)?.clone();
+                if entry.arity as usize != full_args.len() {
+                    return Err(RuntimeError::new(format!(
+                        "Call arity mismatch for function {}: expected {}, got {}",
+                        fun_idx,
+                        entry.arity,
+                        full_args.len()
+                    )));
+                }
+                if entry.entry_pc as usize >= self.bytecode.opcodes.len() {
+                    return Err(RuntimeError::new(format!(
+                        "Function {} entry_pc out of bounds: {}",
+                        fun_idx, entry.entry_pc
+                    )));
+                }
+
+                let locals = Self::build_locals_for_call(&entry, full_args)?;
+                let stack_base = self.stack.len();
+                let previous_depth = self.frames.len();
+                self.frames.push(CallFrame {
+                    return_pc: 0,
+                    stack_base,
+                    call_site,
+                    locals,
+                });
+
+                let mut pc = entry.entry_pc as usize;
+                while self.frames.len() > previous_depth {
+                    if pc >= self.bytecode.opcodes.len() {
+                        return Err(RuntimeError::new("PC out of bounds during builtin callable"));
+                    }
+                    let op = self.bytecode.opcodes[pc].clone();
+                    let mut next_pc = pc + 1;
+                    let halted = self
+                        .execute_opcode(op.clone(), &mut next_pc)
+                        .map_err(|err| self.enrich_runtime_error(err, pc, &op))?;
+                    if halted {
+                        return Err(RuntimeError::new(
+                            "Callable invoked from builtin halted unexpectedly",
+                        ));
+                    }
+                    pc = next_pc;
+                }
+
+                self.pop_stack()
+            }
+        }
+    }
+
     /// Read-only access to the accumulated bytecode.
     pub fn bytecode(&self) -> &Bytecode {
         &self.bytecode

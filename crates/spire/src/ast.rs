@@ -189,6 +189,21 @@ pub enum Ast {
     /// Binary operation: `a + b`, `x == y`
     BinOp(Span, BinOp, Box<Ast>, Box<Ast>),
 
+    /// Value pipe: `value |> f`
+    Pipe(Span, Box<Ast>, Box<Ast>),
+
+    /// Context-preserving map: `value |*> f`
+    ContextMap(Span, Box<Ast>, Box<Ast>),
+
+    /// Context-preserving bind: `value |>= f`
+    ContextBind(Span, Box<Ast>, Box<Ast>),
+
+    /// Plain function composition: `f >> g`
+    Compose(Span, Box<Ast>, Box<Ast>),
+
+    /// Kleisli composition: `f |=> g`
+    KleisliCompose(Span, Box<Ast>, Box<Ast>),
+
     /// Empty list literal: `[]`
     ListNil(Span),
 

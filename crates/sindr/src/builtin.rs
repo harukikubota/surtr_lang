@@ -77,6 +77,24 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "(Int, Int) -> Int",
     },
+    BuiltinMeta {
+        name: "wrap",
+        builtin_id: 9,
+        arity: 1,
+        sig_str: "($A) -> List<$A>",
+    },
+    BuiltinMeta {
+        name: "map",
+        builtin_id: 10,
+        arity: 2,
+        sig_str: "(List<$A>, ($A -> $B)) -> List<$B>",
+    },
+    BuiltinMeta {
+        name: "flat_map",
+        builtin_id: 11,
+        arity: 2,
+        sig_str: "(List<$A>, ($A -> List<$B>)) -> List<$B>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

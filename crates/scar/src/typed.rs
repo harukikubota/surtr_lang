@@ -12,6 +12,21 @@ pub struct TypedNode {
     pub node: TypedInner,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListHelperRef {
+    Builtin(u16),
+    User(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComposeFlavor {
+    Plain,
+    ResultMap,
+    ResultBind,
+    ListMap { helper: ListHelperRef },
+    ListBind { helper: ListHelperRef },
+}
+
 /// Inner structure of a typed node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedInner {
@@ -22,6 +37,10 @@ pub enum TypedInner {
     Bind(TypedPattern, Box<TypedNode>),
     SafeBind(TypedPattern, Box<TypedNode>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
+    Pipe(Box<TypedNode>, Box<TypedNode>),
+    ResultMap(Box<TypedNode>, Box<TypedNode>),
+    ResultBind(Box<TypedNode>, Box<TypedNode>),
+    Compose(ComposeFlavor, Box<TypedNode>, Box<TypedNode>),
     ListNil,
     ListCons(Box<TypedNode>, Box<TypedNode>),
     ListLiteral(Vec<TypedNode>),

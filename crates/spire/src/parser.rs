@@ -340,6 +340,40 @@ impl Parser {
         }
     }
 
+    fn expect_type_gt(&mut self) -> Result<Span, ParseError> {
+        let sp = self.peek_span();
+        match self.peek() {
+            Token::Gt => {
+                self.advance();
+                Ok(sp)
+            }
+            Token::Compose => {
+                let composed = self.advance().span.clone();
+                let first = Span {
+                    start: composed.start,
+                    end: composed.start + 1,
+                };
+                let second = Span {
+                    start: composed.start + 1,
+                    end: composed.end,
+                };
+                self.tokens.insert(
+                    self.pos,
+                    Spanned {
+                        token: Token::Gt,
+                        span: second,
+                    },
+                );
+                Ok(first)
+            }
+            Token::Eof => Err(ParseError::incomplete(">", sp)),
+            other => Err(ParseError::syntax(
+                format!("Expected Gt, got {:?}", other),
+                sp,
+            )),
+        }
+    }
+
     fn expect_ident(&mut self) -> Result<(Symbol, Span), ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
@@ -905,7 +939,36 @@ impl Parser {
     // ── Expression (entry point — handles binding at top level) ──
 
     fn parse_expr(&mut self) -> Result<Ast, ParseError> {
-        self.parse_binop_expr(0)
+        self.parse_flow_expr()
+    }
+
+    fn parse_flow_expr(&mut self) -> Result<Ast, ParseError> {
+        let mut left = self.parse_binop_expr(0)?;
+        loop {
+            let next = match self.peek() {
+                Token::PipeApply => 0,
+                Token::PipeMap => 1,
+                Token::PipeBind => 2,
+                Token::Compose => 3,
+                Token::PipeCompose => 4,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_binop_expr(0)?;
+            let span = Span {
+                start: left.span().start,
+                end: right.span().end,
+            };
+            left = match next {
+                0 => Ast::Pipe(span, Box::new(left), Box::new(right)),
+                1 => Ast::ContextMap(span, Box::new(left), Box::new(right)),
+                2 => Ast::ContextBind(span, Box::new(left), Box::new(right)),
+                3 => Ast::Compose(span, Box::new(left), Box::new(right)),
+                4 => Ast::KleisliCompose(span, Box::new(left), Box::new(right)),
+                _ => unreachable!("validated flow token"),
+            };
+        }
+        Ok(left)
     }
 
     fn parse_pattern_bind_stmt(&mut self) -> Result<Ast, ParseError> {
@@ -1862,7 +1925,7 @@ impl Parser {
                 args.push(self.parse_type_in_impl_context(impl_target.clone())?);
                 self.skip_newlines();
             }
-            let end = self.expect(&Token::Gt)?;
+            let end = self.expect_type_gt()?;
             return Ok(AstTy::Generic(
                 Span {
                     start: sp.start,
@@ -1947,23 +2010,17 @@ impl Parser {
     fn parse_capture_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
         self.expect(&Token::Amp)?;
         let (name, name_span) = self.expect_ident()?;
-        let is_uppercase = name
-            .chars()
-            .next()
-            .map(|c| c.is_uppercase())
-            .unwrap_or(false);
-        if is_uppercase {
-            return Err(ParseError::syntax(
-                "Constructor capture is not supported; use a lambda instead",
-                Span {
-                    start: sp.start,
-                    end: name_span.end,
-                },
-            ));
+        let mut path_segments = vec![name.clone()];
+        let mut path_end = name_span.end;
+        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+            self.consume_path_separator()?;
+            let (seg, seg_span) = self.expect_ident()?;
+            path_end = seg_span.end;
+            path_segments.push(seg);
         }
 
         let mut parsed_args = Vec::new();
-        let mut end = name_span.end;
+        let mut end = path_end;
         if matches!(self.peek(), Token::LParen) {
             self.advance();
             self.skip_newlines();
@@ -1999,12 +2056,30 @@ impl Parser {
             }
         }
 
+        let target = if path_segments.len() == 1 {
+            Ast::Var(name_span, name)
+        } else {
+            Ast::Path(
+                Span {
+                    start: name_span.start,
+                    end: path_end,
+                },
+                AstPath {
+                    span: Span {
+                        start: name_span.start,
+                        end: path_end,
+                    },
+                    segments: path_segments,
+                },
+            )
+        };
+
         Ok(Ast::Capture(
             Span {
                 start: sp.start,
                 end,
             },
-            Box::new(Ast::Var(name_span, name)),
+            Box::new(target),
             args,
         ))
     }
@@ -3075,6 +3150,31 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*left, delta)),
             Box::new(shift_ast_span(*right, delta)),
         ),
+        Ast::Pipe(span, left, right) => Ast::Pipe(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::ContextMap(span, left, right) => Ast::ContextMap(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::ContextBind(span, left, right) => Ast::ContextBind(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::Compose(span, left, right) => Ast::Compose(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::KleisliCompose(span, left, right) => Ast::KleisliCompose(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
         Ast::ListNil(span) => Ast::ListNil(shift_span(span, delta)),
         Ast::ListCons(span, head, tail) => Ast::ListCons(
             shift_span(span, delta),
@@ -3270,6 +3370,11 @@ impl Ast {
             | Ast::Bind(s, _, _)
             | Ast::SafeBind(s, _, _)
             | Ast::BinOp(s, _, _, _)
+            | Ast::Pipe(s, _, _)
+            | Ast::ContextMap(s, _, _)
+            | Ast::ContextBind(s, _, _)
+            | Ast::Compose(s, _, _)
+            | Ast::KleisliCompose(s, _, _)
             | Ast::ListNil(s)
             | Ast::ListCons(s, _, _)
             | Ast::ListLiteral(s, _)
@@ -4029,6 +4134,54 @@ Construct the error branch.
     }
 
     #[test]
+    fn test_qualified_capture_and_flow_parse() {
+        let ast = parse("reader = &User::get_name\nout = value |> trim() |*> normalize()").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Ast::Capture(_, target, args)
+                    if args.is_empty() && matches!(target.as_ref(), Ast::Path(_, path) if path.segments == vec!["User".to_string(), "get_name".to_string()])));
+            }
+            _ => panic!("Expected qualified capture"),
+        }
+        match &ast[1] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::ContextMap(_, left, _) => {
+                    assert!(matches!(left.as_ref(), Ast::Pipe(_, _, _)));
+                }
+                other => panic!("Expected left-associative flow parse, got {:?}", other),
+            },
+            _ => panic!("Expected bind"),
+        }
+    }
+
+    #[test]
+    fn test_nested_generic_type_closes_without_confusing_compose() {
+        let ast = parse("value: Result<List<Int>> = Ok([])").expect("nested generic type should parse");
+        match &ast[0] {
+            Ast::Bind(
+                _,
+                AstPattern::Annotated(_, _, AstTy::Generic(_, name, outer_args)),
+                rhs,
+            ) => {
+                assert_eq!(name, "Result");
+                assert_eq!(outer_args.len(), 1);
+                assert!(matches!(
+                    &outer_args[0],
+                    AstTy::Generic(_, inner_name, inner_args)
+                        if inner_name == "List"
+                            && inner_args.len() == 1
+                            && matches!(&inner_args[0], AstTy::Named(_, ty) if ty == "Int")
+                ));
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Ast::ConstructorCall(_, ctor, args) if ctor == "Ok" && args.len() == 1
+                ));
+            }
+            other => panic!("Expected annotated Result<List<Int>> bind, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_closure_body_accepts_semicolon_separated_statements() {
         let ast = parse("fun = {|num| x = x + 5;x+num}").unwrap();
         match &ast[0] {
@@ -4621,9 +4774,14 @@ y = KeyInput::Arrow(Direction::Down)"#,
     }
 
     #[test]
-    fn test_constructor_capture_is_rejected() {
-        let err = parse("f = &Some").expect_err("Expected parse error");
-        assert!(err.message().contains("use a lambda instead"));
+    fn test_constructor_like_capture_parses_and_is_left_for_later_validation() {
+        let ast = parse("f = &Some").expect("constructor-like capture should parse");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Bind(_, _, rhs)]
+                if matches!(rhs.as_ref(), Ast::Capture(_, target, args)
+                    if args.is_empty() && matches!(target.as_ref(), Ast::Var(_, name) if name == "Some"))
+        ));
     }
 
     #[test]

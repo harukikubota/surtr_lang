@@ -1156,6 +1156,168 @@ match ok_val {
         );
     }
 
+    #[test]
+    fn pipe_accepts_capture_and_callable_marker() {
+        assert_output(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+print(to_string(4 |> &inc))
+print(to_string(4 |> inc()))"#,
+            &["5", "5"],
+        );
+    }
+
+    #[test]
+    fn pipe_accepts_qualified_capture_and_callable_marker() {
+        assert_output(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def get_name(self) -> String {
+    self.name
+  }
+}
+
+user = User("alice", 30)
+print(user |> &User::get_name)
+print(user |> User::get_name())"#,
+            &["alice", "alice"],
+        );
+    }
+
+    #[test]
+    fn result_pipeline_map_and_bind_work() {
+        assert_output(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+def check(x: Int) -> Result<Int> {
+  Ok(x + 10)
+}
+
+mapped: Result<Int> = Ok(1) |*> inc()
+bound: Result<Int> = Ok(1) |>= check()
+
+match mapped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped err"),
+}
+
+match bound {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("bound err"),
+}"#,
+            &["2", "11"],
+        );
+    }
+
+    #[test]
+    fn list_pipeline_helpers_and_compose_work() {
+        assert_output(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+def dup(x: Int) -> List<Int> {
+  [x, x + 10]
+}
+
+nums: List<Int> = [1, 2, 3]
+expand = &List::wrap |=> &dup
+
+print(to_string(List::wrap(5)))
+print(to_string(nums |*> inc()))
+print(to_string(nums |>= dup()))
+print(to_string(expand(2)))"#,
+            &["[5]", "[2, 3, 4]", "[1, 11, 2, 12, 3, 13]", "[2, 12]"],
+        );
+    }
+
+    #[test]
+    fn kleisli_compose_builds_callable() {
+        assert_output(
+            r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x + 2))
+}
+
+pipeline1 = &parse |=> &render
+pipeline2 = parse() |=> render()
+
+match pipeline1("x") {
+  Ok(v) => print(v),
+  Err(e) => print("err1"),
+}
+
+match pipeline2("y") {
+  Ok(v) => print(v),
+  Err(e) => print("err2"),
+}"#,
+            &["3", "3"],
+        );
+    }
+
+    #[test]
+    fn flow_operators_reject_naked_function_refs() {
+        assert_compile_error(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+value = 1 |> inc"#,
+            "requires an explicit callable",
+        );
+
+        assert_compile_error(
+            r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+pipeline = parse |=> render"#,
+            "requires an explicit callable",
+        );
+    }
+
+    #[test]
+    fn flow_operators_reject_context_mismatch_and_monadic_map_rhs() {
+        assert_compile_error(
+            r#"def lift(x: Int) -> Result<Int> {
+  Ok(x + 1)
+}
+
+value: Result<Int> = Ok(1)
+bad = value |*> lift()"#,
+            "expects a plain function on the right-hand side",
+        );
+
+        assert_compile_error(
+            r#"def expand(x: Int) -> List<Int> {
+  [x]
+}
+
+value: Result<Int> = Ok(1)
+bad = value |>= expand()"#,
+            "cannot mix Result and List context",
+        );
+    }
+
     // Language goal
 
     #[test]

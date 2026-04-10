@@ -1503,6 +1503,36 @@ impl Resolver {
                 Ok(Resolved::BinOp(span, op, Box::new(l), Box::new(r)))
             }
 
+            Ast::Pipe(span, left, right) => {
+                let l = self.resolve_node(*left)?;
+                let r = self.resolve_node(*right)?;
+                Ok(Resolved::Pipe(span, Box::new(l), Box::new(r)))
+            }
+
+            Ast::ContextMap(span, left, right) => {
+                let l = self.resolve_node(*left)?;
+                let r = self.resolve_node(*right)?;
+                Ok(Resolved::ContextMap(span, Box::new(l), Box::new(r)))
+            }
+
+            Ast::ContextBind(span, left, right) => {
+                let l = self.resolve_node(*left)?;
+                let r = self.resolve_node(*right)?;
+                Ok(Resolved::ContextBind(span, Box::new(l), Box::new(r)))
+            }
+
+            Ast::Compose(span, left, right) => {
+                let l = self.resolve_node(*left)?;
+                let r = self.resolve_node(*right)?;
+                Ok(Resolved::Compose(span, Box::new(l), Box::new(r)))
+            }
+
+            Ast::KleisliCompose(span, left, right) => {
+                let l = self.resolve_node(*left)?;
+                let r = self.resolve_node(*right)?;
+                Ok(Resolved::KleisliCompose(span, Box::new(l), Box::new(r)))
+            }
+
             Ast::ListNil(span) => Ok(Resolved::ListNil(span)),
 
             Ast::ListCons(span, head, tail) => {
@@ -2163,6 +2193,14 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_bind_pattern_bindings(pat, bound);
         }
         Resolved::BinOp(_, _, left, right) => {
+            collect_captures_inner(left, bound, free);
+            collect_captures_inner(right, bound, free);
+        }
+        Resolved::Pipe(_, left, right)
+        | Resolved::ContextMap(_, left, right)
+        | Resolved::ContextBind(_, left, right)
+        | Resolved::Compose(_, left, right)
+        | Resolved::KleisliCompose(_, left, right) => {
             collect_captures_inner(left, bound, free);
             collect_captures_inner(right, bound, free);
         }

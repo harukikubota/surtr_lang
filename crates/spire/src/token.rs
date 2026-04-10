@@ -57,6 +57,11 @@ pub enum Token {
     Arrow,     // ->
     Semicolon, // ;
     Pipe,      // |
+    PipeApply, // |>
+    PipeMap,   // |*>
+    PipeBind,  // |>=
+    PipeCompose, // |=>
+    Compose,   // >>
     Amp,       // &
     Dollar,    // $
 

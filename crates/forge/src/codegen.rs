@@ -456,12 +456,20 @@ struct PendingClosure {
     body: Box<TypedNode>,
 }
 
+#[derive(Debug, Clone)]
+struct PendingCompose {
+    fun_idx: u32,
+    flavor: ComposeFlavor,
+    span: Span,
+}
+
 struct Codegen {
     ir: Vec<IrOp>,
     state: CodegenState,
     next_label: u32,
     label_positions: HashMap<Label, usize>, // label → IR index it points to
     pending_closures: Vec<PendingClosure>,
+    pending_composes: Vec<PendingCompose>,
     in_function: bool,
     top_level_returns_result: bool,
     constant_dedup_start: usize,
@@ -479,6 +487,7 @@ impl Codegen {
             next_label: 0,
             label_positions: HashMap::new(),
             pending_closures: Vec::new(),
+            pending_composes: Vec::new(),
             in_function: false,
             top_level_returns_result: false,
             constant_dedup_start: 0,
@@ -610,6 +619,151 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_compose_function(
+        &mut self,
+        fun_idx: u32,
+        flavor: &ComposeFlavor,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        let saved_slot_map = self.state.slot_map.clone();
+        let saved_next_slot = self.state.next_slot;
+
+        self.state.slot_map = HashMap::new();
+        self.state.next_slot = 3;
+
+        let lhs_slot = 0u32;
+        let rhs_slot = 1u32;
+        let input_slot = 2u32;
+        let entry_pc = self.current_pos() as u32;
+        let prev_in_function = self.in_function;
+        self.in_function = true;
+
+        match flavor {
+            ComposeFlavor::Plain => {
+                self.emit(Opcode::LoadLocal(rhs_slot));
+                self.emit(Opcode::LoadLocal(lhs_slot));
+                self.emit(Opcode::LoadLocal(input_slot));
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                self.emit(Opcode::Return);
+            }
+            ComposeFlavor::ResultMap | ComposeFlavor::ResultBind => {
+                self.emit(Opcode::LoadLocal(lhs_slot));
+                self.emit(Opcode::LoadLocal(input_slot));
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                let result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(result_slot));
+
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetTag);
+                let err_tag = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(err_tag));
+                self.emit(Opcode::EqTag);
+
+                let ok_path = self.fresh_label();
+                self.emit_jump_if_false(ok_path);
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::Return);
+
+                self.patch_label(ok_path);
+                match flavor {
+                    ComposeFlavor::ResultMap => {
+                        let ok_tag = self.add_constant(Constant::Tag(0));
+                        self.emit(Opcode::LoadConst(ok_tag));
+                        self.emit(Opcode::LoadLocal(rhs_slot));
+                        self.emit(Opcode::LoadLocal(result_slot));
+                        self.emit(Opcode::GetField { field_index: 0 });
+                        self.emit(Opcode::CallClosure {
+                            arity: 1,
+                            span_start: span.start as u32,
+                            span_end: span.end as u32,
+                        });
+                        self.emit(Opcode::StructNew { field_count: 1 });
+                        self.emit(Opcode::Return);
+                    }
+                    ComposeFlavor::ResultBind => {
+                        self.emit(Opcode::LoadLocal(rhs_slot));
+                        self.emit(Opcode::LoadLocal(result_slot));
+                        self.emit(Opcode::GetField { field_index: 0 });
+                        self.emit(Opcode::CallClosure {
+                            arity: 1,
+                            span_start: span.start as u32,
+                            span_end: span.end as u32,
+                        });
+                        self.emit(Opcode::Return);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            ComposeFlavor::ListMap { helper } | ComposeFlavor::ListBind { helper } => {
+                self.emit(Opcode::LoadLocal(lhs_slot));
+                self.emit(Opcode::LoadLocal(input_slot));
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                self.emit(Opcode::LoadLocal(rhs_slot));
+                match helper {
+                    ListHelperRef::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {
+                        builtin_id: *builtin_id,
+                        arity: 2,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    }),
+                    ListHelperRef::User(fun_idx) => self.emit(Opcode::Call {
+                        fun_idx: *fun_idx,
+                        arity: 2,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    }),
+                }
+                self.emit(Opcode::Return);
+            }
+        }
+
+        self.in_function = prev_in_function;
+        self.state.functions.push(FunctionEntry {
+            fun_idx,
+            entry_pc,
+            num_locals: self.state.next_slot,
+            arity: 3,
+            qualified_name: None,
+        });
+
+        self.state.slot_map = saved_slot_map;
+        self.state.next_slot = saved_next_slot;
+        Ok(())
+    }
+
+    fn emit_pending_callables(&mut self) -> Result<(), CodegenError> {
+        while !self.pending_closures.is_empty() || !self.pending_composes.is_empty() {
+            if !self.pending_closures.is_empty() {
+                self.emit_pending_closures()?;
+            }
+            if !self.pending_composes.is_empty() {
+                let pending = std::mem::take(&mut self.pending_composes);
+                for compose in pending {
+                    self.emit_compose_function(compose.fun_idx, &compose.flavor, &compose.span)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn add_constant(&mut self, c: Constant) -> u32 {
         // Check for existing identical constant
         for (i, existing) in self
@@ -730,7 +884,7 @@ impl Codegen {
             }
         }
 
-        self.emit_pending_closures()?;
+        self.emit_pending_callables()?;
         self.normalize_function_table()?;
 
         Ok(())
@@ -908,6 +1062,94 @@ impl Codegen {
                     let opcode = self.binop_to_opcode(op, &left.ty)?;
                     self.emit(opcode);
                 }
+            }
+
+            TypedInner::Pipe(left, right) => {
+                self.emit_callable_ref(right)?;
+                self.emit_node(left)?;
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
+
+            TypedInner::ResultMap(left, right) => {
+                self.emit_node(left)?;
+                let result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(result_slot));
+
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetTag);
+                let err_tag = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(err_tag));
+                self.emit(Opcode::EqTag);
+
+                let ok_path = self.fresh_label();
+                let end_label = self.fresh_label();
+                self.emit_jump_if_false(ok_path);
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit_jump(end_label);
+
+                self.patch_label(ok_path);
+                let ok_tag = self.add_constant(Constant::Tag(0));
+                self.emit(Opcode::LoadConst(ok_tag));
+                self.emit_callable_ref(right)?;
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetField { field_index: 0 });
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+                self.emit(Opcode::StructNew { field_count: 1 });
+
+                self.patch_label(end_label);
+            }
+
+            TypedInner::ResultBind(left, right) => {
+                self.emit_node(left)?;
+                let result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(result_slot));
+
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetTag);
+                let err_tag = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(err_tag));
+                self.emit(Opcode::EqTag);
+
+                let ok_path = self.fresh_label();
+                let end_label = self.fresh_label();
+                self.emit_jump_if_false(ok_path);
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit_jump(end_label);
+
+                self.patch_label(ok_path);
+                self.emit_callable_ref(right)?;
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetField { field_index: 0 });
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+
+                self.patch_label(end_label);
+            }
+
+            TypedInner::Compose(flavor, left, right) => {
+                let fun_idx = self.reserve_fun_idx();
+                self.pending_composes.push(PendingCompose {
+                    fun_idx,
+                    flavor: flavor.clone(),
+                    span: node.span.clone(),
+                });
+                self.emit(Opcode::LoadFunctionRef(fun_idx));
+                self.emit_callable_ref(left)?;
+                self.emit_callable_ref(right)?;
+                self.emit(Opcode::CaptureClosure(2));
             }
 
             TypedInner::ListNil => self.emit(Opcode::ListNil),

@@ -39,6 +39,21 @@ pub enum Resolved {
     /// Binary operation
     BinOp(Span, BinOp, Box<Resolved>, Box<Resolved>),
 
+    /// Value pipe
+    Pipe(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Context map
+    ContextMap(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Context bind
+    ContextBind(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Plain function composition
+    Compose(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Kleisli composition
+    KleisliCompose(Span, Box<Resolved>, Box<Resolved>),
+
     /// Empty list literal
     ListNil(Span),
 

@@ -223,6 +223,28 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
+        // Three-character operators
+        if i + 2 < len {
+            let three: String = chars[i..i + 3].iter().collect();
+            let tok = match three.as_str() {
+                "|*>" => Some(Token::PipeMap),
+                "|>=" => Some(Token::PipeBind),
+                "|=>" => Some(Token::PipeCompose),
+                _ => None,
+            };
+            if let Some(t) = tok {
+                tokens.push(Spanned {
+                    token: t,
+                    span: Span {
+                        start: i,
+                        end: i + 3,
+                    },
+                });
+                i += 3;
+                continue;
+            }
+        }
+
         // Two-character operators
         if i + 1 < len {
             let two: String = chars[i..i + 2].iter().collect();
@@ -236,6 +258,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 ".." => Some(Token::DotDot),
                 "=>" => Some(Token::FatArrow),
                 "->" => Some(Token::Arrow),
+                "|>" => Some(Token::PipeApply),
+                ">>" => Some(Token::Compose),
                 _ => None,
             };
             if let Some(t) = tok {
@@ -365,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_two_char_ops() {
-        let tokens = tokenize("++ =? == != <= >= => ->").unwrap();
+        let tokens = tokenize("++ =? == != <= >= => -> |> >> |*> |>= |=>").unwrap();
         assert!(matches!(tokens[0].token, Token::Concat));
         assert!(matches!(tokens[1].token, Token::SafeBind));
         assert!(matches!(tokens[2].token, Token::EqEq));
@@ -374,6 +398,11 @@ mod tests {
         assert!(matches!(tokens[5].token, Token::GtEq));
         assert!(matches!(tokens[6].token, Token::FatArrow));
         assert!(matches!(tokens[7].token, Token::Arrow));
+        assert!(matches!(tokens[8].token, Token::PipeApply));
+        assert!(matches!(tokens[9].token, Token::Compose));
+        assert!(matches!(tokens[10].token, Token::PipeMap));
+        assert!(matches!(tokens[11].token, Token::PipeBind));
+        assert!(matches!(tokens[12].token, Token::PipeCompose));
     }
 
     #[test]

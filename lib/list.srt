@@ -9,15 +9,28 @@ shape at this file's top level.
 
 @@doc """
 List module.
-Groups helpers for constructing, inspecting, and documenting list behavior.
-Empty lists usually need a type annotation such as `List<Int>`.
-The type declaration stays top-level while the module body is reserved for
-list-owned helpers and examples.
+Groups helpers for constructing and transforming list values.
+Empty lists usually need a type annotation such as `List<Int>`, and `[]` is the
+canonical Nil value.
+The type declaration stays top-level while the module body exposes the
+list-owned helper surface used by bind/pipeline lowering.
 """
 defmod List {
   @@doc """
-  Placeholder entry that keeps the `List` module visible while helper
-  functions are still being added.
+  Wrap one value into a singleton list.
+  This is the value-side constructor counterpart to `[]` as Nil.
   """
-  def dummy() { () }
+  @@builtin def wrap(value: $A) -> List<$A>
+
+  @@doc """
+  Map a plain unary callable over each element and keep the list shape.
+  This matches the semantics of `|*>` on `List`.
+  """
+  @@builtin def map(values: List<$A>, f: ($A -> $B)) -> List<$B>
+
+  @@doc """
+  Apply a unary callable that itself returns a list and flatten one level.
+  This matches the semantics of `|>=` / `|=>` on `List`.
+  """
+  @@builtin def flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B>
 }
