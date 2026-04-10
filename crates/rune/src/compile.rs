@@ -1,5 +1,7 @@
 use diagnostics::SourceRegistry;
-use forge::bytecode::populate_error_template_lines;
+use forge::bytecode::{
+    populate_error_template_lines, stable_hash_hex, synthesize_source_map, SourceFileEntry,
+};
 use spire::ast::{Ast, Span};
 use spire::token::Token;
 
@@ -208,8 +210,50 @@ pub(crate) fn compile_source(
 
     populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;
+    bytecode.compile_info.bytecode_version = 1;
+    bytecode.compile_info.debug_level = 2;
+    bytecode.compile_info.num_locals = bytecode.num_locals;
+    bytecode.compile_info.build_profile = Some("full".into());
+    bytecode.compile_info.source_hash = Some(stable_hash_hex(user_source));
+    bytecode.compile_info.module_hash = Some(stable_hash_hex(&compile_sources.user_module_path));
+    bytecode.sources = collect_viewer_sources(compile_sources);
+    if bytecode.source_map.is_none() {
+        bytecode.source_map = synthesize_source_map(
+            &bytecode.opcodes,
+            &bytecode.functions,
+            &bytecode.error_templates,
+            user_source,
+            Some(
+                compile_sources
+                    .sources
+                    .file_name(user_source_id)
+                    .unwrap_or("<script>"),
+            ),
+        );
+    }
+    bytecode.refresh_viewer_metadata();
 
     Ok(bytecode)
+}
+
+fn collect_viewer_sources(compile_sources: &xldr::CompileSources) -> Vec<SourceFileEntry> {
+    let mut ids = compile_sources.module_source_ids.clone();
+    ids.push(compile_sources.user_source_id);
+    ids.sort_by_key(|id| id.0);
+    ids.dedup_by_key(|id| id.0);
+
+    ids.into_iter()
+        .filter_map(|source_id| {
+            let entry = compile_sources.sources.get(source_id)?;
+            Some(SourceFileEntry {
+                source_id: source_id.0,
+                path: entry.file_name.clone(),
+                normalized_path: Some(entry.file_name.clone()),
+                content_hash: Some(stable_hash_hex(&entry.source)),
+                text: Some(entry.source.clone()),
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn prepare_script_compile_plan(

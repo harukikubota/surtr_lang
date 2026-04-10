@@ -4377,8 +4377,8 @@ impl Checker {
 
         if !shape_ok {
             let expected = match id.name.as_str() {
-                "if" => "@@builtin def if(cond: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A",
-                "if_then" => "@@builtin def if_then(cond: Boolean, then_branch: (-> ())) -> ()",
+                "if" => "@@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A",
+                "if_then" => "@@builtin def if_then(flag: Boolean, then_branch: (-> ())) -> ()",
                 _ => unreachable!(),
             };
             return Err(TypeError {

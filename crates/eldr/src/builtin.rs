@@ -258,14 +258,8 @@ mod tests {
 
     fn test_vm() -> VM {
         VM::new(Bytecode {
-            opcodes: Vec::new(),
-            constants: Vec::new(),
-            num_locals: 0,
             type_registry: TypeRegistry::new(),
-            error_templates: Vec::new(),
-            functions: Vec::new(),
-            source_map: None,
-            docs: Vec::new(),
+            ..Bytecode::default()
         })
         .with_error_capture()
     }

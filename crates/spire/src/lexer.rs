@@ -213,6 +213,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "defenum" => Token::Defenum,
                 "impl" => Token::Impl,
                 "match" => Token::Match,
+                "cond" => Token::Cond,
                 "type" => Token::Type,
                 _ => Token::Ident(text),
             };
@@ -439,6 +440,12 @@ mod tests {
     fn test_type_keyword() {
         let tokens = tokenize("type Int").unwrap();
         assert!(matches!(tokens[0].token, Token::Type));
+    }
+
+    #[test]
+    fn test_cond_keyword() {
+        let tokens = tokenize("cond { True => 1 }").unwrap();
+        assert!(matches!(tokens[0].token, Token::Cond));
     }
 
     #[test]

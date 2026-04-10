@@ -157,9 +157,21 @@ fn dump_outputs_valid_json_for_jq() {
     let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
     assert_eq!(json["header"]["magic"], "ELDR");
     assert_eq!(json["chunks"][0]["tag"], "Code");
-    assert_eq!(json["chunks"][1]["tag"], "Docs");
+    let chunk_tags = json["chunks"]
+        .as_array()
+        .expect("chunks must be an array")
+        .iter()
+        .filter_map(|chunk| chunk["tag"].as_str())
+        .collect::<Vec<_>>();
+    assert!(chunk_tags.contains(&"Docs"));
+    assert!(chunk_tags.contains(&"Func"));
+    assert!(chunk_tags.contains(&"ImpT"));
+    assert!(chunk_tags.contains(&"ExpT"));
+    assert!(chunk_tags.contains(&"LitT"));
     assert!(json["summary"]["opcode_count"].as_u64().unwrap_or(0) > 0);
     assert!(json["summary"]["doc_count"].as_u64().unwrap_or(0) > 0);
+    assert!(json["summary"]["function_count"].as_u64().unwrap_or(0) > 0);
+    assert!(json["summary"]["label_count"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(temp);
 }

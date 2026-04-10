@@ -184,10 +184,64 @@ Opcode は以下のカテゴリを持つ。
 
 - マジック: `ELDR`
 - ヘッダ: `magic/version/debug_level/num_chunks`
-- 最低 1 つの `Code` チャンクを持つ
-- `Docs` チャンクは任意とし、存在する場合は symbol-level doc metadata を持つ
-- `Code` チャンクは実行 bytecode payload を持つ
-- `Docs` が無い旧形式 `.eldr` も decode 可能でなければならない
+- ヘッダ `version` は現行 `1` を維持する
+- 意味的 bytecode 版は `CInf.bytecode_version` に保持し、現行は `1`
+- `.eldr` は単一バイナリ実行物であり、チャンク分割の主目的は実行時ロード都合ではなく viewer / disasm / 診断 / 比較の観測性にある
+- 必須チャンク:
+  - `Code`
+  - `Cnst`
+  - `Func`
+  - `Type`
+  - `ErrT`
+  - `CInf`
+  - `LblT`
+  - `ImpT`
+  - `ExpT`
+  - `LitT`
+  - `Line`
+  - `SpnT`
+  - `SrcP`
+  - `PcSp`
+- 任意チャンク:
+  - `Docs`
+- `Code` は opcode 列のみを持つ
+- `num_locals` は `CInf` に保持する
+- `Cnst` は実行用 constant pool の正本
+- `LitT` は viewer / 比較用の literal table
+- `Func` は関数境界と viewer 用 flag / span を持つ
+- `LblT` / `PcSp` / `Line` / `SpnT` / `SrcP` は viewer 向け索引・source 対応情報である
+
+### 8.1 `Func` と `LblT` の役割分離
+
+- `Func` は人間が読む単位であり、関数一覧・関数ビューの正本とする
+- `LblT` は制御フロー単位であり、jump target と function entry を `label -> pc` で引くために使う
+- viewer は関数一覧から `Func` を起点に表示し、命令列や branch 追跡では `LblT` を補助的に使う
+
+### 8.2 `ImpT` / `ExpT` / `LitT`
+
+- `ImpT` は builtin / function / runtime 呼び出し先を viewer 用に正規化した import table である
+- `ExpT` は公開シンボルと function ref の対応を持つ export table である
+- `LitT` は `Cnst` の差分と viewer 表示を分離するための literal table である
+
+### 8.3 source 対応
+
+- `Line` は軽量な行ビュー用テーブル
+- `SpnT` は span 正本
+- `PcSp` は `pc -> span id`
+- `SrcP` は path / normalized path / content hash / optional source text を持つ
+
+現行実装では Surtr の span 自体は source id を持たないため、`Line` / `SpnT` / `PcSp` / `SrcP` は単一 source を主対象にした viewer 情報として扱う。  
+call opcode / error template / function span を使って source 対応を補完する。
+
+### 8.4 `CInf`
+
+`CInf` は少なくとも以下を保持する。
+
+- `bytecode_version`
+- `debug_level`
+- `num_locals`
+- optional compiler / target / build profile
+- optional source hash / module hash
 
 詳細なエンコード/デコード仕様は `crates/forge/src/bytecode.rs` を正とする。
 

@@ -80,6 +80,7 @@ pub enum Token {
     Defenum,
     Impl,
     Match,
+    Cond,
     Type,
 
     // ── End of file ──

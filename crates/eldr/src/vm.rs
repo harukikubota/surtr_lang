@@ -85,14 +85,8 @@ impl VM {
     /// Create an empty VM intended for REPL/incremental execution.
     pub fn new_interactive(type_registry: TypeRegistry) -> Self {
         Self::new(Bytecode {
-            opcodes: Vec::new(),
-            constants: Vec::new(),
-            num_locals: 0,
             type_registry,
-            error_templates: Vec::new(),
-            functions: Vec::new(),
-            source_map: None,
-            docs: Vec::new(),
+            ..Bytecode::default()
         })
     }
 
@@ -253,7 +247,9 @@ impl VM {
                 let mut pc = entry.entry_pc as usize;
                 while self.frames.len() > previous_depth {
                     if pc >= self.bytecode.opcodes.len() {
-                        return Err(RuntimeError::new("PC out of bounds during builtin callable"));
+                        return Err(RuntimeError::new(
+                            "PC out of bounds during builtin callable",
+                        ));
                     }
                     let op = self.bytecode.opcodes[pc].clone();
                     let mut next_pc = pc + 1;
@@ -1578,13 +1574,8 @@ mod tests {
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
             opcodes,
-            constants: Vec::new(),
-            num_locals: 0,
             type_registry: TypeRegistry::new(),
-            error_templates: Vec::new(),
-            functions: Vec::new(),
-            source_map: None,
-            docs: Vec::new(),
+            ..Bytecode::default()
         }
     }
 

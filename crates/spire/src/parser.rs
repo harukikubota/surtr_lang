@@ -1192,6 +1192,9 @@ impl Parser {
             // Match expression
             Token::Match => self.parse_match_expr(),
 
+            // Cond expression
+            Token::Cond => self.parse_cond_expr(),
+
             // Identifier — could be: variable, binding, function call
             Token::Ident(name) => {
                 self.advance();
@@ -2878,9 +2881,85 @@ impl Parser {
         ))
     }
 
+    /// `cond { cond1 => expr1, ..., True => exprN }`
+    fn parse_cond_expr(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Cond)?;
+        self.skip_newlines();
+        let lbrace = self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        if matches!(self.peek(), Token::RBrace) {
+            return Err(ParseError::syntax(
+                "Cond expression must contain at least one clause",
+                lbrace,
+            ));
+        }
+
+        let mut clauses = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            self.skip_newlines();
+            let cond = self.parse_expr()?;
+            self.expect(&Token::FatArrow)?;
+            let body = self.parse_expr()?;
+            clauses.push((cond, body));
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+        let end = self.expect(&Token::RBrace)?;
+
+        for (idx, (cond, _)) in clauses.iter().enumerate() {
+            if Self::is_true_literal(cond) && idx + 1 != clauses.len() {
+                return Err(ParseError::syntax(
+                    "`True` clause must be the final cond clause",
+                    cond.span().clone(),
+                ));
+            }
+        }
+
+        let Some((last_cond, last_body)) = clauses.pop() else {
+            unreachable!("checked non-empty clauses");
+        };
+        if !Self::is_true_literal(&last_cond) {
+            return Err(ParseError::syntax(
+                "Final cond clause must use `True` as its condition",
+                last_cond.span().clone(),
+            ));
+        }
+
+        let mut expr = last_body;
+        while let Some((cond, body)) = clauses.pop() {
+            let span = Span {
+                start: sp.start,
+                end: end.end,
+            };
+            expr = Ast::App(
+                span,
+                Box::new(Ast::Var(sp.clone(), "if".to_string())),
+                vec![
+                    RecordLitArg::Positional(cond),
+                    RecordLitArg::Positional(body),
+                    RecordLitArg::Positional(expr),
+                ],
+            );
+        }
+
+        Ok(expr)
+    }
+
     /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
     fn parse_match_pattern(&mut self) -> Result<AstPattern, ParseError> {
         self.parse_bind_pattern()
+    }
+
+    fn is_true_literal(expr: &Ast) -> bool {
+        matches!(expr, Ast::Lit(_, Lit::Bool(true)))
     }
 
     fn parse_string_or_interpolated(&mut self, span: Span, raw: String) -> Result<Ast, ParseError> {
@@ -3852,7 +3931,7 @@ Construct the error branch.
     fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
         let ast = parse_with_context(
             r#"defmod Kernel {
-  @@builtin def if(cond: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
+  @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
 }"#,
             ParserContext::module(1, None).with_rules(SourceRules::std_module()),
         )
@@ -4547,6 +4626,93 @@ Construct the error branch.
         assert!(err
             .message()
             .contains("Match expression must contain at least one arm"));
+    }
+
+    #[test]
+    fn test_cond_desugars_to_nested_if_apps() {
+        let ast = parse(
+            r#"x = cond {
+  a => 1,
+  b => 2,
+  True => 3,
+}"#,
+        )
+        .expect("cond should parse");
+
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::App(_, func, args) => {
+                    assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "if"));
+                    assert!(matches!(&args[0], RecordLitArg::Positional(Ast::Var(_, name)) if name == "a"));
+                    assert!(matches!(&args[1], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(1)));
+                    assert!(matches!(
+                        &args[2],
+                        RecordLitArg::Positional(Ast::App(_, inner_func, inner_args))
+                            if matches!(inner_func.as_ref(), Ast::Var(_, name) if name == "if")
+                                && matches!(&inner_args[0], RecordLitArg::Positional(Ast::Var(_, name)) if name == "b")
+                                && matches!(&inner_args[1], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(2))
+                                && matches!(&inner_args[2], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(3))
+                    ));
+                }
+                _ => panic!("Expected App"),
+            },
+            _ => panic!("Expected Bind with cond RHS"),
+        }
+    }
+
+    #[test]
+    fn test_cond_accepts_block_body() {
+        let ast = parse(
+            r#"x = cond {
+  True => { print("ok"); 1 },
+}"#,
+        )
+        .expect("cond with block body should parse");
+
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Block(_, stmts) => {
+                    assert!(matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Lit(_, Lit::Int(n))] if n == &int(1)));
+                }
+                _ => panic!("Expected final True clause body to remain as block"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_empty_cond_is_error() {
+        let err = parse("x = cond {}").expect_err("Expected parse error");
+        assert!(err
+            .message()
+            .contains("Cond expression must contain at least one clause"));
+    }
+
+    #[test]
+    fn test_cond_requires_final_true_clause() {
+        let err = parse(
+            r#"x = cond {
+  flag => 1,
+}"#,
+        )
+        .expect_err("Expected parse error");
+        assert!(err
+            .message()
+            .contains("Final cond clause must use `True` as its condition"));
+    }
+
+    #[test]
+    fn test_cond_rejects_non_final_true_clause() {
+        let err = parse(
+            r#"x = cond {
+  True => 1,
+  other => 2,
+}"#,
+        )
+        .expect_err("Expected parse error");
+        assert!(err
+            .message()
+            .contains("`True` clause must be the final cond clause"));
     }
 
     #[test]

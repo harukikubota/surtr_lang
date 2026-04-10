@@ -37,7 +37,7 @@ defmod Kernel {
   In other words, the signature describes the language semantics, while the
   surface syntax keeps the convenient expression-oriented style.
   """
-  @@builtin def if_then(cond: Boolean, then_branch: (-> Unit)) -> Unit
+  @@builtin def if_then(flag: Boolean, then_branch: (-> Unit)) -> Unit
 
   @@doc """
   Branching expression that returns one value from two alternatives.
@@ -59,7 +59,7 @@ defmod Kernel {
   When the branches both return `Unit`, prefer `if_then(...)` to make the
   intent explicit.
   """
-  @@builtin def if(cond: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
+  @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
 
   @@doc """
   Print a string to stdout.

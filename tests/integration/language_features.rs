@@ -703,6 +703,51 @@ print(match n {
         );
     }
 
+    #[test]
+    fn cond_selects_first_true_branch_and_skips_later_branches() {
+        assert_output(
+            r#"print(to_string(cond {
+  False => 0,
+  1 < 2 => 1,
+  True => 2,
+}))"#,
+            &["1"],
+        );
+    }
+
+    #[test]
+    fn cond_allows_block_bodies() {
+        assert_output(
+            r#"print(to_string(cond {
+  False => 0,
+  True => { print("branch"); 42 },
+}))"#,
+            &["branch", "42"],
+        );
+    }
+
+    #[test]
+    fn cond_condition_must_be_boolean() {
+        assert_compile_error(
+            r#"print(to_string(cond {
+  1 => 10,
+  True => 20,
+}))"#,
+            "if condition must be Boolean, got Int",
+        );
+    }
+
+    #[test]
+    fn cond_branch_types_must_match() {
+        assert_compile_error(
+            r#"print(to_string(cond {
+  False => 1,
+  True => "x",
+}))"#,
+            "if branches have different types: Int and String",
+        );
+    }
+
     // String interpolation
 
     #[test]

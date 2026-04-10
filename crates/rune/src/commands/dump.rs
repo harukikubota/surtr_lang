@@ -147,10 +147,19 @@ fn build_dump_json(
         "summary": {
             "opcode_count": inspected.bytecode.opcodes.len(),
             "constant_count": inspected.bytecode.constants.len(),
+            "function_count": inspected.bytecode.functions.len(),
             "type_entry_count": inspected.bytecode.type_registry.entries.len(),
             "error_template_count": inspected.bytecode.error_templates.len(),
             "num_locals": inspected.bytecode.num_locals,
-            "doc_count": inspected.bytecode.docs.len()
+            "doc_count": inspected.bytecode.docs.len(),
+            "label_count": inspected.bytecode.labels.len(),
+            "import_count": inspected.bytecode.imports.len(),
+            "export_count": inspected.bytecode.exports.len(),
+            "literal_count": inspected.bytecode.literals.len(),
+            "span_count": inspected.bytecode.spans.len(),
+            "source_count": inspected.bytecode.sources.len(),
+            "pc_span_count": inspected.bytecode.pc_spans.len(),
+            "bytecode_version": inspected.bytecode.compile_info.bytecode_version
         },
         "entrypoint_trace": entrypoint_trace,
         "bytecode": bytecode

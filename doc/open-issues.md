@@ -30,6 +30,8 @@
   - `Result<$T>`
 - `@@doc """..."""` の導入
 - `.eldr` への `Docs` chunk 追加
+- `.eldr` viewer 向け chunk 基盤
+  - `Code`, `Cnst`, `Func`, `Type`, `ErrT`, `CInf`, `LblT`, `ImpT`, `ExpT`, `LitT`, `Line`, `SpnT`, `SrcP`, `PcSp`
 - 標準モジュールの type 単位分割
   - `Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user`
   - cross-cutting builtin は `kernel.srt` へ置く
@@ -257,6 +259,26 @@
 - テスト方針:
   - 既存の spec / compile_errors / integration を回帰基準にする。
   - 追加最適化を入れる場合は opcode 列または IR 選択が変わるケースを unit で固定する。
+
+### OI-012 `.eldr` viewer follow-up
+
+- 策定コミット: `2026-04-10 .eldr viewer chunk baseline`
+- 背景:
+  - `.eldr` には viewer 向け chunk 基盤を導入済みだが、source id を持たない span や最小限の import/literal metadata など、将来拡張を前提にした部分が残っている。
+  - VSCode 拡張と TUI viewer はこの baseline を消費するが、より深い debug 表示は未実装である。
+- 2026-04-10 時点の後続項目:
+  - `Dbgi` を追加する
+  - `LocT` を追加する
+  - span に source id を持たせる設計を検討する
+  - `ImpT` の import 粒度を module import / external import まで拡張する
+  - `LitT` に use-site / reverse index を追加する
+  - VSCode 拡張 / TUI 側で `Func` / `LblT` / `ImpT` / `ExpT` / `LitT` / `PcSp` を消費する viewer を実装する
+- 受け入れ条件:
+  - viewer が `.eldr` 単体で関数ビュー / ラベルビュー / import/export ビュー / literal ビュー / source compare を提供できる
+  - `Dbgi` / `LocT` 導入後も現行 chunk 契約と後方整合する
+- テスト方針:
+  - `unit/sindr` で chunk 整合性と参照先の妥当性を固定する
+  - `integration` で `surtr dump` 出力が viewer の期待するテーブルを欠かさないことを維持する
 
 ---
 

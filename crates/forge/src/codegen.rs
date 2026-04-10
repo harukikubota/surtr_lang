@@ -6,7 +6,7 @@ use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_meta_by_name;
-use sindr::ir::DocEntry;
+use sindr::ir::{CompileInfo, DocEntry, FunctionFlags};
 use sindr::primitives::int;
 use spire::ast::{BinOp, Lit, Span};
 
@@ -29,6 +29,15 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         functions: state.functions,
         source_map: None,
         docs: Vec::new(),
+        compile_info: CompileInfo::default(),
+        labels: Vec::new(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        literals: Vec::new(),
+        lines: Vec::new(),
+        spans: Vec::new(),
+        sources: Vec::new(),
+        pc_spans: Vec::new(),
     })
 }
 
@@ -606,6 +615,16 @@ impl Codegen {
             num_locals: self.state.next_slot,
             arity: total_arity as u8,
             qualified_name: None,
+            end_pc: 0,
+            span_start: body.span.start as u32,
+            span_end: body.span.end as u32,
+            flags: FunctionFlags {
+                public: false,
+                closure: true,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: true,
+            },
         });
 
         self.state.slot_map = saved_slot_map;
@@ -751,6 +770,16 @@ impl Codegen {
             num_locals: self.state.next_slot,
             arity: 3,
             qualified_name: None,
+            end_pc: 0,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+            flags: FunctionFlags {
+                public: false,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: true,
+            },
         });
 
         self.state.slot_map = saved_slot_map;
@@ -795,6 +824,16 @@ impl Codegen {
             num_locals: self.state.next_slot,
             arity: (extra_arg_count + 2) as u8,
             qualified_name: None,
+            end_pc: 0,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+            flags: FunctionFlags {
+                public: false,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: true,
+            },
         });
 
         self.state.slot_map = saved_slot_map;
@@ -994,6 +1033,16 @@ impl Codegen {
             num_locals,
             arity: params.len() as u8,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
+            end_pc: 0,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+            flags: FunctionFlags {
+                public: true,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: false,
+            },
         });
         self.state.next_fun_idx = self.state.next_fun_idx.max(*fun_idx + 1);
 
@@ -1055,6 +1104,16 @@ impl Codegen {
             num_locals,
             arity: params.len() as u8,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
+            end_pc: 0,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+            flags: FunctionFlags {
+                public: true,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: false,
+            },
         });
         self.state
             .error_ctor_funs
