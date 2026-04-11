@@ -33,6 +33,6 @@
     "generate:types": "node ./scripts/generate-types.mjs",
     "build": "npm run generate:types && node ./scripts/build.mjs",
     "test": "vitest run",
-    "package": "npx vsce package --no-dependencies"
+    "package": "npx @vscode/vsce package --no-dependencies"
   }
 }

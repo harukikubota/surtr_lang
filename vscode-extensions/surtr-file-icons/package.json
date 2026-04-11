@@ -22,6 +22,6 @@
   "scripts": {
     "build": "node -e \"console.log('surtr-file-icons: no build step')\"",
     "test": "node -e \"console.log('surtr-file-icons: no automated test runner configured yet')\"",
-    "package": "npx vsce package --no-dependencies"
+    "package": "npx @vscode/vsce package --no-dependencies"
   }
 }

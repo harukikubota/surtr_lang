@@ -44,6 +44,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node -e \"console.log('surtr-tools: no automated test runner configured yet')\"",
-    "package": "npx vsce package --no-dependencies"
+    "package": "npx @vscode/vsce package --no-dependencies"
   }
 }
