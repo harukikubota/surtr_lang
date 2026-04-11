@@ -366,15 +366,20 @@ mod tests {
         gene.state.slot_map.insert(99, 0);
         gene.state.next_slot = 1;
 
-        gene.emit_node(&node).expect("assert emission should succeed");
+        gene.emit_node(&node)
+            .expect("assert emission should succeed");
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
 
-        assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::JumpIfFalse(_))));
         assert!(opcodes
             .iter()
-            .filter(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 }))
-            .count()
-            >= 2);
+            .any(|opcode| matches!(opcode, Opcode::JumpIfFalse(_))));
+        assert!(
+            opcodes
+                .iter()
+                .filter(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 }))
+                .count()
+                >= 2
+        );
     }
 
     #[test]
@@ -425,11 +430,16 @@ mod tests {
             ),
         };
 
-        gene.emit_node(&node).expect("ensure emission should succeed");
+        gene.emit_node(&node)
+            .expect("ensure emission should succeed");
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
 
-        assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::StoreLocal(_))));
-        assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::StoreLocal(_))));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
     }
 }
 
@@ -1819,7 +1829,7 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_empty_list_failure(rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(pat, rhs.span.clone())?;
 
         self.patch_label(success_label);
         if matches!(pat, TypedPattern::Wildcard(_)) {
@@ -1887,7 +1897,7 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_empty_list_failure(rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(pat, rhs.span.clone())?;
 
         self.patch_label(success_label);
         let unit_idx = self.add_constant(Constant::Unit);
@@ -1897,6 +1907,29 @@ impl Codegen {
 
     fn emit_empty_list_failure(&mut self, span: Span) -> Result<(), CodegenError> {
         self.emit_pattern_failure("EmptyList", "Empty List.", span)
+    }
+
+    fn emit_safebind_pattern_failure(
+        &mut self,
+        pat: &TypedPattern,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        match pat {
+            TypedPattern::As(_, inner, _) => self.emit_safebind_pattern_failure(inner, span),
+            TypedPattern::ListNil(_) | TypedPattern::ListCons(_, _, _) => {
+                self.emit_empty_list_failure(span)
+            }
+            TypedPattern::Extractor {
+                input_ty,
+                extractor_ty,
+                ..
+            } if matches!(extractor_ty, Ty::BuiltinFunc { name, .. } if name == "uncons")
+                && matches!(input_ty, Ty::List(_)) =>
+            {
+                self.emit_empty_list_failure(span)
+            }
+            _ => self.emit_pattern_mismatch_failure(span),
+        }
     }
 
     fn emit_list_len_mismatch_failure_concrete(
@@ -2328,6 +2361,7 @@ impl Codegen {
                 )?;
             }
             TypedPattern::Extractor {
+                input_ty,
                 extractor,
                 extractor_ty,
                 success_tag,
@@ -2338,6 +2372,7 @@ impl Codegen {
                 ..
             } => {
                 let item_slots = self.emit_extractor_item_slots_from_local(
+                    input_ty,
                     extractor,
                     extractor_ty,
                     *success_tag,
@@ -2408,6 +2443,7 @@ impl Codegen {
                 self.emit_pattern_bind_from_local(inner, inner_slot)?;
             }
             TypedPattern::Extractor {
+                input_ty,
                 extractor,
                 extractor_ty,
                 success_tag,
@@ -2420,6 +2456,7 @@ impl Codegen {
                 let impossible_no_match = self.fresh_label();
                 let done = self.fresh_label();
                 let item_slots = self.emit_extractor_item_slots_from_local(
+                    input_ty,
                     extractor,
                     extractor_ty,
                     *success_tag,
@@ -2557,6 +2594,7 @@ impl Codegen {
 
     fn emit_extractor_item_slots_from_local(
         &mut self,
+        input_ty: &Ty,
         extractor: &ResolvedId,
         extractor_ty: &Ty,
         success_tag: u32,
@@ -2618,22 +2656,53 @@ impl Codegen {
                             span: extractor.span.clone(),
                         });
                     }
-                    self.emit(Opcode::LoadLocal(input_slot));
-                    self.emit(Opcode::ListIsEmpty);
-                    self.emit_jump_if_true(no_match_label);
+                    match input_ty {
+                        Ty::List(_) => {
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::ListIsEmpty);
+                            self.emit_jump_if_true(no_match_label);
 
-                    let head_slot = self.state.next_slot;
-                    self.state.next_slot += 1;
-                    self.emit(Opcode::LoadLocal(input_slot));
-                    self.emit(Opcode::ListHead);
-                    self.emit(Opcode::StoreLocal(head_slot));
+                            let head_slot = self.state.next_slot;
+                            self.state.next_slot += 1;
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::ListHead);
+                            self.emit(Opcode::StoreLocal(head_slot));
 
-                    let tail_slot = self.state.next_slot;
-                    self.state.next_slot += 1;
-                    self.emit(Opcode::LoadLocal(input_slot));
-                    self.emit(Opcode::ListTail);
-                    self.emit(Opcode::StoreLocal(tail_slot));
-                    return Ok(vec![head_slot, tail_slot]);
+                            let tail_slot = self.state.next_slot;
+                            self.state.next_slot += 1;
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::ListTail);
+                            self.emit(Opcode::StoreLocal(tail_slot));
+                            return Ok(vec![head_slot, tail_slot]);
+                        }
+                        Ty::Str => {
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::StringIsEmpty);
+                            self.emit_jump_if_true(no_match_label);
+
+                            let head_slot = self.state.next_slot;
+                            self.state.next_slot += 1;
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::StringHead);
+                            self.emit(Opcode::StoreLocal(head_slot));
+
+                            let tail_slot = self.state.next_slot;
+                            self.state.next_slot += 1;
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::StringTail);
+                            self.emit(Opcode::StoreLocal(tail_slot));
+                            return Ok(vec![head_slot, tail_slot]);
+                        }
+                        other => {
+                            return Err(CodegenError {
+                                message: format!(
+                                    "uncons extractor expects List<...> or String, got {}",
+                                    ty_to_string(other)
+                                ),
+                                span: extractor.span.clone(),
+                            });
+                        }
+                    }
                 }
                 other => {
                     return Err(CodegenError {
@@ -3224,6 +3293,7 @@ impl Codegen {
                 self.emit_match_pattern_test(tail, tail_slot, fail_label)?;
             }
             TypedMatchPattern::Extractor {
+                input_ty,
                 extractor,
                 extractor_ty,
                 success_tag,
@@ -3233,6 +3303,7 @@ impl Codegen {
                 items,
             } => {
                 let item_slots = self.emit_extractor_item_slots_from_local(
+                    input_ty,
                     extractor,
                     extractor_ty,
                     *success_tag,
@@ -3305,6 +3376,7 @@ impl Codegen {
                 self.emit_match_pattern_bind(tail, tail_slot)?;
             }
             TypedMatchPattern::Extractor {
+                input_ty,
                 extractor,
                 extractor_ty,
                 success_tag,
@@ -3316,6 +3388,7 @@ impl Codegen {
                 let impossible_no_match = self.fresh_label();
                 let done = self.fresh_label();
                 let item_slots = self.emit_extractor_item_slots_from_local(
+                    input_ty,
                     extractor,
                     extractor_ty,
                     *success_tag,

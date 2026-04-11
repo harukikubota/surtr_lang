@@ -1030,6 +1030,39 @@ print(to_string(tail))"#,
     }
 
     #[test]
+    fn safebind_uncons_string_ok() {
+        assert_output(
+            r#"value = "source"
+uncons(first, tail) =? value
+print(first)
+print(tail)"#,
+            &["s", "ource"],
+        );
+    }
+
+    #[test]
+    fn safebind_string_pattern_plain_string_ok() {
+        assert_output(
+            r#"value = "source"
+[first, ..tail] =? value
+print(first)
+print(tail)"#,
+            &["s", "ource"],
+        );
+    }
+
+    #[test]
+    fn safebind_string_pattern_handles_multibyte_chars() {
+        assert_output(
+            r#"value = "あい"
+[first, ..tail] =? value
+print(first)
+print(tail)"#,
+            &["あ", "い"],
+        );
+    }
+
+    #[test]
     fn safebind_list_pattern_plain_list_empty_propagates_empty_list() {
         let (_stdout, stderr) = run_surtr_with_stderr(
             r#"value: List<Int> = []
@@ -1038,6 +1071,20 @@ print("after")"#,
         )
         .expect("Pipeline failed");
         assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
+    }
+
+    #[test]
+    fn safebind_string_pattern_empty_propagates_pattern_mismatch() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"value: String = ""
+[first, ..tail] =? value
+print("after")"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(
+            stderr,
+            vec!["Error: PatternMismatch: Pattern did not match."]
+        );
     }
 
     #[test]
@@ -1063,6 +1110,38 @@ print("after")"#,
         assert_eq!(
             stderr,
             vec!["Error: IndexOutOfBounds: LHS.len(2) > RHS.len(1)"]
+        );
+    }
+
+    #[test]
+    fn match_string_empty_and_uncons_is_exhaustive() {
+        assert_output(
+            r#"value = "source"
+print(match value {
+  [] => "empty",
+  [first, ..tail] => tail,
+})"#,
+            &["ource"],
+        );
+    }
+
+    #[test]
+    fn expr_list_cons_does_not_become_string_cons() {
+        assert_compile_error(
+            r#"source = ["x"]
+str: String = ["t", ..source]"#,
+            "expected String, got List<String>",
+        );
+    }
+
+    #[test]
+    fn match_string_uncons_without_empty_arm_is_non_exhaustive() {
+        assert_compile_error(
+            r#"value = "x"
+print(match value {
+  [head, ..tail] => head,
+})"#,
+            "Non-exhaustive match. Missing: []",
         );
     }
 

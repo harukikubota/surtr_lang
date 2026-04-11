@@ -371,25 +371,16 @@ impl Checker {
         for stmt in stmts {
             match stmt {
                 Resolved::StructDef(_, id, _) => {
-                    self.env.predeclare_type_def(
-                        id.name.clone(),
-                        TypeKind::Struct,
-                        Vec::new(),
-                    );
+                    self.env
+                        .predeclare_type_def(id.name.clone(), TypeKind::Struct, Vec::new());
                 }
                 Resolved::RecordDef(_, id, _) => {
-                    self.env.predeclare_type_def(
-                        id.name.clone(),
-                        TypeKind::Record,
-                        Vec::new(),
-                    );
+                    self.env
+                        .predeclare_type_def(id.name.clone(), TypeKind::Record, Vec::new());
                 }
                 Resolved::DeferrorDef(_, id, _, _) => {
-                    self.env.predeclare_type_def(
-                        id.name.clone(),
-                        TypeKind::Error,
-                        Vec::new(),
-                    );
+                    self.env
+                        .predeclare_type_def(id.name.clone(), TypeKind::Error, Vec::new());
                 }
                 Resolved::EnumDef(_, id, type_params, _) => {
                     self.env.predeclare_type_def(
@@ -1057,7 +1048,8 @@ impl Checker {
                         message: "Only total MatchBlock patterns can be used with `=`".into(),
                         span: span.clone(),
                         hint: Some(
-                            "Use `=?` for partial destructuring and extractor-driven matches.".into(),
+                            "Use `=?` for partial destructuring and extractor-driven matches."
+                                .into(),
                         ),
                     });
                 }
@@ -1100,9 +1092,7 @@ impl Checker {
             Resolved::BinOp(span, op, left, right) => self.check_binop(span, op, left, right),
             Resolved::Pipe(span, left, right) => self.check_pipe(span, left, right),
             Resolved::ContextMap(span, left, right) => self.check_context_map(span, left, right),
-            Resolved::ContextBind(span, left, right) => {
-                self.check_context_bind(span, left, right)
-            }
+            Resolved::ContextBind(span, left, right) => self.check_context_bind(span, left, right),
             Resolved::Compose(span, left, right) => self.check_compose(span, left, right),
             Resolved::KleisliCompose(span, left, right) => {
                 self.check_kleisli_compose(span, left, right)
@@ -1270,10 +1260,7 @@ impl Checker {
     }
 
     fn register_function_id(&mut self, id: &ResolvedId) {
-        let key = id
-            .qualified_name
-            .clone()
-            .unwrap_or_else(|| id.name.clone());
+        let key = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
         self.function_ids_by_name.insert(key, id.clone());
     }
 
@@ -1393,11 +1380,15 @@ impl Checker {
         name: &str,
         span: &Span,
     ) -> Result<TypedNode, TypeError> {
-        let id = self.function_ids_by_name.get(name).cloned().ok_or_else(|| TypeError {
-            message: format!("Missing helper function: {}", name),
-            span: span.clone(),
-            hint: None,
-        })?;
+        let id = self
+            .function_ids_by_name
+            .get(name)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Missing helper function: {}", name),
+                span: span.clone(),
+                hint: None,
+            })?;
         let ty = self
             .env
             .lookup_var(id.unique_id)
@@ -1442,7 +1433,11 @@ impl Checker {
         };
         if params.len() != args.len() {
             return Err(TypeError {
-                message: format!("function expects {} argument(s), got {}", params.len(), args.len()),
+                message: format!(
+                    "function expects {} argument(s), got {}",
+                    params.len(),
+                    args.len()
+                ),
                 span: span.clone(),
                 hint: None,
             });
@@ -1479,7 +1474,10 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                message: format!("{} does not support named arguments on the right-hand side", op_name),
+                message: format!(
+                    "{} does not support named arguments on the right-hand side",
+                    op_name
+                ),
                 span: span.clone(),
                 hint: None,
             });
@@ -1493,7 +1491,11 @@ impl Checker {
             Ty::Func(params, ret) => (params, ret.as_ref().clone()),
             other => {
                 return Err(TypeError {
-                    message: format!("{} right-hand side is not a function call target: {}", op_name, self.ty_name(&other)),
+                    message: format!(
+                        "{} right-hand side is not a function call target: {}",
+                        op_name,
+                        self.ty_name(&other)
+                    ),
                     span: span.clone(),
                     hint: None,
                 })
@@ -1539,7 +1541,10 @@ impl Checker {
         }
 
         Ok(TypedNode {
-            ty: Ty::Func(vec![self.resolve_ty(&params[0])], Box::new(self.resolve_ty(&ret))),
+            ty: Ty::Func(
+                vec![self.resolve_ty(&params[0])],
+                Box::new(self.resolve_ty(&ret)),
+            ),
             span: span.clone(),
             node: TypedInner::InjectCall(Box::new(typed_func), typed_args),
         })
@@ -1657,7 +1662,8 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_right = self.check_apply_callable(right, "`|*>`")?;
-        let (rhs_in, rhs_out) = self.unary_function_parts(&typed_right.ty, "`|*>`", &typed_right.span)?;
+        let (rhs_in, rhs_out) =
+            self.unary_function_parts(&typed_right.ty, "`|*>`", &typed_right.span)?;
         self.ensure_plain_map_output(&rhs_out, "`|*>`", &typed_right.span)?;
 
         let typed_left = self.check_node(left)?;
@@ -1695,7 +1701,10 @@ impl Checker {
                 self.build_list_helper_call("List::map", span, typed_left, typed_right)
             }
             other => Err(TypeError {
-                message: format!("`|*>` requires Result or List on the left, got {}", self.ty_name(&other)),
+                message: format!(
+                    "`|*>` requires Result or List on the left, got {}",
+                    self.ty_name(&other)
+                ),
                 span: typed_left.span.clone(),
                 hint: None,
             }),
@@ -1709,7 +1718,8 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_right = self.check_apply_callable(right, "`|>=`")?;
-        let (rhs_in, rhs_ret) = self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span)?;
+        let (rhs_in, rhs_ret) =
+            self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span)?;
 
         let typed_left = self.check_node(left)?;
         match (self.resolve_ty(&typed_left.ty), self.resolve_ty(&rhs_ret)) {
@@ -1752,7 +1762,10 @@ impl Checker {
                 hint: None,
             }),
             (other, _) => Err(TypeError {
-                message: format!("`|>=` requires Result or List on the left, got {}", self.ty_name(&other)),
+                message: format!(
+                    "`|>=` requires Result or List on the left, got {}",
+                    self.ty_name(&other)
+                ),
                 span: typed_left.span.clone(),
                 hint: None,
             }),
@@ -1767,8 +1780,10 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_compose_callable(left, "`>>`")?;
         let typed_right = self.check_compose_callable(right, "`>>`")?;
-        let (left_in, left_out) = self.unary_function_parts(&typed_left.ty, "`>>`", &typed_left.span)?;
-        let (right_in, right_out) = self.unary_function_parts(&typed_right.ty, "`>>`", &typed_right.span)?;
+        let (left_in, left_out) =
+            self.unary_function_parts(&typed_left.ty, "`>>`", &typed_left.span)?;
+        let (right_in, right_out) =
+            self.unary_function_parts(&typed_right.ty, "`>>`", &typed_right.span)?;
         if !self.types_compatible(&left_out, &right_in) {
             return Err(TypeError {
                 message: "`>>` requires the left output type to match the right input type".into(),
@@ -1795,8 +1810,10 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_compose_callable(left, "`|=>`")?;
         let typed_right = self.check_compose_callable(right, "`|=>`")?;
-        let (left_in, left_out) = self.unary_function_parts(&typed_left.ty, "`|=>`", &typed_left.span)?;
-        let (right_in, right_out) = self.unary_function_parts(&typed_right.ty, "`|=>`", &typed_right.span)?;
+        let (left_in, left_out) =
+            self.unary_function_parts(&typed_left.ty, "`|=>`", &typed_left.span)?;
+        let (right_in, right_out) =
+            self.unary_function_parts(&typed_right.ty, "`|=>`", &typed_right.span)?;
         match (self.resolve_ty(&left_out), self.resolve_ty(&right_out)) {
             (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
                 if !self.types_compatible(ok.as_ref(), &right_in)
@@ -1827,7 +1844,8 @@ impl Checker {
             (Ty::List(item), Ty::List(next_item)) => {
                 if !self.types_compatible(item.as_ref(), &right_in) {
                     return Err(TypeError {
-                        message: "`|=>` requires matching List element types across both sides".into(),
+                        message: "`|=>` requires matching List element types across both sides"
+                            .into(),
                         span: span.clone(),
                         hint: None,
                     });
@@ -1949,6 +1967,88 @@ impl Checker {
             self.require_match_result_seq_ty(&self.resolve_ty(&ret), span, &extractor_id.name)?;
         let (success_tag, no_match_tag, err_tag) = self.match_result_variant_tags(span)?;
         Ok((input_ty, seq_tys, success_tag, no_match_tag, err_tag))
+    }
+
+    fn extractor_callable_ty(
+        &mut self,
+        extractor_id: &ResolvedId,
+        span: &Span,
+    ) -> Result<Ty, TypeError> {
+        let extractor_ty = self
+            .env
+            .lookup_var(extractor_id.unique_id)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Undefined extractor: {}", extractor_id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        Ok(self.instantiate_builtin_ty(&extractor_ty))
+    }
+
+    fn kernel_uncons_id(&self, span: &Span) -> Result<ResolvedId, TypeError> {
+        let id = self
+            .function_ids_by_name
+            .get("Kernel::uncons")
+            .or_else(|| self.function_ids_by_name.get("uncons"))
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: "Missing helper function: Kernel::uncons".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        Ok(ResolvedId {
+            span: span.clone(),
+            ..id
+        })
+    }
+
+    fn uncons_contract_for_input(
+        &self,
+        observed_ty: &Ty,
+        span: &Span,
+    ) -> Result<(Ty, Vec<Ty>), TypeError> {
+        match self.resolve_ty(observed_ty) {
+            Ty::List(inner) => {
+                let elem_ty = inner.as_ref().clone();
+                let list_ty = Ty::List(Box::new(elem_ty.clone()));
+                Ok((list_ty.clone(), vec![elem_ty, list_ty]))
+            }
+            Ty::Str => Ok((Ty::Str, vec![Ty::Str, Ty::Str])),
+            other => Err(TypeError {
+                message: format!(
+                    "Extractor uncons expects List<...> or String, got {}",
+                    self.ty_name(&other)
+                ),
+                span: span.clone(),
+                hint: None,
+            }),
+        }
+    }
+
+    fn extractor_contract_for_observed_ty(
+        &mut self,
+        extractor_id: &ResolvedId,
+        observed_ty: &Ty,
+        span: &Span,
+    ) -> Result<(Ty, Ty, Vec<Ty>, u32, u32, u32), TypeError> {
+        let extractor_ty = self.extractor_callable_ty(extractor_id, span)?;
+        let (input_ty, seq_tys, success_tag, no_match_tag, err_tag) = if matches!(&extractor_ty, Ty::BuiltinFunc { name, .. } if name == "uncons")
+        {
+            let (input_ty, seq_tys) = self.uncons_contract_for_input(observed_ty, span)?;
+            let (success_tag, no_match_tag, err_tag) = self.match_result_variant_tags(span)?;
+            (input_ty, seq_tys, success_tag, no_match_tag, err_tag)
+        } else {
+            self.extractor_contract(extractor_id, span)?
+        };
+        Ok((
+            input_ty,
+            self.resolve_ty(&extractor_ty),
+            seq_tys,
+            success_tag,
+            no_match_tag,
+            err_tag,
+        ))
     }
 
     fn require_match_result_seq_ty(
@@ -2100,10 +2200,8 @@ impl Checker {
                     let value =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     if args.len() == 2 {
-                        let err = self.resolve_ast_ty_in_context(
-                            &args[1],
-                            TypeSyntaxContext::General,
-                        )?;
+                        let err =
+                            self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
                         if !matches!(err, Ty::Error) {
                             return Err(TypeError {
                                 message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
@@ -2178,7 +2276,10 @@ impl Checker {
                     match def.kind {
                         crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
                         _ => Err(TypeError {
-                            message: format!("Generic type {} is not supported in this context", other),
+                            message: format!(
+                                "Generic type {} is not supported in this context",
+                                other
+                            ),
                             span: span.clone(),
                             hint: None,
                         }),
@@ -2284,7 +2385,9 @@ impl Checker {
                     )?;
                     if !matches!(err, Ty::Error) {
                         return Err(TypeError {
-                            message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
+                            message:
+                                "MatchResult<$Value, Error> requires Error as the second argument"
+                                    .into(),
                             span: span.clone(),
                             hint: None,
                         });
@@ -2295,8 +2398,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "Result" => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
-                        message: "Result<T> or Result<T, E> requires 1 or 2 type arguments"
-                            .into(),
+                        message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
                     });
@@ -2309,9 +2411,8 @@ impl Checker {
                 let err = if args.len() == 2 {
                     if context != TypeSyntaxContext::FunctionReturn {
                         return Err(TypeError {
-                            message:
-                                "Result<T, E> is only allowed in function return signatures."
-                                    .into(),
+                            message: "Result<T, E> is only allowed in function return signatures."
+                                .into(),
                             span: span.clone(),
                             hint: Some("Use Result<T> in local code.".into()),
                         });
@@ -2327,11 +2428,15 @@ impl Checker {
                 Ok(Ty::Result(Box::new(ok), Box::new(err)))
             }
             AstTy::Generic(span, name, args) => {
-                let def = self.env.lookup_type_def(name).cloned().ok_or_else(|| TypeError {
-                    message: format!("Unknown generic type: {}", name),
-                    span: span.clone(),
-                    hint: None,
-                })?;
+                let def = self
+                    .env
+                    .lookup_type_def(name)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        message: format!("Unknown generic type: {}", name),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
                 if def.type_params.len() != args.len() {
                     return Err(TypeError {
                         message: format!(
@@ -2374,8 +2479,11 @@ impl Checker {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret =
-                    self.resolve_signature_ast_ty_in_context(ret, TypeSyntaxContext::General, tyvars)?;
+                let ret = self.resolve_signature_ast_ty_in_context(
+                    ret,
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             _ => self.resolve_ast_ty_in_context(ast_ty, context),
@@ -2695,9 +2803,10 @@ impl Checker {
                     .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
                     .collect(),
             ),
-            Ty::Enum(name, args) => {
-                Ty::Enum(name.clone(), args.iter().map(|arg| self.resolve_ty(arg)).collect())
-            }
+            Ty::Enum(name, args) => Ty::Enum(
+                name.clone(),
+                args.iter().map(|arg| self.resolve_ty(arg)).collect(),
+            ),
             Ty::Result(ok, err) => Ty::Result(
                 Box::new(self.resolve_ty(ok)),
                 Box::new(self.resolve_ty(err)),
@@ -2753,7 +2862,10 @@ impl Checker {
                 fields
                     .iter()
                     .map(|(field, field_ty)| {
-                        (field.clone(), self.instantiate_ty_with_fresh(field_ty, fresh))
+                        (
+                            field.clone(),
+                            self.instantiate_ty_with_fresh(field_ty, fresh),
+                        )
                     })
                     .collect(),
             ),
@@ -2762,7 +2874,10 @@ impl Checker {
                 fields
                     .iter()
                     .map(|(field, field_ty)| {
-                        (field.clone(), self.instantiate_ty_with_fresh(field_ty, fresh))
+                        (
+                            field.clone(),
+                            self.instantiate_ty_with_fresh(field_ty, fresh),
+                        )
                     })
                     .collect(),
             ),
@@ -3000,18 +3115,16 @@ impl Checker {
                 self.resolve_ty(&ret_ty),
                 Box::new(self.resolve_typed_node(*body)),
             ),
-            TypedInner::ExtractorDef(fun_idx, id, param, ret_ty, body) => {
-                TypedInner::ExtractorDef(
-                    fun_idx,
-                    id,
-                    TypedFunParam {
-                        id: param.id,
-                        ty: self.resolve_ty(&param.ty),
-                    },
-                    self.resolve_ty(&ret_ty),
-                    Box::new(self.resolve_typed_node(*body)),
-                )
-            }
+            TypedInner::ExtractorDef(fun_idx, id, param, ret_ty, body) => TypedInner::ExtractorDef(
+                fun_idx,
+                id,
+                TypedFunParam {
+                    id: param.id,
+                    ty: self.resolve_ty(&param.ty),
+                },
+                self.resolve_ty(&ret_ty),
+                Box::new(self.resolve_typed_node(*body)),
+            ),
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
                 TypedInner::BuiltinExtractorDecl(
                     id,
@@ -3087,10 +3200,7 @@ impl Checker {
                 success_tag,
                 no_match_tag,
                 err_tag,
-                seq_tys: seq_tys
-                    .into_iter()
-                    .map(|ty| self.resolve_ty(&ty))
-                    .collect(),
+                seq_tys: seq_tys.into_iter().map(|ty| self.resolve_ty(&ty)).collect(),
                 items: items
                     .into_iter()
                     .map(|item| self.resolve_typed_pattern(item))
@@ -3127,6 +3237,7 @@ impl Checker {
                 Box::new(self.resolve_typed_match_pattern(*tail)),
             ),
             TypedMatchPattern::Extractor {
+                input_ty,
                 extractor,
                 extractor_ty,
                 success_tag,
@@ -3135,15 +3246,13 @@ impl Checker {
                 seq_tys,
                 items,
             } => TypedMatchPattern::Extractor {
+                input_ty: self.resolve_ty(&input_ty),
                 extractor,
                 extractor_ty: self.resolve_ty(&extractor_ty),
                 success_tag,
                 no_match_tag,
                 err_tag,
-                seq_tys: seq_tys
-                    .into_iter()
-                    .map(|ty| self.resolve_ty(&ty))
-                    .collect(),
+                seq_tys: seq_tys.into_iter().map(|ty| self.resolve_ty(&ty)).collect(),
                 items: items
                     .into_iter()
                     .map(|item| self.resolve_typed_match_pattern(item))
@@ -3275,9 +3384,10 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 match rhs_ty {
                     Ty::List(_) => Ok((TypedPattern::ListNil(rhs_ty.clone()), rhs_ty)),
+                    Ty::Str => Ok((TypedPattern::StrLit(Ty::Str, String::new()), rhs_ty)),
                     other => Err(TypeError {
                         message: format!(
-                            "empty list pattern requires List<...>, got {}",
+                            "empty list pattern requires List<...> or String, got {}",
                             self.ty_name(&other)
                         ),
                         span: pspan.clone(),
@@ -3287,30 +3397,51 @@ impl Checker {
             }
             ResolvedPattern::ListCons(head, tail) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
-                let elem_ty = match &rhs_ty {
-                    Ty::List(inner) => inner.as_ref().clone(),
-                    other => {
-                        return Err(TypeError {
-                            message: format!(
-                                "list pattern requires List<...>, got {}",
-                                self.ty_name(other)
+                match &rhs_ty {
+                    Ty::List(inner) => {
+                        let elem_ty = inner.as_ref().clone();
+                        let (typed_head, _) = self.check_pattern(head, &elem_ty, span)?;
+                        let tail_ty = Ty::List(Box::new(elem_ty.clone()));
+                        let (typed_tail, _) = self.check_pattern(tail, &tail_ty, span)?;
+                        Ok((
+                            TypedPattern::ListCons(
+                                rhs_ty.clone(),
+                                Box::new(typed_head),
+                                Box::new(typed_tail),
                             ),
-                            span: span.clone(),
-                            hint: None,
-                        });
+                            rhs_ty,
+                        ))
                     }
-                };
-                let (typed_head, _) = self.check_pattern(head, &elem_ty, span)?;
-                let tail_ty = Ty::List(Box::new(elem_ty.clone()));
-                let (typed_tail, _) = self.check_pattern(tail, &tail_ty, span)?;
-                Ok((
-                    TypedPattern::ListCons(
-                        rhs_ty.clone(),
-                        Box::new(typed_head),
-                        Box::new(typed_tail),
-                    ),
-                    rhs_ty,
-                ))
+                    Ty::Str => {
+                        let extractor_id = self.kernel_uncons_id(span)?;
+                        let (input_ty, extractor_ty, seq_tys, success_tag, no_match_tag, err_tag) =
+                            self.extractor_contract_for_observed_ty(&extractor_id, &rhs_ty, span)?;
+                        debug_assert_eq!(seq_tys.len(), 2);
+                        let (typed_head, _) = self.check_pattern(head, &seq_tys[0], span)?;
+                        let (typed_tail, _) = self.check_pattern(tail, &seq_tys[1], span)?;
+                        Ok((
+                            TypedPattern::Extractor {
+                                input_ty,
+                                extractor: extractor_id,
+                                extractor_ty,
+                                success_tag,
+                                no_match_tag,
+                                err_tag,
+                                seq_tys,
+                                items: vec![typed_head, typed_tail],
+                            },
+                            rhs_ty,
+                        ))
+                    }
+                    other => Err(TypeError {
+                        message: format!(
+                            "list pattern requires List<...> or String, got {}",
+                            self.ty_name(other)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    }),
+                }
             }
             ResolvedPattern::IntLit(pspan, n) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
@@ -3399,20 +3530,13 @@ impl Checker {
                 ))
             }
             ResolvedPattern::Extractor(extractor_id, items) => {
-                let (input_ty, seq_tys, success_tag, no_match_tag, err_tag) =
-                    self.extractor_contract(extractor_id, &extractor_id.span)?;
-                let extractor_ty = self
-                    .env
-                    .lookup_var(extractor_id.unique_id)
-                    .cloned()
-                    .ok_or_else(|| TypeError {
-                        message: format!("Undefined extractor: {}", extractor_id.name),
-                        span: extractor_id.span.clone(),
-                        hint: None,
-                    })?;
-                let extractor_ty = self.instantiate_builtin_ty(&extractor_ty);
-                let extractor_ty = self.resolve_ty(&extractor_ty);
                 let rhs_ty = self.resolve_ty(rhs_ty);
+                let (input_ty, extractor_ty, seq_tys, success_tag, no_match_tag, err_tag) = self
+                    .extractor_contract_for_observed_ty(
+                        extractor_id,
+                        &rhs_ty,
+                        &extractor_id.span,
+                    )?;
                 if !self.types_compatible(&input_ty, &rhs_ty) {
                     return Err(TypeError {
                         message: format!(
@@ -4390,7 +4514,8 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_node(value)?;
         let typed_pred = self.check_compose_callable(pred, "ensure")?;
-        let (pred_in, pred_out) = self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
+        let (pred_in, pred_out) =
+            self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
         if !self.types_compatible(&pred_in, &typed_value.ty) {
             return Err(TypeError {
                 message: format!(
@@ -4418,7 +4543,10 @@ impl Checker {
         self.ensure_guard_error_value(&typed_err, "ensure")?;
 
         Ok(TypedNode {
-            ty: Ty::Result(Box::new(self.resolve_ty(&typed_value.ty)), Box::new(Ty::Error)),
+            ty: Ty::Result(
+                Box::new(self.resolve_ty(&typed_value.ty)),
+                Box::new(Ty::Error),
+            ),
             span: span.clone(),
             node: TypedInner::Ensure(
                 Box::new(typed_value),
@@ -4572,6 +4700,38 @@ impl Checker {
                 } else {
                     let mut missing = Vec::new();
                     if !has_nil {
+                        missing.push("[]");
+                    }
+                    if !has_cons {
+                        missing.push("[head, ..tail]");
+                    }
+                    Err(TypeError {
+                        message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
+                        span: span.clone(),
+                        hint: None,
+                    })
+                }
+            }
+            Ty::Str => {
+                let has_empty = arms.iter().any(
+                    |(pat, _)| matches!(pat, TypedMatchPattern::StrLit(value) if value.is_empty()),
+                );
+                let has_cons = arms.iter().any(|(pat, _)| {
+                    matches!(
+                        pat,
+                        TypedMatchPattern::Extractor {
+                            input_ty,
+                            extractor,
+                            ..
+                        } if extractor.name == "uncons"
+                            && matches!(self.resolve_ty(input_ty), Ty::Str)
+                    )
+                });
+                if has_empty && has_cons {
+                    Ok(())
+                } else {
+                    let mut missing = Vec::new();
+                    if !has_empty {
                         missing.push("[]");
                     }
                     if !has_cons {
@@ -4788,42 +4948,66 @@ impl Checker {
                     field_offset: 1,
                 })
             }
-            ResolvedPattern::ListNil(span) => {
-                if !matches!(expected_ty, Ty::List(_)) {
-                    return Err(TypeError {
-                        message: "empty list pattern on non-List scrutinee".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
+            ResolvedPattern::ListNil(span) => match self.resolve_ty(expected_ty) {
+                Ty::List(_) => Ok(TypedMatchPattern::ListNil),
+                Ty::Str => Ok(TypedMatchPattern::StrLit(String::new())),
+                _ => Err(TypeError {
+                    message: "empty list pattern on non-List/String scrutinee".into(),
+                    span: span.clone(),
+                    hint: None,
+                }),
+            },
+            ResolvedPattern::ListCons(head, tail) => match self.resolve_ty(expected_ty) {
+                Ty::List(inner) => {
+                    let elem_ty = inner.as_ref().clone();
+                    let typed_head = self.check_match_subpattern(head, &elem_ty)?;
+                    let tail_ty = Ty::List(Box::new(elem_ty));
+                    let typed_tail = self.check_match_subpattern(tail, &tail_ty)?;
+                    Ok(TypedMatchPattern::ListCons(
+                        Box::new(typed_head),
+                        Box::new(typed_tail),
+                    ))
                 }
-                Ok(TypedMatchPattern::ListNil)
-            }
-            ResolvedPattern::ListCons(head, tail) => {
-                let elem_ty = match expected_ty {
-                    Ty::List(inner) => inner.as_ref().clone(),
-                    other => {
-                        return Err(TypeError {
-                            message: format!(
-                                "list pattern requires List<...>, got {}",
-                                self.ty_name(other)
-                            ),
-                            span: Span { start: 0, end: 0 },
-                            hint: None,
-                        });
-                    }
-                };
-                let typed_head = self.check_match_subpattern(head, &elem_ty)?;
-                let tail_ty = Ty::List(Box::new(elem_ty));
-                let typed_tail = self.check_match_subpattern(tail, &tail_ty)?;
-                Ok(TypedMatchPattern::ListCons(
-                    Box::new(typed_head),
-                    Box::new(typed_tail),
-                ))
-            }
+                Ty::Str => {
+                    let extractor_id = self.kernel_uncons_id(&Span { start: 0, end: 0 })?;
+                    let (input_ty, extractor_ty, seq_tys, success_tag, no_match_tag, err_tag) =
+                        self.extractor_contract_for_observed_ty(
+                            &extractor_id,
+                            &Ty::Str,
+                            &extractor_id.span,
+                        )?;
+                    debug_assert_eq!(seq_tys.len(), 2);
+                    let mut typed_items = Vec::with_capacity(2);
+                    typed_items.push(self.check_match_subpattern(head, &seq_tys[0])?);
+                    typed_items.push(self.check_match_subpattern(tail, &seq_tys[1])?);
+                    Ok(TypedMatchPattern::Extractor {
+                        input_ty,
+                        extractor: extractor_id,
+                        extractor_ty,
+                        success_tag,
+                        no_match_tag,
+                        err_tag,
+                        seq_tys,
+                        items: typed_items,
+                    })
+                }
+                other => Err(TypeError {
+                    message: format!(
+                        "list pattern requires List<...> or String, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: Span { start: 0, end: 0 },
+                    hint: None,
+                }),
+            },
             ResolvedPattern::Extractor(extractor_id, items) => {
-                let (input_ty, seq_tys, success_tag, no_match_tag, err_tag) =
-                    self.extractor_contract(extractor_id, &extractor_id.span)?;
                 let expected_ty = self.resolve_ty(expected_ty);
+                let (input_ty, extractor_ty, seq_tys, success_tag, no_match_tag, err_tag) = self
+                    .extractor_contract_for_observed_ty(
+                        extractor_id,
+                        &expected_ty,
+                        &extractor_id.span,
+                    )?;
                 if !self.types_compatible(&input_ty, &expected_ty) {
                     return Err(TypeError {
                         message: format!(
@@ -4852,18 +5036,10 @@ impl Checker {
                 for (item, item_ty) in items.iter().zip(seq_tys.iter()) {
                     typed_items.push(self.check_match_subpattern(item, item_ty)?);
                 }
-                let extractor_ty = self
-                    .env
-                    .lookup_var(extractor_id.unique_id)
-                    .cloned()
-                    .ok_or_else(|| TypeError {
-                        message: format!("Undefined extractor: {}", extractor_id.name),
-                        span: extractor_id.span.clone(),
-                        hint: None,
-                    })?;
                 Ok(TypedMatchPattern::Extractor {
+                    input_ty: expected_ty,
                     extractor: extractor_id.clone(),
-                    extractor_ty: self.instantiate_builtin_ty(&extractor_ty),
+                    extractor_ty,
                     success_tag,
                     no_match_tag,
                     err_tag,
@@ -4960,13 +5136,11 @@ impl Checker {
             .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match ret_ty {
-            Some(ty) => {
-                self.resolve_builtin_ast_ty_in_context(
-                    ty,
-                    TypeSyntaxContext::FunctionReturn,
-                    &mut tyvars,
-                )?
-            }
+            Some(ty) => self.resolve_builtin_ast_ty_in_context(
+                ty,
+                TypeSyntaxContext::FunctionReturn,
+                &mut tyvars,
+            )?,
             None => Ty::Unit,
         };
 
@@ -5058,25 +5232,33 @@ impl Checker {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "Boolean")
                     && Self::is_named_type(&params[1].ty, "Boolean")
-                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
             }
             "eq" | "neq" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "$A")
                     && Self::is_named_type(&params[1].ty, "$A")
-                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
             }
             "lt" | "lte" | "gt" | "gte" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "$A")
                     && Self::is_named_type(&params[1].ty, "$A")
-                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
             }
             "concat" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "String")
                     && Self::is_named_type(&params[1].ty, "String")
-                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "String"))
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_named_type(ty, "String"))
             }
             _ => false,
         };
@@ -5114,13 +5296,11 @@ impl Checker {
             .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match ret_ty {
-            Some(ty) => {
-                self.resolve_builtin_ast_ty_in_context(
-                    ty,
-                    TypeSyntaxContext::FunctionReturn,
-                    &mut tyvars,
-                )?
-            }
+            Some(ty) => self.resolve_builtin_ast_ty_in_context(
+                ty,
+                TypeSyntaxContext::FunctionReturn,
+                &mut tyvars,
+            )?,
             None => Ty::Unit,
         };
 
@@ -5204,11 +5384,9 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let mut tyvars = HashMap::new();
         let param_ty = match &param.ty {
-            Some(ty) => self.resolve_builtin_ast_ty_in_context(
-                ty,
-                TypeSyntaxContext::General,
-                &mut tyvars,
-            )?,
+            Some(ty) => {
+                self.resolve_builtin_ast_ty_in_context(ty, TypeSyntaxContext::General, &mut tyvars)?
+            }
             None => self.env.fresh_tyvar(),
         };
         let ret = self.resolve_builtin_ast_ty_in_context(
@@ -5275,7 +5453,9 @@ impl Checker {
 
         let shape_ok = match id.name.as_str() {
             "Ok" => Self::is_named_type(param_ty, "$T") && Self::is_result_of_named(ret_ty, "$T"),
-            "Err" => Self::is_named_type(param_ty, "Error") && Self::is_result_of_named(ret_ty, "$T"),
+            "Err" => {
+                Self::is_named_type(param_ty, "Error") && Self::is_result_of_named(ret_ty, "$T")
+            }
             _ => false,
         };
 
@@ -5340,8 +5520,7 @@ impl Checker {
     fn is_special_form_builtin_decl_name(name: &str) -> bool {
         matches!(
             name,
-            "if"
-                | "if_then"
+            "if" | "if_then"
                 | "assert"
                 | "ensure"
                 | "and"
@@ -5558,7 +5737,11 @@ impl Checker {
             TypeSyntaxContext::FunctionReturn,
             &mut tyvars,
         )?;
-        self.require_match_result_seq_ty(&expected_ret, &param.id.span, &format!("Extractor {}", id.name))?;
+        self.require_match_result_seq_ty(
+            &expected_ret,
+            &param.id.span,
+            &format!("Extractor {}", id.name),
+        )?;
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
         let mut body_checker = self.spawn_child_checker(fun_env);
@@ -6411,11 +6594,7 @@ impl Checker {
         }
     }
 
-    fn ensure_guard_error_value(
-        &self,
-        node: &TypedNode,
-        form_name: &str,
-    ) -> Result<(), TypeError> {
+    fn ensure_guard_error_value(&self, node: &TypedNode, form_name: &str) -> Result<(), TypeError> {
         if !matches!(node.ty, Ty::Error) {
             return Err(TypeError {
                 message: format!(

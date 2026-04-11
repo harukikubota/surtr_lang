@@ -53,6 +53,9 @@ pub enum Opcode {
 
     // String
     ConcatStr,
+    StringIsEmpty,
+    StringHead,
+    StringTail,
 
     // Unary
     NegInt,
@@ -162,6 +165,9 @@ impl Opcode {
             Self::EqBool => "EqBool",
             Self::NeqBool => "NeqBool",
             Self::ConcatStr => "ConcatStr",
+            Self::StringIsEmpty => "StringIsEmpty",
+            Self::StringHead => "StringHead",
+            Self::StringTail => "StringTail",
             Self::NegInt => "NegInt",
             Self::NegFloat => "NegFloat",
             Self::NotBool => "NotBool",

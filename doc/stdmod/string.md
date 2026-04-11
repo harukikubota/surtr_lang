@@ -29,6 +29,7 @@ print(to_string(String::repeat("na", -1)))
 
 - `join` と `repeat` は pure Surtr の再帰で実装します。
 - `repeat` は trap ではなく `Result` で失敗を返し、関数型らしく合成しやすい surface を優先します。
+- MatchBlock では `Kernel::uncons(term)` または `[head, ..tail]` を使って `String` を分解します。通常関数としての `String::uncons` は置きません。
 
 ## Next candidates
 
@@ -39,7 +40,6 @@ print(to_string(String::repeat("na", -1)))
 - `String::ends_with(value, suffix) -> Boolean`
 - `String::strip_prefix(value, prefix) -> Result<String, NoneError>`
 - `String::strip_suffix(value, suffix) -> Result<String, NoneError>`
-- `String::uncons(value) -> Result<StringUncons, NoneError>` または MatchBlock 用 builtin Extractor
 - `String::split_once(value, separator) -> Result<StringSplit, NoneError>`
 - `String::trim(value) -> String`
 - `String::trim_start(value) -> String`

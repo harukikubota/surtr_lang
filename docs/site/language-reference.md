@@ -252,11 +252,13 @@ pipeline = &parse |=> &validate
 value: Int =? parse_int("1")
 [head, ..tail] =? [1, 2, 3]
 [head, ..tail] =? Ok([1, 2, 3])
+[first, ..tail] =? "source"
 ```
 
 - `pattern =? Result<T, E>` は `Ok` を束縛し、`Err` を早期伝播する
 - `pattern =? expr` は SafeBind 対象の失敗しうるパターン入力を扱う
-- 現時点の対象は `Result` と `List`
+- 現時点の対象は `Result`、`List`、`String`
+- `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
 #### 共通制約
 

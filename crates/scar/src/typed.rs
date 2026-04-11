@@ -149,6 +149,7 @@ pub enum TypedMatchPattern {
     /// `[head, ..tail]`
     ListCons(Box<TypedMatchPattern>, Box<TypedMatchPattern>),
     Extractor {
+        input_ty: Ty,
         extractor: ResolvedId,
         extractor_ty: Ty,
         success_tag: u32,

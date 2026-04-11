@@ -195,6 +195,23 @@ defmod Kernel {
   @@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>
 
   @@doc """
+  Decompose a non-empty sequence in MatchBlock positions.
+
+  `uncons(term)` is a builtin Extractor used by `=?` and `match`.
+  It accepts both `List` and `String`.
+
+  - `List<$A>` becomes `(head: $A, tail: List<$A>)`
+  - `String` becomes `(head: String, tail: String)`
+
+  In pattern position, `[head, ..tail]` is an alias of `uncons(head, tail)`.
+  This alias is MatchBlock-only; expression position keeps list construction
+  semantics, so `["t", ..source]` is still a list expression.
+
+  Empty input returns `NoMatch`.
+  """
+  @@builtin defextractor uncons(term) -> MatchResult<Seq<$Head, $Tail>, Error>
+
+  @@doc """
   Print a string to stdout.
   Use `to_string(...)` first when the value is not already `String`.
   This builtin belongs under `Kernel` because printing is part of the shared

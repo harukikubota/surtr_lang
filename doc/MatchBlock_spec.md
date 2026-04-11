@@ -14,7 +14,9 @@ MatchBlock は、Surtr の左辺位置でのみ使われる分解記法である
 
 - `name = expr` の左辺
 - `name =? expr` の左辺
+- `SafeBind.LHS` (`pattern =? expr` の `pattern`)
 - `match expr { lhs => rhs, ... }` の各 arm 左辺
+- `matchArm.LHS` (`lhs => rhs` の `lhs`)
 
 MatchBlock は通常の式評価とは異なる。
 右辺の値を起点に、左辺の構造・literal・Extractor を再帰的にたどり、
@@ -278,16 +280,17 @@ surface では `MatchResult<$Value, Error>` を canonical spelling として扱�
 - 入力値と literal が一致すれば `Success`
 - 一致しなければ `NoMatch`
 
-### 6.5 list pattern
+### 6.5 sequence pattern
 
 - `[]`
 - `[head, ..tail]`
 
 意味:
 
-- `[]` は空 list にのみ `Success`
-- `[head, ..tail]` は非空 list にのみ `Success`
+- `[]` は空 `List` または空 `String` にのみ `Success`
+- `[head, ..tail]` は非空 `List` または非空 `String` にのみ `Success`
 - 成功時は `head` と `tail` を再帰的に処理する
+- `String` に対する `[head, ..tail]` は `Kernel::uncons(head, tail)` の alias として扱う
 
 ### 6.6 constructor pattern
 
@@ -396,6 +399,9 @@ User(name, age)
 
 `=?` は失敗しうる MatchBlock を手続きレベルで扱うための構文である。
 
+- `SafeBind.LHS` は MatchBlock として解釈する
+- `SafeBind.RHS` の値を起点に MatchBlock evaluator を適用する
+
 - `Success` なら束縛して続行
 - `NoMatch` は error へ変換して伝播してよい
 - `Err` はそのまま伝播する
@@ -406,6 +412,9 @@ User(name, age)
 ### 8.3 `match`
 
 `match` は分岐用途であり、`NoMatch` を次 arm へ流せる。
+
+- 各 `matchArm.LHS` は MatchBlock として解釈する
+- 各 arm は scrutinee に対して MatchBlock evaluator を適用して判定する
 
 - arm が `Success` ならその arm を採用
 - arm が `NoMatch` なら次 arm を試す
@@ -424,6 +433,7 @@ User(name, age)
 例:
 
 - `List<T>` に対する `[]` と `[head, ..tail]`
+- `String` に対する `[]` と `[head, ..tail]`
 - `defenum` に対する全 variant 列挙
 
 ### 9.2 意味網羅
@@ -457,6 +467,7 @@ MatchBlock 内に partial matcher が含まれる場合、
 構造網羅だけで total と判定してよい例:
 
 - `List<T>` に対する `[]` と `[head, ..tail]`
+- `String` に対する `[]` と `[head, ..tail]`
 - `defenum` に対する全 variant 列挙
 
 構造網羅だけでは total と判定できない例:
@@ -566,12 +577,12 @@ Extractor の分解結果を運ぶ compiler-special な型。
 """
 @@builtin type Seq<$Type>
 
-defmod List {
+defmod Kernel {
   @@doc """
-  非空 List を `(head, tail)` へ分解する builtin Extractor。
-  空 List のときは `NoMatch` を返す。
+  非空 List または非空 String を `(head, tail)` へ分解する builtin Extractor。
+  空入力のときは `NoMatch` を返す。
   """
-  @@builtin defextractor uncons(self: List<$A>) -> MatchResult<Seq<$A, List<$A>>, Error>
+  @@builtin defextractor uncons(term) -> MatchResult<Seq<$Head, $Tail>, Error>
 }
 
 @@doc """
@@ -603,6 +614,8 @@ impl User {
 - `Seq` の arity や各要素型の厳密な扱いは compiler が吸収してよい
 - builtin Extractor も user-defined Extractor も、宣言レベルでは同じ段に置けることを重視する
 - `uncons` は code-level に宣言があっても、内部実装は compiler-special のままでよい
+- Pattern 位置の `[head, ..tail]` は `List` / `String` に対して `uncons(head, tail)` の alias として扱ってよい
+- Expr 位置の `["t", ..source]` は引き続き list 構築であり、String 構築 sugar にはしない
 - constructor-style な head は `defextractor` 名ではなく attached extractor sugar として使う
 - `defextractor` / `@@builtin defextractor` は module / impl の下でのみ宣言する
 - `User(...)` は `User::deconstruct(...)` が定義されているときだけ Extractor call として成立する

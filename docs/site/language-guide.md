@@ -281,12 +281,18 @@ def pick() -> Result<Int> {
 例外送出ではなく、`Either` 的な分岐を短く書くための記法だと考えると追いやすくなります。
 
 `=?` は Result 専用というより、Surtr では「失敗を伝播する束縛」の入口です。  
-現在きちんと使える対象は `Result` と `List` です。
+現在きちんと使える対象は `Result`、`List`、`String` です。
 
 ```surtr
 [head, ..tail] =? [1, 2, 3]
 print(to_string(head))
 print(to_string(tail))
+```
+
+```surtr
+[first, ..tail] =? "source"
+print(first)   # => "s"
+print(tail)    # => "ource"
 ```
 
 `Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では `defenum` と同一 contract にはしません。  
@@ -317,7 +323,8 @@ List::find_map([1, 2], &lookup)
 
 ここでの単位元は `[]` です。  
 Surtr は一般化された `pure` を置かず、`[]` と `List::cons` / `[x]` をはっきり分けています。
-`[head, ..tail]` の分解は pattern 位置専用で、値側の基本操作としては `List::cons` を使います。
+`[head, ..tail]` の分解は pattern 位置専用で、`List` と `String` のどちらにも使えます。
+値側の基本操作は引き続き `List::cons` で、`["t", ..source]` は list 構築のままです。
 
 ## 10. パイプラインと合成
 

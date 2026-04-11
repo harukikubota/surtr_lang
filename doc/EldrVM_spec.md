@@ -132,6 +132,7 @@ Opcode は以下のカテゴリを持つ。
 - 定数/ローカル操作（Load/Store）
 - 算術・比較・bitwise
 - 文字列結合
+- 文字列分解
 - リスト/タグ付き値操作
 - 呼び出し（`Call`, `CallClosure`, `CallBuiltin`）
 - 制御フロー（`Jump`, `JumpIf*`）

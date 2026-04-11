@@ -131,13 +131,19 @@ mod tests {
                     "Boolean",
                     pick_override("Boolean", BOOLEAN_MODULE_SOURCE, overrides),
                 ),
-                ("Error", pick_override("Error", ERROR_MODULE_SOURCE, overrides)),
+                (
+                    "Error",
+                    pick_override("Error", ERROR_MODULE_SOURCE, overrides),
+                ),
                 ("List", pick_override("List", LIST_MODULE_SOURCE, overrides)),
                 (
                     "Result",
                     pick_override("Result", RESULT_MODULE_SOURCE, overrides),
                 ),
-                ("Float", pick_override("Float", FLOAT_MODULE_SOURCE, overrides)),
+                (
+                    "Float",
+                    pick_override("Float", FLOAT_MODULE_SOURCE, overrides),
+                ),
             ]
             .into_iter()
             .flat_map(|(name, source)| parse_std_module_stage(source, name))
@@ -197,7 +203,11 @@ mod tests {
         )
     }
 
-    fn pick_override<'a>(name: &str, default_source: &'a str, overrides: &[(&str, &'a str)]) -> &'a str {
+    fn pick_override<'a>(
+        name: &str,
+        default_source: &'a str,
+        overrides: &[(&str, &'a str)],
+    ) -> &'a str {
         overrides
             .iter()
             .find(|(override_name, _)| *override_name == name)
@@ -308,6 +318,45 @@ Ok(num) =? value"#,
             typed.last().map(|node| &node.node),
             Some(TypedInner::SafeBind(_, _))
         ));
+    }
+
+    #[test]
+    fn safebind_string_pattern_accepts_plain_string_rhs() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"value = "source"
+[head, ..tail] =? value"#,
+        );
+        let typed = typecheck(resolved).expect("typecheck should succeed");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::SafeBind(_, _))
+        ));
+    }
+
+    #[test]
+    fn match_string_requires_empty_and_uncons_arms_for_exhaustiveness() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"value = "x"
+print(match value {
+  [head, ..tail] => head,
+})"#,
+        );
+
+        let err = typecheck(resolved).expect_err("typecheck should fail");
+        assert!(err.message.contains("Non-exhaustive match. Missing: []"));
+    }
+
+    #[test]
+    fn match_string_accepts_empty_and_uncons_arms() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"value = "x"
+print(match value {
+  [] => "empty",
+  [head, ..tail] => tail,
+})"#,
+        );
+        let typed = typecheck(resolved).expect("typecheck should succeed");
+        assert!(!typed.is_empty());
     }
 
     #[test]
@@ -546,7 +595,10 @@ guard = ensure(4, &is_even, NoneError)"#,
         let bind = typed.last().expect("binding should exist");
         match &bind.node {
             TypedInner::Bind(_, rhs) => {
-                assert!(matches!(rhs.node, TypedInner::BinOp(spire::ast::BinOp::Eq, _, _)));
+                assert!(matches!(
+                    rhs.node,
+                    TypedInner::BinOp(spire::ast::BinOp::Eq, _, _)
+                ));
                 assert!(matches!(rhs.ty, crate::types::Ty::Bool));
             }
             other => panic!("expected bind, got {:?}", other),
@@ -559,7 +611,10 @@ guard = ensure(4, &is_even, NoneError)"#,
         let bind = typed.last().expect("binding should exist");
         match &bind.node {
             TypedInner::Bind(_, rhs) => {
-                assert!(matches!(rhs.node, TypedInner::BinOp(spire::ast::BinOp::Lt, _, _)));
+                assert!(matches!(
+                    rhs.node,
+                    TypedInner::BinOp(spire::ast::BinOp::Lt, _, _)
+                ));
                 assert!(matches!(rhs.ty, crate::types::Ty::Bool));
             }
             other => panic!("expected bind, got {:?}", other),
@@ -590,9 +645,7 @@ guard = ensure(4, is_even(), NoneError)"#,
             SourceRules::script(),
         )
         .expect_err("call expression predicate must fail");
-        assert!(err
-            .message
-            .contains("ensure requires a closure or capture"));
+        assert!(err.message.contains("ensure requires a closure or capture"));
     }
 
     #[test]
@@ -625,9 +678,9 @@ defmod Kernel {
 }"#,
         )])
         .expect_err("lazy signature should violate canonical contract");
-        assert!(err.message.contains(
-            "@@builtin def and(left: Boolean, right: Boolean) -> Boolean"
-        ));
+        assert!(err
+            .message
+            .contains("@@builtin def and(left: Boolean, right: Boolean) -> Boolean"));
     }
 
     #[test]
@@ -657,9 +710,9 @@ defmod Kernel {
 }"#,
         )])
         .expect_err("generic concat signature should violate canonical contract");
-        assert!(err.message.contains(
-            "@@builtin def concat(left: String, right: String) -> String"
-        ));
+        assert!(err
+            .message
+            .contains("@@builtin def concat(left: String, right: String) -> String"));
     }
 
     #[test]
@@ -679,11 +732,10 @@ left: Int = id(1)
 right: String = id("ok")"#,
         );
         assert!(typed.len() >= 3);
-        assert!(typed
-            .iter()
-            .rev()
-            .take(3)
-            .all(|node| matches!(node.node, TypedInner::Bind(_, _) | TypedInner::Def(_, _, _, _, _))));
+        assert!(typed.iter().rev().take(3).all(|node| matches!(
+            node.node,
+            TypedInner::Bind(_, _) | TypedInner::Def(_, _, _, _, _)
+        )));
     }
 
     #[test]

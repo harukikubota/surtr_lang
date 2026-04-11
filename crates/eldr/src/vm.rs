@@ -625,8 +625,7 @@ impl VM {
     }
 
     fn can_optimize_tail_call(&self, next_pc: usize) -> bool {
-        self.frames.len() > 1
-            && matches!(self.bytecode.opcodes.get(next_pc), Some(Opcode::Return))
+        self.frames.len() > 1 && matches!(self.bytecode.opcodes.get(next_pc), Some(Opcode::Return))
     }
 
     fn reuse_current_frame_for_call(
@@ -1082,6 +1081,26 @@ impl VM {
                 let b = self.pop_str()?;
                 let a = self.pop_str()?;
                 self.stack.push(Value::Str(a + &b));
+            }
+            Opcode::StringIsEmpty => {
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.is_empty()));
+            }
+            Opcode::StringHead => {
+                let value = self.pop_str()?;
+                let mut chars = value.chars();
+                let head = chars
+                    .next()
+                    .ok_or_else(|| RuntimeError::new("StringHead on empty string"))?;
+                self.stack.push(Value::Str(head.to_string()));
+            }
+            Opcode::StringTail => {
+                let value = self.pop_str()?;
+                let mut chars = value.chars();
+                chars
+                    .next()
+                    .ok_or_else(|| RuntimeError::new("StringTail on empty string"))?;
+                self.stack.push(Value::Str(chars.collect()));
             }
 
             // Unary
@@ -2464,6 +2483,44 @@ mod tests {
         let bytecode = base_bytecode(vec![Opcode::ListEmpty, Opcode::ListTail, Opcode::Halt]);
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("ListTail on empty list"));
+    }
+
+    #[test]
+    fn string_head_and_tail_execute_successfully() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::StringHead,
+            Opcode::LoadConst(0),
+            Opcode::StringTail,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Str("あい".into())];
+
+        let mut vm = VM::new(bytecode);
+        vm.run().expect("must succeed");
+
+        assert_eq!(
+            vm.stack,
+            vec![Value::Str("あ".into()), Value::Str("い".into())]
+        );
+    }
+
+    #[test]
+    fn string_head_on_empty_string_is_runtime_error() {
+        let mut bytecode =
+            base_bytecode(vec![Opcode::LoadConst(0), Opcode::StringHead, Opcode::Halt]);
+        bytecode.constants = vec![Constant::Str(String::new())];
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("StringHead on empty string"));
+    }
+
+    #[test]
+    fn string_tail_on_empty_string_is_runtime_error() {
+        let mut bytecode =
+            base_bytecode(vec![Opcode::LoadConst(0), Opcode::StringTail, Opcode::Halt]);
+        bytecode.constants = vec![Constant::Str(String::new())];
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("StringTail on empty string"));
     }
 
     #[test]
