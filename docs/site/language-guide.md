@@ -446,12 +446,12 @@ pipeline = &parse |=> &validate
 - `print(String) -> Unit`
 - `to_string(A) -> String`
 - `inspect(A) -> String`
-- `safe_div(A, A) -> Result<A>`
-- `safe_mod(Int, Int) -> Result<Int>`
+- `safe_div(A, A) -> Result<A, ZeroDivisionError>`
+- `safe_mod(Int, Int) -> Result<Int, ZeroDivisionError>`
 - `eprint(Error) -> Unit`
 - `set_exit_code(Int) -> Unit`
 
-`safe_div` と `safe_mod` は、失敗を例外ではなく `Result` で返します。
+`safe_div` と `safe_mod` は、失敗を例外ではなく `Result<_, ZeroDivisionError>` で返します。
 
 ## 12. 標準モジュールの前提
 

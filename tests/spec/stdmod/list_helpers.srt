@@ -1,0 +1,8 @@
+print(to_string(List::append([1, 2], [3, 4])))
+print(to_string(List::flat_map([1, 2], {|n| [n, n + 10]})))
+print(to_string(List::concat([[1], [2, 3], []])))
+print(to_string(List::last([1, 2, 3])))
+print(to_string(List::last([])))
+print(to_string(List::at([10, 20, 30], 1)))
+print(to_string(List::at([], 0)))
+print(to_string(List::at([10, 20], -1)))

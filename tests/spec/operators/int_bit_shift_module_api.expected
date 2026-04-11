@@ -1,2 +1,3 @@
-8
-4
+Ok(8)
+Ok(4)
+Err(NegativeShiftCount("shift amount must be non-negative: -1"))

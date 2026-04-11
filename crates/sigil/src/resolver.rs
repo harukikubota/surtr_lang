@@ -2346,8 +2346,8 @@ mod tests {
                 r#"@@builtin def print(a: String) -> Unit
 @@builtin def to_string(a: $A) -> String
 @@builtin def inspect(a: $A) -> String
-@@builtin def safe_div(a: $A, b: $A) -> Result<$A>
-@@builtin def safe_mod(a: Int, b: Int) -> Result<Int>
+@@builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
+@@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 @@builtin def eprint(err: Error) -> Unit
 @@builtin def set_exit_code(code: Int) -> Unit
 deferror NoneError { "none" }
@@ -2391,7 +2391,10 @@ deferror Oops(reason: String) { reason }"#,
     fn test_precollect_builtin_decl_in_module() {
         let module_stages = vec![vec![staged_module(
             "Int",
-            parse_module_ast(r#"@@builtin def shl(value: Int, bits: Int) -> Int"#, "Int"),
+            parse_module_ast(
+                r#"@@builtin def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>"#,
+                "Int",
+            ),
         )]];
 
         let index =
@@ -2675,7 +2678,10 @@ user = User("alice", 30)"#,
     fn test_module_builtin_can_be_resolved_by_qualified_name() {
         let module_stages = vec![vec![staged_module(
             "Int",
-            parse_module_ast(r#"@@builtin def shl(value: Int, bits: Int) -> Int"#, "Int"),
+            parse_module_ast(
+                r#"@@builtin def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>"#,
+                "Int",
+            ),
         )]];
 
         let resolved = resolve_user_with_modules("value = Int::shl(2, 3)", &module_stages)

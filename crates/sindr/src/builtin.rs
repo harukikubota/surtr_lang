@@ -45,13 +45,13 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "safe_div",
         builtin_id: 3,
         arity: 2,
-        sig_str: "($A, $A) -> Result<$A>",
+        sig_str: "($A, $A) -> Result<$A, ZeroDivisionError>",
     },
     BuiltinMeta {
         name: "safe_mod",
         builtin_id: 4,
         arity: 2,
-        sig_str: "(Int, Int) -> Result<Int>",
+        sig_str: "(Int, Int) -> Result<Int, ZeroDivisionError>",
     },
     BuiltinMeta {
         name: "eprint",
@@ -69,13 +69,13 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "shl",
         builtin_id: 7,
         arity: 2,
-        sig_str: "(Int, Int) -> Int",
+        sig_str: "(Int, Int) -> Result<Int, NegativeShiftCount>",
     },
     BuiltinMeta {
         name: "shr",
         builtin_id: 8,
         arity: 2,
-        sig_str: "(Int, Int) -> Int",
+        sig_str: "(Int, Int) -> Result<Int, NegativeShiftCount>",
     },
     BuiltinMeta {
         name: "len",

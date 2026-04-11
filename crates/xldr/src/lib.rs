@@ -531,7 +531,7 @@ defmod Result {
     fn lower_module_source_keeps_builtin_decls_global_even_with_single_defmod() {
         let ast = spire::parse_with_context(
             r#"@@builtin type Int
-@@builtin def safe_mod(a: Int, b: Int) -> Result<Int>
+@@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 
 defmod Int {
   def dummy() { () }

@@ -9,9 +9,16 @@ than a local library tweak.
 @@builtin type Int
 
 @@doc """
+Concrete integer-module error for negative bit shift counts.
+`Int::shl` and `Int::shr` return this instead of trapping when `bits < 0`.
+"""
+deferror NegativeShiftCount(bits: Int) {
+  "shift amount must be non-negative: #{bits}"
+}
+
+@@doc """
 Int module.
-Groups integer-specific helpers and placeholder surface while the module API
-grows.
+Groups integer-specific helpers and arithmetic predicates.
 The type declaration lives at the top level of this file, while the module body
 is reserved for integer-owned helpers.
 """
@@ -21,30 +28,81 @@ defmod Int {
   The success case keeps the same value type as the inputs.
   This follows the `Result`/`Either` style of representing failure as a value.
   """
-  @@builtin def safe_div(a: $A, b: $A) -> Result<$A>
+  @@builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
 
   @@doc """
   Compute `a mod b` for integers and return `Err(ZeroDivisionError)` on zero.
   Failure stays on the value side rather than becoming an implicit exception.
   """
-  @@builtin def safe_mod(a: Int, b: Int) -> Result<Int>
+  @@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 
   @@doc """
   Shift `value` left by `bits`.
-  This is part of the small bit-like helper surface kept in the `Int` module.
+  Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
   @@builtin
-  @@test shl(1, 1) == 2
-  @@test shl(1, 4) == 16
-  @@test shl(8, 2) == 32
-  def shl(value: Int, bits: Int) -> Int
+  @@test inspect(shl(1, 1)) == "Ok(2)"
+  @@test inspect(shl(1, 4)) == "Ok(16)"
+  @@test inspect(shl(8, 2)) == "Ok(32)"
+  @@test inspect(shl(1, -1)) == "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))"
+  def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
 
   @@doc """
   Shift `value` right by `bits`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
   @@builtin
-  @@test shr(1, 1) == 0
-  @@test shr(16, 2) == 4
-  @@test shr(1024, 10) == 1
-  def shr(value: Int, bits: Int) -> Int
+  @@test inspect(shr(1, 1)) == "Ok(0)"
+  @@test inspect(shr(16, 2)) == "Ok(4)"
+  @@test inspect(shr(1024, 10)) == "Ok(1)"
+  @@test inspect(shr(1, -1)) == "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))"
+  def shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
+
+  @@doc """
+  Return the absolute value of `value`.
+  """
+  def abs(value: Int) -> Int {
+    if(value < 0, 0 - value, value)
+  }
+
+  @@doc """
+  Return the smaller of `a` and `b`.
+  """
+  def min(a: Int, b: Int) -> Int {
+    if(a <= b, a, b)
+  }
+
+  @@doc """
+  Return the larger of `a` and `b`.
+  """
+  def max(a: Int, b: Int) -> Int {
+    if(a >= b, a, b)
+  }
+
+  @@doc """
+  Return `-1`, `0`, or `1` depending on the sign of `value`.
+  """
+  def sign(value: Int) -> Int {
+    if(value < 0, -1, if(value > 0, 1, 0))
+  }
+
+  @@doc """
+  Return `True` when `value` is divisible by two.
+  """
+  def is_even(value: Int) -> Boolean {
+    match Int::safe_mod(value, 2) {
+      Ok(rem) => rem == 0,
+      Err(_) => False,
+    }
+  }
+
+  @@doc """
+  Return `True` when `value` is not divisible by two.
+  """
+  def is_odd(value: Int) -> Boolean {
+    match Int::safe_mod(value, 2) {
+      Ok(rem) => rem != 0,
+      Err(_) => False,
+    }
+  }
 }

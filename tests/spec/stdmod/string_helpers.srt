@@ -1,0 +1,6 @@
+print(to_string(String::is_empty("")))
+print(to_string(String::non_empty("surtr")))
+print(String::surround("core", "[", "]"))
+print(String::join(["a", "b", "c"], ","))
+print(to_string(String::repeat("na", 3)))
+print(to_string(String::repeat("na", -1)))

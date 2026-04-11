@@ -8,14 +8,34 @@ contract.
 
 @@doc """
 Boolean module.
-Groups boolean-specific helpers and future convenience APIs.
-For now it mostly exists as a stable namespace and as the source home for
-boolean-oriented documentation.
+Groups boolean-specific helpers and connective-style combinators.
 """
 defmod Boolean {
   @@doc """
-  Placeholder entry that keeps the module available as the boolean surface
-  grows.
+  Return the logical negation of `value`.
   """
-  def dummy() { () }
+  def not(value: Boolean) -> Boolean {
+    if(value, False, True)
+  }
+
+  @@doc """
+  Return `True` when exactly one input is `True`.
+  """
+  def xor(left: Boolean, right: Boolean) -> Boolean {
+    if(left, Boolean::not(right), right)
+  }
+
+  @@doc """
+  Return `True` when both inputs have the same truth value.
+  """
+  def eqv(left: Boolean, right: Boolean) -> Boolean {
+    if(left, right, Boolean::not(right))
+  }
+
+  @@doc """
+  Return material implication `left -> right`.
+  """
+  def implies(left: Boolean, right: Boolean) -> Boolean {
+    if(left, right, True)
+  }
 }

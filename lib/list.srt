@@ -43,6 +43,16 @@ defmod List {
   }
 
   @@doc """
+  Return the last element of a list, or `Err(NoneError)` for `[]`.
+  """
+  def last(values: List<$A>) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(List::_last_go(head, tail)),
+    }
+  }
+
+  @@doc """
   Return the number of elements in a list.
   This stays a core helper so the runtime can keep the O(1) handle-based length
   contract.
@@ -63,7 +73,39 @@ defmod List {
     }
   }
 
-  def _list_flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B> {
+  def _index_out_of_bounds(index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
+    Err(IndexOutOfBounds("index #{index} out of bounds for len #{len}"))
+  }
+
+  def _last_go(current: $A, rest: List<$A>) -> $A {
+    match rest {
+      [] => current,
+      [head, ..tail] => List::_last_go(head, tail),
+    }
+  }
+
+  def _at_go(values: List<$A>, index: Int, original_index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
+    match values {
+      [] => List::_index_out_of_bounds(original_index, len),
+      [head, ..tail] => if(index == 0, Ok(head), List::_at_go(tail, index - 1, original_index, len)),
+    }
+  }
+
+  @@doc """
+  Append `right` after `left`.
+  This keeps the left-to-right order of both lists.
+  """
+  def append(left: List<$A>, right: List<$A>) -> List<$A> {
+    match left {
+      [] => right,
+      [head, ..tail] => List::cons(head, List::append(tail, right)),
+    }
+  }
+
+  @@doc """
+  Map each element to a list and concatenate the results.
+  """
+  def flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B> {
     List::reverse(
       List::reduce(values, [], {|acc, x|
         List::_append_reverse(f(x), acc)
@@ -72,10 +114,29 @@ defmod List {
   }
 
   @@doc """
+  Concatenate a list of lists into one list.
+  """
+  def concat(values: List<List<$A>>) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => List::append(head, List::concat(tail)),
+    }
+  }
+
+  @@doc """
   Reverse the order of a list.
   """
   def reverse(values: List<$A>) -> List<$A> {
     List::_list_reverse_go(values, [])
+  }
+
+  @@doc """
+  Return the element at `index`.
+  Negative indices and out-of-range access return `Err(IndexOutOfBounds(...))`.
+  """
+  def at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds> {
+    len = List::len(values)
+    if(index < 0, List::_index_out_of_bounds(index, len), List::_at_go(values, index, index, len))
   }
 
   @@doc """
