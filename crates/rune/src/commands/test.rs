@@ -374,11 +374,7 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
     let lib_modules = xldr::collect_lib_module_inputs().map_err(|e| {
         RuneError::message(
             1,
-            format!(
-                "{}: failed to read `./lib`: {}",
-                env.command_name(),
-                e
-            ),
+            format!("{}: failed to read `./lib`: {}", env.command_name(), e),
         )
     })?;
     if lib_modules.is_empty() {
@@ -392,7 +388,7 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
     for module in lib_modules {
         let tests =
             collect_test_cases_from_source(&module.file_name, &module.source, &module.module_path)
-            .map_err(|message| RuneError::message(1, message))?;
+                .map_err(|message| RuneError::message(1, message))?;
         all_tests.extend(tests);
     }
 

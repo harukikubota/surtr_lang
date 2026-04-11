@@ -97,7 +97,12 @@ pub enum Resolved {
     DeferrorDef(Span, ResolvedId, Vec<ResolvedField>, Box<Resolved>),
 
     /// Enum definition
-    EnumDef(Span, ResolvedId, Vec<ResolvedTypeParam>, Vec<ResolvedEnumVariant>),
+    EnumDef(
+        Span,
+        ResolvedId,
+        Vec<ResolvedTypeParam>,
+        Vec<ResolvedEnumVariant>,
+    ),
 
     /// Function definition
     Def(

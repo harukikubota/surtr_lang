@@ -86,14 +86,14 @@ fn parse_program(
 
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = match mode {
-        TestCompileMode::Script => spire::parse_with_context(
-            user_source,
-            spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
-                CompileUnitKind::Script,
-                SourceKind::Script,
-                None,
-            )),
-        ),
+        TestCompileMode::Script => {
+            spire::parse_with_context(
+                user_source,
+                spire::ParserContext::script(user_source_id.0).with_rules(
+                    xldr::derive_source_rules(CompileUnitKind::Script, SourceKind::Script, None),
+                ),
+            )
+        }
         TestCompileMode::Project => {
             spire::parse_with_context(user_source, spire::ParserContext::project(user_source_id.0))
         }

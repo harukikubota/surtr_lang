@@ -241,9 +241,18 @@ mid = Int::bit_or(6, 3)
 right = Int::bit_xor(6, 3)"#,
         );
 
-        assert!(bytecode.opcodes.iter().any(|op| matches!(op, Opcode::BitAndInt)));
-        assert!(bytecode.opcodes.iter().any(|op| matches!(op, Opcode::BitOrInt)));
-        assert!(bytecode.opcodes.iter().any(|op| matches!(op, Opcode::BitXorInt)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::BitAndInt)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::BitOrInt)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::BitXorInt)));
 
         let bit_and_id = builtin_meta_by_name("bit_and")
             .expect("bit_and builtin metadata must exist")

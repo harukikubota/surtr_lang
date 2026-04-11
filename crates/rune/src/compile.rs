@@ -149,10 +149,11 @@ fn parse_program_with_module_sources(
                 user_source,
                 spire::ParserContext::module(user_source_id.0, None).with_rules(
                     xldr::derive_source_rules(
-                    compile_unit_kind,
-                    xldr::SourceKind::Module,
-                    entrypoint,
-                )),
+                        compile_unit_kind,
+                        xldr::SourceKind::Module,
+                        entrypoint,
+                    ),
+                ),
             )
             .map_err(|e| {
                 RuneError::diagnostic(
@@ -460,7 +461,9 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_entrypoint_annotations, is_direct_module_source, prepare_script_compile_plan};
+    use super::{
+        collect_entrypoint_annotations, is_direct_module_source, prepare_script_compile_plan,
+    };
     use spire::ast::Ast;
 
     #[test]
@@ -505,8 +508,7 @@ mod tests {
 
     #[test]
     fn plain_script_is_not_treated_as_module_source() {
-        let ast = spire::parse(r#"print(to_string(1))"#)
-        .expect("script source should parse");
+        let ast = spire::parse(r#"print(to_string(1))"#).expect("script source should parse");
 
         assert!(matches!(ast.last(), Some(Ast::App(_, _, _))));
         assert!(!is_direct_module_source(&ast));

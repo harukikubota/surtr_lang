@@ -53,8 +53,7 @@ fn is_runtime_builtin_decl(name: &str) -> bool {
 fn is_special_form_builtin_decl(name: &str) -> bool {
     matches!(
         name,
-        "if"
-            | "if_then"
+        "if" | "if_then"
             | "assert"
             | "ensure"
             | "and"
@@ -425,19 +424,17 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             ret_ty.map(|ret| rewrite_self_type(ret, target)),
             attrs,
         ),
-        Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => {
-            Ast::BuiltinExtractorDecl(
-                span,
-                name,
-                ExtractorParam {
-                    name: param.name,
-                    ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
-                    span: param.span,
-                },
-                rewrite_self_type(ret_ty, target),
-                attrs,
-            )
-        }
+        Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
+            span,
+            name,
+            ExtractorParam {
+                name: param.name,
+                ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
+                span: param.span,
+            },
+            rewrite_self_type(ret_ty, target),
+            attrs,
+        ),
         Ast::BuiltinTypeDecl(span, head, attrs) => Ast::BuiltinTypeDecl(
             span,
             spire::ast::BuiltinTypeHead {
@@ -598,29 +595,15 @@ fn apply_import_to_scope(
         });
     }
     match spec {
-        spire::ast::ImportSpec::All => import_module_into_scope(
-            scope,
-            import_context,
-            &module_name,
-            false,
-            span,
-        ),
-        spire::ast::ImportSpec::Single(name) => import_single_into_scope(
-            scope,
-            import_context,
-            &module_name,
-            name,
-            span,
-        ),
+        spire::ast::ImportSpec::All => {
+            import_module_into_scope(scope, import_context, &module_name, false, span)
+        }
+        spire::ast::ImportSpec::Single(name) => {
+            import_single_into_scope(scope, import_context, &module_name, name, span)
+        }
         spire::ast::ImportSpec::List(names) => {
             for name in names {
-                import_single_into_scope(
-                    scope,
-                    import_context,
-                    &module_name,
-                    name,
-                    span.clone(),
-                )?;
+                import_single_into_scope(scope, import_context, &module_name, name, span.clone())?;
             }
             Ok(())
         }
@@ -764,7 +747,9 @@ fn bind_import_name(
         if auto_import
             && module_name == "Result"
             && matches!(short_name, "Ok" | "Err")
-            && !import_context.declaration_uid_kinds.contains_key(&existing_uid)
+            && !import_context
+                .declaration_uid_kinds
+                .contains_key(&existing_uid)
         {
             scope.define_with_id(short_name, uid);
             return Ok(());
@@ -1572,7 +1557,8 @@ impl Resolver {
                         .entry(name.clone())
                         .or_default()
                         .push_back(uid);
-                    self.declaration_uid_kinds.insert(uid, DeclarationKind::Enum);
+                    self.declaration_uid_kinds
+                        .insert(uid, DeclarationKind::Enum);
                     self.scope.define_with_id(name, uid);
 
                     for variant in variants {
@@ -2470,12 +2456,7 @@ impl Resolver {
             CompareKind::Gte => BinOp::Gte,
         };
 
-        Ok(Resolved::BinOp(
-            span,
-            op,
-            Box::new(left),
-            Box::new(right),
-        ))
+        Ok(Resolved::BinOp(span, op, Box::new(left), Box::new(right)))
     }
 
     fn resolve_concat_call(
@@ -2931,10 +2912,7 @@ fn collect_positional_args(
             RecordLitArg::Positional(expr) => positional.push(expr),
             RecordLitArg::Named(name, _) => {
                 return Err(ResolveError {
-                    message: format!(
-                        "{} does not accept named argument '{}'",
-                        callee_name, name
-                    ),
+                    message: format!("{} does not accept named argument '{}'", callee_name, name),
                     span,
                 });
             }
@@ -2996,12 +2974,12 @@ mod tests {
             spire::ParserContext::module(0, Some(module_path.to_string()))
                 .with_rules(permissive_module_rules()),
         )
-            .expect("module source should parse")
+        .expect("module source should parse")
     }
 
     fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
-        let ast = spire::parse_with_context(src, spire::ParserContext::project(0))
-            .expect("parse failed");
+        let ast =
+            spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
         resolve(ast)
     }
 
@@ -3286,7 +3264,9 @@ value = User("alice")"#,
             &module_stages,
         )
         .expect_err("root struct import should fail");
-        assert!(err.message.contains("Import target `User` is not importable"));
+        assert!(err
+            .message
+            .contains("Import target `User` is not importable"));
     }
 
     #[test]
@@ -3568,7 +3548,10 @@ x = and(False, rhs())"#,
                 Resolved::If(_, cond, then_branch, Some(else_branch)) => {
                     assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
                     assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
-                    assert!(matches!(else_branch.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                    assert!(matches!(
+                        else_branch.as_ref(),
+                        Resolved::Lit(_, Lit::Bool(false))
+                    ));
                 }
                 other => panic!("Expected If for and(...), got {:?}", other),
             },
@@ -3587,7 +3570,10 @@ x = or(True, rhs())"#,
             Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
                 Resolved::If(_, cond, then_branch, Some(else_branch)) => {
                     assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
-                    assert!(matches!(then_branch.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                    assert!(matches!(
+                        then_branch.as_ref(),
+                        Resolved::Lit(_, Lit::Bool(true))
+                    ));
                     assert!(matches!(else_branch.as_ref(), Resolved::App(_, _, _)));
                 }
                 other => panic!("Expected If for or(...), got {:?}", other),
@@ -3634,7 +3620,10 @@ x = or(True, rhs())"#,
         let resolved = parse_and_resolve(r#"x = concat("a", "b")"#).unwrap();
         match &resolved[0] {
             Resolved::Bind(_, _, rhs) => {
-                assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Concat, _, _)));
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Resolved::BinOp(_, BinOp::Concat, _, _)
+                ));
             }
             _ => panic!("Expected Bind with Concat binop"),
         }

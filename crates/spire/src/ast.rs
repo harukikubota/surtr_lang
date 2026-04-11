@@ -265,14 +265,7 @@ pub enum Ast {
         DeclAttrs,
     ),
 
-    ExtractorDef(
-        Span,
-        Symbol,
-        ExtractorParam,
-        AstTy,
-        Box<Ast>,
-        DeclAttrs,
-    ),
+    ExtractorDef(Span, Symbol, ExtractorParam, AstTy, Box<Ast>, DeclAttrs),
 
     /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),

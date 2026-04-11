@@ -9,8 +9,8 @@ pub use loader::{
     collect_module_sources_with_module_file_stages, collect_module_sources_with_module_stages,
     collect_module_sources_with_modules, collect_module_sources_with_std_module_stages,
     compose_script_compile_sources, derive_primary_module_path, is_default_std_module_file_name,
-    is_default_std_module_path, script_pseudo_module_path, CompileSources, LoadError,
-    ModuleInput, ModuleSources, SourceDescriptor, SourceKind, StagedModule,
+    is_default_std_module_path, script_pseudo_module_path, CompileSources, LoadError, ModuleInput,
+    ModuleSources, SourceDescriptor, SourceKind, StagedModule,
 };
 
 pub use repl::logic::core::{EldrLoadError, ReplEngine};
