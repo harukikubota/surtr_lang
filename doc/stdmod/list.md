@@ -43,3 +43,37 @@ print(to_string(List::at([10, 20, 30], 1)))
 
 - 推奨される構築スタイルは引き続き `List::cons + List::reverse` です。
 - `append` / `concat` / `at` を追加しても、`List` の中心用途は先頭からの逐次処理のままです。
+
+## Next candidates
+
+`List` は逐次処理中心の方針を保ちつつ、探索・集約・比較で頻出する helper は追加候補に入れてよいです。
+
+優先度が高い候補:
+
+- `List::sum(values: List<Int>) -> Int`
+- `List::max(values: List<Int>) -> Result<Int, NoneError>`
+- `List::min(values: List<Int>) -> Result<Int, NoneError>`
+- `List::max_by(values, cmp) -> Result<$A, NoneError>`
+- `List::min_by(values, cmp) -> Result<$A, NoneError>`
+- `List::take(values, count) -> List<$A>`
+- `List::drop(values, count) -> List<$A>`
+- `List::partition(values, pred) -> Pair<List<$A>, List<$A>>` 相当
+- `List::count(values, pred) -> Int`
+- `List::zip(left: List<$A>, right: List<$B>) -> List<Pair<$A, $B>>` 相当
+
+牌計算や parser 以外でも便利な候補:
+
+- `List::enumerate(values) -> List<Pair<Int, $A>>` 相当
+- `List::take_while(values, pred) -> List<$A>`
+- `List::drop_while(values, pred) -> List<$A>`
+- `List::span(values, pred) -> Pair<List<$A>, List<$A>>` 相当
+- `List::group_count(values) -> List<Pair<$A, Int>>` 相当
+- `List::dedup(values) -> List<$A>`
+- `List::sort(values) -> List<$A>`
+- `List::sort_by(values, cmp) -> List<$A>`
+
+設計メモ:
+
+- `List::reduce` / `reduce_while` / `flat_map` がすでにあるため、多くの helper は pure Surtr で記述できます。
+- 一方で `sort`, `group_count`, `zip`, `partition` は userland で毎回書くと冗長になりやすく、標準 surface に置く価値があります。
+- `Pair` や tuple を一般機能として導入しない方針なら、`Seq` を流用せず、専用 record / enum か複数戻り値相当の別設計を用意した方が境界が明確です。
