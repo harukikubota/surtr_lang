@@ -1,5 +1,6 @@
 use sindr::ir::{
-    line_column_for_offset, Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, SourceMap,
+    line_column_for_offset, Bytecode, BytecodeChunk, Constant, DocEntry, FunctionEntry, Opcode,
+    SourceMap,
 };
 use sindr::primitives::SurtrInt;
 use sindr::runtime::{
@@ -32,6 +33,7 @@ struct VmCheckpoint {
     type_entry_len: usize,
     error_template_len: usize,
     function_len: usize,
+    doc_len: usize,
     source_map_len: Option<usize>,
     overwritten_functions: Vec<(usize, FunctionEntry)>,
 }
@@ -284,6 +286,7 @@ impl VM {
             error_template_base: chunk_error_template_base,
             error_templates,
             functions,
+            docs,
         } = chunk;
         let code_base = self.bytecode.opcodes.len();
         let const_base = self.bytecode.constants.len();
@@ -310,6 +313,7 @@ impl VM {
         self.bytecode.constants.extend(constants);
         self.bytecode.type_registry.entries.extend(type_entries);
         self.bytecode.error_templates.extend(error_templates);
+        self.extend_docs_unique(docs);
         self.bytecode.opcodes.extend(chunk_opcodes);
         self.relocate_and_extend_source_map(source_map, code_base)?;
         // Invariant: runtime uses O(1) lookup `functions[fun_idx as usize]`.
@@ -401,6 +405,7 @@ impl VM {
             type_entry_len: self.bytecode.type_registry.entries.len(),
             error_template_len: self.bytecode.error_templates.len(),
             function_len: self.bytecode.functions.len(),
+            doc_len: self.bytecode.docs.len(),
             source_map_len: self
                 .bytecode
                 .source_map
@@ -434,6 +439,7 @@ impl VM {
             .error_templates
             .truncate(checkpoint.error_template_len);
         self.bytecode.functions.truncate(checkpoint.function_len);
+        self.bytecode.docs.truncate(checkpoint.doc_len);
         for (idx, entry) in checkpoint.overwritten_functions {
             if idx < self.bytecode.functions.len() {
                 self.bytecode.functions[idx] = entry;
@@ -452,6 +458,15 @@ impl VM {
 
     fn verify_loaded_bytecode(&self) -> Result<(), RuntimeError> {
         Self::verify_program(&self.bytecode)
+    }
+
+    fn extend_docs_unique(&mut self, docs: Vec<DocEntry>) {
+        for doc in docs {
+            let exists = self.bytecode.docs.iter().any(|existing| existing == &doc);
+            if !exists {
+                self.bytecode.docs.push(doc);
+            }
+        }
     }
 
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
@@ -1528,6 +1543,7 @@ mod tests {
             num_locals,
             arity,
             qualified_name: qualified_name.map(str::to_string),
+            signature: None,
             end_pc: 0,
             span_start: 0,
             span_end: 0,
@@ -1658,6 +1674,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -1680,6 +1697,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -1724,6 +1742,7 @@ mod tests {
                 num_params: 1,
             }],
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -1768,6 +1787,7 @@ mod tests {
                     num_params: 1,
                 }],
                 functions: Vec::new(),
+                docs: Vec::new(),
             })
             .expect("push should succeed");
         match result {
@@ -1829,6 +1849,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1851,6 +1872,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1877,6 +1899,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: vec![function_entry(0, 2, 1, 0, Some("new"))],
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1913,6 +1936,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1936,6 +1960,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1967,6 +1992,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         vm.push_atomic(chunk).expect("push should succeed");
@@ -2005,6 +2031,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -2124,6 +2151,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -2156,6 +2184,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");

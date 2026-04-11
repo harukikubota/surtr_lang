@@ -354,6 +354,7 @@ pub struct BytecodeChunk {
     pub error_template_base: u32,
     pub error_templates: Vec<ErrTemplate>,
     pub functions: Vec<FunctionEntry>,
+    pub docs: Vec<DocEntry>,
 }
 
 /// Function table entry.
@@ -364,6 +365,8 @@ pub struct FunctionEntry {
     pub num_locals: u32,
     pub arity: u8,
     pub qualified_name: Option<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
     #[serde(default)]
     pub end_pc: u32,
     #[serde(default)]
@@ -1221,6 +1224,7 @@ mod tests {
                 num_locals: 0,
                 arity: 0,
                 qualified_name: Some("Main::entry".to_string()),
+                signature: Some("entry() -> Unit".to_string()),
                 end_pc: 2,
                 span_start: 0,
                 span_end: 4,

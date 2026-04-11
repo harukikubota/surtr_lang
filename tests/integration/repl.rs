@@ -350,6 +350,69 @@ fn repl_doc_command_shows_builtin_docs() {
 }
 
 #[test]
+fn repl_displays_bare_std_callable_refs_with_named_inspect_format() {
+    let output =
+        run_repl_session("&Int::shr\n&Boolean::xor\nprint(inspect(&Boolean::xor))\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "FnCapture(module: Int, name: shr, signature: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
+        ),
+        "expected builtin callable inspect format, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains(
+            "FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)"
+        ),
+        "expected function callable inspect format, got:\n{}",
+        stdout
+    );
+    assert_eq!(
+        stdout
+            .matches(
+                "FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)"
+            )
+            .count(),
+        2,
+        "expected bare display and inspect(...) to agree for Boolean::xor, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_displays_local_function_refs_with_named_inspect_format() {
+    let output = run_repl_session(
+        "def add(x: Int, y: Int) -> Int { x + y }\n&add\nprint(inspect(&add))\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("FnCapture(module:"),
+        "expected named callable inspect output, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("name: add, signature: add(x: Int, y: Int) -> Int)"),
+        "expected local function signature in inspect output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_save_command_writes_decodable_eldr_snapshot() {
     let dir = temp_dir("repl-save");
     let save_base = dir.join("session");

@@ -260,6 +260,7 @@ impl ReplEngine {
             }
         };
         meta.docs = docs.clone();
+        chunk.docs = docs.clone();
 
         for stage in &self.module_stages {
             for module in stage {
@@ -273,11 +274,7 @@ impl ReplEngine {
         }
 
         if let Err(e) = self.vm.push_atomic(chunk) {
-            let file_name = self
-                .vm
-                .source_file()
-                .unwrap_or("<runtime>")
-                .to_string();
+            let file_name = self.vm.source_file().unwrap_or("<runtime>").to_string();
             return Err(LoadError::BootstrapFailed {
                 phase: "runtime".into(),
                 file_name,
@@ -882,6 +879,7 @@ impl ReplEngine {
             }
         };
         meta.docs = docs.clone();
+        chunk.docs = docs.clone();
 
         if let Some(repl_source) = self.sources.source(self.repl_source_id) {
             populate_error_template_lines(&mut chunk.error_templates, repl_source);
@@ -1014,8 +1012,7 @@ impl ReplEngine {
             .map(|entry| entry.fun_idx + 1)
             .max()
             .unwrap_or(0);
-        self.scar_session
-            .ensure_next_fun_idx_at_least(next_fun_idx);
+        self.scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
     }
 }
 
@@ -1089,7 +1086,10 @@ fn load_error_from_span_failure(
     message: impl Into<String>,
 ) -> LoadError {
     let source_id = find_source_id_for_span(sources, module_stages, span, fallback);
-    let file_name = sources.file_name(source_id).unwrap_or("<unknown>").to_string();
+    let file_name = sources
+        .file_name(source_id)
+        .unwrap_or("<unknown>")
+        .to_string();
     LoadError::BootstrapFailed {
         phase: phase.to_string(),
         file_name,
@@ -1168,14 +1168,13 @@ mod tests {
     use super::*;
 
     fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
-        let repl_sources = loader::collect_repl_sources_with_std_module_stages(&[vec![
-            crate::ModuleInput {
+        let repl_sources =
+            loader::collect_repl_sources_with_std_module_stages(&[vec![crate::ModuleInput {
                 file_name: "lib/bad.srt".into(),
                 source: source.into(),
                 module_path: module_path.into(),
-            },
-        ]])
-        .expect("test stdlib stage should load");
+            }]])
+            .expect("test stdlib stage should load");
         let forge_session = forge::ForgeSession::new();
         let vm = eldr::VM::new_interactive(forge_session.type_registry());
 
@@ -1186,7 +1185,9 @@ mod tests {
             declaration_index: Default::default(),
             repl_source_id: repl_sources.repl_source_id,
             repl_module_path: repl_sources.repl_module_path.clone(),
-            sigil_session: sigil::SigilSession::with_module_path(Some(repl_sources.repl_module_path)),
+            sigil_session: sigil::SigilSession::with_module_path(Some(
+                repl_sources.repl_module_path,
+            )),
             scar_session: scar::ScarSession::new(),
             forge_session,
             vm,
@@ -1203,11 +1204,7 @@ mod tests {
         }
     }
 
-    fn expect_bootstrap_failure(
-        source: &str,
-        phase: &str,
-        message_fragment: &str,
-    ) -> LoadError {
+    fn expect_bootstrap_failure(source: &str, phase: &str, message_fragment: &str) -> LoadError {
         let mut engine = bootstrap_engine_with_module(source, "Broken");
         let err = engine
             .bootstrap_std_modules()
@@ -1257,23 +1254,24 @@ mod tests {
 
     #[test]
     fn bootstrap_std_modules_returns_runtime_failure() {
-        let mut engine = bootstrap_engine_with_module(
-            "defmod Broken { def nope() -> Int { 1 } }",
-            "Broken",
-        );
+        let mut engine =
+            bootstrap_engine_with_module("defmod Broken { def nope() -> Int { 1 } }", "Broken");
         engine.vm = eldr::VM::new_interactive(engine.forge_session.type_registry());
-        engine.vm.push_atomic(sindr::ir::BytecodeChunk {
-            opcodes: vec![sindr::ir::Opcode::Halt],
-            source_map: None,
-            const_base: 0,
-            constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
-            new_locals: 0,
-            type_entries: Vec::new(),
-            error_template_base: 0,
-            error_templates: Vec::new(),
-            functions: Vec::new(),
-        })
-        .expect("vm bootstrap corruption setup should succeed");
+        engine
+            .vm
+            .push_atomic(sindr::ir::BytecodeChunk {
+                opcodes: vec![sindr::ir::Opcode::Halt],
+                source_map: None,
+                const_base: 0,
+                constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
+                new_locals: 0,
+                type_entries: Vec::new(),
+                error_template_base: 0,
+                error_templates: Vec::new(),
+                functions: Vec::new(),
+                docs: Vec::new(),
+            })
+            .expect("vm bootstrap corruption setup should succeed");
 
         let err = engine
             .bootstrap_std_modules()

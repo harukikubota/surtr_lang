@@ -2,8 +2,9 @@ use crate::error::RuntimeError;
 use crate::value::Value;
 use crate::vm::VM;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
+use sindr::ir::DocKind;
 use sindr::primitives::{ToPrimitive, Zero};
-use sindr::runtime::{Location, RichError};
+use sindr::runtime::{Callable, CallableTarget, Location, RichError};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -254,8 +255,61 @@ fn builtin_bit_xor(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
 }
 
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
-    let registry = vm.type_registry();
-    value.to_display_string(registry)
+    if let Value::Callable(callable) = value {
+        if let Some(display) = inspect_callable(vm, callable) {
+            return display;
+        }
+    }
+
+    value.to_display_string(vm.type_registry())
+}
+
+fn inspect_callable(vm: &VM, callable: &Callable) -> Option<String> {
+    if !callable.lexical_captures.is_empty() || !callable.partial_args.is_empty() {
+        return None;
+    }
+
+    match callable.target {
+        CallableTarget::Builtin(id) => {
+            let meta = builtin_meta_by_id(id)?;
+            let doc = vm.bytecode().docs.iter().rev().find(|doc| {
+                matches!(doc.kind, DocKind::Function)
+                    && doc.qualified_name.rsplit("::").next() == Some(meta.name)
+            })?;
+            let signature = doc.signature.as_deref()?;
+            Some(format!(
+                "FnCapture(module: {}, name: {}, signature: {})",
+                doc.module_path, meta.name, signature
+            ))
+        }
+        CallableTarget::Function(fun_idx) => {
+            let entry = vm.bytecode().functions.get(fun_idx as usize)?;
+            let qualified_name = entry.qualified_name.as_deref()?;
+            let signature = entry.signature.as_deref().or_else(|| {
+                vm.bytecode()
+                    .docs
+                    .iter()
+                    .rev()
+                    .find(|doc| {
+                        matches!(doc.kind, DocKind::Function)
+                            && doc.qualified_name == qualified_name
+                    })
+                    .and_then(|doc| doc.signature.as_deref())
+            })?;
+            let (module, name) = split_qualified_name(qualified_name);
+            Some(format!(
+                "FnCapture(module: {}, name: {}, signature: {})",
+                module, name, signature
+            ))
+        }
+    }
+}
+
+fn split_qualified_name(qualified_name: &str) -> (&str, &str) {
+    match qualified_name.rsplit_once("::") {
+        Some((module, name)) if !module.is_empty() => (module, name),
+        _ => ("<local>", qualified_name),
+    }
 }
 
 fn ok_result(value: Value) -> Value {
@@ -287,12 +341,12 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::call_builtin;
+    use super::{call_builtin, inspect_value};
     use crate::vm::VM;
     use sindr::builtin::{builtin_meta_by_name, BUILTIN_METAS};
-    use sindr::ir::Bytecode;
+    use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
     use sindr::primitives::int;
-    use sindr::runtime::{TypeRegistry, Value};
+    use sindr::runtime::{Callable, CallableTarget, TypeRegistry, Value};
 
     fn test_vm() -> VM {
         VM::new(Bytecode {
@@ -548,9 +602,102 @@ mod tests {
         let result =
             call_builtin(&mut vm, 5, vec![Value::Int(int(42))]).expect("eprint should succeed");
         assert_eq!(result, Value::Unit);
+        assert_eq!(vm.error_output.as_deref(), Some(&["42".to_string()][..]));
+    }
+
+    #[test]
+    fn inspect_formats_bare_builtin_callable_with_doc_metadata() {
+        let vm = VM::new(Bytecode {
+            docs: vec![DocEntry {
+                qualified_name: "Int::shr".into(),
+                kind: DocKind::Function,
+                module_path: "Int".into(),
+                signature: Some(
+                    "shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>".into(),
+                ),
+                doc: String::new(),
+            }],
+            ..Bytecode::default()
+        });
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Builtin(8),
+            lexical_captures: Vec::new(),
+            partial_args: Vec::new(),
+        });
+
         assert_eq!(
-            vm.error_output.as_deref(),
-            Some(&["42".to_string()][..])
+            inspect_value(&vm, &value),
+            "FnCapture(module: Int, name: shr, signature: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
         );
+    }
+
+    #[test]
+    fn inspect_formats_bare_function_callable_with_embedded_signature() {
+        let vm = VM::new(Bytecode {
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 0,
+                num_locals: 0,
+                arity: 2,
+                qualified_name: Some("Main::add".into()),
+                signature: Some("add(x: Int, y: Int) -> Int".into()),
+                end_pc: 0,
+                span_start: 0,
+                span_end: 0,
+                flags: Default::default(),
+            }],
+            ..Bytecode::default()
+        });
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            partial_args: Vec::new(),
+        });
+
+        assert_eq!(
+            inspect_value(&vm, &value),
+            "FnCapture(module: Main, name: add, signature: add(x: Int, y: Int) -> Int)"
+        );
+    }
+
+    #[test]
+    fn inspect_formats_local_function_callable_with_local_module_marker() {
+        let vm = VM::new(Bytecode {
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 0,
+                num_locals: 0,
+                arity: 2,
+                qualified_name: Some("add".into()),
+                signature: Some("add(x: Int, y: Int) -> Int".into()),
+                end_pc: 0,
+                span_start: 0,
+                span_end: 0,
+                flags: Default::default(),
+            }],
+            ..Bytecode::default()
+        });
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            partial_args: Vec::new(),
+        });
+
+        assert_eq!(
+            inspect_value(&vm, &value),
+            "FnCapture(module: <local>, name: add, signature: add(x: Int, y: Int) -> Int)"
+        );
+    }
+
+    #[test]
+    fn inspect_keeps_legacy_callable_display_for_partial_application() {
+        let vm = VM::new(Bytecode::default());
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Builtin(8),
+            lexical_captures: Vec::new(),
+            partial_args: vec![Value::Int(int(1))],
+        });
+
+        assert_eq!(inspect_value(&vm, &value), "<builtin:8>");
     }
 }

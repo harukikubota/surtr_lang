@@ -630,6 +630,7 @@ mod tests {
                 num_locals: 1,
                 arity: 0,
                 qualified_name: Some("Main::entry".into()),
+                signature: Some("entry() -> Unit".into()),
                 end_pc: 3,
                 span_start: 0,
                 span_end: 5,
