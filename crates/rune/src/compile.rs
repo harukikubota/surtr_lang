@@ -56,6 +56,7 @@ pub(crate) fn script_plan_error_as_rune_error(
         1,
         &sources,
         source_id,
+        "parse",
         diagnostics::simple_error("ParseError", &error.message, error.span, None),
     )
 }
@@ -113,6 +114,7 @@ fn parse_program_with_module_sources(
                     1,
                     sources,
                     e.source_id,
+                    "parse",
                     diagnostics::simple_error("ParseError", e.message(), e.span(), None),
                 )
             })?;
@@ -131,6 +133,7 @@ fn parse_program_with_module_sources(
             1,
             sources,
             user_source_id,
+            "parse",
             diagnostics::simple_error("ParseError", e.message(), e.span().clone(), None),
         )
     })?;
@@ -168,6 +171,7 @@ pub(crate) fn compile_source(
             1,
             sources,
             user_source_id,
+            "resolve",
             diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
         )
     })?;
@@ -183,6 +187,7 @@ pub(crate) fn compile_source(
             1,
             sources,
             user_source_id,
+            "resolve",
             diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
         )
     })?;
@@ -203,6 +208,7 @@ pub(crate) fn compile_source(
             1,
             sources,
             user_source_id,
+            "typecheck",
             diagnostics::type_error_spec_by_id(sources, user_source_id, &e),
         )
     })?;
@@ -212,6 +218,7 @@ pub(crate) fn compile_source(
             1,
             sources,
             user_source_id,
+            "codegen",
             diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
         )
     })?;

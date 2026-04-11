@@ -1,0 +1,45 @@
+{
+  "name": "surtr-language-support",
+  "displayName": "Surtr Language Support",
+  "description": "Language configuration, syntax highlighting, snippets, and outline support for Surtr (.srt).",
+  "version": "0.1.0",
+  "publisher": "haruca-local",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:surtr"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "surtr",
+        "aliases": ["Surtr", "surtr"],
+        "extensions": [".srt"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "surtr",
+        "scopeName": "source.surtr",
+        "path": "./syntaxes/surtr.tmGrammar.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "surtr",
+        "path": "./snippets/surtr.code-snippets"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node -e \"console.log('surtr-language-support: no automated test runner configured yet')\"",
+    "package": "npx vsce package --no-dependencies"
+  }
+}

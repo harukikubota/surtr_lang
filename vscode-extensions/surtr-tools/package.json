@@ -1,0 +1,49 @@
+{
+  "name": "surtr-tools",
+  "displayName": "Surtr Tools",
+  "description": "CLI-backed diagnostics and utility commands for Surtr.",
+  "version": "0.1.0",
+  "publisher": "haruca-local",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:surtr",
+    "onCommand:surtr.run.file",
+    "onCommand:surtr.build.file",
+    "onCommand:surtr.test.workspace",
+    "onCommand:surtr.bytecode.dumpJson"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "surtr.run.file", "title": "Surtr: Run Current File" },
+      { "command": "surtr.build.file", "title": "Surtr: Build Current File" },
+      { "command": "surtr.test.workspace", "title": "Surtr: Run Workspace Tests" },
+      { "command": "surtr.bytecode.dumpJson", "title": "Surtr: Dump Raw Bytecode JSON" }
+    ],
+    "configuration": {
+      "title": "Surtr",
+      "properties": {
+        "surtr.compiler.path": {
+          "type": "string",
+          "default": "surtr",
+          "description": "Path to the Surtr CLI executable."
+        },
+        "surtr.diagnostics.onSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run `surtr check --format json` when a Surtr file is saved."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node -e \"console.log('surtr-tools: no automated test runner configured yet')\"",
+    "package": "npx vsce package --no-dependencies"
+  }
+}

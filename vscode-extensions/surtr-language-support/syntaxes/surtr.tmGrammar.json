@@ -1,0 +1,122 @@
+{
+  "name": "Surtr",
+  "scopeName": "source.surtr",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#docStrings" },
+    { "include": "#strings" },
+    { "include": "#annotators" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#types" },
+    { "include": "#functions" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.surtr",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "docStrings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.surtr",
+          "begin": "\"\"\"",
+          "end": "\"\"\""
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.surtr",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.surtr",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.interpolation.surtr",
+              "begin": "#\\{",
+              "end": "\\}"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.surtr",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.surtr",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "annotators": {
+      "patterns": [
+        {
+          "name": "storage.modifier.annotation.surtr",
+          "match": "@@[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.surtr",
+          "match": "\\b(def|defmod|impl|match|if|cond|import|type|defstruct|defrecord|deferror|defenum)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.surtr",
+          "match": "\\b(True|False|Ok|Err)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.surtr",
+          "match": "\\b-?\\d+(?:\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.surtr",
+          "match": "\\|=>|\\|>=|\\|\\*>|\\|>|>>|==|!=|<=|>=|\\+\\+|[+\\-*/<>=]"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "entity.name.type.surtr",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.surtr",
+          "match": "\\b[a-z_][A-Za-z0-9_]*\\s*(?=\\()"
+        }
+      ]
+    }
+  }
+}

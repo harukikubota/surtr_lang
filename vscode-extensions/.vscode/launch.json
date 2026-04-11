@@ -1,0 +1,70 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Surtr Language Support: Development Host",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/surtr-language-support",
+        "--disable-extension",
+        "haruca-local.surtr-tools",
+        "--disable-extension",
+        "haruca-local.eldr-viewer",
+        "--disable-extension",
+        "haruca-local.surtr-file-icons"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/surtr-language-support/dist/**/*.js"
+      ]
+    },
+    {
+      "name": "Surtr Tools: Development Host",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/surtr-tools",
+        "--disable-extension",
+        "haruca-local.surtr-language-support",
+        "--disable-extension",
+        "haruca-local.eldr-viewer",
+        "--disable-extension",
+        "haruca-local.surtr-file-icons"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/surtr-tools/dist/**/*.js"
+      ]
+    },
+    {
+      "name": "Eldr Viewer: Development Host",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/eldr-viewer",
+        "--disable-extension",
+        "haruca-local.surtr-language-support",
+        "--disable-extension",
+        "haruca-local.surtr-tools",
+        "--disable-extension",
+        "haruca-local.surtr-file-icons"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/eldr-viewer/dist/**/*.js"
+      ]
+    },
+    {
+      "name": "Surtr File Icons: Development Host",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/surtr-file-icons",
+        "--disable-extensions"
+      ],
+      "outFiles": []
+    }
+  ]
+}

@@ -6,6 +6,7 @@ pub(crate) type RuneResult<T> = Result<T, RuneError>;
 pub(crate) const USAGE_TEXT: &str = "\
 Usage:\n\
   surtr --version\n\
+  surtr check <file.srt> [--format json]\n\
   surtr run <file.srt|file.eldr> [--entry <name>]\n\
   surtr test [selector]\n\
   surtr repl [--quiet] [--banner] [--version]\n\
@@ -15,6 +16,7 @@ Usage:\n\
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExecutionEnv {
+    Check,
     Run,
     Build,
     Test,
@@ -27,6 +29,7 @@ pub(crate) enum ExecutionEnv {
 impl ExecutionEnv {
     pub(crate) fn command_name(self) -> &'static str {
         match self {
+            Self::Check => "check",
             Self::Run => "run",
             Self::Build => "build",
             Self::Test => "test",
@@ -55,6 +58,7 @@ impl ExecutionEnv {
 pub(crate) struct RuneDiagnostic {
     pub(crate) sources: SourceRegistry,
     pub(crate) source_id: SourceId,
+    pub(crate) phase: String,
     pub(crate) spec: DiagnosticSpec,
 }
 
@@ -98,6 +102,7 @@ impl RuneError {
         exit_code: i32,
         sources: &SourceRegistry,
         source_id: SourceId,
+        phase: impl Into<String>,
         spec: DiagnosticSpec,
     ) -> Self {
         Self::Diagnostic {
@@ -105,6 +110,7 @@ impl RuneError {
             diagnostic: Box::new(RuneDiagnostic {
                 sources: sources.clone(),
                 source_id,
+                phase: phase.into(),
                 spec,
             }),
         }
@@ -130,14 +136,56 @@ impl RuneError {
                     eprintln!("{message}");
                 }
             }
-            Self::Diagnostic {
-                diagnostic,
-                ..
-            } => diagnostics::report_error_by_id(
+            Self::Diagnostic { diagnostic, .. } => diagnostics::report_error_by_id(
                 &diagnostic.sources,
                 diagnostic.source_id,
                 diagnostic.spec.clone(),
             ),
+        }
+    }
+
+    pub(crate) fn to_serializable_report(&self) -> diagnostics::SerializableDiagnosticReport {
+        match self {
+            Self::Diagnostic { diagnostic, .. } => diagnostics::serializable_report_by_id(
+                &diagnostic.sources,
+                diagnostic.source_id,
+                diagnostic.phase.clone(),
+                &diagnostic.spec,
+            ),
+            Self::Usage { message } => diagnostics::SerializableDiagnosticReport {
+                errors: vec![diagnostics::SerializableDiagnostic {
+                    kind: "UsageError".to_string(),
+                    phase: "cli".to_string(),
+                    line: 1,
+                    column: 1,
+                    span: [0, 0],
+                    message: if message.is_empty() {
+                        "usage error".to_string()
+                    } else {
+                        message.clone()
+                    },
+                    expected: None,
+                    got: None,
+                    hint: Some(USAGE_TEXT.to_string()),
+                }],
+            },
+            Self::Message { message, .. } => diagnostics::SerializableDiagnosticReport {
+                errors: vec![diagnostics::SerializableDiagnostic {
+                    kind: "CommandError".to_string(),
+                    phase: "cli".to_string(),
+                    line: 1,
+                    column: 1,
+                    span: [0, 0],
+                    message: if message.is_empty() {
+                        "command failed".to_string()
+                    } else {
+                        message.clone()
+                    },
+                    expected: None,
+                    got: None,
+                    hint: None,
+                }],
+            },
         }
     }
 
@@ -157,15 +205,15 @@ impl RuneError {
                     message.clone()
                 }
             }
-            Self::Diagnostic {
-                diagnostic,
-                ..
-            } => {
+            Self::Diagnostic { diagnostic, .. } => {
                 let file_name = diagnostic
                     .sources
                     .file_name(diagnostic.source_id)
                     .unwrap_or("<unknown>");
-                let source = diagnostic.sources.source(diagnostic.source_id).unwrap_or("");
+                let source = diagnostic
+                    .sources
+                    .source(diagnostic.source_id)
+                    .unwrap_or("");
                 let (line, column) =
                     line_column_for_offset(source, diagnostic.spec.primary_span.start);
                 format!(

@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use serde_json::{json, Value};
+use sindr::viewer::viewer_file_from_inspect;
 
 use crate::compile::{
     collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
@@ -45,10 +46,13 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
         i += 1;
     }
 
-    if format != "json" {
+    if format != "json" && format != "viewer-json" {
         return Err(RuneError::message(
             1,
-            format!("dump: unsupported format '{}'. supported: json", format),
+            format!(
+                "dump: unsupported format '{}'. supported: json, viewer-json",
+                format
+            ),
         ));
     }
 
@@ -57,7 +61,12 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("srt"))
     {
-        return dump_entry_source_as_json(file_path, entry.as_deref(), ExecutionEnv::DumpSource);
+        return dump_entry_source(
+            file_path,
+            entry.as_deref(),
+            format,
+            ExecutionEnv::DumpSource,
+        );
     }
 
     if entry.is_some() {
@@ -82,16 +91,15 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
         )
     })?;
 
-    let dump_json = build_dump_json(file_path, &inspected, None)?;
-    let text = serde_json::to_string(&dump_json)
-        .map_err(|e| RuneError::message(1, format!("dump: failed to serialize json: {}", e)))?;
+    let text = serialize_dump_output(file_path, format, &inspected, None)?;
     println!("{}", text);
     Ok(())
 }
 
-fn dump_entry_source_as_json(
+fn dump_entry_source(
     file_path: &str,
     cli_entry: Option<&str>,
+    format: &str,
     env: ExecutionEnv,
 ) -> RuneResult<()> {
     let source = fs::read_to_string(file_path)
@@ -121,11 +129,35 @@ fn dump_entry_source_as_json(
             .map(|entry| entry.qualified_symbol.clone())
     });
 
-    let dump_json = build_dump_json(file_path, &inspected, Some(entrypoint_trace))?;
-    let text = serde_json::to_string(&dump_json)
-        .map_err(|e| RuneError::message(1, format!("dump: failed to serialize json: {}", e)))?;
+    let text = serialize_dump_output(file_path, format, &inspected, Some(entrypoint_trace))?;
     println!("{}", text);
     Ok(())
+}
+
+fn serialize_dump_output(
+    file_path: &str,
+    format: &str,
+    inspected: &forge::bytecode::EldrInspect,
+    entrypoint_trace: Option<Value>,
+) -> RuneResult<String> {
+    match format {
+        "json" => {
+            let dump_json = build_dump_json(file_path, inspected, entrypoint_trace)?;
+            serde_json::to_string(&dump_json).map_err(|e| {
+                RuneError::message(1, format!("dump: failed to serialize json: {}", e))
+            })
+        }
+        "viewer-json" => {
+            let viewer = viewer_file_from_inspect(inspected);
+            serde_json::to_string(&viewer).map_err(|e| {
+                RuneError::message(1, format!("dump: failed to serialize viewer json: {}", e))
+            })
+        }
+        other => Err(RuneError::message(
+            1,
+            format!("dump: unsupported format '{}'", other),
+        )),
+    }
 }
 
 fn build_dump_json(

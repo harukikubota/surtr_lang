@@ -1,0 +1,42 @@
+{
+  "def": {
+    "prefix": "defn",
+    "body": [
+      "def ${1:name}(${2:arg}: ${3:Int}) -> ${4:Unit} {",
+      "  ${5:()}",
+      "}"
+    ],
+    "description": "Define a Surtr function"
+  },
+  "impl": {
+    "prefix": "impl",
+    "body": [
+      "impl ${1:Type} {",
+      "  def ${2:method}(self) -> ${3:Self} {",
+      "    ${4:self}",
+      "  }",
+      "}"
+    ],
+    "description": "Define an impl block"
+  },
+  "match": {
+    "prefix": "match",
+    "body": [
+      "match ${1:expr} {",
+      "  ${2:Ok(value)} => ${3:value},",
+      "  ${4:Err(err)} => ${5:err}",
+      "}"
+    ],
+    "description": "Insert a match expression"
+  },
+  "ok": {
+    "prefix": "ok",
+    "body": ["Ok(${1:value})"],
+    "description": "Wrap a value in Ok"
+  },
+  "err": {
+    "prefix": "err",
+    "body": ["Err(${1:error})"],
+    "description": "Wrap a value in Err"
+  }
+}

@@ -26,6 +26,7 @@ fn dispatch(args: &[String]) -> RuneResult<()> {
             println!("surtr {}", RUNE_VERSION);
             Ok(())
         }
+        Some("check") => commands::check::dispatch(&args[2..]),
         Some("run") => commands::run::dispatch(&args[2..]),
         Some("repl") => commands::repl::dispatch(&args[2..]),
         Some("build") => commands::build::dispatch(&args[2..]),
@@ -47,5 +48,6 @@ mod tests {
     fn usage_text_mentions_dump_and_test() {
         assert!(crate::error::USAGE_TEXT.contains("surtr dump"));
         assert!(crate::error::USAGE_TEXT.contains("surtr test"));
+        assert!(crate::error::USAGE_TEXT.contains("surtr check"));
     }
 }

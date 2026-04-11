@@ -1,0 +1,38 @@
+{
+  "name": "eldr-viewer",
+  "displayName": "Eldr Viewer",
+  "description": "React-based bytecode viewer for Surtr / Eldr.",
+  "version": "0.1.0",
+  "publisher": "haruca-local",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onCommand:surtr.bytecode.openViewer"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "surtr.bytecode.openViewer", "title": "Surtr: Open Eldr Viewer" }
+    ],
+    "configuration": {
+      "title": "Surtr",
+      "properties": {
+        "surtr.compiler.path": {
+          "type": "string",
+          "default": "surtr",
+          "description": "Path to the Surtr CLI executable."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "generate:types": "node ./scripts/generate-types.mjs",
+    "build": "npm run generate:types && node ./scripts/build.mjs",
+    "test": "vitest run",
+    "package": "npx vsce package --no-dependencies"
+  }
+}

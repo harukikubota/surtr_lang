@@ -7,5 +7,7 @@
 /.venv_icon
 
 # VS Code extension build artifacts
-vscode-surtr-icons/node_modules/
-vscode-surtr-icons/*.vsix
+vscode-extensions/node_modules/
+vscode-extensions/*/node_modules/
+vscode-extensions/*/dist/
+vscode-extensions/*/*.vsix

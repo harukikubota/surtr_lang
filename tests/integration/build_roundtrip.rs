@@ -221,3 +221,102 @@ def launch() -> Result<()> { Ok(()) }
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn check_outputs_machine_readable_json_for_success_and_failure() {
+    let temp = unique_temp_dir("surtr_check_json");
+    let ok_source_path = temp.join("ok.srt");
+    let bad_source_path = temp.join("bad.srt");
+
+    write_source(&ok_source_path, "print(\"hello\")\n");
+    write_source(&bad_source_path, "bad: Int = \"oops\"\n");
+
+    let bin = surtr_bin();
+    let ok = Command::new(&bin)
+        .args([
+            "check",
+            ok_source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run check command");
+    assert!(
+        ok.status.success(),
+        "check failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&ok.stdout),
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    let ok_json: Value =
+        serde_json::from_slice(&ok.stdout).expect("check success output must be valid json");
+    assert_eq!(
+        ok_json["errors"]
+            .as_array()
+            .map(|items| items.len())
+            .unwrap_or(1),
+        0
+    );
+
+    let bad = Command::new(&bin)
+        .args([
+            "check",
+            bad_source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run check command");
+    assert!(
+        !bad.status.success(),
+        "check should fail for type error\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&bad.stdout),
+        String::from_utf8_lossy(&bad.stderr)
+    );
+    let bad_json: Value =
+        serde_json::from_slice(&bad.stdout).expect("check failure output must be valid json");
+    let first = bad_json["errors"][0].clone();
+    assert_eq!(first["phase"], "typecheck");
+    assert_eq!(first["kind"], "TypeError");
+    assert_eq!(first["expected"], "Int");
+    assert_eq!(first["got"], "String");
+    assert!(first["hint"].is_string() || first["hint"].is_null());
+    assert!(first["line"].as_u64().unwrap_or(0) >= 1);
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn dump_outputs_viewer_json() {
+    let temp = unique_temp_dir("surtr_dump_viewer_json");
+    let source_path = temp.join("viewer_sample.srt");
+
+    write_source(&source_path, "print(\"hello\")\n");
+
+    let bin = surtr_bin();
+    let dump = Command::new(&bin)
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "viewer-json",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "viewer dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value =
+        serde_json::from_slice(&dump.stdout).expect("viewer dump output must be valid json");
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["format"], "eldr_viewer");
+    assert!(json["functions"].as_array().is_some());
+    assert!(json["opcodes"].as_array().is_some());
+    assert!(json["sources"].as_array().is_some());
+    assert!(json["errors"].as_array().is_some());
+
+    let _ = fs::remove_dir_all(temp);
+}
