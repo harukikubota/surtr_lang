@@ -616,7 +616,6 @@ impl VM {
             observer.record_call_event(kind, line);
         }
     }
-
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
         Self::verify_type_registry_entries(&bytecode.type_registry.entries, None)?;
         Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
