@@ -325,6 +325,11 @@ value.field
 | `or` | `(Boolean, Boolean) -> Boolean` |
 | `eq` | `($A, $A) -> Boolean` |
 | `neq` | `($A, $A) -> Boolean` |
+| `lt` | `($A, $A) -> Boolean` |
+| `lte` | `($A, $A) -> Boolean` |
+| `gt` | `($A, $A) -> Boolean` |
+| `gte` | `($A, $A) -> Boolean` |
+| `concat` | `(String, String) -> String` |
 | `print` | `(String) -> Unit` |
 | `to_string` | `($A) -> String` |
 | `inspect` | `($A) -> String` |
@@ -339,6 +344,8 @@ value.field
 - 普段の source では block を明示せず `if(flag, "ok", err_reason)` や `if_then(flag, print("ok"))` のように書ける
 - `and` / `or` は宣言上は普通の 2 引数関数だが、コンパイラが short-circuit として解釈する
 - `eq` / `neq` は call-style helper で、`==` / `!=` と同じ比較制約に従う
+- `lt` / `lte` / `gt` / `gte` は call-style helper で、`<` / `<=` / `>` / `>=` と同じ比較制約に従う
+- `concat` は call-style helper で、`++` と同じく `String` 同士だけを受ける
 - `safe_div` / `safe_mod` は失敗時に `Err(ZeroDivisionError)` を返す
 - `set_exit_code` は処理系側で使用位置制約を持つ
 

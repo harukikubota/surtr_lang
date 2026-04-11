@@ -110,6 +110,61 @@ defmod Kernel {
   @@builtin def neq(left: $A, right: $A) -> Boolean
 
   @@doc """
+  Call-style less-than comparison.
+
+  The declared type is:
+  `lt($A, $A) -> Boolean`
+
+  `lt(left, right)` lowers to `left < right` and therefore shares the same
+  comparison support and restrictions as the operator form.
+  """
+  @@builtin def lt(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style less-than-or-equal comparison.
+
+  The declared type is:
+  `lte($A, $A) -> Boolean`
+
+  `lte(left, right)` lowers to `left <= right` and therefore shares the same
+  comparison support and restrictions as the operator form.
+  """
+  @@builtin def lte(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style greater-than comparison.
+
+  The declared type is:
+  `gt($A, $A) -> Boolean`
+
+  `gt(left, right)` lowers to `left > right` and therefore shares the same
+  comparison support and restrictions as the operator form.
+  """
+  @@builtin def gt(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style greater-than-or-equal comparison.
+
+  The declared type is:
+  `gte($A, $A) -> Boolean`
+
+  `gte(left, right)` lowers to `left >= right` and therefore shares the same
+  comparison support and restrictions as the operator form.
+  """
+  @@builtin def gte(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style string concatenation.
+
+  The declared type is:
+  `concat(String, String) -> String`
+
+  `concat(left, right)` lowers to `left ++ right` and therefore shares the same
+  string-only restriction as the operator form.
+  """
+  @@builtin def concat(left: String, right: String) -> String
+
+  @@doc """
   Guard a precondition and return `Result<Unit>`.
 
   The declared type is:

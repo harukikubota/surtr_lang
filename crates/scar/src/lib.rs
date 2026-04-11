@@ -498,6 +498,35 @@ guard = ensure(4, &is_even, NoneError)"#,
     }
 
     #[test]
+    fn lt_special_form_typechecks_as_binop() {
+        let typed = typecheck_with_builtin_prelude("flag = lt(1, 2)");
+        let bind = typed.last().expect("binding should exist");
+        match &bind.node {
+            TypedInner::Bind(_, rhs) => {
+                assert!(matches!(rhs.node, TypedInner::BinOp(spire::ast::BinOp::Lt, _, _)));
+                assert!(matches!(rhs.ty, crate::types::Ty::Bool));
+            }
+            other => panic!("expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn concat_special_form_typechecks_as_binop() {
+        let typed = typecheck_with_builtin_prelude(r#"value = concat("a", "b")"#);
+        let bind = typed.last().expect("binding should exist");
+        match &bind.node {
+            TypedInner::Bind(_, rhs) => {
+                assert!(matches!(
+                    rhs.node,
+                    TypedInner::BinOp(spire::ast::BinOp::Concat, _, _)
+                ));
+                assert!(matches!(rhs.ty, crate::types::Ty::Str));
+            }
+            other => panic!("expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn ensure_rejects_call_expression_predicate() {
         let err = typecheck_with_rules(
             r#"def is_even() -> (Int -> Boolean) { {|n| Int::is_even(n) } }
@@ -559,6 +588,22 @@ defmod Boolean {
         assert!(err
             .message
             .contains("Special-form declaration `and` is only allowed in std module `Kernel`."));
+    }
+
+    #[test]
+    fn kernel_concat_contract_rejects_generic_signature() {
+        let err = typecheck_std_modules_with_overrides(&[(
+            "Kernel",
+            r#"@@builtin type Unit
+
+defmod Kernel {
+  @@builtin def concat(left: $A, right: $A) -> String
+}"#,
+        )])
+        .expect_err("generic concat signature should violate canonical contract");
+        assert!(err.message.contains(
+            "@@builtin def concat(left: String, right: String) -> String"
+        ));
     }
 
     #[test]

@@ -264,6 +264,19 @@ print(to_string(neq(Flag::On, Flag::Off)))"#,
     }
 
     #[test]
+    fn kernel_ordering_and_concat_helpers_match_operator_behavior() {
+        assert_output(
+            r#"print(to_string(lt(1, 2)))
+print(to_string(lte(2, 2)))
+print(to_string(gt(3, 2)))
+print(to_string(gte(3, 3)))
+print(concat("hello", " world"))
+print(to_string(lt(1.5, 2.0)))"#,
+            &["True", "True", "True", "True", "hello world", "True"],
+        );
+    }
+
+    #[test]
     fn concat_strings() {
         assert_output(r#"print("hello" ++ " world")"#, &["hello world"]);
     }
@@ -1595,6 +1608,82 @@ match summary {
   Err(e) => print("err"),
 }"#,
             &["alice:20"],
+        );
+    }
+
+    #[test]
+    fn kernel_helper_usecase_works_with_funcliteral_and_flow_ops() {
+        assert_output(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+  active: Boolean,
+}
+
+impl User {
+  def new(name: String, age: Int, active: Boolean) -> Self {
+    User { name: name, age: age, active: active }
+  }
+}
+
+deferror HiddenUser {
+  "hidden user"
+}
+
+def parse_key(key: String) -> Result<Int, HiddenUser> {
+  if(eq(key, "alice"), Ok(1), if(eq(key, "boss"), Ok(2), Ok(3)))
+}
+
+def load_user(id: Int) -> Result<User, HiddenUser> {
+  if(
+    eq(id, 1),
+    Ok(User("alice", 21, True)),
+    if(eq(id, 2), Ok(User("boss", 70, True)), Ok(User("guest", 17, False))),
+  )
+}
+
+def allow(user: User) -> Result<User, HiddenUser> {
+  visible = and(
+    user.active,
+    and(
+      user.name `neq` "banned",
+      or(user.age `gte` 20, user.name `eq` "alice"),
+    ),
+  )
+
+  if(visible, Ok(user), Err(HiddenUser))
+}
+
+def age_band(user: User) -> String {
+  if(
+    user.age `lt` 13,
+    "child",
+    if(user.age `lte` 19, "teen", if(user.age `gt` 64, "senior", "adult")),
+  )
+}
+
+def render(user: User) -> String {
+  visibility = if(and(user.active, user.name `neq` "banned"), "visible", "hidden")
+  user.name `concat` ":" `concat` age_band(user) `concat` ":" `concat` visibility
+}
+
+lookup = &parse_key |=> &load_user
+
+match lookup("alice") |>= allow() |*> render() {
+  Ok(v) => print(v),
+  Err(e) => print("hidden"),
+}
+
+match lookup("boss") |>= allow() |*> render() {
+  Ok(v) => print(v),
+  Err(e) => print("hidden"),
+}
+
+match lookup("guest") |>= allow() |*> render() {
+  Ok(v) => print(v),
+  Err(e) => print("hidden"),
+}"#,
+            &["alice:adult:visible", "boss:senior:visible", "hidden"],
         );
     }
 

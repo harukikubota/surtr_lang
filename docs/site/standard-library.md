@@ -31,7 +31,7 @@ concrete error は、最初の標準ステージから使えるようここに�
 
 ### `Kernel`
 
-- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
+- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `concat`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
 - auto import される最小の標準 API を置く
 - 専用 file を持たない `Unit` の builtin type 宣言を置く
 
@@ -40,6 +40,8 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 説明を標準 surface に残すため `Kernel` に置きます。
 `and` / `or` も宣言上は通常の 2 引数関数ですが、コンパイラが short-circuit
 評価へ lower する call-style helper としてここに置きます。
+comparison / concat 系の call-style helper (`eq`, `lt`, `concat` など) も
+primitive module をまたぐ読みやすさを優先して `Kernel` に置きます。
 
 ### type modules
 

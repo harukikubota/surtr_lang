@@ -49,7 +49,19 @@ fn is_runtime_builtin_decl(name: &str) -> bool {
 fn is_special_form_builtin_decl(name: &str) -> bool {
     matches!(
         name,
-        "if" | "if_then" | "assert" | "ensure" | "and" | "or" | "eq" | "neq"
+        "if"
+            | "if_then"
+            | "assert"
+            | "ensure"
+            | "and"
+            | "or"
+            | "eq"
+            | "neq"
+            | "lt"
+            | "lte"
+            | "gt"
+            | "gte"
+            | "concat"
     )
 }
 
@@ -1468,6 +1480,21 @@ impl Resolver {
                     if name == "neq" {
                         return self.resolve_compare_call(span, args, CompareKind::Neq);
                     }
+                    if name == "lt" {
+                        return self.resolve_compare_call(span, args, CompareKind::Lt);
+                    }
+                    if name == "lte" {
+                        return self.resolve_compare_call(span, args, CompareKind::Lte);
+                    }
+                    if name == "gt" {
+                        return self.resolve_compare_call(span, args, CompareKind::Gt);
+                    }
+                    if name == "gte" {
+                        return self.resolve_compare_call(span, args, CompareKind::Gte);
+                    }
+                    if name == "concat" {
+                        return self.resolve_concat_call(span, args);
+                    }
                 }
 
                 let resolved_func = self.resolve_node(*func)?;
@@ -2145,6 +2172,10 @@ impl Resolver {
         let callee_name = match kind {
             CompareKind::Eq => "eq",
             CompareKind::Neq => "neq",
+            CompareKind::Lt => "lt",
+            CompareKind::Lte => "lte",
+            CompareKind::Gt => "gt",
+            CompareKind::Gte => "gte",
         };
         let positional = collect_positional_args(span.clone(), args, callee_name, 2)?;
         let mut iter = positional.into_iter();
@@ -2153,11 +2184,33 @@ impl Resolver {
         let op = match kind {
             CompareKind::Eq => BinOp::Eq,
             CompareKind::Neq => BinOp::Neq,
+            CompareKind::Lt => BinOp::Lt,
+            CompareKind::Lte => BinOp::Lte,
+            CompareKind::Gt => BinOp::Gt,
+            CompareKind::Gte => BinOp::Gte,
         };
 
         Ok(Resolved::BinOp(
             span,
             op,
+            Box::new(left),
+            Box::new(right),
+        ))
+    }
+
+    fn resolve_concat_call(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let positional = collect_positional_args(span.clone(), args, "concat", 2)?;
+        let mut iter = positional.into_iter();
+        let left = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let right = self.resolve_node(iter.next().expect("checked arg length"))?;
+
+        Ok(Resolved::BinOp(
+            span,
+            BinOp::Concat,
             Box::new(left),
             Box::new(right),
         ))
@@ -2272,6 +2325,10 @@ enum LogicKind {
 enum CompareKind {
     Eq,
     Neq,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
 }
 
 fn collect_captures(body: &Resolved, params: &[ResolvedClosureParam]) -> Vec<ResolvedId> {
@@ -3077,6 +3134,28 @@ x = or(True, rhs())"#,
     }
 
     #[test]
+    fn test_lt_conversion() {
+        let resolved = parse_and_resolve("x = lt(1, 2)").unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Lt, _, _)));
+            }
+            _ => panic!("Expected Bind with Lt binop"),
+        }
+    }
+
+    #[test]
+    fn test_concat_conversion() {
+        let resolved = parse_and_resolve(r#"x = concat("a", "b")"#).unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Concat, _, _)));
+            }
+            _ => panic!("Expected Bind with Concat binop"),
+        }
+    }
+
+    #[test]
     fn test_and_named_arg_is_error() {
         let err = parse_and_resolve("x = and(left: True, right: False)")
             .expect_err("named args must fail");
@@ -3087,6 +3166,15 @@ x = or(True, rhs())"#,
     fn test_eq_wrong_arity_is_error() {
         let err = parse_and_resolve("x = eq(1)").expect_err("wrong arity must fail");
         assert!(err.message.contains("eq expects 2 arguments, got 1"));
+    }
+
+    #[test]
+    fn test_concat_named_arg_is_error() {
+        let err = parse_and_resolve(r#"x = concat(left: "a", right: "b")"#)
+            .expect_err("named args must fail");
+        assert!(err
+            .message
+            .contains("concat does not accept named argument"));
     }
 
     #[test]
