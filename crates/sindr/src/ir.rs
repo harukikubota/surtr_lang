@@ -18,6 +18,9 @@ pub enum Opcode {
     AddInt,
     SubInt,
     MulInt,
+    BitAndInt,
+    BitOrInt,
+    BitXorInt,
 
     // Arithmetic (Float)
     AddFloat,

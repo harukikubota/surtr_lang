@@ -83,6 +83,24 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 1,
         sig_str: "(List<$A>) -> Int",
     },
+    BuiltinMeta {
+        name: "bit_and",
+        builtin_id: 10,
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "bit_or",
+        builtin_id: 11,
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "bit_xor",
+        builtin_id: 12,
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

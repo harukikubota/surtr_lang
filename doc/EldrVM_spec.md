@@ -120,7 +120,7 @@ Eldr が扱う値の概念カテゴリ:
 Opcode は以下のカテゴリを持つ。
 
 - 定数/ローカル操作（Load/Store）
-- 算術・比較
+- 算術・比較・bitwise
 - 文字列結合
 - リスト/タグ付き値操作
 - 呼び出し（`Call`, `CallClosure`, `CallBuiltin`）
@@ -132,6 +132,7 @@ Opcode は以下のカテゴリを持つ。
 補足:
 
 - `CallBuiltin` は `builtin_id` ベースでディスパッチする
+- `BitAndInt` / `BitOrInt` / `BitXorInt` は `Int::bit_and` / `bit_or` / `bit_xor` の direct call を対象にした monomorphic fast-path とする
 
 実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。
 

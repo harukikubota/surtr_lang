@@ -842,6 +842,9 @@ impl VM {
             Opcode::AddInt => self.int_binop(|a, b| Ok(Value::Int(a + b)))?,
             Opcode::SubInt => self.int_binop(|a, b| Ok(Value::Int(a - b)))?,
             Opcode::MulInt => self.int_binop(|a, b| Ok(Value::Int(a * b)))?,
+            Opcode::BitAndInt => self.int_binop(|a, b| Ok(Value::Int(a & b)))?,
+            Opcode::BitOrInt => self.int_binop(|a, b| Ok(Value::Int(a | b)))?,
+            Opcode::BitXorInt => self.int_binop(|a, b| Ok(Value::Int(a ^ b)))?,
 
             // Arithmetic (Float)
             Opcode::AddFloat => self.float_binop(|a, b| Value::Float(a + b))?,
@@ -2177,6 +2180,28 @@ mod tests {
         let bytecode = base_bytecode(vec![Opcode::ListEmpty, Opcode::ListTail, Opcode::Halt]);
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("ListTail on empty list"));
+    }
+
+    #[test]
+    fn int_bitwise_opcodes_execute_successfully() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::BitAndInt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::BitOrInt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::BitXorInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(6)), Constant::Int(int(3))];
+
+        let mut vm = VM::new(bytecode);
+        vm.run().expect("run should succeed");
+
+        assert_eq!(vm.last_result, Some(Value::Int(int(5))));
     }
 
     #[test]

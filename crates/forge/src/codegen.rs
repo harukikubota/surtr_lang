@@ -605,7 +605,20 @@ impl Codegen {
     }
 
     fn builtin_id(name: &str) -> Option<u16> {
-        builtin_meta_by_name(name).map(|meta| meta.builtin_id)
+        let short_name = name.rsplit("::").next().unwrap_or(name);
+        builtin_meta_by_name(short_name).map(|meta| meta.builtin_id)
+    }
+
+    fn direct_builtin_opcode(name: &str, arity: usize) -> Option<Opcode> {
+        if arity != 2 {
+            return None;
+        }
+        match name.rsplit("::").next().unwrap_or(name) {
+            "bit_and" => Some(Opcode::BitAndInt),
+            "bit_or" => Some(Opcode::BitOrInt),
+            "bit_xor" => Some(Opcode::BitXorInt),
+            _ => None,
+        }
     }
 
     fn emit_callable_ref(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
@@ -2211,19 +2224,23 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         match &func.ty {
             Ty::BuiltinFunc { name, .. } => {
-                let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
-                    message: format!("Unknown builtin: {}", name),
-                    span: func.span.clone(),
-                })?;
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::CallBuiltin {
-                    builtin_id,
-                    arity: args.len() as u8,
-                    span_start: call_span.start as u32,
-                    span_end: call_span.end as u32,
-                });
+                if let Some(opcode) = Self::direct_builtin_opcode(name, args.len()) {
+                    self.emit(opcode);
+                } else {
+                    let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                        message: format!("Unknown builtin: {}", name),
+                        span: func.span.clone(),
+                    })?;
+                    self.emit(Opcode::CallBuiltin {
+                        builtin_id,
+                        arity: args.len() as u8,
+                        span_start: call_span.start as u32,
+                        span_end: call_span.end as u32,
+                    });
+                }
             }
             Ty::UserFunc {
                 fun_idx, params, ..

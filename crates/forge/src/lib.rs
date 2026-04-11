@@ -13,6 +13,7 @@ mod tests {
     use super::codegen;
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
+    use sindr::builtin::builtin_meta_by_name;
     use spire::ast::Ast;
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
@@ -229,5 +230,39 @@ print("ok")"#,
         assert_eq!(point.tag, user.tag + 1);
         assert_eq!(point.name, "Point");
         assert_eq!(point.kind, TypeKind::Record);
+    }
+
+    #[test]
+    fn direct_int_bitwise_builtin_calls_lower_to_specialized_opcodes() {
+        let bytecode = codegen_source(
+            r#"left = Int::bit_and(6, 3)
+mid = Int::bit_or(6, 3)
+right = Int::bit_xor(6, 3)"#,
+        );
+
+        assert!(bytecode.opcodes.iter().any(|op| matches!(op, Opcode::BitAndInt)));
+        assert!(bytecode.opcodes.iter().any(|op| matches!(op, Opcode::BitOrInt)));
+        assert!(bytecode.opcodes.iter().any(|op| matches!(op, Opcode::BitXorInt)));
+
+        let bit_and_id = builtin_meta_by_name("bit_and")
+            .expect("bit_and builtin metadata must exist")
+            .builtin_id;
+        let bit_or_id = builtin_meta_by_name("bit_or")
+            .expect("bit_or builtin metadata must exist")
+            .builtin_id;
+        let bit_xor_id = builtin_meta_by_name("bit_xor")
+            .expect("bit_xor builtin metadata must exist")
+            .builtin_id;
+
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 2,
+                    ..
+                } if *builtin_id == bit_and_id || *builtin_id == bit_or_id || *builtin_id == bit_xor_id
+            )
+        }));
     }
 }

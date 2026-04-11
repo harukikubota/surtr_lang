@@ -40,6 +40,15 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_list_len,
     },
+    BuiltinImpl {
+        func: builtin_bit_and,
+    },
+    BuiltinImpl {
+        func: builtin_bit_or,
+    },
+    BuiltinImpl {
+        func: builtin_bit_xor,
+    },
 ];
 
 const _: () = {
@@ -221,6 +230,27 @@ fn builtin_list_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
         return Err(RuntimeError::new("len expects List as first argument"));
     };
     Ok(Value::Int(list.len.into()))
+}
+
+fn builtin_bit_and(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(left), Value::Int(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("bit_and expects (Int, Int)"));
+    };
+    Ok(Value::Int(left & right))
+}
+
+fn builtin_bit_or(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(left), Value::Int(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("bit_or expects (Int, Int)"));
+    };
+    Ok(Value::Int(left | right))
+}
+
+fn builtin_bit_xor(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(left), Value::Int(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("bit_xor expects (Int, Int)"));
+    };
+    Ok(Value::Int(left ^ right))
 }
 
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
@@ -462,6 +492,23 @@ mod tests {
             },
             other => panic!("expected Err result, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn bitwise_builtins_execute_on_ints() {
+        let mut vm = test_vm();
+
+        let bit_and = call_builtin(&mut vm, 10, vec![Value::Int(int(6)), Value::Int(int(3))])
+            .expect("bit_and should succeed");
+        assert_eq!(bit_and, Value::Int(int(2)));
+
+        let bit_or = call_builtin(&mut vm, 11, vec![Value::Int(int(6)), Value::Int(int(3))])
+            .expect("bit_or should succeed");
+        assert_eq!(bit_or, Value::Int(int(7)));
+
+        let bit_xor = call_builtin(&mut vm, 12, vec![Value::Int(int(6)), Value::Int(int(3))])
+            .expect("bit_xor should succeed");
+        assert_eq!(bit_xor, Value::Int(int(5)));
     }
 
     #[test]

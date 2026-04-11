@@ -7,6 +7,9 @@
 
 - `Int::safe_div(a, b) -> Result<Int | Float, ZeroDivisionError>`
 - `Int::safe_mod(a, b) -> Result<Int, ZeroDivisionError>`
+- `Int::bit_and(a, b) -> Int`
+- `Int::bit_or(a, b) -> Int`
+- `Int::bit_xor(a, b) -> Int`
 - `Int::shl(value, bits) -> Result<Int, NegativeShiftCount>`
 - `Int::shr(value, bits) -> Result<Int, NegativeShiftCount>`
 - `Int::abs(value) -> Int`
@@ -28,6 +31,7 @@
 
 ```surtr
 print(to_string(Int::abs(-5)))
+print(to_string(Int::bit_and(6, 3)))
 print(to_string(Int::shl(1, 3)))
 print(to_string(Int::sign(0)))
 print(to_string(Int::is_even(8)))
@@ -36,4 +40,4 @@ print(to_string(Int::is_even(8)))
 ## Notes
 
 - `is_even` / `is_odd` は `safe_mod(value, 2)` を土台にした pure Surtr 実装です。
-- builtin / opcode の追加は行わず、既存 surface の組み合わせで表現します。
+- `bit_and` / `bit_or` / `bit_xor` は surface は builtin 関数のまま公開し、direct call は VM の専用 Opcode に lower されます。

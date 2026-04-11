@@ -1,4 +1,7 @@
 print(to_string(Int::abs(-5)))
+print(to_string(Int::bit_and(6, 3)))
+print(to_string(Int::bit_or(6, 3)))
+print(to_string(Int::bit_xor(6, 3)))
 print(to_string(Int::min(4, -2)))
 print(to_string(Int::max(4, -2)))
 print(to_string(Int::sign(-12)))

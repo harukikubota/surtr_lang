@@ -134,6 +134,11 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
         },
+        "bit_and" | "bit_or" | "bit_xor" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Int, Ty::Int],
+            ret: Box::new(Ty::Int),
+        },
         "len" => {
             let a = env.fresh_tyvar();
             Ty::BuiltinFunc {

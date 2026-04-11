@@ -37,6 +37,27 @@ defmod Int {
   @@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 
   @@doc """
+  Return the bitwise AND of `a` and `b`.
+  """
+  @@builtin
+  @@test bit_and(6, 3) == 2
+  def bit_and(a: Int, b: Int) -> Int
+
+  @@doc """
+  Return the bitwise OR of `a` and `b`.
+  """
+  @@builtin
+  @@test bit_or(6, 3) == 7
+  def bit_or(a: Int, b: Int) -> Int
+
+  @@doc """
+  Return the bitwise XOR of `a` and `b`.
+  """
+  @@builtin
+  @@test bit_xor(6, 3) == 5
+  def bit_xor(a: Int, b: Int) -> Int
+
+  @@doc """
   Shift `value` left by `bits`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
