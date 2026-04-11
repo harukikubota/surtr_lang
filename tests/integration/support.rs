@@ -2,6 +2,12 @@ use forge::bytecode::{populate_error_template_lines, Bytecode};
 use spire::CompileUnitKind;
 use xldr::{CompileSources, ModuleInput, ModuleSources, SourceKind};
 
+#[derive(Clone, Copy)]
+enum TestCompileMode {
+    Script,
+    Project,
+}
+
 #[allow(dead_code)]
 pub fn collect_default_module_sources() -> Result<ModuleSources, String> {
     let module_inputs = xldr::collect_additional_default_std_module_inputs()
@@ -56,19 +62,42 @@ pub fn parse_module_stages(
 pub fn parse_script_program(
     compile_sources: &CompileSources,
 ) -> Result<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>), String> {
+    parse_program(compile_sources, TestCompileMode::Script)
+}
+
+#[allow(dead_code)]
+pub fn parse_project_program(
+    compile_sources: &CompileSources,
+) -> Result<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>), String> {
+    parse_program(compile_sources, TestCompileMode::Project)
+}
+
+fn parse_program(
+    compile_sources: &CompileSources,
+    mode: TestCompileMode,
+) -> Result<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>), String> {
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
-    let module_stages = parse_module_stages(compile_sources, CompileUnitKind::Script)?;
+    let compile_unit_kind = match mode {
+        TestCompileMode::Script => CompileUnitKind::Script,
+        TestCompileMode::Project => CompileUnitKind::Project,
+    };
+    let module_stages = parse_module_stages(compile_sources, compile_unit_kind)?;
 
     let user_source = sources.source(user_source_id).unwrap_or("");
-    let user_ast = spire::parse_with_context(
-        user_source,
-        spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
-            CompileUnitKind::Script,
-            SourceKind::Script,
-            None,
-        )),
-    )
+    let user_ast = match mode {
+        TestCompileMode::Script => spire::parse_with_context(
+            user_source,
+            spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
+                CompileUnitKind::Script,
+                SourceKind::Script,
+                None,
+            )),
+        ),
+        TestCompileMode::Project => {
+            spire::parse_with_context(user_source, spire::ParserContext::project(user_source_id.0))
+        }
+    }
     .map_err(|e| {
         let file_name = sources.file_name(user_source_id).unwrap_or("<unknown>");
         format!("phase=parse; file={}; message={}", file_name, e.message())
@@ -85,7 +114,28 @@ pub fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, Strin
 
 #[allow(dead_code)]
 pub fn compile_script_sources(compile_sources: &CompileSources) -> Result<Bytecode, String> {
-    let (module_asts, user_ast) = parse_script_program(compile_sources)?;
+    compile_sources_with_mode(compile_sources, TestCompileMode::Script)
+}
+
+#[allow(dead_code)]
+pub fn compile_project_script(source_name: &str, source: &str) -> Result<Bytecode, String> {
+    let compile_sources = collect_script_compile_sources(source_name, source)?;
+    compile_project_sources(&compile_sources)
+}
+
+#[allow(dead_code)]
+pub fn compile_project_sources(compile_sources: &CompileSources) -> Result<Bytecode, String> {
+    compile_sources_with_mode(compile_sources, TestCompileMode::Project)
+}
+
+fn compile_sources_with_mode(
+    compile_sources: &CompileSources,
+    mode: TestCompileMode,
+) -> Result<Bytecode, String> {
+    let (module_asts, user_ast) = match mode {
+        TestCompileMode::Script => parse_script_program(compile_sources)?,
+        TestCompileMode::Project => parse_project_program(compile_sources)?,
+    };
     let docs = xldr::collect_doc_entries(
         &module_asts,
         &user_ast,
@@ -103,11 +153,12 @@ pub fn compile_script_sources(compile_sources: &CompileSources) -> Result<Byteco
     let typed = scar::typecheck_with_context(
         resolved,
         scar::TypecheckContext {
-            source_rules: xldr::derive_source_rules(
-                CompileUnitKind::Script,
-                SourceKind::Script,
-                None,
-            ),
+            source_rules: match mode {
+                TestCompileMode::Script => {
+                    xldr::derive_source_rules(CompileUnitKind::Script, SourceKind::Script, None)
+                }
+                TestCompileMode::Project => spire::SourceRules::project(),
+            },
             enforce_builtin_type_contracts: true,
         },
     )
@@ -130,11 +181,30 @@ pub fn run_script(source_name: &str, source: &str) -> Result<Vec<String>, String
 }
 
 #[allow(dead_code)]
+pub fn run_project_script(source_name: &str, source: &str) -> Result<Vec<String>, String> {
+    let (stdout, _stderr) = run_project_script_with_stderr(source_name, source)?;
+    Ok(stdout)
+}
+
+#[allow(dead_code)]
 pub fn run_script_with_stderr(
     source_name: &str,
     source: &str,
 ) -> Result<(Vec<String>, Vec<String>), String> {
     let bytecode = compile_script(source_name, source)?;
+    run_bytecode_with_stderr(bytecode)
+}
+
+#[allow(dead_code)]
+pub fn run_project_script_with_stderr(
+    source_name: &str,
+    source: &str,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let bytecode = compile_project_script(source_name, source)?;
+    run_bytecode_with_stderr(bytecode)
+}
+
+fn run_bytecode_with_stderr(bytecode: Bytecode) -> Result<(Vec<String>, Vec<String>), String> {
     let mut vm = eldr::VM::new(bytecode)
         .with_output_capture()
         .with_error_capture();

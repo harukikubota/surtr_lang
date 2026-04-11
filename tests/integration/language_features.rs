@@ -7,16 +7,16 @@ mod e2e {
     use eldr::VM;
 
     fn run_surtr(source: &str) -> Result<Vec<String>, String> {
-        support::run_script("language_features.srt", source)
+        support::run_project_script("language_features.srt", source)
     }
 
     fn run_surtr_with_stderr(source: &str) -> Result<(Vec<String>, Vec<String>), String> {
-        support::run_script_with_stderr("language_features.srt", source)
+        support::run_project_script_with_stderr("language_features.srt", source)
     }
 
     fn observe_surtr(source: &str) -> VmObservation {
-        let bytecode =
-            support::compile_script("language_features.srt", source).expect("compile should work");
+        let bytecode = support::compile_project_script("language_features.srt", source)
+            .expect("compile should work");
         let mut vm = VM::new(bytecode);
         vm.enable_observation(VmObservationOptions::default());
         vm.run().expect("run should succeed");

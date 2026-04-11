@@ -192,11 +192,7 @@ fn run_source_error_points_to_generation_site() {
     let source_path = temp.join("sample.srt");
     write_source(
         &source_path,
-        r#"deferror PageNotFound(html: String) {
-  "Page Not Found. #{html}"
-}
-
-err_result: Result<Int> = Err(PageNotFound("404"))
+        r#"err_result: Result<Int> = Err(NoneError)
 match err_result {
   Ok(num) => print(to_string(num)),
   Err(e)  => eprint(e)
@@ -219,13 +215,8 @@ match err_result {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("sample.srt:5:"),
-        "expected error to point at generation site on line 5, got:\n{}",
-        stderr
-    );
-    assert!(
-        !stderr.contains("deferror PageNotFound"),
-        "did not expect the definition site to be the primary focus, got:\n{}",
+        stderr.contains("sample.srt:1:"),
+        "expected error to point at generation site on line 1, got:\n{}",
         stderr
     );
 
@@ -233,17 +224,17 @@ match err_result {
 }
 
 #[test]
-fn run_source_deferror_compile_error_points_to_show_expression() {
+fn run_source_compile_error_points_to_offending_expression() {
     let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_deferror_compile_location");
     let source_path = temp.join("sample.srt");
     write_source(
         &source_path,
-        r#"deferror BadMessage {
-  1
+        r#"def main() -> Result<Int> {
+  "bad"
 }
 
-Err(BadMessage)"#,
+main()"#,
     );
     let output = Command::new(&bin)
         .args([
@@ -263,7 +254,7 @@ Err(BadMessage)"#,
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("sample.srt:2:"),
-        "expected deferror compile error to point at the show expression on line 2, got:\n{}",
+        "expected compile error to point at the offending expression on line 2, got:\n{}",
         stderr
     );
 
@@ -400,11 +391,9 @@ fn run_source_main_err_overrides_set_exit_code_with_runtime_error_exit() {
     let source_path = temp.join("sample.srt");
     write_source(
         &source_path,
-        r#"deferror Boom { "boom" }
-
-def main() -> Result<()> {
+        r#"def main() -> Result<()> {
   set_exit_code(7)
-  Err(Boom)
+  Err(NoneError)
 }
 
 main()
@@ -429,8 +418,8 @@ main()
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Boom"),
-        "expected runtime diagnostic for Boom, got:\n{}",
+        stderr.contains("NoneError"),
+        "expected runtime diagnostic for NoneError, got:\n{}",
         stderr
     );
 

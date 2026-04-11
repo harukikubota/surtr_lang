@@ -275,6 +275,31 @@ fn module_compile_error_fixtures_match_expectations_via_loader() {
 }
 
 #[test]
+fn direct_module_file_compiles_without_module_resolution_stub_error() {
+    let module_path =
+        repo_root().join("tests/compile_errors/modules/duplicate_import_all_all/Kernel.srt");
+    let output = Command::new(surtr_bin())
+        .args([
+            "check",
+            module_path.to_str().expect("module path must be utf-8"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run surtr check");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "direct module compile should succeed for {}\nstdout:\n{}\nstderr:\n{}",
+        module_path.display(),
+        stdout,
+        stderr
+    );
+}
+
+#[test]
 fn dump_includes_qualified_function_names_for_module_defined_functions() {
     let case_dir = repo_root().join("tests/spec/modules/qualified_name_without_import");
     let bytecode = compile_multi_source_case(&case_dir)

@@ -2394,11 +2394,13 @@ mod tests {
 
     fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
         let _ = module_path;
-        spire::parse(src).expect("module source should parse")
+        spire::parse_with_context(src, spire::ParserContext::project(0))
+            .expect("module source should parse")
     }
 
     fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
-        let ast = spire::parse(src).expect("parse failed");
+        let ast = spire::parse_with_context(src, spire::ParserContext::project(0))
+            .expect("parse failed");
         resolve(ast)
     }
 
@@ -2414,7 +2416,8 @@ mod tests {
         user_src: &str,
         module_stages: &[Vec<StagedModuleAst>],
     ) -> Result<Vec<Resolved>, ResolveError> {
-        let user_ast = spire::parse(user_src).expect("user script should parse");
+        let user_ast = spire::parse_with_context(user_src, spire::ParserContext::project(0))
+            .expect("user script should parse");
         let mut full_stages = vec![vec![staged_module(
             "Bootstrap",
             parse_module_ast(

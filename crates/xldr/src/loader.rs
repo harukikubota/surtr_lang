@@ -276,7 +276,17 @@ fn lib_module_path_from_path(path: &Path) -> String {
 
 pub fn derive_primary_module_path(source: &str) -> Option<String> {
     let stripped = crate::strip_test_annotations(source);
-    let ast = spire::parse(&stripped).ok()?;
+    let ast = spire::parse_with_context(
+        &stripped,
+        spire::ParserContext::module(0, None).with_rules(spire::SourceRules::module()),
+    )
+    .or_else(|_| {
+        spire::parse_with_context(
+            &stripped,
+            spire::ParserContext::module(0, None).with_rules(spire::SourceRules::std_module()),
+        )
+    })
+    .ok()?;
     crate::lower_module_source_ast(ast, None)
         .into_iter()
         .find(|module| module.declared_span.is_some() && !module.module_path.is_empty())

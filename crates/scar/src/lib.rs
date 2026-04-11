@@ -129,7 +129,8 @@ mod tests {
 
     fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
         let module_stages = std_module_stages();
-        let user_ast = spire::parse(source).expect("source should parse");
+        let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+            .expect("source should parse");
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");
         sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)

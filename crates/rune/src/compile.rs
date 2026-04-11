@@ -120,25 +120,92 @@ fn parse_program_with_module_sources(
             })?;
 
     let user_source = sources.source(user_source_id).unwrap_or("");
-    let user_ast = spire::parse_with_context(
+    let user_ast = match spire::parse_with_context(
         user_source,
         spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
             compile_unit_kind,
             source_kind,
             entrypoint,
         )),
-    )
-    .map_err(|e| {
-        RuneError::diagnostic(
-            1,
-            sources,
-            user_source_id,
-            "parse",
-            diagnostics::simple_error("ParseError", e.message(), e.span().clone(), None),
-        )
-    })?;
+    ) {
+        Ok(ast) => ast,
+        Err(script_err) => {
+            if xldr::derive_primary_module_path(user_source).is_none() {
+                return Err(RuneError::diagnostic(
+                    1,
+                    sources,
+                    user_source_id,
+                    "parse",
+                    diagnostics::simple_error(
+                        "ParseError",
+                        script_err.message(),
+                        script_err.span().clone(),
+                        None,
+                    ),
+                ));
+            }
 
-    Ok((staged_module_asts, user_ast))
+            spire::parse_with_context(
+                user_source,
+                spire::ParserContext::module(user_source_id.0, None).with_rules(
+                    xldr::derive_source_rules(
+                    compile_unit_kind,
+                    xldr::SourceKind::Module,
+                    entrypoint,
+                )),
+            )
+            .map_err(|e| {
+                RuneError::diagnostic(
+                    1,
+                    sources,
+                    user_source_id,
+                    "parse",
+                    diagnostics::simple_error("ParseError", e.message(), e.span().clone(), None),
+                )
+            })?
+        }
+    };
+
+    if is_direct_module_source(&user_ast) {
+        let lowered = xldr::lower_module_source_ast(
+            user_ast,
+            Some(compile_sources.user_module_path.as_str()),
+        );
+        let mut combined_stages = staged_module_asts;
+        combined_stages.push(
+            lowered
+                .into_iter()
+                .map(|module| sigil::StagedModuleAst {
+                    module_path: module.module_path,
+                    ast: module.ast,
+                    module_doc: module.module_doc,
+                })
+                .collect(),
+        );
+        Ok((combined_stages, Vec::new()))
+    } else {
+        Ok((staged_module_asts, user_ast))
+    }
+}
+
+fn is_direct_module_source(ast: &[Ast]) -> bool {
+    !ast.is_empty()
+        && ast.iter().all(|stmt| {
+            matches!(
+                stmt,
+                Ast::Defmod(_, _, _, _)
+                    | Ast::Import(_, _, _)
+                    | Ast::Def(_, _, _, _, _, _)
+                    | Ast::StructDef(_, _, _)
+                    | Ast::RecordDef(_, _, _)
+                    | Ast::DeferrorDef(_, _, _, _, _)
+                    | Ast::EnumDef(_, _, _, _, _)
+                    | Ast::ImplDef(_, _, _)
+                    | Ast::BuiltinDecl(_, _, _, _, _)
+                    | Ast::BuiltinTypeDecl(_, _, _)
+                    | Ast::ResultCtorDecl(_, _, _, _, _)
+            )
+        })
 }
 
 pub(crate) fn compile_source(
@@ -391,7 +458,8 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_entrypoint_annotations, prepare_script_compile_plan};
+    use super::{collect_entrypoint_annotations, is_direct_module_source, prepare_script_compile_plan};
+    use spire::ast::Ast;
 
     #[test]
     fn collect_entrypoint_annotations_strips_annotator_and_keeps_def() {
@@ -416,5 +484,29 @@ mod tests {
                 .map(|e| e.qualified_symbol.as_str()),
             Some("__Script::sample::manual")
         );
+    }
+
+    #[test]
+    fn direct_module_source_is_detected() {
+        let ast = spire::parse_with_context(
+            r#"defmod Helper {
+  def add(x: Int, y: Int) -> Int {
+    x + y
+  }
+}"#,
+            spire::ParserContext::module(0, None).with_rules(spire::SourceRules::module()),
+        )
+        .expect("module source should parse");
+
+        assert!(is_direct_module_source(&ast));
+    }
+
+    #[test]
+    fn plain_script_is_not_treated_as_module_source() {
+        let ast = spire::parse(r#"print(to_string(1))"#)
+        .expect("script source should parse");
+
+        assert!(matches!(ast.last(), Some(Ast::App(_, _, _))));
+        assert!(!is_direct_module_source(&ast));
     }
 }

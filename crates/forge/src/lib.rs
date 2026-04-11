@@ -129,7 +129,8 @@ mod tests {
 
     fn typed_with_builtin_prelude(source: &str) -> Vec<scar::typed::TypedNode> {
         let module_stages = std_module_stages();
-        let user_ast = spire::parse(source).expect("source should parse");
+        let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+            .expect("source should parse");
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");
         let resolved =
