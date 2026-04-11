@@ -43,6 +43,11 @@
 - List runtime 前提の固定
   - cons cell + handle
   - `len` は handle に保持して O(1)
+- FuncLiteral v1 の surface 固定
+  - backtick infix (`expr \`name\` expr`, `expr \`operator\` expr`)
+  - FuncLiteral は parser-only であり値にはならない
+  - `Bind < Apply=Compose < Logical < Expr`
+  - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
 
 これらの正本は `doc/要件定義v9.md`, `doc/EldrVM_spec.md`, `doc/Xldr_spec.md`, `doc/テスト方針.md` を参照する。
 
@@ -320,6 +325,11 @@
 - closure の `expected=None` 推論強化
   - 期待型や注釈なしでも強く推論する方向は別 issue で扱う
   - let-generalization を入れない current baseline を前提に reopen する
+- FuncLiteral の未実装部分
+  - `&` 側の operator capture (`&`+``)
+  - placeholder capture (`&1`, `&2`, ...)
+  - qualified backtick path (`\`Type::method\``)
+  - これらは v1 範囲外のため、仕様を詰めてから reopen する
 - OOM / host failure policy
   - 上限値、停止文言、回復可否は host 依存方針のまま、詳細契約は将来確定する
 - Enum conversion helper

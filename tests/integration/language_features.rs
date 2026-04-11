@@ -232,8 +232,8 @@ print(inspect(Err(MyError)))"#,
 
     #[test]
     fn arithmetic_precedence() {
-        // 2 + 3 * 4 = 2 + 12 = 14
-        assert_output("print(to_string(2 + 3 * 4))", &["14"]);
+        // Expr-class operators are same-precedence and left-associative.
+        assert_output("print(to_string(2 + 3 * 4))", &["20"]);
     }
 
     #[test]
@@ -307,6 +307,28 @@ print(to_string(fun(3)))"#,
             r#"printer = &print
 printer("hello")"#,
             &["hello"],
+        );
+    }
+
+    #[test]
+    fn func_literal_infix_invocation_works() {
+        assert_output(
+            r#"def eq(left: Int, right: Int) -> Boolean {
+  left == right
+}
+
+print(to_string(10 `+` 5))
+print(to_string(7 `eq` 7))"#,
+            &["15", "True"],
+        );
+    }
+
+    #[test]
+    fn expr_class_operators_are_same_precedence() {
+        assert_output(
+            r#"print(to_string(2 + 3 * 4))
+print(to_string(2 `*` 3 + 4))"#,
+            &["20", "10"],
         );
     }
 
@@ -1587,7 +1609,10 @@ lift_and_expand = &singleton |=> &aliases
 words: List<String> = ["surtr", "vm"]
 print(to_string(words |>= aliases() |*> wrap_bracket()))
 print(to_string(lift_and_expand("bind") |*> wrap_bracket()))"#,
-            &["[[surtr], [surtr_alt], [vm], [vm_alt]]", "[[bind], [bind_alt]]"],
+            &[
+                "[[surtr], [surtr_alt], [vm], [vm_alt]]",
+                "[[bind], [bind_alt]]",
+            ],
         );
     }
 

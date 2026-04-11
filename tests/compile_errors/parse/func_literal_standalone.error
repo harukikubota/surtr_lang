@@ -1,0 +1,2 @@
+phase: parse
+contains: FuncLiteral must appear in infix position

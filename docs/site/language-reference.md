@@ -264,10 +264,19 @@ value: Int =? parse_int("1")
 - `value |> normalize` は不許可
 - `pipeline = parse |=> validate` も不許可
 - 関数値として保持できるのは capture または closure
+- backtick FuncLiteral は中置位置専用で、値にはならない
+- ``left `name` right`` は `name(left, right)` に lower される
+- ``left `operator` right`` は対応する通常演算に lower される
+- V1 の FuncLiteral は unqualified name と symbolic operator のみを許可する
+- `` `Type::method` `` のような qualified backtick path は未対応
+- `&` 側で operator を capture する構文と placeholder capture (`&1`) は未実装
 - bare capture を `inspect` / `to_string` すると、metadata があれば
   `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
 - `Result` と `List` を `|*>`, `|>=`, `|=>` で混在させない
 - `|>`, `|*>`, `|>=`, `|=>`, `=?` は同一優先度・左結合
+- 結合優先度は `Bind < Apply=Compose < Logical < Expr`
+- `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
+- comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
 
 ## 5. パターン
 

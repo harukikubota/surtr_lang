@@ -1,0 +1,8 @@
+def eq(left: Int, right: Int) -> Boolean {
+  left == right
+}
+
+print(to_string(10 `+` 5))
+print(to_string(2 `*` 3 + 4))
+print(to_string(4 + 3 `==` 7))
+print(to_string(7 `eq` 7))
