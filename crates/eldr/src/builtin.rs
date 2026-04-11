@@ -190,22 +190,30 @@ fn builtin_shl(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("shl expects (Int, Int)"));
     };
-    let amount = bits.to_usize().ok_or_else(|| {
-        RuntimeError::new(format!("shl shift amount must be non-negative: {}", bits))
-    })?;
+    let Some(amount) = bits.to_usize() else {
+        return Ok(err_result(
+            _vm,
+            "NegativeShiftCount",
+            &format!("shift amount must be non-negative: {}", bits),
+        ));
+    };
     let shifted = value << amount;
-    Ok(Value::Int(shifted))
+    Ok(ok_result(Value::Int(shifted)))
 }
 
 fn builtin_shr(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (Value::Int(value), Value::Int(bits)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new("shr expects (Int, Int)"));
     };
-    let amount = bits.to_usize().ok_or_else(|| {
-        RuntimeError::new(format!("shr shift amount must be non-negative: {}", bits))
-    })?;
+    let Some(amount) = bits.to_usize() else {
+        return Ok(err_result(
+            _vm,
+            "NegativeShiftCount",
+            &format!("shift amount must be non-negative: {}", bits),
+        ));
+    };
     let shifted = value >> amount;
-    Ok(Value::Int(shifted))
+    Ok(ok_result(Value::Int(shifted)))
 }
 
 fn builtin_list_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -402,6 +410,58 @@ mod tests {
         let err = call_builtin(&mut vm, 4, vec![Value::Bool(true), Value::Int(int(1))])
             .expect_err("safe_mod must reject non-int inputs");
         assert!(err.message.contains("safe_mod expects (Int, Int)"));
+    }
+
+    #[test]
+    fn shl_returns_result_and_negative_shift_error() {
+        let mut vm = test_vm();
+        let ok = call_builtin(&mut vm, 7, vec![Value::Int(int(2)), Value::Int(int(3))])
+            .expect("shl should return Result");
+        match ok {
+            Value::Tagged { tag: 0, fields } => {
+                assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(16)));
+            }
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+
+        let err = call_builtin(&mut vm, 7, vec![Value::Int(int(2)), Value::Int(int(-1))])
+            .expect("negative shl should still return Result");
+        match err {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "NegativeShiftCount");
+                    assert_eq!(rich.message, "shift amount must be non-negative: -1");
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn shr_returns_result_and_negative_shift_error() {
+        let mut vm = test_vm();
+        let ok = call_builtin(&mut vm, 8, vec![Value::Int(int(16)), Value::Int(int(2))])
+            .expect("shr should return Result");
+        match ok {
+            Value::Tagged { tag: 0, fields } => {
+                assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(4)));
+            }
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+
+        let err = call_builtin(&mut vm, 8, vec![Value::Int(int(2)), Value::Int(int(-1))])
+            .expect("negative shr should still return Result");
+        match err {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "NegativeShiftCount");
+                    assert_eq!(rich.message, "shift amount must be non-negative: -1");
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
     }
 
     #[test]

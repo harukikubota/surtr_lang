@@ -1,0 +1,8 @@
+[1, 2, 3, 4]
+[1, 11, 2, 12]
+[1, 2, 3]
+Ok(3)
+Err(NoneError("None Value."))
+Ok(20)
+Err(IndexOutOfBounds("index 0 out of bounds for len 0"))
+Err(IndexOutOfBounds("index -1 out of bounds for len 2"))

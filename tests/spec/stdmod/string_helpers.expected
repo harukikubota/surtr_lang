@@ -1,0 +1,6 @@
+True
+True
+[core]
+a,b,c
+Ok(nanana)
+Err(NegativeRepeatCount("repeat count must be non-negative: -1"))

@@ -11,12 +11,28 @@ This top-level declaration exists so the rest of the pipeline can talk about
 Float module.
 Groups float-specific helpers while the exact `Float` contract continues to be
 refined.
-This module stays intentionally small until the language-level `Float`
-specification is promoted from the dedicated design note into the main spec.
+This module stays intentionally small and focuses on arithmetic helpers that
+are independent of rounding-policy decisions.
 """
 defmod Float {
   @@doc """
-  Placeholder entry for the module-level `Float` surface.
+  Return the absolute value of `value`.
   """
-  def dummy() { () }
+  def abs(value: Float) -> Float {
+    if(value < 0.0, 0.0 - value, value)
+  }
+
+  @@doc """
+  Return the smaller of `a` and `b`.
+  """
+  def min(a: Float, b: Float) -> Float {
+    if(a <= b, a, b)
+  }
+
+  @@doc """
+  Return the larger of `a` and `b`.
+  """
+  def max(a: Float, b: Float) -> Float {
+    if(a >= b, a, b)
+  }
 }

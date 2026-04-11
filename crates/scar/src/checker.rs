@@ -132,7 +132,7 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
         "shl" | "shr" => Ty::BuiltinFunc {
             name: meta.name.into(),
             params: vec![Ty::Int, Ty::Int],
-            ret: Box::new(Ty::Int),
+            ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
         },
         "len" => {
             let a = env.fresh_tyvar();
@@ -1663,7 +1663,7 @@ impl Checker {
                         hint: None,
                     });
                 }
-                self.build_list_helper_call("List::_list_flat_map", span, typed_left, typed_right)
+                self.build_list_helper_call("List::flat_map", span, typed_left, typed_right)
             }
             (Ty::Result(_, _), Ty::List(_)) | (Ty::List(_), Ty::Result(_, _)) => Err(TypeError {
                 message: "`|>=` cannot mix Result and List context".into(),
@@ -1759,7 +1759,7 @@ impl Checker {
                     span: span.clone(),
                     node: TypedInner::Compose(
                         ComposeFlavor::ListBind {
-                            helper: self.list_helper_ref_by_name("List::_list_flat_map", span)?,
+                            helper: self.list_helper_ref_by_name("List::flat_map", span)?,
                         },
                         Box::new(typed_left),
                         Box::new(typed_right),
@@ -4313,7 +4313,13 @@ impl Checker {
             .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match ret_ty {
-            Some(ty) => self.resolve_builtin_ast_ty(ty, &mut tyvars)?,
+            Some(ty) => {
+                self.resolve_builtin_ast_ty_in_context(
+                    ty,
+                    TypeSyntaxContext::FunctionReturn,
+                    &mut tyvars,
+                )?
+            }
             None => Ty::Unit,
         };
 
@@ -4398,7 +4404,13 @@ impl Checker {
             .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match ret_ty {
-            Some(ty) => self.resolve_builtin_ast_ty(ty, &mut tyvars)?,
+            Some(ty) => {
+                self.resolve_builtin_ast_ty_in_context(
+                    ty,
+                    TypeSyntaxContext::FunctionReturn,
+                    &mut tyvars,
+                )?
+            }
             None => Ty::Unit,
         };
 
