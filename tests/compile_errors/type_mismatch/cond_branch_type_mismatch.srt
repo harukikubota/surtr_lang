@@ -1,0 +1,4 @@
+print(to_string(cond {
+  False => 1,
+  True => "x",
+}))

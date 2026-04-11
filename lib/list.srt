@@ -1,0 +1,230 @@
+@@doc """
+Standard `List` type declaration.
+`List` is the homogeneous sequence type used by list literals and list
+patterns.
+The canonical builtin head is `List<$A>`, and the compiler validates that exact
+shape at this file's top level.
+"""
+@@builtin type List<$A>
+
+@@doc """
+Stepper for `List::reduce_while`.
+`Resume(next)` continues with the next accumulator, while `Stop(done)` ends the
+reduction immediately.
+"""
+defenum ReduceStep<$A> {
+  Resume($A),
+  Stop($A),
+}
+
+@@doc """
+List module.
+Groups helpers for transforming list values in source code.
+Empty lists usually need a type annotation such as `List<Int>`, and `[]` is the
+canonical Nil value.
+"""
+defmod List {
+  @@doc """
+  Prepend one element onto the front of a list.
+  `cons` is the canonical value-level constructor for list growth.
+  """
+  def cons(head: $A, tail: List<$A>) -> List<$A> {
+    [head, ..tail]
+  }
+
+  @@doc """
+  Return the first element of a list, or `Err(NoneError)` for `[]`.
+  """
+  def first(values: List<$A>) -> Result<$A, NoneError> {
+    match values {
+      [head, .._] => Ok(head),
+      [] => Err(NoneError),
+    }
+  }
+
+  @@doc """
+  Return the last element of a list, or `Err(NoneError)` for `[]`.
+  """
+  def last(values: List<$A>) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(List::_last_go(head, tail)),
+    }
+  }
+
+  @@doc """
+  Return the number of elements in a list.
+  This stays a core helper so the runtime can keep the O(1) handle-based length
+  contract.
+  """
+  @@builtin def len(values: List<$A>) -> Int
+
+  def _list_reverse_go(values: List<$A>, acc: List<$A>) -> List<$A> {
+    match values {
+      [] => acc,
+      [head, ..tail] => List::_list_reverse_go(tail, List::cons(head, acc)),
+    }
+  }
+
+  def _append_reverse(values: List<$A>, acc: List<$A>) -> List<$A> {
+    match values {
+      [] => acc,
+      [head, ..tail] => List::_append_reverse(tail, List::cons(head, acc)),
+    }
+  }
+
+  def _index_out_of_bounds(index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
+    Err(IndexOutOfBounds("index #{index} out of bounds for len #{len}"))
+  }
+
+  def _last_go(current: $A, rest: List<$A>) -> $A {
+    match rest {
+      [] => current,
+      [head, ..tail] => List::_last_go(head, tail),
+    }
+  }
+
+  def _at_go(values: List<$A>, index: Int, original_index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
+    match values {
+      [] => List::_index_out_of_bounds(original_index, len),
+      [head, ..tail] => if(index == 0, Ok(head), List::_at_go(tail, index - 1, original_index, len)),
+    }
+  }
+
+  @@doc """
+  Append `right` after `left`.
+  This keeps the left-to-right order of both lists.
+  """
+  def append(left: List<$A>, right: List<$A>) -> List<$A> {
+    match left {
+      [] => right,
+      [head, ..tail] => List::cons(head, List::append(tail, right)),
+    }
+  }
+
+  @@doc """
+  Map each element to a list and concatenate the results.
+  """
+  def flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B> {
+    List::reverse(
+      List::reduce(values, [], {|acc, x|
+        List::_append_reverse(f(x), acc)
+      }),
+    )
+  }
+
+  @@doc """
+  Concatenate a list of lists into one list.
+  """
+  def concat(values: List<List<$A>>) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => List::append(head, List::concat(tail)),
+    }
+  }
+
+  @@doc """
+  Reverse the order of a list.
+  """
+  def reverse(values: List<$A>) -> List<$A> {
+    List::_list_reverse_go(values, [])
+  }
+
+  @@doc """
+  Return the element at `index`.
+  Negative indices and out-of-range access return `Err(IndexOutOfBounds(...))`.
+  """
+  def at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds> {
+    len = List::len(values)
+    if(index < 0, List::_index_out_of_bounds(index, len), List::_at_go(values, index, index, len))
+  }
+
+  @@doc """
+  Fold a list from left to right.
+  """
+  def reduce(values: List<$A>, init: $B, f: ($B, $A -> $B)) -> $B {
+    match values {
+      [] => init,
+      [head, ..tail] => List::reduce(tail, f(init, head), f),
+    }
+  }
+
+  @@doc """
+  Fold a list from left to right with early exit.
+  """
+  def reduce_while(values: List<$A>, init: $B, f: ($B, $A -> ReduceStep<$B>)) -> $B {
+    match values {
+      [] => init,
+      [head, ..tail] => match f(init, head) {
+        ReduceStep::Resume(next) => List::reduce_while(tail, next, f),
+        ReduceStep::Stop(done) => done,
+      },
+    }
+  }
+
+  @@doc """
+  Map a plain unary callable over each element and keep the list shape.
+  This matches the semantics of `|*>` on `List`.
+  """
+  def map(values: List<$A>, f: ($A -> $B)) -> List<$B> {
+    List::reverse(
+      List::reduce(values, [], {|acc, x|
+        List::cons(f(x), acc)
+      }),
+    )
+  }
+
+  @@doc """
+  Keep only the elements that satisfy `pred`.
+  """
+  def filter(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    List::reverse(
+      List::reduce(values, [], {|acc, x|
+        if(pred(x), List::cons(x, acc), acc)
+      }),
+    )
+  }
+
+  @@doc """
+  Return the first element that satisfies `pred`.
+  """
+  def find(values: List<$A>, pred: ($A -> Boolean)) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => if(pred(head), Ok(head), List::find(tail, pred)),
+    }
+  }
+
+  @@doc """
+  Return the first successful mapped value.
+  """
+  def find_map(values: List<$A>, f: ($A -> Result<$B>)) -> Result<$B, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => match f(head) {
+        Ok(value) => Ok(value),
+        Err(_) => List::find_map(tail, f),
+      },
+    }
+  }
+
+  @@doc """
+  Return `True` when at least one element satisfies `pred`.
+  """
+  def any(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
+    match values {
+      [] => False,
+      [head, ..tail] => if(pred(head), True, List::any(tail, pred)),
+    }
+  }
+
+  @@doc """
+  Return `True` when every element satisfies `pred`.
+  """
+  def all(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
+    match values {
+      [] => True,
+      [head, ..tail] => if(pred(head), List::all(tail, pred), False),
+    }
+  }
+}

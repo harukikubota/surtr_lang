@@ -51,12 +51,19 @@ Xldr は対話セッション中に次を保持する。
 
 ### 3.2 初期化
 
-- セッション開始時に標準 module source を `Bootstrap -> Kernel -> [他標準モジュール]` の順で読み込む
-- `Bootstrap` source では builtin 宣言と先行解決すべき汎用 error を登録する
-- `Kernel` source では builtin 以外の標準 API を登録する
-- 現行実装の事前ロードファイルは `lib/bootstrap.srt` と `lib/kernel.srt` である
+- セッション開始時に標準 module source を `Bootstrap -> [Kernel + 他標準モジュール]` の順で読み込む
+- `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
+- `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin と、トップレベルの `Unit` type 宣言を登録する
+- 各 type file の top-level では対応する canonical builtin type head を登録する
+- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/kernel.srt`, `lib/int.srt`, `lib/string.srt`, `lib/boolean.srt`, `lib/error.srt`, `lib/list.srt`, `lib/result.srt`, `lib/float.srt` を同一段として読み込む
+- loader は追加標準 module も `./lib/*.srt` から収集し、built-in 標準 module と重複するものはデフォルト入力から除外する
 - REPL user chunk は標準 module 読み込み後に `SourceKind::ReplChunk` として追加される
+- REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、型定義・`impl`・`defmod` は parse error とする
 - 初期補完候補には `Ok`, `Err` と builtin 名を含める
+- セッションは `.eldr` と live compile の両方から doc metadata を保持し、`:doc` 表示へ利用する
+- `.eldr` から初期化した場合、標準 library の compile-time context は source から復元する
+- `.eldr` に含まれる user-defined function は VM には常駐するが、新しい REPL 入力の名前解決対象としては復元されない
+- したがって `.eldr` 復元は現時点では部分復元であり、完全な semantic restore は後続課題とする
 
 `Bootstrap` / `Kernel` は REPL でも auto import 対象とし、明示 `import` は compile error とする。
 
@@ -105,6 +112,7 @@ Xldr は対話セッション中に次を保持する。
 |---|---|
 | `:quit` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する |
+| `:doc <symbol>` | 現在セッションで見える symbol の doc を表示する |
 
 ### 5.2 予約済み
 
@@ -128,7 +136,7 @@ Xldr は対話セッション中に次を保持する。
 - 補完対象は REPL コマンドと現在スコープで見えるシンボルである
 - 補完候補は入力済み接頭辞に基づいて抽出する
 
-候補一覧表示の改善や型文脈つき補完は `doc/draft.md` の検討事項として扱う。
+候補一覧表示の改善や型文脈つき補完は `doc/open-issues.md` の将来課題として扱う。
 
 ---
 

@@ -1,0 +1,1 @@
+`surtr test` is a source-driven test harness for `@@test` annotations. It discovers test expressions inside Surtr modules, evaluates them through the compiler and VM, and reports failures with module and line information.

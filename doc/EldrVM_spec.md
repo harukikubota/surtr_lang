@@ -13,6 +13,7 @@ Eldr は Surtr の Bytecode 実行エンジンであり、以下を担う。
 - スタック/ローカル/関数テーブルの管理
 - 組込み関数呼び出し
 - ランタイムエラーの検出と停止
+- 開発観測用の execution stats / trace 収集（有効時のみ）
 
 Eldr は次を担わない。
 
@@ -30,6 +31,7 @@ Eldr は次を担わない。
 - ファイル実行と `.eldr` 入出力に使う完全な実行単位
 - `opcodes`, `constants`, `type_registry`, `error_templates`, `functions` を持つ
 - `source_map` は `Option<SourceMap>` で付与する
+- `docs` は `@@doc` 由来の symbol metadata を保持する
 
 ### 2.2 `BytecodeChunk`
 
@@ -56,11 +58,14 @@ Eldr は次を担わない。
 - `Callable` は `lexical_captures` と `partial_args` を別々に保持する
 - 関数呼び出し時、`locals` には `lexical_captures` → `partial_args` → 実引数 の順で先頭から配置する
 - `Call` 実行後は、呼び出し先がフレーム完成状態で開始する
+- user function への tail-position call は、次 opcode が `Return` の場合に限り current `CallFrame` を再利用してよい
+- frame 再利用時も外部意味は変わらず、返り値 1 個・呼び出し元への復帰位置・operand stack 契約は維持する
 
 ### 3.3 返り値
 
 - 関数は 1 値を返す
 - 呼び出し元には返り値 1 つのみが push される
+- tail call が最適化された場合、途中フレームの `Return` は省略されうるが、観測上は最終返り値だけが呼び出し元へ渡る
 
 ### 3.4 関数テーブル不変条件
 
@@ -78,6 +83,7 @@ Eldr は次を担わない。
 - Forge の chunk codegen は top-level 末尾へ必ず `Halt` を 1 つ挿入する
 - top-level 実行は append された `code_base` から開始し、最初の `Halt` で停止する
 - 関数本体は top-level `Halt` 後ろに配置され、top-level からは到達不能であり、`Call` / `CallClosure` でのみ到達する
+- 実装は VM 全体 clone ではなく、append した bytecode 断片と実行時状態の checkpoint / rollback で原子性を保つ
 - `push_atomic()` の返り値は chunk 実行終了時点の stack top 1 値のみとする。stack が空なら `Unit` を返す
 - `push_atomic()` 完了後、VM の operand stack は空に戻す。REPL は前回 chunk の stack 内容を次回 chunk へ持ち越さない
 - `push_atomic()` は chunk 実行を原子的に扱い、失敗時は VM 状態を更新しない
@@ -101,6 +107,12 @@ Eldr が扱う値の概念カテゴリ:
 - 呼び出し可能値: `Callable`
 - 言語エラー値: `Error(RichError)`
 
+`inspect` / `to_string` における `Callable` 表示は、bare callable
+（`lexical_captures == 0 && partial_args == 0`）かつ runtime metadata から
+`module` / `name` / `signature` を復元できる場合、
+`FnCapture(module: M, name: f, signature: sig)` を返す。
+それ以外の callable は実装定義の fallback 表示を使う。
+
 ### 4.1 RichError（V9確定）
 
 `RichError` は次を保持する。
@@ -118,8 +130,9 @@ Eldr が扱う値の概念カテゴリ:
 Opcode は以下のカテゴリを持つ。
 
 - 定数/ローカル操作（Load/Store）
-- 算術・比較
+- 算術・比較・bitwise
 - 文字列結合
+- 文字列分解
 - リスト/タグ付き値操作
 - 呼び出し（`Call`, `CallClosure`, `CallBuiltin`）
 - 制御フロー（`Jump`, `JumpIf*`）
@@ -129,8 +142,8 @@ Opcode は以下のカテゴリを持つ。
 
 補足:
 
-- `MakeFrame` / `PopFrame` は互換目的の命令で、新規 codegen は emit しない
 - `CallBuiltin` は `builtin_id` ベースでディスパッチする
+- `BitNotInt` / `BitAndInt` / `BitOrInt` / `BitXorInt` は `Int::bit_not` / `bit_and` / `bit_or` / `bit_xor` の direct call を対象にした monomorphic fast-path とする
 
 実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。
 
@@ -167,7 +180,7 @@ Opcode は以下のカテゴリを持つ。
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `Float` の厳密契約は `doc/float.md` を参照する
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> Kernel -> [他標準モジュール] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel + 他標準モジュール] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.1 TypeRegistry
 
@@ -182,8 +195,64 @@ Opcode は以下のカテゴリを持つ。
 
 - マジック: `ELDR`
 - ヘッダ: `magic/version/debug_level/num_chunks`
-- 最低 1 つの `Code` チャンクを持つ
-- payload は Bytecode をシリアライズした実行可能データ
+- ヘッダ `version` は現行 `1` を維持する
+- 意味的 bytecode 版は `CInf.bytecode_version` に保持し、現行は `1`
+- `.eldr` は単一バイナリ実行物であり、チャンク分割の主目的は実行時ロード都合ではなく viewer / disasm / 診断 / 比較の観測性にある
+- 必須チャンク:
+  - `Code`
+  - `Cnst`
+  - `Func`
+  - `Type`
+  - `ErrT`
+  - `CInf`
+  - `LblT`
+  - `ImpT`
+  - `ExpT`
+  - `LitT`
+  - `Line`
+  - `SpnT`
+  - `SrcP`
+  - `PcSp`
+- 任意チャンク:
+  - `Docs`
+- `Code` は opcode 列のみを持つ
+- `num_locals` は `CInf` に保持する
+- `Cnst` は実行用 constant pool の正本
+- `LitT` は viewer / 比較用の literal table
+- `Func` は関数境界と viewer 用 flag / span を持つ
+- `LblT` / `PcSp` / `Line` / `SpnT` / `SrcP` は viewer 向け索引・source 対応情報である
+
+### 8.1 `Func` と `LblT` の役割分離
+
+- `Func` は人間が読む単位であり、関数一覧・関数ビューの正本とする
+- `LblT` は制御フロー単位であり、jump target と function entry を `label -> pc` で引くために使う
+- viewer は関数一覧から `Func` を起点に表示し、命令列や branch 追跡では `LblT` を補助的に使う
+
+### 8.2 `ImpT` / `ExpT` / `LitT`
+
+- `ImpT` は builtin / function / runtime 呼び出し先を viewer 用に正規化した import table である
+- `ExpT` は公開シンボルと function ref の対応を持つ export table である
+- `LitT` は `Cnst` の差分と viewer 表示を分離するための literal table である
+
+### 8.3 source 対応
+
+- `Line` は軽量な行ビュー用テーブル
+- `SpnT` は span 正本
+- `PcSp` は `pc -> span id`
+- `SrcP` は path / normalized path / content hash / optional source text を持つ
+
+現行実装では Surtr の span 自体は source id を持たないため、`Line` / `SpnT` / `PcSp` / `SrcP` は単一 source を主対象にした viewer 情報として扱う。  
+call opcode / error template / function span を使って source 対応を補完する。
+
+### 8.4 `CInf`
+
+`CInf` は少なくとも以下を保持する。
+
+- `bytecode_version`
+- `debug_level`
+- `num_locals`
+- optional compiler / target / build profile
+- optional source hash / module hash
 
 詳細なエンコード/デコード仕様は `crates/forge/src/bytecode.rs` を正とする。
 
@@ -194,6 +263,11 @@ Opcode は以下のカテゴリを持つ。
 - `VM::step()` / `VMSnapshot`
 - Bytecode verifier
 - 値表現最適化（clone 削減、共有構造）
+
+補足:
+
+- 開発観測機能は実行意味を変更しない read-only 計測とする
+- stats / trace は CLI 等の上位層が opt-in で有効化する
 
 ---
 

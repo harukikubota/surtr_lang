@@ -6,6 +6,8 @@ description = "Shared Surtr foundations: IR, runtime values, and builtin metadat
 
 [dependencies]
 bincode = "1.3.3"
+schemars = { version = "0.8", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 num-bigint = { workspace = true }
 num-traits = { workspace = true }

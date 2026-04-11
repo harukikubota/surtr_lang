@@ -1,0 +1,5 @@
+user = User(age: 30, name: "alice")
+print(User::greeting(user))
+
+print(to_string(Light::is_green(Light::Green)))
+print(to_string(Light::is_green(Light::Red)))

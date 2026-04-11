@@ -61,12 +61,17 @@ impl SetExitCodePolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopLevelDeclKind {
     Def,
+    ExtractorDef,
     Defmod,
+    ImplDef,
     Import,
     StructDef,
     RecordDef,
     DeferrorDef,
+    EnumDef,
     BuiltinDecl,
+    BuiltinExtractorDecl,
+    BuiltinTypeDecl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,7 +101,10 @@ impl SourceRules {
     pub fn script() -> Self {
         Self {
             allow_top_level_expr: true,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::Import,
+            ]),
             set_exit_code_policy: SetExitCodePolicy::Anywhere,
             normalized_entrypoint: Some("main".to_string()),
         }
@@ -115,10 +123,12 @@ impl SourceRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::EnumDef,
             ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
@@ -130,11 +140,14 @@ impl SourceRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::EnumDef,
                 TopLevelDeclKind::BuiltinDecl,
+                TopLevelDeclKind::BuiltinTypeDecl,
             ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
@@ -144,7 +157,10 @@ impl SourceRules {
     pub fn module_member() -> Self {
         Self {
             allow_top_level_expr: false,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![TopLevelDeclKind::Def]),
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::ExtractorDef,
+            ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
         }
@@ -155,7 +171,10 @@ impl SourceRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
+                TopLevelDeclKind::ExtractorDef,
                 TopLevelDeclKind::BuiltinDecl,
+                TopLevelDeclKind::BuiltinExtractorDecl,
+                TopLevelDeclKind::BuiltinTypeDecl,
             ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
@@ -165,7 +184,10 @@ impl SourceRules {
     pub fn repl_chunk() -> Self {
         Self {
             allow_top_level_expr: true,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::Import,
+            ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
         }
@@ -174,7 +196,16 @@ impl SourceRules {
     pub fn project() -> Self {
         Self {
             allow_top_level_expr: true,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::ImplDef,
+                TopLevelDeclKind::Import,
+                TopLevelDeclKind::StructDef,
+                TopLevelDeclKind::RecordDef,
+                TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::EnumDef,
+            ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
         }
@@ -269,6 +300,7 @@ struct Parser {
     tokens: Vec<Spanned<Token>>,
     pos: usize,
     context: ParserContext,
+    impl_target_stack: Vec<Symbol>,
 }
 
 impl Parser {
@@ -277,6 +309,7 @@ impl Parser {
             tokens,
             pos: 0,
             context,
+            impl_target_stack: Vec::new(),
         }
     }
 
@@ -329,6 +362,40 @@ impl Parser {
         }
     }
 
+    fn expect_type_gt(&mut self) -> Result<Span, ParseError> {
+        let sp = self.peek_span();
+        match self.peek() {
+            Token::Gt => {
+                self.advance();
+                Ok(sp)
+            }
+            Token::Compose => {
+                let composed = self.advance().span.clone();
+                let first = Span {
+                    start: composed.start,
+                    end: composed.start + 1,
+                };
+                let second = Span {
+                    start: composed.start + 1,
+                    end: composed.end,
+                };
+                self.tokens.insert(
+                    self.pos,
+                    Spanned {
+                        token: Token::Gt,
+                        span: second,
+                    },
+                );
+                Ok(first)
+            }
+            Token::Eof => Err(ParseError::incomplete(">", sp)),
+            other => Err(ParseError::syntax(
+                format!("Expected Gt, got {:?}", other),
+                sp,
+            )),
+        }
+    }
+
     fn expect_ident(&mut self) -> Result<(Symbol, Span), ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
@@ -342,6 +409,10 @@ impl Parser {
                 sp,
             )),
         }
+    }
+
+    fn expect_builtin_decl_name(&mut self) -> Result<(Symbol, Span), ParseError> {
+        self.expect_ident()
     }
 
     fn skip_newlines(&mut self) {
@@ -368,20 +439,6 @@ impl Parser {
                 self.peek_span(),
             ))
         }
-    }
-
-    #[allow(dead_code)]
-    fn at_stmt_end(&self) -> bool {
-        matches!(
-            self.peek(),
-            Token::Newline
-                | Token::Semicolon
-                | Token::Eof
-                | Token::RBrace
-                | Token::RParen
-                | Token::RBrack
-                | Token::Comma
-        )
     }
 
     fn has_path_separator(&self) -> bool {
@@ -427,10 +484,13 @@ impl Parser {
                 Token::Annotator(_)
                     | Token::Def
                     | Token::Defmod
+                    | Token::Impl
                     | Token::Import
                     | Token::Defstruct
                     | Token::Defrecord
                     | Token::Deferror
+                    | Token::Defenum
+                    | Token::Defextractor
             )
         {
             return Err(ParseError::syntax(
@@ -444,10 +504,13 @@ impl Parser {
             Token::Annotator(_) => self.parse_annotated_decl()?,
             Token::Def => self.parse_def()?,
             Token::Defmod => self.parse_defmod()?,
+            Token::Impl => self.parse_impl_def()?,
             Token::Import => self.parse_import()?,
             Token::Defstruct => self.parse_struct_def()?,
             Token::Defrecord => self.parse_record_def()?,
             Token::Deferror => self.parse_deferror_def()?,
+            Token::Defenum => self.parse_enum_def()?,
+            Token::Defextractor => self.parse_extractor_def()?,
             _ => {
                 if self.is_pattern_bind_stmt_start() {
                     let save = self.pos;
@@ -515,13 +578,21 @@ impl Parser {
 
     fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         match ast {
-            Ast::Def(_, _, _, _, _) => Some(TopLevelDeclKind::Def),
-            Ast::Defmod(_, _, _) => Some(TopLevelDeclKind::Defmod),
+            Ast::Def(_, _, _, _, _, _) => Some(TopLevelDeclKind::Def),
+            Ast::ExtractorDef(_, _, _, _, _, _) => Some(TopLevelDeclKind::ExtractorDef),
+            Ast::Defmod(_, _, _, _) => Some(TopLevelDeclKind::Defmod),
+            Ast::ImplDef(_, _, _) => Some(TopLevelDeclKind::ImplDef),
             Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
             Ast::StructDef(_, _, _) => Some(TopLevelDeclKind::StructDef),
             Ast::RecordDef(_, _, _) => Some(TopLevelDeclKind::RecordDef),
-            Ast::DeferrorDef(_, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
-            Ast::BuiltinDecl(_, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
+            Ast::DeferrorDef(_, _, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
+            Ast::EnumDef(_, _, _, _, _) => Some(TopLevelDeclKind::EnumDef),
+            Ast::BuiltinDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
+            Ast::BuiltinExtractorDecl(_, _, _, _, _) => {
+                Some(TopLevelDeclKind::BuiltinExtractorDecl)
+            }
+            Ast::BuiltinTypeDecl(_, _, _) => Some(TopLevelDeclKind::BuiltinTypeDecl),
+            Ast::ResultCtorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
             _ => None,
         }
     }
@@ -673,6 +744,162 @@ impl Parser {
     }
 
     fn parse_defmod(&mut self) -> Result<Ast, ParseError> {
+        self.parse_defmod_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_impl_def(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Impl)?;
+        let (target, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut methods = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            if !matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    "impl body may only contain `def` declarations",
+                    self.peek_span(),
+                ));
+            }
+            let method = self.parse_impl_method(&target)?;
+            self.ensure_stmt_boundary(&method, true)?;
+            methods.push(method);
+            while matches!(self.peek(), Token::Newline) {
+                self.advance();
+            }
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::ImplDef(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            target,
+            methods,
+        ))
+    }
+
+    fn parse_impl_method(&mut self, target: &str) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Def)?;
+        let (name, _) = self.expect_ident()?;
+        let mut params = Vec::new();
+
+        if matches!(self.peek(), Token::Unit) {
+            self.advance();
+        } else {
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+            let mut first_param = true;
+            if !matches!(self.peek(), Token::RParen) {
+                loop {
+                    if matches!(self.peek(), Token::Eof) {
+                        return Err(ParseError::incomplete(")", self.peek_span()));
+                    }
+                    self.skip_newlines();
+                    let (param_name, param_span) = self.expect_ident()?;
+
+                    let param_ty = if param_name == "self" {
+                        if !first_param {
+                            return Err(ParseError::syntax(
+                                "`self` is only allowed as the first parameter of impl methods",
+                                param_span,
+                            ));
+                        }
+                        if matches!(self.peek(), Token::Colon) {
+                            self.advance();
+                            self.skip_newlines();
+                            let ty = self.parse_type_in_impl_context(Some(target.to_string()))?;
+                            if !Self::is_self_type(&ty) {
+                                return Err(ParseError::syntax(
+                                    "`self` receiver type must be `Self`",
+                                    ast_ty_span(&ty).clone(),
+                                ));
+                            }
+                            ty
+                        } else {
+                            AstTy::Named(param_span.clone(), "Self".to_string())
+                        }
+                    } else {
+                        self.expect(&Token::Colon)?;
+                        self.skip_newlines();
+                        self.parse_type_in_impl_context(Some(target.to_string()))?
+                    };
+
+                    params.push(FunParam {
+                        name: param_name,
+                        ty: param_ty,
+                        span: param_span,
+                    });
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                    first_param = false;
+                }
+            }
+            self.expect(&Token::RParen)?;
+        }
+
+        let ret_ty = if matches!(self.peek(), Token::Arrow) {
+            self.advance();
+            self.skip_newlines();
+            Some(self.parse_type_in_impl_context(Some(target.to_string()))?)
+        } else {
+            None
+        };
+
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.impl_target_stack.push(target.to_string());
+        let body_stmts = self.parse_block_stmts();
+        self.impl_target_stack.pop();
+        let body_stmts = body_stmts?;
+        if body_stmts.is_empty() {
+            return Err(ParseError::syntax(
+                "Function body must not be empty",
+                self.peek_span(),
+            ));
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let body = Ast::Block(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            body_stmts,
+        );
+
+        Ok(Ast::Def(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            name,
+            params,
+            ret_ty,
+            Box::new(body),
+            DeclAttrs::default(),
+        ))
+    }
+
+    fn parse_defmod_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         if self.context.module_path.is_some() {
             return Err(ParseError::syntax(
@@ -689,11 +916,12 @@ impl Parser {
 
         Ok(Ast::Defmod(
             Span {
-                start: sp.start,
+                start: annotator_start.unwrap_or(sp.start),
                 end: end.end,
             },
             name,
             body,
+            attrs,
         ))
     }
 
@@ -725,7 +953,36 @@ impl Parser {
     // ── Expression (entry point — handles binding at top level) ──
 
     fn parse_expr(&mut self) -> Result<Ast, ParseError> {
-        self.parse_binop_expr(0)
+        self.parse_flow_expr()
+    }
+
+    fn parse_flow_expr(&mut self) -> Result<Ast, ParseError> {
+        let mut left = self.parse_logical_expr()?;
+        loop {
+            let next = match self.peek() {
+                Token::PipeApply => 0,
+                Token::PipeMap => 1,
+                Token::PipeBind => 2,
+                Token::Compose => 3,
+                Token::PipeCompose => 4,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_logical_expr()?;
+            let span = Span {
+                start: left.span().start,
+                end: right.span().end,
+            };
+            left = match next {
+                0 => Ast::Pipe(span, Box::new(left), Box::new(right)),
+                1 => Ast::ContextMap(span, Box::new(left), Box::new(right)),
+                2 => Ast::ContextBind(span, Box::new(left), Box::new(right)),
+                3 => Ast::Compose(span, Box::new(left), Box::new(right)),
+                4 => Ast::KleisliCompose(span, Box::new(left), Box::new(right)),
+                _ => unreachable!("validated flow token"),
+            };
+        }
+        Ok(left)
     }
 
     fn parse_pattern_bind_stmt(&mut self) -> Result<Ast, ParseError> {
@@ -764,48 +1021,130 @@ impl Parser {
         )
     }
 
-    // ── Binary operators with precedence climbing ──
+    // ── Infix operators grouped by OpKind ──
 
-    fn binop_precedence(tok: &Token) -> Option<(u8, BinOp)> {
+    fn expr_binop(tok: &Token) -> Option<BinOp> {
         match tok {
-            // Comparison (lowest)
-            Token::EqEq => Some((1, BinOp::Eq)),
-            Token::BangEq => Some((1, BinOp::Neq)),
-            Token::Lt => Some((2, BinOp::Lt)),
-            Token::Gt => Some((2, BinOp::Gt)),
-            Token::LtEq => Some((2, BinOp::Lte)),
-            Token::GtEq => Some((2, BinOp::Gte)),
-            // Concat
-            Token::Concat => Some((3, BinOp::Concat)),
-            // Additive
-            Token::Plus => Some((4, BinOp::Add)),
-            Token::Minus => Some((4, BinOp::Sub)),
-            // Multiplicative
-            Token::Star => Some((5, BinOp::Mul)),
+            Token::Plus => Some(BinOp::Add),
+            Token::Minus => Some(BinOp::Sub),
+            Token::Star => Some(BinOp::Mul),
+            Token::Concat => Some(BinOp::Concat),
             _ => None,
         }
     }
 
-    fn parse_binop_expr(&mut self, min_prec: u8) -> Result<Ast, ParseError> {
+    fn logical_binop(tok: &Token) -> Option<BinOp> {
+        match tok {
+            Token::EqEq => Some(BinOp::Eq),
+            Token::BangEq => Some(BinOp::Neq),
+            Token::Lt => Some(BinOp::Lt),
+            Token::Gt => Some(BinOp::Gt),
+            Token::LtEq => Some(BinOp::Lte),
+            Token::GtEq => Some(BinOp::Gte),
+            _ => None,
+        }
+    }
+
+    fn expr_binop_from_func_literal(body: &str) -> Option<BinOp> {
+        match body {
+            "+" => Some(BinOp::Add),
+            "-" => Some(BinOp::Sub),
+            "*" => Some(BinOp::Mul),
+            "++" => Some(BinOp::Concat),
+            _ => None,
+        }
+    }
+
+    fn logical_binop_from_func_literal(body: &str) -> Option<BinOp> {
+        match body {
+            "==" => Some(BinOp::Eq),
+            "!=" => Some(BinOp::Neq),
+            "<" => Some(BinOp::Lt),
+            ">" => Some(BinOp::Gt),
+            "<=" => Some(BinOp::Lte),
+            ">=" => Some(BinOp::Gte),
+            _ => None,
+        }
+    }
+
+    fn lower_binop(left: Ast, op: BinOp, right: Ast) -> Ast {
+        let span = Span {
+            start: left.span().start,
+            end: right.span().end,
+        };
+        Ast::BinOp(span, op, Box::new(left), Box::new(right))
+    }
+
+    fn lower_func_literal_call(left: Ast, func_span: Span, name: Symbol, right: Ast) -> Ast {
+        let span = Span {
+            start: left.span().start,
+            end: right.span().end,
+        };
+        Ast::App(
+            span,
+            Box::new(Ast::Var(func_span, name)),
+            vec![
+                RecordLitArg::Positional(left),
+                RecordLitArg::Positional(right),
+            ],
+        )
+    }
+
+    fn parse_expr_class_expr(&mut self) -> Result<Ast, ParseError> {
         let mut left = self.parse_postfix()?;
 
         loop {
-            let (prec, op) = match Self::binop_precedence(self.peek()) {
-                Some(p) => p,
-                None => break,
+            if let Some(op) = Self::expr_binop(self.peek()) {
+                self.advance();
+                let right = self.parse_postfix()?;
+                left = Self::lower_binop(left, op, right);
+                continue;
+            }
+
+            let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
+                break;
             };
-            if prec < min_prec {
+
+            if let Some(op) = Self::expr_binop_from_func_literal(&body) {
+                self.advance();
+                let right = self.parse_postfix()?;
+                left = Self::lower_binop(left, op, right);
+                continue;
+            }
+
+            if Self::logical_binop_from_func_literal(&body).is_some() {
                 break;
             }
-            let op_span = self.peek_span();
-            self.advance(); // consume operator
-            let right = self.parse_binop_expr(prec + 1)?;
-            let span = Span {
-                start: left.span().start,
-                end: right.span().end,
+
+            let func_span = self.advance().span.clone();
+            let right = self.parse_postfix()?;
+            left = Self::lower_func_literal_call(left, func_span, body, right);
+        }
+
+        Ok(left)
+    }
+
+    fn parse_logical_expr(&mut self) -> Result<Ast, ParseError> {
+        let mut left = self.parse_expr_class_expr()?;
+
+        loop {
+            if let Some(op) = Self::logical_binop(self.peek()) {
+                self.advance();
+                let right = self.parse_expr_class_expr()?;
+                left = Self::lower_binop(left, op, right);
+                continue;
+            }
+
+            let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
+                break;
             };
-            left = Ast::BinOp(span, op, Box::new(left), Box::new(right));
-            let _ = op_span;
+
+            let Some(op) = Self::logical_binop_from_func_literal(&body) else {
+                break;
+            };
+            self.advance();
+            let right = self.parse_expr_class_expr()?;
+            left = Self::lower_binop(left, op, right);
         }
 
         Ok(left)
@@ -848,6 +1187,10 @@ impl Parser {
                 self.advance();
                 self.parse_string_or_interpolated(sp, s)
             }
+            Token::DocString(_) => Err(ParseError::syntax(
+                "Doc strings are only allowed after @@doc",
+                sp,
+            )),
             Token::True => {
                 self.advance();
                 Ok(Ast::Lit(sp, Lit::Bool(true)))
@@ -942,8 +1285,16 @@ impl Parser {
             // Capture / partial application: &foo, &foo(1)
             Token::Amp => self.parse_capture_expr(sp),
 
+            Token::FuncLiteral(_) => Err(ParseError::syntax(
+                "FuncLiteral must appear in infix position",
+                sp,
+            )),
+
             // Match expression
             Token::Match => self.parse_match_expr(),
+
+            // Cond expression
+            Token::Cond => self.parse_cond_expr(),
 
             // Identifier — could be: variable, binding, function call
             Token::Ident(name) => {
@@ -971,6 +1322,13 @@ impl Parser {
         name: Symbol,
         name_span: Span,
     ) -> Result<Ast, ParseError> {
+        if name == "self" && self.impl_target_stack.is_empty() {
+            return Err(ParseError::syntax(
+                "`self` can only be used inside impl methods",
+                name_span,
+            ));
+        }
+
         let mut path_segments = vec![name.clone()];
         let mut path_end = name_span.end;
         while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
@@ -999,6 +1357,12 @@ impl Parser {
         };
 
         if let Some(path_expr) = path_ast {
+            let path_name = path_segments.join("::");
+            let path_last_is_uppercase = path_segments
+                .last()
+                .and_then(|segment| segment.chars().next())
+                .map(|ch| ch.is_uppercase())
+                .unwrap_or(false);
             if matches!(self.peek(), Token::LParen) {
                 self.advance();
                 self.skip_newlines();
@@ -1016,24 +1380,35 @@ impl Parser {
                 }
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                return Ok(Ast::App(
-                    Span {
-                        start: name_span.start,
-                        end: end_span.end,
-                    },
-                    Box::new(path_expr),
-                    args,
-                ));
+                let span = Span {
+                    start: name_span.start,
+                    end: end_span.end,
+                };
+                if path_last_is_uppercase {
+                    return Ok(Ast::ConstructorCall(span, path_name, args));
+                }
+                return Ok(Ast::App(span, Box::new(path_expr), args));
             }
 
             if matches!(self.peek(), Token::Unit) {
                 let end_span = self.advance().span.clone();
-                return Ok(Ast::App(
+                let span = Span {
+                    start: name_span.start,
+                    end: end_span.end,
+                };
+                if path_last_is_uppercase {
+                    return Ok(Ast::ConstructorCall(span, path_name, Vec::new()));
+                }
+                return Ok(Ast::App(span, Box::new(path_expr), Vec::new()));
+            }
+
+            if path_last_is_uppercase {
+                return Ok(Ast::ConstructorCall(
                     Span {
                         start: name_span.start,
-                        end: end_span.end,
+                        end: path_end,
                     },
-                    Box::new(path_expr),
+                    path_name,
                     Vec::new(),
                 ));
             }
@@ -1376,6 +1751,12 @@ impl Parser {
             self.advance(); // '@'
             self.skip_newlines();
             let (alias, alias_span) = self.expect_ident()?;
+            if alias == "self" && self.impl_target_stack.is_empty() {
+                return Err(ParseError::syntax(
+                    "`self` can only be used inside impl methods",
+                    alias_span,
+                ));
+            }
             self.skip_newlines();
             let alias_ty = if matches!(self.peek(), Token::Colon) {
                 self.advance();
@@ -1442,41 +1823,89 @@ impl Parser {
                 Ok(AstPattern::BoolLit(sp, false))
             }
             Token::Ident(name) => {
-                if name
-                    .chars()
-                    .next()
-                    .map(|c| c.is_uppercase())
-                    .unwrap_or(false)
-                    && matches!(self.peek_n(1), Some(Token::LParen))
-                {
+                if name == "self" && self.impl_target_stack.is_empty() {
+                    return Err(ParseError::syntax(
+                        "`self` can only be used inside impl methods",
+                        sp,
+                    ));
+                }
+                self.advance();
+                let mut segments = vec![name.clone()];
+                let mut path_end = sp.end;
+                while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+                    self.consume_path_separator()?;
+                    let (seg, seg_span) = self.expect_ident()?;
+                    path_end = seg_span.end;
+                    segments.push(seg);
+                }
+
+                let callee_name = segments.join("::");
+                if matches!(self.peek(), Token::LParen) {
                     self.advance();
-                    self.expect(&Token::LParen)?;
                     self.skip_newlines();
-                    if matches!(self.peek(), Token::RParen) {
-                        return Err(ParseError::syntax(
-                            "Constructor pattern requires exactly one inner pattern",
-                            self.peek_span(),
-                        ));
-                    }
-                    let inner = self.parse_bind_pattern()?;
-                    self.skip_newlines();
-                    if matches!(self.peek(), Token::Comma) {
-                        return Err(ParseError::syntax(
-                            "Constructor pattern supports exactly one inner pattern",
-                            self.peek_span(),
-                        ));
+                    let mut inners = Vec::new();
+                    if !matches!(self.peek(), Token::RParen) {
+                        inners.push(self.parse_bind_pattern()?);
+                        self.skip_newlines();
+                        while matches!(self.peek(), Token::Comma) {
+                            self.advance();
+                            self.skip_newlines();
+                            if matches!(self.peek(), Token::RParen) {
+                                break;
+                            }
+                            inners.push(self.parse_bind_pattern()?);
+                            self.skip_newlines();
+                        }
                     }
                     let end = self.expect(&Token::RParen)?;
-                    return Ok(AstPattern::Constructor(
+                    return Ok(AstPattern::Call(
                         Span {
                             start: sp.start,
                             end: end.end,
                         },
-                        name,
-                        Box::new(inner),
+                        callee_name,
+                        inners,
                     ));
                 }
-                self.advance();
+
+                let is_ctor = segments
+                    .last()
+                    .and_then(|segment| segment.chars().next())
+                    .map(|ch| ch.is_uppercase())
+                    .unwrap_or(false);
+                if is_ctor {
+                    let ctor_name = callee_name;
+                    if matches!(self.peek(), Token::Unit) {
+                        let end = self.advance().span.clone();
+                        return Ok(AstPattern::Constructor(
+                            Span {
+                                start: sp.start,
+                                end: end.end,
+                            },
+                            ctor_name,
+                            Vec::new(),
+                        ));
+                    }
+                    return Ok(AstPattern::Constructor(
+                        Span {
+                            start: sp.start,
+                            end: path_end,
+                        },
+                        ctor_name,
+                        Vec::new(),
+                    ));
+                }
+
+                if segments.len() > 1 {
+                    return Err(ParseError::syntax(
+                        "Qualified patterns support constructor forms only",
+                        Span {
+                            start: sp.start,
+                            end: path_end,
+                        },
+                    ));
+                }
+
                 Ok(AstPattern::Var(sp, name))
             }
             Token::LBrack => self.parse_list_bind_pattern(),
@@ -1491,6 +1920,13 @@ impl Parser {
     // ── Type annotation parsing ──
 
     fn parse_type(&mut self) -> Result<AstTy, ParseError> {
+        self.parse_type_in_impl_context(self.impl_target_stack.last().cloned())
+    }
+
+    fn parse_type_in_impl_context(
+        &mut self,
+        impl_target: Option<String>,
+    ) -> Result<AstTy, ParseError> {
         self.skip_newlines();
         let sp = self.peek_span();
 
@@ -1499,7 +1935,7 @@ impl Parser {
             self.skip_newlines();
             if matches!(self.peek(), Token::Arrow) {
                 self.advance();
-                let ret = self.parse_type()?;
+                let ret = self.parse_type_in_impl_context(impl_target.clone())?;
                 self.skip_newlines();
                 let end = self.expect(&Token::RParen)?;
                 return Ok(AstTy::Func(
@@ -1513,16 +1949,16 @@ impl Parser {
             }
 
             let mut params = Vec::new();
-            params.push(self.parse_type()?);
+            params.push(self.parse_type_in_impl_context(impl_target.clone())?);
             self.skip_newlines();
             while matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
-                params.push(self.parse_type()?);
+                params.push(self.parse_type_in_impl_context(impl_target.clone())?);
                 self.skip_newlines();
             }
             self.expect(&Token::Arrow)?;
-            let ret = self.parse_type()?;
+            let ret = self.parse_type_in_impl_context(impl_target.clone())?;
             self.skip_newlines();
             let end = self.expect(&Token::RParen)?;
             return Ok(AstTy::Func(
@@ -1538,12 +1974,16 @@ impl Parser {
         if matches!(self.peek(), Token::Dollar) {
             self.advance();
             let (name, end) = self.expect_ident()?;
+            let name = format!("${}", name);
+            if name == "$Self" {
+                return Err(ParseError::syntax("Invalid type variable name: $Self", sp));
+            }
             return Ok(AstTy::Named(
                 Span {
                     start: sp.start,
                     end: end.end,
                 },
-                format!("${}", name),
+                name,
             ));
         }
 
@@ -1560,20 +2000,38 @@ impl Parser {
 
         // Named type, possibly with type args: Result<Int>, List<Int>, Option<Int>, ...
         let (name, _) = self.expect_ident()?;
+        if name == "Self" {
+            if impl_target.is_some() {
+                return Ok(AstTy::Named(
+                    Span {
+                        start: sp.start,
+                        end: sp.end,
+                    },
+                    "Self".to_string(),
+                ));
+            }
+            return Err(ParseError::syntax(
+                "`Self` can only be used inside impl methods",
+                sp,
+            ));
+        }
+        if name == "self" {
+            return Err(ParseError::syntax("`self` is not a type name", sp));
+        }
 
         // Check for type parameters: Name<T> or Name<T, E>
         if matches!(self.peek(), Token::Lt) {
             self.advance();
             self.skip_newlines();
-            let mut args = vec![self.parse_type()?];
+            let mut args = vec![self.parse_type_in_impl_context(impl_target.clone())?];
             self.skip_newlines();
             while matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
-                args.push(self.parse_type()?);
+                args.push(self.parse_type_in_impl_context(impl_target.clone())?);
                 self.skip_newlines();
             }
-            let end = self.expect(&Token::Gt)?;
+            let end = self.expect_type_gt()?;
             return Ok(AstTy::Generic(
                 Span {
                     start: sp.start,
@@ -1591,6 +2049,10 @@ impl Parser {
             },
             name,
         ))
+    }
+
+    fn is_self_type(ty: &AstTy) -> bool {
+        matches!(ty, AstTy::Named(_, name) if name == "Self")
     }
 
     fn parse_closure_literal(&mut self, sp: Span) -> Result<Ast, ParseError> {
@@ -1654,23 +2116,17 @@ impl Parser {
     fn parse_capture_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
         self.expect(&Token::Amp)?;
         let (name, name_span) = self.expect_ident()?;
-        let is_uppercase = name
-            .chars()
-            .next()
-            .map(|c| c.is_uppercase())
-            .unwrap_or(false);
-        if is_uppercase {
-            return Err(ParseError::syntax(
-                "Constructor capture is not supported; use a lambda instead",
-                Span {
-                    start: sp.start,
-                    end: name_span.end,
-                },
-            ));
+        let mut path_segments = vec![name.clone()];
+        let mut path_end = name_span.end;
+        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+            self.consume_path_separator()?;
+            let (seg, seg_span) = self.expect_ident()?;
+            path_end = seg_span.end;
+            path_segments.push(seg);
         }
 
         let mut parsed_args = Vec::new();
-        let mut end = name_span.end;
+        let mut end = path_end;
         if matches!(self.peek(), Token::LParen) {
             self.advance();
             self.skip_newlines();
@@ -1706,12 +2162,30 @@ impl Parser {
             }
         }
 
+        let target = if path_segments.len() == 1 {
+            Ast::Var(name_span, name)
+        } else {
+            Ast::Path(
+                Span {
+                    start: name_span.start,
+                    end: path_end,
+                },
+                AstPath {
+                    span: Span {
+                        start: name_span.start,
+                        end: path_end,
+                    },
+                    segments: path_segments,
+                },
+            )
+        };
+
         Ok(Ast::Capture(
             Span {
                 start: sp.start,
                 end,
             },
-            Box::new(Ast::Var(name_span, name)),
+            Box::new(target),
             args,
         ))
     }
@@ -1804,8 +2278,188 @@ impl Parser {
         ))
     }
 
+    fn parse_enum_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_enum_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_enum_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        start_override: Option<usize>,
+    ) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Defenum)?;
+        let (name, name_span) = self.expect_ident()?;
+        let type_params = self.parse_decl_type_params()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut variants = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            self.skip_newlines();
+            let variant_start = self.peek_span().start;
+            let (variant_name, _) = self.expect_ident()?;
+            let mut payload = Vec::new();
+
+            if matches!(self.peek(), Token::LParen) {
+                self.advance();
+                self.skip_newlines();
+                if !matches!(self.peek(), Token::RParen) {
+                    payload.push(self.parse_type()?);
+                    self.skip_newlines();
+                    while matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                        payload.push(self.parse_type()?);
+                        self.skip_newlines();
+                    }
+                }
+                self.expect(&Token::RParen)?;
+            }
+
+            let discriminant = if matches!(self.peek(), Token::Bind) {
+                self.advance();
+                self.skip_newlines();
+                Some(self.parse_enum_discriminant()?)
+            } else {
+                None
+            };
+
+            let variant_end = if self.pos > 0 {
+                self.tokens[self.pos - 1].span.end
+            } else {
+                variant_start
+            };
+            variants.push(EnumVariant {
+                name: variant_name,
+                payload,
+                discriminant,
+                span: Span {
+                    start: variant_start,
+                    end: variant_end,
+                },
+            });
+
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                continue;
+            }
+        }
+
+        if variants.is_empty() {
+            return Err(ParseError::syntax(
+                "Enum definition requires at least one variant",
+                Span {
+                    start: sp.start,
+                    end: sp.end,
+                },
+            ));
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::EnumDef(
+            Span {
+                start: start_override.unwrap_or(sp.start),
+                end: end.end,
+            },
+            name,
+            type_params
+                .into_iter()
+                .map(|name| TypeParam {
+                    name,
+                    span: name_span.clone(),
+                })
+                .collect(),
+            variants,
+            attrs,
+        ))
+    }
+
+    fn parse_decl_type_params(&mut self) -> Result<Vec<Symbol>, ParseError> {
+        if !matches!(self.peek(), Token::Lt) {
+            return Ok(Vec::new());
+        }
+
+        self.advance();
+        self.skip_newlines();
+
+        let mut params = Vec::new();
+        loop {
+            self.expect(&Token::Dollar)?;
+            let (param_name, _) = self.expect_ident()?;
+            params.push(format!("${}", param_name));
+            self.skip_newlines();
+
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                continue;
+            }
+
+            if matches!(self.peek(), Token::Gt) {
+                self.expect(&Token::Gt)?;
+                break;
+            }
+
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete(">", self.peek_span()));
+            }
+
+            return Err(ParseError::syntax(
+                "Expected `,` or `>` in declaration type parameter list",
+                self.peek_span(),
+            ));
+        }
+
+        Ok(params)
+    }
+
+    fn parse_enum_discriminant(&mut self) -> Result<sindr::primitives::SurtrInt, ParseError> {
+        let span = self.peek_span();
+        if matches!(self.peek(), Token::Minus) {
+            self.advance();
+            let int_span = self.peek_span();
+            let Token::Int(n) = self.peek().clone() else {
+                return Err(ParseError::syntax(
+                    "Expected integer literal after '-' in enum discriminant",
+                    int_span,
+                ));
+            };
+            self.advance();
+            return Ok(-n);
+        }
+        match self.peek().clone() {
+            Token::Int(n) => {
+                self.advance();
+                Ok(n)
+            }
+            Token::Eof => Err(ParseError::incomplete("integer literal", span)),
+            _ => Err(ParseError::syntax(
+                "Enum discriminant must be an integer literal",
+                span,
+            )),
+        }
+    }
+
     /// `deferror Name { expr }` or `deferror Name(fields) { expr }`
     fn parse_deferror_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_deferror_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_deferror_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        start_override: Option<usize>,
+    ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Deferror)?;
         let (name, _) = self.expect_ident()?;
@@ -1854,21 +2508,33 @@ impl Parser {
 
         Ok(Ast::DeferrorDef(
             Span {
-                start: sp.start,
+                start: start_override.unwrap_or(sp.start),
                 end: end.end,
             },
             name,
             fields,
             Box::new(show_expr),
+            attrs,
         ))
     }
 
     fn parse_def_signature(
         &mut self,
     ) -> Result<(Span, Symbol, Vec<FunParam>, Option<AstTy>), ParseError> {
+        self.parse_def_signature_with_name_mode(false)
+    }
+
+    fn parse_def_signature_with_name_mode(
+        &mut self,
+        allow_builtin_keyword_name: bool,
+    ) -> Result<(Span, Symbol, Vec<FunParam>, Option<AstTy>), ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Def)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = if allow_builtin_keyword_name {
+            self.expect_builtin_decl_name()?
+        } else {
+            self.expect_ident()?
+        };
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
             self.advance();
@@ -1909,33 +2575,154 @@ impl Parser {
         Ok((sp, name, params, ret_ty))
     }
 
-    fn parse_annotated_decl(&mut self) -> Result<Ast, ParseError> {
-        let (annotator, annotator_span) = match self.peek().clone() {
-            Token::Annotator(name) => {
-                let span = self.peek_span();
-                self.advance();
-                (name, span)
-            }
-            _ => {
-                return Err(ParseError::syntax(
-                    "Expected annotator declaration",
-                    self.peek_span(),
-                ));
-            }
-        };
+    fn parse_extractor_signature(
+        &mut self,
+    ) -> Result<(Span, Symbol, ExtractorParam, AstTy), ParseError> {
+        self.parse_extractor_signature_with_name_mode(false)
+    }
 
+    fn parse_extractor_signature_with_name_mode(
+        &mut self,
+        allow_builtin_keyword_name: bool,
+    ) -> Result<(Span, Symbol, ExtractorParam, AstTy), ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Defextractor)?;
+        let (name, name_span) = if allow_builtin_keyword_name {
+            self.expect_builtin_decl_name()?
+        } else {
+            self.expect_ident()?
+        };
+        if Self::is_constructor_style_name(&name) {
+            return Err(ParseError::syntax(
+                format!(
+                    "Extractor names must not use constructor-style names like `{}`; implement `{}`::deconstruct(...) instead",
+                    name, name
+                ),
+                name_span,
+            ));
+        }
         self.skip_newlines();
-        match annotator.as_str() {
-            "builtin" => self.parse_builtin_decl(annotator_span),
-            _ => Err(ParseError::syntax(
-                format!("Unknown annotator: @@{}", annotator),
-                annotator_span,
-            )),
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let (param_name, param_span) = self.expect_ident()?;
+        self.skip_newlines();
+        let param_ty = if matches!(self.peek(), Token::Colon) {
+            self.advance();
+            self.skip_newlines();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.skip_newlines();
+        self.expect(&Token::RParen)?;
+        self.skip_newlines();
+        self.expect(&Token::Arrow)?;
+        self.skip_newlines();
+        let ret_ty = self.parse_type()?;
+        Ok((
+            sp,
+            name,
+            ExtractorParam {
+                name: param_name,
+                ty: param_ty,
+                span: param_span,
+            },
+            ret_ty,
+        ))
+    }
+
+    fn is_constructor_style_name(name: &str) -> bool {
+        name.chars().next().is_some_and(|ch| ch.is_uppercase())
+    }
+
+    fn parse_annotated_decl(&mut self) -> Result<Ast, ParseError> {
+        let mut attrs = DeclAttrs::default();
+        let mut saw_builtin = false;
+        let mut start_span: Option<Span> = None;
+
+        while let Token::Annotator(name) = self.peek().clone() {
+            let annotator_span = self.peek_span();
+            if start_span.is_none() {
+                start_span = Some(annotator_span.clone());
+            }
+            self.advance();
+            self.skip_newlines();
+            match name.as_str() {
+                "builtin" => {
+                    if saw_builtin {
+                        return Err(ParseError::syntax(
+                            "@@builtin may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    saw_builtin = true;
+                }
+                "doc" => {
+                    if attrs.doc.is_some() {
+                        return Err(ParseError::syntax(
+                            "@@doc may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    let token = self.peek().clone();
+                    match token {
+                        Token::DocString(text) => {
+                            self.advance();
+                            attrs.doc = Some(text);
+                        }
+                        Token::Eof => {
+                            return Err(ParseError::incomplete("doc string", self.peek_span()));
+                        }
+                        _ => {
+                            return Err(ParseError::syntax(
+                                "@@doc expects a triple-quoted doc string",
+                                self.peek_span(),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown annotator: @@{}", name),
+                        annotator_span,
+                    ));
+                }
+            }
+            self.skip_newlines();
+        }
+
+        let start = start_span
+            .map(|span| span.start)
+            .unwrap_or_else(|| self.peek_span().start);
+
+        if saw_builtin {
+            match self.peek() {
+                Token::Def => self.parse_builtin_decl(start, attrs),
+                Token::Defextractor => self.parse_builtin_extractor_decl(start, attrs),
+                Token::Type => self.parse_builtin_type_decl(start, attrs),
+                _ => Err(ParseError::syntax(
+                    "Expected `def`, `defextractor`, or `type` after @@builtin",
+                    self.peek_span(),
+                )),
+            }
+        } else {
+            match self.peek() {
+                Token::Def => self.parse_def_with_attrs(attrs, Some(start)),
+                Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
+                Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
+                Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
+                Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
+                Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
+                _ => Err(ParseError::syntax(
+                    "@@doc must annotate `def`, `defmod`, `deferror`, `defenum`, `defextractor`, or `@@builtin type/def/defextractor`",
+                    self.peek_span(),
+                )),
+            }
         }
     }
 
-    fn parse_builtin_decl(&mut self, sp: Span) -> Result<Ast, ParseError> {
-        let (_def_span, name, params, ret_ty) = self.parse_def_signature()?;
+    fn parse_builtin_decl(&mut self, start: usize, attrs: DeclAttrs) -> Result<Ast, ParseError> {
+        let (_def_span, name, params, ret_ty) = self.parse_def_signature_with_name_mode(true)?;
 
         let mut lookahead = self.pos;
         while matches!(
@@ -1958,22 +2745,192 @@ impl Parser {
         let end = if self.pos > 0 {
             self.tokens[self.pos - 1].span.end
         } else {
-            sp.end
+            start
         };
 
         Ok(Ast::BuiltinDecl(
-            Span {
-                start: sp.start,
-                end,
-            },
+            Span { start, end },
             name,
             params,
             ret_ty,
+            attrs,
+        ))
+    }
+
+    fn parse_builtin_extractor_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        let (_sp, name, param, ret_ty) = self.parse_extractor_signature_with_name_mode(true)?;
+
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::Newline)
+        ) {
+            lookahead += 1;
+        }
+
+        if matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::LBrace)
+        ) {
+            return Err(ParseError::syntax(
+                "@@builtin extractor declaration must not have a function body",
+                self.tokens[lookahead].span.clone(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+
+        Ok(Ast::BuiltinExtractorDecl(
+            Span { start, end },
+            name,
+            param,
+            ret_ty,
+            attrs,
+        ))
+    }
+
+    fn parse_builtin_type_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Type)?;
+        self.skip_newlines();
+        let (name, name_span) = self.expect_ident()?;
+
+        // `Result` keeps `Ok` / `Err` as declaration-only constructor
+        // contracts. They intentionally live behind `@@builtin type ...` so
+        // the std-module declaration layer stays visually uniform, even though
+        // the payload that follows is function-shaped rather than type-shaped.
+        if (name == "Ok" || name == "Err") && matches!(self.peek(), Token::LParen) {
+            return self.parse_result_ctor_builtin_type_decl(start, name, attrs);
+        }
+
+        let mut params = Vec::new();
+        if matches!(self.peek(), Token::Lt) {
+            self.advance();
+            self.skip_newlines();
+            loop {
+                self.expect(&Token::Dollar)?;
+                let (param_name, _) = self.expect_ident()?;
+                params.push(format!("${}", param_name));
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                if matches!(self.peek(), Token::Gt) {
+                    let gt = self.expect(&Token::Gt)?;
+                    let end = if self.pos > 0 {
+                        self.tokens[self.pos - 1].span.end
+                    } else {
+                        gt.end
+                    };
+                    return Ok(Ast::BuiltinTypeDecl(
+                        Span { start, end },
+                        BuiltinTypeHead {
+                            span: Span {
+                                start: name_span.start,
+                                end,
+                            },
+                            name,
+                            params,
+                        },
+                        attrs,
+                    ));
+                }
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete(">", self.peek_span()));
+                }
+                return Err(ParseError::syntax(
+                    "Expected `,` or `>` in builtin type parameter list",
+                    self.peek_span(),
+                ));
+            }
+        }
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+
+        Ok(Ast::BuiltinTypeDecl(
+            Span { start, end },
+            BuiltinTypeHead {
+                span: Span { start, end },
+                name,
+                params,
+            },
+            attrs,
+        ))
+    }
+
+    fn parse_result_ctor_builtin_type_decl(
+        &mut self,
+        start: usize,
+        name: Symbol,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.skip_newlines();
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let param_ty = self.parse_type()?;
+        self.skip_newlines();
+        self.expect(&Token::RParen)?;
+        self.skip_newlines();
+        self.expect(&Token::Arrow)?;
+        self.skip_newlines();
+        let ret_ty = self.parse_type()?;
+
+        if matches!(self.peek(), Token::LBrace) {
+            return Err(ParseError::syntax(
+                "Result constructor builtin contracts in std modules must not have a function body",
+                self.peek_span(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+
+        Ok(Ast::ResultCtorDecl(
+            Span { start, end },
+            name,
+            param_ty,
+            ret_ty,
+            attrs,
         ))
     }
 
     /// `def name(arg: Type, ...) -> Type { expr }`
     fn parse_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_extractor_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_extractor_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    fn parse_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
+        if self.should_parse_result_ctor_decl() {
+            return self.parse_result_ctor_decl_with_attrs(attrs, annotator_start);
+        }
+
         let (sp, name, params, ret_ty) = self.parse_def_signature()?;
 
         self.skip_newlines();
@@ -1996,18 +2953,131 @@ impl Parser {
 
         Ok(Ast::Def(
             Span {
-                start: sp.start,
+                start: annotator_start.unwrap_or(sp.start),
                 end: end.end,
             },
             name,
             params,
             ret_ty,
             Box::new(body),
+            attrs,
+        ))
+    }
+
+    fn parse_extractor_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
+        let (sp, name, param, ret_ty) = self.parse_extractor_signature()?;
+
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        let body_stmts = self.parse_block_stmts()?;
+        if body_stmts.is_empty() {
+            return Err(ParseError::syntax(
+                "Extractor body must not be empty",
+                self.peek_span(),
+            ));
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let body = Ast::Block(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            body_stmts,
+        );
+
+        Ok(Ast::ExtractorDef(
+            Span {
+                start: annotator_start.unwrap_or(sp.start),
+                end: end.end,
+            },
+            name,
+            param,
+            ret_ty,
+            Box::new(body),
+            attrs,
+        ))
+    }
+
+    fn should_parse_result_ctor_decl(&self) -> bool {
+        if self.context.level != DeclLevel::Top {
+            return false;
+        }
+        if self.context.module_path.is_some() {
+            return false;
+        }
+        if !self
+            .context
+            .source_rules
+            .allowed_top_level_decl_kinds
+            .allows(TopLevelDeclKind::BuiltinDecl)
+        {
+            return false;
+        }
+        if !matches!(self.peek(), Token::Def) {
+            return false;
+        }
+        matches!(
+            self.tokens.get(self.pos + 1).map(|sp| &sp.token),
+            Some(Token::Ident(name)) if name == "Ok" || name == "Err"
+        )
+    }
+
+    fn parse_result_ctor_decl_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Def)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let param_ty = self.parse_type()?;
+        self.skip_newlines();
+        self.expect(&Token::RParen)?;
+        self.skip_newlines();
+        self.expect(&Token::Arrow)?;
+        self.skip_newlines();
+        let ret_ty = self.parse_type()?;
+
+        if matches!(self.peek(), Token::LBrace) {
+            return Err(ParseError::syntax(
+                "Result constructor declarations in std modules must not have a function body",
+                self.peek_span(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            sp.start
+        };
+
+        Ok(Ast::ResultCtorDecl(
+            Span {
+                start: annotator_start.unwrap_or(sp.start),
+                end,
+            },
+            name,
+            param_ty,
+            ret_ty,
+            attrs,
         ))
     }
 
     fn parse_fun_param(&mut self) -> Result<FunParam, ParseError> {
         let (name, span) = self.expect_ident()?;
+        if name == "self" {
+            return Err(ParseError::syntax(
+                "`self` is only allowed as the first parameter of impl methods",
+                span,
+            ));
+        }
         self.expect(&Token::Colon)?;
         let ty = self.parse_type()?;
         Ok(FunParam { name, ty, span })
@@ -2058,197 +3128,85 @@ impl Parser {
         ))
     }
 
-    /// Match pattern: `_`, literals, `Ok(var)`, `Err(var)`
-    fn parse_match_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
+    /// `cond { cond1 => expr1, ..., True => exprN }`
+    fn parse_cond_expr(&mut self) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
-        match self.peek().clone() {
-            Token::LBrack => self.parse_match_list_pattern(),
-            Token::Ident(name) if name == "_" => {
-                self.advance();
-                Ok(AstMatchPattern::Wildcard(sp))
-            }
-            Token::True => {
-                self.advance();
-                Ok(AstMatchPattern::BoolLit(sp, true))
-            }
-            Token::False => {
-                self.advance();
-                Ok(AstMatchPattern::BoolLit(sp, false))
-            }
-            Token::Int(n) => {
-                self.advance();
-                Ok(AstMatchPattern::IntLit(sp, n))
-            }
-            Token::Minus => {
-                self.advance();
-                match self.peek().clone() {
-                    Token::Int(n) => {
-                        let int_span = self.peek_span();
-                        self.advance();
-                        Ok(AstMatchPattern::IntLit(
-                            Span {
-                                start: sp.start,
-                                end: int_span.end,
-                            },
-                            -n,
-                        ))
-                    }
-                    _ => Err(ParseError::syntax(
-                        "Expected integer after '-' in match pattern",
-                        sp,
-                    )),
-                }
-            }
-            Token::Str(s) => {
-                self.advance();
-                Ok(AstMatchPattern::StrLit(sp, s))
-            }
-            Token::Ident(name) => {
-                self.advance();
-                if name == "Ok" || name == "Err" {
-                    self.expect(&Token::LParen)?;
-                    let (inner_name, _) = self.expect_ident()?;
-                    let end = self.expect(&Token::RParen)?;
-                    Ok(AstMatchPattern::Constructor(
-                        Span {
-                            start: sp.start,
-                            end: end.end,
-                        },
-                        name,
-                        Some(inner_name),
-                    ))
-                } else {
-                    Err(ParseError::syntax(
-                        "Phase 1 match patterns only support `_`, booleans, integer/string literals, and `Ok(name)` / `Err(name)`; remove this test when CamelCase patterns are implemented",
-                        sp,
-                    ))
-                }
-            }
-            Token::Eof => Err(ParseError::incomplete("match pattern", sp)),
-            _ => Err(ParseError::syntax(
-                format!("Expected match pattern, got {:?}", self.peek()),
-                sp,
-            )),
-        }
-    }
-
-    fn parse_match_list_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
-        let sp = self.peek_span();
-        self.expect(&Token::LBrack)?;
+        self.expect(&Token::Cond)?;
         self.skip_newlines();
-        if matches!(self.peek(), Token::RBrack) {
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(AstMatchPattern::ListNil(Span {
-                start: sp.start,
-                end: end.end,
-            }));
+        let lbrace = self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        if matches!(self.peek(), Token::RBrace) {
+            return Err(ParseError::syntax(
+                "Cond expression must contain at least one clause",
+                lbrace,
+            ));
         }
 
-        let first = self.parse_match_list_item_pattern()?;
-        self.skip_newlines();
-        let end = if matches!(self.peek(), Token::Comma) {
-            self.advance();
+        let mut clauses = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
             self.skip_newlines();
-            if matches!(self.peek(), Token::DotDot) {
+            let cond = self.parse_expr()?;
+            self.expect(&Token::FatArrow)?;
+            let body = self.parse_expr()?;
+            clauses.push((cond, body));
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
-                let tail = self.parse_match_list_item_pattern()?;
-                self.skip_newlines();
-                let end = self.expect(&Token::RBrack)?;
-                return Ok(AstMatchPattern::ListCons(
-                    Span {
-                        start: sp.start,
-                        end: end.end,
-                    },
-                    Box::new(first),
-                    Box::new(tail),
+            }
+        }
+        let end = self.expect(&Token::RBrace)?;
+
+        for (idx, (cond, _)) in clauses.iter().enumerate() {
+            if Self::is_true_literal(cond) && idx + 1 != clauses.len() {
+                return Err(ParseError::syntax(
+                    "`True` clause must be the final cond clause",
+                    cond.span().clone(),
                 ));
             }
+        }
 
-            let mut items = vec![first];
-            items.push(self.parse_match_list_item_pattern()?);
-            while matches!(self.peek(), Token::Comma) {
-                self.advance();
-                self.skip_newlines();
-                if matches!(self.peek(), Token::RBrack) {
-                    break;
-                }
-                items.push(self.parse_match_list_item_pattern()?);
-            }
-            self.skip_newlines();
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(fixed_match_list_pattern(sp.start, end.end, items));
-        } else {
-            self.expect(&Token::RBrack)?
+        let Some((last_cond, last_body)) = clauses.pop() else {
+            unreachable!("checked non-empty clauses");
         };
+        if !Self::is_true_literal(&last_cond) {
+            return Err(ParseError::syntax(
+                "Final cond clause must use `True` as its condition",
+                last_cond.span().clone(),
+            ));
+        }
 
-        Ok(fixed_match_list_pattern(sp.start, end.end, vec![first]))
+        let mut expr = last_body;
+        while let Some((cond, body)) = clauses.pop() {
+            let span = Span {
+                start: sp.start,
+                end: end.end,
+            };
+            expr = Ast::App(
+                span,
+                Box::new(Ast::Var(sp.clone(), "if".to_string())),
+                vec![
+                    RecordLitArg::Positional(cond),
+                    RecordLitArg::Positional(body),
+                    RecordLitArg::Positional(expr),
+                ],
+            );
+        }
+
+        Ok(expr)
     }
 
-    fn parse_match_list_item_pattern(&mut self) -> Result<AstMatchPattern, ParseError> {
-        let sp = self.peek_span();
-        match self.peek().clone() {
-            Token::Ident(name) if name == "_" => {
-                self.advance();
-                Ok(AstMatchPattern::Wildcard(sp))
-            }
-            Token::Ident(name) => {
-                self.advance();
-                if name == "Ok" || name == "Err" {
-                    self.expect(&Token::LParen)?;
-                    let (inner_name, _) = self.expect_ident()?;
-                    let end = self.expect(&Token::RParen)?;
-                    Ok(AstMatchPattern::Constructor(
-                        Span {
-                            start: sp.start,
-                            end: end.end,
-                        },
-                        name,
-                        Some(inner_name),
-                    ))
-                } else {
-                    Ok(AstMatchPattern::Binding(sp, name))
-                }
-            }
-            Token::LBrack => self.parse_match_list_pattern(),
-            Token::True => {
-                self.advance();
-                Ok(AstMatchPattern::BoolLit(sp, true))
-            }
-            Token::False => {
-                self.advance();
-                Ok(AstMatchPattern::BoolLit(sp, false))
-            }
-            Token::Int(n) => {
-                self.advance();
-                Ok(AstMatchPattern::IntLit(sp, n))
-            }
-            Token::Minus => {
-                self.advance();
-                match self.peek().clone() {
-                    Token::Int(n) => {
-                        let int_span = self.peek_span();
-                        self.advance();
-                        Ok(AstMatchPattern::IntLit(
-                            Span {
-                                start: sp.start,
-                                end: int_span.end,
-                            },
-                            -n,
-                        ))
-                    }
-                    _ => Err(ParseError::syntax(
-                        "Expected integer after '-' in list pattern item",
-                        sp,
-                    )),
-                }
-            }
-            Token::Str(s) => {
-                self.advance();
-                Ok(AstMatchPattern::StrLit(sp, s))
-            }
-            _ => Err(ParseError::syntax("Invalid list pattern item", sp)),
-        }
+    /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
+    fn parse_match_pattern(&mut self) -> Result<AstPattern, ParseError> {
+        self.parse_bind_pattern()
+    }
+
+    fn is_true_literal(expr: &Ast) -> bool {
+        matches!(expr, Ast::Lit(_, Lit::Bool(true)))
     }
 
     fn parse_string_or_interpolated(&mut self, span: Span, raw: String) -> Result<Ast, ParseError> {
@@ -2284,11 +3242,7 @@ impl Parser {
                 && chars[i + 1] == '{'
                 && (i == 0 || chars[i - 1] != '\\');
             if !is_interp_start {
-                if ch == '\\'
-                    && i + 2 < chars.len()
-                    && chars[i + 1] == '#'
-                    && chars[i + 2] == '{'
-                {
+                if ch == '\\' && i + 2 < chars.len() && chars[i + 1] == '#' && chars[i + 2] == '{' {
                     text.push('#');
                     has_escaped_interpolation = true;
                     i += 2;
@@ -2431,6 +3385,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::StrLit(span, _)
         | AstPattern::BoolLit(span, _)
         | AstPattern::Constructor(span, _, _)
+        | AstPattern::Call(span, _, _)
         | AstPattern::As(span, _, _, _) => span,
     }
 }
@@ -2445,27 +3400,15 @@ fn fixed_bind_list_pattern(start: usize, end: usize, items: Vec<AstPattern>) -> 
         })
 }
 
-fn fixed_match_list_pattern(
-    start: usize,
-    end: usize,
-    items: Vec<AstMatchPattern>,
-) -> AstMatchPattern {
-    let span = Span { start, end };
-    items
-        .into_iter()
-        .rev()
-        .fold(AstMatchPattern::ListNil(span.clone()), |tail, head| {
-            AstMatchPattern::ListCons(span.clone(), Box::new(head), Box::new(tail))
-        })
-}
-
 fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
     match ty {
         AstTy::Named(span, name) => AstTy::Named(shift_span(span, delta), name),
         AstTy::Generic(span, name, args) => AstTy::Generic(
             shift_span(span, delta),
             name,
-            args.into_iter().map(|arg| shift_ast_ty(arg, delta)).collect(),
+            args.into_iter()
+                .map(|arg| shift_ast_ty(arg, delta))
+                .collect(),
         ),
         AstTy::Func(span, params, ret) => AstTy::Func(
             shift_span(span, delta),
@@ -2491,10 +3434,21 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
         AstPattern::IntLit(span, n) => AstPattern::IntLit(shift_span(span, delta), n),
         AstPattern::StrLit(span, s) => AstPattern::StrLit(shift_span(span, delta), s),
         AstPattern::BoolLit(span, b) => AstPattern::BoolLit(shift_span(span, delta), b),
-        AstPattern::Constructor(span, name, inner) => AstPattern::Constructor(
+        AstPattern::Constructor(span, name, inners) => AstPattern::Constructor(
             shift_span(span, delta),
             name,
-            Box::new(shift_pattern(*inner, delta)),
+            inners
+                .into_iter()
+                .map(|inner| shift_pattern(inner, delta))
+                .collect(),
+        ),
+        AstPattern::Call(span, name, inners) => AstPattern::Call(
+            shift_span(span, delta),
+            name,
+            inners
+                .into_iter()
+                .map(|inner| shift_pattern(inner, delta))
+                .collect(),
         ),
         AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
             shift_span(span, delta),
@@ -2513,24 +3467,27 @@ fn shift_fun_param(param: FunParam, delta: usize) -> FunParam {
     }
 }
 
-fn shift_match_pattern(pat: AstMatchPattern, delta: usize) -> AstMatchPattern {
-    match pat {
-        AstMatchPattern::Binding(span, name) => {
-            AstMatchPattern::Binding(shift_span(span, delta), name)
-        }
-        AstMatchPattern::Wildcard(span) => AstMatchPattern::Wildcard(shift_span(span, delta)),
-        AstMatchPattern::BoolLit(span, b) => AstMatchPattern::BoolLit(shift_span(span, delta), b),
-        AstMatchPattern::IntLit(span, n) => AstMatchPattern::IntLit(shift_span(span, delta), n),
-        AstMatchPattern::StrLit(span, s) => AstMatchPattern::StrLit(shift_span(span, delta), s),
-        AstMatchPattern::Constructor(span, ctor, inner) => {
-            AstMatchPattern::Constructor(shift_span(span, delta), ctor, inner)
-        }
-        AstMatchPattern::ListNil(span) => AstMatchPattern::ListNil(shift_span(span, delta)),
-        AstMatchPattern::ListCons(span, head, tail) => AstMatchPattern::ListCons(
-            shift_span(span, delta),
-            Box::new(shift_match_pattern(*head, delta)),
-            Box::new(shift_match_pattern(*tail, delta)),
-        ),
+fn shift_extractor_param(param: ExtractorParam, delta: usize) -> ExtractorParam {
+    ExtractorParam {
+        name: param.name,
+        ty: param.ty.map(|ty| shift_ast_ty(ty, delta)),
+        span: shift_span(param.span, delta),
+    }
+}
+
+fn shift_match_pattern(pat: AstPattern, delta: usize) -> AstPattern {
+    shift_pattern(pat, delta)
+}
+
+fn shift_decl_attrs(attrs: DeclAttrs) -> DeclAttrs {
+    attrs
+}
+
+fn shift_builtin_type_head(head: BuiltinTypeHead, delta: usize) -> BuiltinTypeHead {
+    BuiltinTypeHead {
+        span: shift_span(head.span, delta),
+        name: head.name,
+        params: head.params,
     }
 }
 
@@ -2580,6 +3537,31 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::BinOp(span, op, left, right) => Ast::BinOp(
             shift_span(span, delta),
             op,
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::Pipe(span, left, right) => Ast::Pipe(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::ContextMap(span, left, right) => Ast::ContextMap(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::ContextBind(span, left, right) => Ast::ContextBind(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::Compose(span, left, right) => Ast::Compose(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
+        Ast::KleisliCompose(span, left, right) => Ast::KleisliCompose(
+            shift_span(span, delta),
             Box::new(shift_ast_span(*left, delta)),
             Box::new(shift_ast_span(*right, delta)),
         ),
@@ -2659,7 +3641,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|a| shift_record_lit_arg(a, delta))
                 .collect(),
         ),
-        Ast::DeferrorDef(span, name, fields, show_expr) => Ast::DeferrorDef(
+        Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ast::DeferrorDef(
             shift_span(span, delta),
             name,
             fields
@@ -2671,8 +3653,34 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 })
                 .collect(),
             Box::new(shift_ast_span(*show_expr, delta)),
+            shift_decl_attrs(attrs),
         ),
-        Ast::Def(span, name, params, ret_ty, body) => Ast::Def(
+        Ast::EnumDef(span, name, type_params, variants, attrs) => Ast::EnumDef(
+            shift_span(span, delta),
+            name,
+            type_params
+                .into_iter()
+                .map(|param| TypeParam {
+                    name: param.name,
+                    span: shift_span(param.span, delta),
+                })
+                .collect(),
+            variants
+                .into_iter()
+                .map(|variant| EnumVariant {
+                    name: variant.name,
+                    payload: variant
+                        .payload
+                        .into_iter()
+                        .map(|ty| shift_ast_ty(ty, delta))
+                        .collect(),
+                    discriminant: variant.discriminant,
+                    span: shift_span(variant.span, delta),
+                })
+                .collect(),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::Def(span, name, params, ret_ty, body, attrs) => Ast::Def(
             shift_span(span, delta),
             name,
             params
@@ -2681,8 +3689,17 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
             Box::new(shift_ast_span(*body, delta)),
+            shift_decl_attrs(attrs),
         ),
-        Ast::BuiltinDecl(span, name, params, ret_ty) => Ast::BuiltinDecl(
+        Ast::ExtractorDef(span, name, param, ret_ty, body, attrs) => Ast::ExtractorDef(
+            shift_span(span, delta),
+            name,
+            shift_extractor_param(param, delta),
+            shift_ast_ty(ret_ty, delta),
+            Box::new(shift_ast_span(*body, delta)),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
             shift_span(span, delta),
             name,
             params
@@ -2690,11 +3707,40 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|p| shift_fun_param(p, delta))
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+            shift_decl_attrs(attrs),
         ),
-        Ast::Defmod(span, name, body) => Ast::Defmod(
+        Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
+            shift_span(span, delta),
+            name,
+            shift_extractor_param(param, delta),
+            shift_ast_ty(ret_ty, delta),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::BuiltinTypeDecl(span, head, attrs) => Ast::BuiltinTypeDecl(
+            shift_span(span, delta),
+            shift_builtin_type_head(head, delta),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
+            shift_span(span, delta),
+            name,
+            shift_ast_ty(param_ty, delta),
+            shift_ast_ty(ret_ty, delta),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::Defmod(span, name, body, attrs) => Ast::Defmod(
             shift_span(span, delta),
             name,
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::ImplDef(span, target, methods) => Ast::ImplDef(
+            shift_span(span, delta),
+            target,
+            methods
+                .into_iter()
+                .map(|method| shift_ast_span(method, delta))
+                .collect(),
         ),
         Ast::Import(span, path, spec) => {
             Ast::Import(shift_span(span, delta), shift_ast_path(path, delta), spec)
@@ -2736,6 +3782,11 @@ impl Ast {
             | Ast::Bind(s, _, _)
             | Ast::SafeBind(s, _, _)
             | Ast::BinOp(s, _, _, _)
+            | Ast::Pipe(s, _, _)
+            | Ast::ContextMap(s, _, _)
+            | Ast::ContextBind(s, _, _)
+            | Ast::Compose(s, _, _)
+            | Ast::KleisliCompose(s, _, _)
             | Ast::ListNil(s)
             | Ast::ListCons(s, _, _)
             | Ast::ListLiteral(s, _)
@@ -2746,10 +3797,16 @@ impl Ast {
             | Ast::RecordDef(s, _, _)
             | Ast::StructLit(s, _, _)
             | Ast::ConstructorCall(s, _, _)
-            | Ast::DeferrorDef(s, _, _, _)
-            | Ast::Def(s, _, _, _, _)
-            | Ast::BuiltinDecl(s, _, _, _)
-            | Ast::Defmod(s, _, _)
+            | Ast::DeferrorDef(s, _, _, _, _)
+            | Ast::EnumDef(s, _, _, _, _)
+            | Ast::Def(s, _, _, _, _, _)
+            | Ast::ExtractorDef(s, _, _, _, _, _)
+            | Ast::BuiltinDecl(s, _, _, _, _)
+            | Ast::BuiltinExtractorDecl(s, _, _, _, _)
+            | Ast::BuiltinTypeDecl(s, _, _)
+            | Ast::ResultCtorDecl(s, _, _, _, _)
+            | Ast::Defmod(s, _, _, _)
+            | Ast::ImplDef(s, _, _)
             | Ast::Import(s, _, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
@@ -2856,9 +3913,10 @@ def noop() {()}"#,
         )
         .unwrap();
         match &ast[0] {
-            Ast::Def(_, name, params, ret_ty, body) => {
+            Ast::Def(_, name, params, ret_ty, body, attrs) => {
                 assert_eq!(name, "add");
                 assert_eq!(params.len(), 2);
+                assert_eq!(attrs, &DeclAttrs::default());
                 assert!(matches!(ret_ty, Some(AstTy::Named(_, ty)) if ty == "Int"));
                 assert!(
                     matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::BinOp(_, BinOp::Add, _, _)]))
@@ -2867,9 +3925,10 @@ def noop() {()}"#,
             _ => panic!("Expected Def"),
         }
         match &ast[1] {
-            Ast::Def(_, name, params, ret_ty, body) => {
+            Ast::Def(_, name, params, ret_ty, body, attrs) => {
                 assert_eq!(name, "noop");
                 assert_eq!(params.len(), 0);
+                assert_eq!(attrs, &DeclAttrs::default());
                 assert!(ret_ty.is_none());
                 assert!(
                     matches!(body.as_ref(), Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::Lit(_, Lit::Unit)]))
@@ -2880,12 +3939,124 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_impl_parses_and_keeps_methods() {
+        let ast = parse_with_context(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("impl should parse");
+
+        let impl_node = ast
+            .iter()
+            .find(|node| matches!(node, Ast::ImplDef(_, _, _)))
+            .expect("expected impl node");
+        match impl_node {
+            Ast::ImplDef(_, target, methods) => {
+                assert_eq!(target, "User");
+                assert_eq!(methods.len(), 2);
+                assert!(matches!(
+                    &methods[0],
+                    Ast::Def(_, name, _, Some(AstTy::Named(_, ret)), _, _)
+                        if name == "new" && ret == "Self"
+                ));
+                assert!(matches!(
+                    &methods[1],
+                    Ast::Def(_, name, _, Some(AstTy::Named(_, ret)), _, _)
+                        if name == "normalize" && ret == "Self"
+                ));
+            }
+            _ => panic!("Expected ImplDef"),
+        }
+    }
+
+    #[test]
+    fn test_impl_rejects_self_not_first_param() {
+        let err = parse_with_context(
+            r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  def bad(x: Int, self: Self) -> Self {
+    self
+  }
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect_err("self after first parameter must fail");
+        assert!(err
+            .message()
+            .contains("`self` is only allowed as the first parameter of impl methods"));
+    }
+
+    #[test]
+    fn test_impl_allows_self_rebinding_syntax() {
+        let ast = parse_with_context(
+            r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  def bad(self) -> Self {
+    self = self
+    self
+  }
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("self rebinding should be parsed");
+        assert!(ast.iter().any(|node| matches!(node, Ast::ImplDef(_, _, _))));
+    }
+
+    #[test]
+    fn test_defmod_rejects_self_and_self_type() {
+        let err = parse(
+            r#"defmod UserTools {
+  def bad(self: Int) -> Int { self }
+}"#,
+        )
+        .expect_err("defmod must reject `self`");
+        assert!(err
+            .message()
+            .contains("`self` is only allowed as the first parameter of impl methods"));
+
+        let err = parse(
+            r#"defmod UserTools {
+  def bad(x: Self) -> Int { 1 }
+}"#,
+        )
+        .expect_err("defmod must reject `Self`");
+        assert!(err
+            .message()
+            .contains("`Self` can only be used inside impl methods"));
+    }
+
+    #[test]
     fn test_builtin_decl() {
-        let ast = parse("@@builtin def to_string(a: $A) -> String").unwrap();
+        let ast = parse_with_context(
+            "@@builtin def to_string(a: $A) -> String",
+            ParserContext::module(1, Some("Bootstrap".into()))
+                .with_rules(SourceRules::std_module()),
+        )
+        .expect("std module should accept builtin declarations");
         match &ast[0] {
-            Ast::BuiltinDecl(_, name, params, ret_ty) => {
+            Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
                 assert_eq!(name, "to_string");
                 assert_eq!(params.len(), 1);
+                assert_eq!(attrs, &DeclAttrs::default());
                 assert!(matches!(
                     params[0].ty,
                     AstTy::Named(_, ref name) if name == "$A"
@@ -2897,9 +4068,178 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_builtin_type_decl() {
+        let ast = parse_with_context(
+            "@@builtin\ntype Int",
+            ParserContext::module(1, Some("Bootstrap".into()))
+                .with_rules(SourceRules::std_module()),
+        )
+        .expect("std module should accept builtin type declarations");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, params, .. }, attrs)]
+                if name == "Int" && params.is_empty() && attrs == &DeclAttrs::default()
+        ));
+    }
+
+    #[test]
+    fn test_doc_annotates_builtin_type_decl() {
+        let ast = parse_with_context(
+            "@@doc \"\"\"\nBuiltin Int.\n\"\"\"\n@@builtin type Int",
+            ParserContext::module(1, Some("Bootstrap".into()))
+                .with_rules(SourceRules::std_module()),
+        )
+        .expect("doc + builtin type should parse");
+
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, .. }, DeclAttrs { doc: Some(doc) })]
+                if name == "Int" && doc == "\nBuiltin Int.\n"
+        ));
+    }
+
+    #[test]
+    fn test_doc_annotates_defmod() {
+        let ast = parse_with_context(
+            "@@doc \"\"\"Kernel docs\"\"\"\ndefmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}",
+            ParserContext::module(1, None),
+        )
+        .expect("doc + defmod should parse");
+
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Defmod(_, name, _, DeclAttrs { doc: Some(doc) })]
+                if name == "Kernel" && doc == "Kernel docs"
+        ));
+    }
+
+    #[test]
+    fn test_doc_annotates_deferror() {
+        let ast = parse_with_context(
+            "@@doc \"\"\"Missing value error\"\"\"\ndeferror NoneError { \"None Value.\" }",
+            ParserContext::module(1, None),
+        )
+        .expect("doc + deferror should parse");
+
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::DeferrorDef(_, name, _, _, DeclAttrs { doc: Some(doc) })]
+                if name == "NoneError" && doc == "Missing value error"
+        ));
+    }
+
+    #[test]
+    fn test_doc_requires_following_declaration() {
+        let err = parse("@@doc \"\"\"dangling\"\"\"").expect_err("expected parse error");
+        assert!(err.message().contains("declaration"));
+    }
+
+    #[test]
+    fn test_builtin_type_decl_preserves_generic_head() {
+        let ast = parse_with_context(
+            "@@builtin type Result<$T>",
+            ParserContext::module(1, Some("Bootstrap".into()))
+                .with_rules(SourceRules::std_module()),
+        )
+        .expect("generic builtin type should parse");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, params, .. }, _)]
+                if name == "Result" && params.as_slice() == ["$T"]
+        ));
+    }
+
+    #[test]
+    fn test_std_module_result_ctor_decls_are_accepted() {
+        let ast = parse_with_context(
+            r#"@@doc """
+Construct the success branch.
+"""
+def Ok($T) -> Result<$T>
+
+@@doc """
+Construct the error branch.
+"""
+def Err(Error) -> Result<$T>"#,
+            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("result constructor declarations should parse in std modules");
+
+        assert_eq!(ast.len(), 2);
+        assert!(matches!(
+            &ast[0],
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+                if name == "Ok" && param == "$T" && ret_name == "Result" && args.len() == 1 && doc.contains("success")
+        ));
+        assert!(matches!(
+            &ast[1],
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+                if name == "Err" && param == "Error" && ret_name == "Result" && args.len() == 1 && doc.contains("error")
+        ));
+    }
+
+    #[test]
+    fn test_std_module_result_ctor_builtin_type_contracts_are_accepted() {
+        let ast = parse_with_context(
+            r#"@@doc """
+Construct the success branch.
+"""
+@@builtin type Ok($T) -> Result<$T>
+
+@@doc """
+Construct the error branch.
+"""
+@@builtin type Err(Error) -> Result<$T>"#,
+            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("result constructor builtin contracts should parse in std modules");
+
+        assert_eq!(ast.len(), 2);
+        assert!(matches!(
+            &ast[0],
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+                if name == "Ok" && param == "$T" && ret_name == "Result" && args.len() == 1 && doc.contains("success")
+        ));
+        assert!(matches!(
+            &ast[1],
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+                if name == "Err" && param == "Error" && ret_name == "Result" && args.len() == 1 && doc.contains("error")
+        ));
+    }
+
+    #[test]
+    fn test_type_keyword_cannot_be_used_as_function_name() {
+        let err = parse("def type() -> Int { 0 }").expect_err("type should stay reserved");
+        assert!(err.message().contains("Expected identifier"));
+    }
+
+    #[test]
     fn test_builtin_decl_with_body_is_error() {
         let err = parse("@@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
         assert!(err.message().contains("must not have a function body"));
+    }
+
+    #[test]
+    fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
+        let ast = parse_with_context(
+            r#"defmod Kernel {
+  @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
+}"#,
+            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("builtin if declaration should parse");
+
+        match &ast[0] {
+            Ast::Defmod(_, name, body, _) => {
+                assert_eq!(name, "Kernel");
+                assert!(matches!(
+                    &body[0],
+                    Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                        if builtin_name == "if" && params.len() == 3 && ret == "$A"
+                ));
+            }
+            other => panic!("expected defmod, got {:?}", other),
+        }
     }
 
     #[test]
@@ -2921,18 +4261,107 @@ def noop() {()}"#,
 
     #[test]
     fn test_precedence() {
-        // 1 + 2 * 3 should parse as 1 + (2 * 3)
+        // Expr-class operators are same-precedence and left-associative.
         let ast = parse("x = 1 + 2 * 3").unwrap();
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
-                Ast::BinOp(_, BinOp::Add, left, right) => {
-                    assert!(matches!(left.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1)));
-                    assert!(matches!(right.as_ref(), Ast::BinOp(_, BinOp::Mul, _, _)));
+                Ast::BinOp(_, BinOp::Mul, left, right) => {
+                    assert!(matches!(right.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(3)));
+                    assert!(matches!(
+                        left.as_ref(),
+                        Ast::BinOp(_, BinOp::Add, ll, lr)
+                            if matches!(ll.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1))
+                                && matches!(lr.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(2))
+                    ));
                 }
-                _ => panic!("Expected Add at top"),
+                _ => panic!("Expected left-associative Expr-class parse at top"),
             },
             _ => panic!("Expected Bind"),
         }
+    }
+
+    #[test]
+    fn test_logical_precedence_is_lower_than_expr_class() {
+        let ast = parse("x = a + b == c").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::BinOp(_, BinOp::Eq, left, right) => {
+                    assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "c"));
+                    assert!(matches!(
+                        left.as_ref(),
+                        Ast::BinOp(_, BinOp::Add, ll, lr)
+                            if matches!(ll.as_ref(), Ast::Var(_, name) if name == "a")
+                                && matches!(lr.as_ref(), Ast::Var(_, name) if name == "b")
+                    ));
+                }
+                other => panic!("Expected logical top-level parse, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_func_literal_name_lowers_to_binary_call() {
+        let ast = parse("x = left `eq` right").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::App(_, func, args) => {
+                    assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "eq"));
+                    assert!(matches!(
+                        args.as_slice(),
+                        [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                            if matches!(left, Ast::Var(_, name) if name == "left")
+                                && matches!(right, Ast::Var(_, name) if name == "right")
+                    ));
+                }
+                other => panic!("Expected lowered App, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_func_literal_operator_lowers_to_binop() {
+        let ast = parse("x = left `+` right").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Ast::BinOp(_, BinOp::Add, left, right)
+                        if matches!(left.as_ref(), Ast::Var(_, name) if name == "left")
+                            && matches!(right.as_ref(), Ast::Var(_, name) if name == "right")
+                ));
+            }
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_func_literal_operator_comparison_uses_logical_tier() {
+        let ast = parse("x = a `==` b + c").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::BinOp(_, BinOp::Eq, left, right) => {
+                    assert!(matches!(left.as_ref(), Ast::Var(_, name) if name == "a"));
+                    assert!(matches!(
+                        right.as_ref(),
+                        Ast::BinOp(_, BinOp::Add, rl, rr)
+                            if matches!(rl.as_ref(), Ast::Var(_, name) if name == "b")
+                                && matches!(rr.as_ref(), Ast::Var(_, name) if name == "c")
+                    ));
+                }
+                other => panic!("Expected logical-tier func literal parse, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_standalone_func_literal_is_error() {
+        let err = parse("`eq`").expect_err("expected parse error");
+        assert!(err
+            .message()
+            .contains("FuncLiteral must appear in infix position"));
     }
 
     #[test]
@@ -3062,9 +4491,9 @@ def noop() {()}"#,
             Ast::SafeBind(_, pattern, rhs) => {
                 assert!(matches!(
                     pattern,
-                    AstPattern::Constructor(_, ctor, inner)
+                    AstPattern::Call(_, ctor, inner)
                         if ctor == "Ok"
-                        && matches!(inner.as_ref(), AstPattern::Var(_, name) if name == "num")
+                        && matches!(inner.as_slice(), [AstPattern::Var(_, name)] if name == "num")
                 ));
                 assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
             }
@@ -3105,8 +4534,8 @@ def noop() {()}"#,
                     pattern,
                     AstPattern::ListCons(_, first, rest)
                         if matches!(first.as_ref(),
-                            AstPattern::Constructor(_, ctor, inner)
-                            if ctor == "Ok" && matches!(inner.as_ref(), AstPattern::IntLit(_, n) if n == &int(1))
+                            AstPattern::Call(_, ctor, inner)
+                            if ctor == "Ok" && matches!(inner.as_slice(), [AstPattern::IntLit(_, n)] if n == &int(1))
                         )
                         && matches!(rhs.as_ref(), Ast::Var(_, name) if name == "lr")
                         && matches!(rest.as_ref(), AstPattern::ListCons(_, _, _))
@@ -3132,7 +4561,7 @@ def noop() {()}"#,
     fn test_result_unit_type_annotation_uses_unit_token() {
         let ast = parse("def main() -> Result<()> { Ok(()) }").unwrap();
         match &ast[0] {
-            Ast::Def(_, _, _, Some(AstTy::Generic(_, name, args)), _) => {
+            Ast::Def(_, _, _, Some(AstTy::Generic(_, name, args)), _, _) => {
                 assert_eq!(name, "Result");
                 assert!(matches!(args.as_slice(), [AstTy::Named(_, n)] if n == "Unit"));
             }
@@ -3219,6 +4648,100 @@ def noop() {()}"#,
     }
 
     #[test]
+    fn test_qualified_capture_and_flow_parse() {
+        let ast = parse("reader = &User::get_name\nout = value |> trim() |*> normalize()").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Ast::Capture(_, target, args)
+                    if args.is_empty() && matches!(target.as_ref(), Ast::Path(_, path) if path.segments == vec!["User".to_string(), "get_name".to_string()])));
+            }
+            _ => panic!("Expected qualified capture"),
+        }
+        match &ast[1] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::ContextMap(_, left, _) => {
+                    assert!(matches!(left.as_ref(), Ast::Pipe(_, _, _)));
+                }
+                other => panic!("Expected left-associative flow parse, got {:?}", other),
+            },
+            _ => panic!("Expected bind"),
+        }
+    }
+
+    #[test]
+    fn test_pipe_rhs_call_stays_as_app() {
+        let ast =
+            parse("out = user |> User::get_name()").expect("pipe with method call should parse");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Pipe(_, _, right) => {
+                    assert!(matches!(right.as_ref(), Ast::App(_, _, args) if args.is_empty()));
+                }
+                other => panic!("Expected pipe node, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_nested_generic_type_closes_without_confusing_compose() {
+        let ast =
+            parse("value: Result<List<Int>> = Ok([])").expect("nested generic type should parse");
+        match &ast[0] {
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, outer_args)), rhs) => {
+                assert_eq!(name, "Result");
+                assert_eq!(outer_args.len(), 1);
+                assert!(matches!(
+                    &outer_args[0],
+                    AstTy::Generic(_, inner_name, inner_args)
+                        if inner_name == "List"
+                            && inner_args.len() == 1
+                            && matches!(&inner_args[0], AstTy::Named(_, ty) if ty == "Int")
+                ));
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Ast::ConstructorCall(_, ctor, args) if ctor == "Ok" && args.len() == 1
+                ));
+            }
+            other => panic!("Expected annotated Result<List<Int>> bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_qualified_partial_capture_parses() {
+        let ast = parse(r#"rename = &User::with_name("bob")"#)
+            .expect("qualified partial capture should parse");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Ast::Capture(_, target, args)
+                        if args.len() == 1
+                            && matches!(target.as_ref(), Ast::Path(_, path)
+                                if path.segments == vec!["User".to_string(), "with_name".to_string()])
+                ));
+            }
+            other => panic!("Expected qualified partial capture bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compose_chain_is_left_associative_at_same_precedence() {
+        let ast = parse("pipeline = parse() |=> validate() >> render()")
+            .expect("compose chain should parse");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Compose(_, left, right) => {
+                    assert!(matches!(right.as_ref(), Ast::App(_, _, args) if args.is_empty()));
+                    assert!(matches!(left.as_ref(), Ast::KleisliCompose(_, _, _)));
+                }
+                other => panic!("Expected outer compose node, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_closure_body_accepts_semicolon_separated_statements() {
         let ast = parse("fun = {|num| x = x + 5;x+num}").unwrap();
         match &ast[0] {
@@ -3267,7 +4790,7 @@ def noop() {()}"#,
     fn test_function_body_trailing_semicolon_is_explicit_unit() {
         let ast = parse("def fun() -> Unit { print(\"x\"); }").unwrap();
         match &ast[0] {
-            Ast::Def(_, _, _, _, body) => {
+            Ast::Def(_, _, _, _, body, _) => {
                 assert!(matches!(
                     body.as_ref(),
                     Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::Semi(_, inner)] if matches!(inner.as_ref(), Ast::App(_, _, _)))
@@ -3424,8 +4947,8 @@ def noop() {()}"#,
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Match(_, _, arms) => {
-                    assert!(matches!(&arms[0].0, AstMatchPattern::IntLit(_, n) if n == &int(1)));
-                    assert!(matches!(&arms[1].0, AstMatchPattern::Wildcard(_)));
+                    assert!(matches!(&arms[0].0, AstPattern::IntLit(_, n) if n == &int(1)));
+                    assert!(matches!(&arms[1].0, AstPattern::Wildcard(_)));
                 }
                 _ => panic!("Expected Match"),
             },
@@ -3445,7 +4968,7 @@ def noop() {()}"#,
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Match(_, _, arms) => {
-                    assert!(matches!(&arms[0].0, AstMatchPattern::StrLit(_, s) if s == "a"));
+                    assert!(matches!(&arms[0].0, AstPattern::StrLit(_, s) if s == "a"));
                 }
                 _ => panic!("Expected Match"),
             },
@@ -3467,9 +4990,9 @@ def noop() {()}"#,
                 Ast::Match(_, _, arms) => {
                     assert!(matches!(
                         &arms[0].0,
-                        AstMatchPattern::ListCons(_, head, tail)
-                            if matches!(head.as_ref(), AstMatchPattern::IntLit(_, n) if n == &int(-1))
-                                && matches!(tail.as_ref(), AstMatchPattern::ListNil(_))
+                        AstPattern::ListCons(_, head, tail)
+                            if matches!(head.as_ref(), AstPattern::IntLit(_, n) if n == &int(-1))
+                                && matches!(tail.as_ref(), AstPattern::ListNil(_))
                     ));
                 }
                 _ => panic!("Expected Match"),
@@ -3487,48 +5010,188 @@ def noop() {()}"#,
     }
 
     #[test]
-    fn test_match_camel_case_pattern_is_rejected_for_now() {
-        // Remove this test when CamelCase match patterns are intentionally implemented.
+    fn test_cond_desugars_to_nested_if_apps() {
+        let ast = parse(
+            r#"x = cond {
+  a => 1,
+  b => 2,
+  True => 3,
+}"#,
+        )
+        .expect("cond should parse");
+
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::App(_, func, args) => {
+                    assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "if"));
+                    assert!(
+                        matches!(&args[0], RecordLitArg::Positional(Ast::Var(_, name)) if name == "a")
+                    );
+                    assert!(
+                        matches!(&args[1], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(1))
+                    );
+                    assert!(matches!(
+                        &args[2],
+                        RecordLitArg::Positional(Ast::App(_, inner_func, inner_args))
+                            if matches!(inner_func.as_ref(), Ast::Var(_, name) if name == "if")
+                                && matches!(&inner_args[0], RecordLitArg::Positional(Ast::Var(_, name)) if name == "b")
+                                && matches!(&inner_args[1], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(2))
+                                && matches!(&inner_args[2], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(3))
+                    ));
+                }
+                _ => panic!("Expected App"),
+            },
+            _ => panic!("Expected Bind with cond RHS"),
+        }
+    }
+
+    #[test]
+    fn test_cond_accepts_block_body() {
+        let ast = parse(
+            r#"x = cond {
+  True => { print("ok"); 1 },
+}"#,
+        )
+        .expect("cond with block body should parse");
+
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Block(_, stmts) => {
+                    assert!(
+                        matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Lit(_, Lit::Int(n))] if n == &int(1))
+                    );
+                }
+                _ => panic!("Expected final True clause body to remain as block"),
+            },
+            _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_empty_cond_is_error() {
+        let err = parse("x = cond {}").expect_err("Expected parse error");
+        assert!(err
+            .message()
+            .contains("Cond expression must contain at least one clause"));
+    }
+
+    #[test]
+    fn test_cond_requires_final_true_clause() {
         let err = parse(
+            r#"x = cond {
+  flag => 1,
+}"#,
+        )
+        .expect_err("Expected parse error");
+        assert!(err
+            .message()
+            .contains("Final cond clause must use `True` as its condition"));
+    }
+
+    #[test]
+    fn test_cond_rejects_non_final_true_clause() {
+        let err = parse(
+            r#"x = cond {
+  True => 1,
+  other => 2,
+}"#,
+        )
+        .expect_err("Expected parse error");
+        assert!(err
+            .message()
+            .contains("`True` clause must be the final cond clause"));
+    }
+
+    #[test]
+    fn test_match_constructor_pattern_is_accepted() {
+        let ast = parse(
             r#"x = match value {
   Some(y) => y,
   _ => 0,
 }"#,
         )
-        .expect_err("Expected parse error");
-        assert!(err
-            .message()
-            .contains("remove this test when CamelCase patterns are implemented"));
+        .expect("constructor pattern should parse");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Match(_, _, arms) => {
+                    assert!(matches!(
+                        &arms[0].0,
+                        AstPattern::Call(_, name, inner)
+                            if name == "Some"
+                                && matches!(inner.as_slice(), [AstPattern::Var(_, bound)] if bound == "y")
+                    ));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
+        }
     }
 
     #[test]
-    fn test_match_bare_constructor_pattern_is_rejected_for_now() {
-        // Remove this test when CamelCase match patterns are intentionally implemented.
-        let err = parse(
+    fn test_match_bare_uppercase_identifier_is_constructor_pattern() {
+        let ast = parse(
             r#"x = match value {
   ParseError => 0,
   _ => 1,
 }"#,
         )
-        .expect_err("Expected parse error");
-        assert!(err
-            .message()
-            .contains("remove this test when CamelCase patterns are implemented"));
+        .expect("bare uppercase identifier should parse as a constructor pattern");
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Match(_, _, arms) => {
+                    assert!(matches!(
+                        &arms[0].0,
+                        AstPattern::Constructor(_, name, args) if name == "ParseError" && args.is_empty()
+                    ));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
+        }
+    }
+
+    #[test]
+    fn test_match_as_and_annotated_pattern_is_accepted() {
+        let ast = parse(
+            r#"x = match value {
+  [head, ..tail] @ whole: List<Int> => head,
+  _ => 0,
+}"#,
+        )
+        .expect("as-pattern and annotation in match should parse");
+
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::Match(_, _, arms) => {
+                    assert!(matches!(
+                        &arms[0].0,
+                        AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, ty_name, ty_args)))
+                            if alias == "whole"
+                                && ty_name == "List"
+                                && ty_args.len() == 1
+                                && matches!(inner.as_ref(), AstPattern::ListCons(_, _, _))
+                    ));
+                }
+                _ => panic!("Expected Match"),
+            },
+            _ => panic!("Expected Bind with Match"),
+        }
     }
 
     #[test]
     fn test_defmod_parses_module_body() {
-        let ast = parse(
+        let ast = parse_with_context(
             r#"defmod Kernel {
   def add(x: Int, y: Int) -> Int { x + y }
 }"#,
+            ParserContext::module(1, None),
         )
         .expect("defmod should parse");
 
         match ast.as_slice() {
-            [Ast::Defmod(_, name, body)] => {
+            [Ast::Defmod(_, name, body, _)] => {
                 assert_eq!(name, "Kernel");
-                assert!(matches!(body.as_slice(), [Ast::Def(_, _, _, _, _)]));
+                assert!(matches!(body.as_slice(), [Ast::Def(_, _, _, _, _, _)]));
             }
             _ => panic!("Expected single defmod declaration"),
         }
@@ -3557,6 +5220,76 @@ import Kernel::{add, sub};"#,
             ast[2],
             Ast::Import(_, AstPath { ref segments, .. }, ImportSpec::List(ref names))
                 if segments.as_slice() == ["Kernel"] && names.as_slice() == ["add", "sub"]
+        ));
+    }
+
+    #[test]
+    fn test_defenum_parses_variants_with_payload_and_discriminant() {
+        let ast = parse_with_context(
+            r#"defenum Direction {
+  Up = 1,
+  Down,
+  Arrow(Int, Int),
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("defenum should parse");
+
+        match ast.as_slice() {
+            [Ast::EnumDef(_, name, type_params, variants, _)] => {
+                assert_eq!(name, "Direction");
+                assert!(type_params.is_empty());
+                assert_eq!(variants.len(), 3);
+                assert_eq!(variants[0].name, "Up");
+                assert_eq!(variants[0].discriminant, Some(int(1)));
+                assert_eq!(variants[1].name, "Down");
+                assert_eq!(variants[1].payload.len(), 0);
+                assert_eq!(variants[2].name, "Arrow");
+                assert_eq!(variants[2].payload.len(), 2);
+            }
+            other => panic!("Expected enum definition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_defenum_parses_generic_header() {
+        let ast = parse_with_context(
+            r#"defenum ReduceStep<$A> {
+  Resume($A),
+  Stop($A),
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("generic defenum should parse");
+
+        match ast.as_slice() {
+            [Ast::EnumDef(_, name, type_params, variants, _)] => {
+                assert_eq!(name, "ReduceStep");
+                assert_eq!(type_params.len(), 1);
+                assert_eq!(type_params[0].name, "$A");
+                assert_eq!(variants.len(), 2);
+            }
+            other => panic!("Expected generic enum definition, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_qualified_constructor_call_and_unit_constructor_parse() {
+        let ast = parse(
+            r#"x = Direction::Up
+y = KeyInput::Arrow(Direction::Down)"#,
+        )
+        .expect("qualified constructors should parse");
+
+        assert!(matches!(
+            ast[0],
+            Ast::Bind(_, _, ref rhs)
+                if matches!(rhs.as_ref(), Ast::ConstructorCall(_, name, args) if name == "Direction::Up" && args.is_empty())
+        ));
+        assert!(matches!(
+            ast[1],
+            Ast::Bind(_, _, ref rhs)
+                if matches!(rhs.as_ref(), Ast::ConstructorCall(_, name, args) if name == "KeyInput::Arrow" && args.len() == 1)
         ));
     }
 
@@ -3610,13 +5343,44 @@ import Kernel::{add, sub};"#,
     }
 
     #[test]
+    fn test_module_compile_unit_rejects_top_level_defextractor() {
+        let err = parse_with_context(
+            "defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> { MatchResult::NoMatch }",
+            ParserContext::module(1, None),
+        )
+        .expect_err("module compile unit should require defmod wrappers for extractors");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
     fn test_module_compile_unit_accepts_top_level_defmod() {
         let ast = parse_with_context(
             "defmod Kernel { def add(x: Int, y: Int) -> Int { x + y } }",
             ParserContext::module(1, None),
         )
         .expect("module compile unit should accept defmod declarations");
-        assert!(matches!(ast.as_slice(), [Ast::Defmod(_, _, _)]));
+        assert!(matches!(ast.as_slice(), [Ast::Defmod(_, _, _, _)]));
+    }
+
+    #[test]
+    fn test_defmod_body_accepts_defextractor() {
+        let ast = parse_with_context(
+            r#"defmod Matchers {
+  defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> {
+    MatchResult::NoMatch
+  }
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("defmod should accept extractor declarations");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Defmod(_, name, body, _)]
+                if name == "Matchers"
+                    && matches!(body.as_slice(), [Ast::ExtractorDef(_, extractor_name, _, _, _, _)] if extractor_name == "never")
+        ));
     }
 
     #[test]
@@ -3656,6 +5420,15 @@ import Kernel::{add, sub};"#,
     }
 
     #[test]
+    fn test_module_compile_unit_rejects_builtin_type_decl() {
+        let err = parse_with_context("@@builtin type Int", ParserContext::module(1, None))
+            .expect_err("user module compile unit should reject builtin type declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
     fn test_std_module_compile_unit_accepts_builtin_decl() {
         let ast = parse_with_context(
             "defmod Bootstrap { @@builtin def print(a: String) -> Unit }",
@@ -3663,9 +5436,57 @@ import Kernel::{add, sub};"#,
         )
         .expect("std module compile unit should accept builtin declarations");
         assert!(
-            matches!(ast.as_slice(), [Ast::Defmod(_, name, body)] if name == "Bootstrap"
-            && matches!(body.as_slice(), [Ast::BuiltinDecl(_, _, _, _)]))
+            matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Bootstrap"
+            && matches!(body.as_slice(), [Ast::BuiltinDecl(_, _, _, _, _)]))
         );
+    }
+
+    #[test]
+    fn test_std_module_compile_unit_accepts_builtin_type_decl() {
+        let ast = parse_with_context(
+            "defmod Bootstrap { @@builtin type Int }",
+            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+        )
+        .expect("std module compile unit should accept builtin type declarations");
+        assert!(
+            matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Bootstrap"
+            && matches!(body.as_slice(), [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name: builtin_name, .. }, _)] if builtin_name == "Int"))
+        );
+    }
+
+    #[test]
+    fn test_script_compile_unit_accepts_top_level_def_and_import() {
+        let ast = parse_with_context(
+            "def add(x: Int, y: Int) -> Int { x + y }\nimport Kernel::add;",
+            ParserContext::script(1),
+        )
+        .expect("script compile unit should accept top-level def and import");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Def(_, name, _, _, _, _), Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(import_name))]
+                if name == "add" && segments.as_slice() == ["Kernel"] && import_name == "add"
+        ));
+    }
+
+    #[test]
+    fn test_script_compile_unit_rejects_top_level_struct_def() {
+        let err = parse_with_context("defstruct User { name: String }", ParserContext::script(1))
+            .expect_err("script compile unit should reject top-level type declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
+    fn test_repl_compile_unit_rejects_top_level_impl_block() {
+        let err = parse_with_context(
+            "impl User { def new(name: String) -> Self { User { name: name } } }",
+            ParserContext::repl(1),
+        )
+        .expect_err("repl chunk should reject top-level impl declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
     }
 
     #[test]
@@ -3684,6 +5505,18 @@ import Kernel::{add, sub};"#,
     }
 
     #[test]
+    fn test_project_compile_unit_rejects_top_level_defextractor() {
+        let err = parse_with_context(
+            "defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> { MatchResult::NoMatch }",
+            ParserContext::project(1),
+        )
+        .expect_err("project compile unit should reject top-level extractor declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
     fn test_declaration_inside_function_body_is_rejected() {
         let err = parse(
             r#"def outer() -> Unit {
@@ -3697,9 +5530,14 @@ import Kernel::{add, sub};"#,
     }
 
     #[test]
-    fn test_constructor_capture_is_rejected() {
-        let err = parse("f = &Some").expect_err("Expected parse error");
-        assert!(err.message().contains("use a lambda instead"));
+    fn test_constructor_like_capture_parses_and_is_left_for_later_validation() {
+        let ast = parse("f = &Some").expect("constructor-like capture should parse");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Bind(_, _, rhs)]
+                if matches!(rhs.as_ref(), Ast::Capture(_, target, args)
+                    if args.is_empty() && matches!(target.as_ref(), Ast::Var(_, name) if name == "Some"))
+        ));
     }
 
     #[test]

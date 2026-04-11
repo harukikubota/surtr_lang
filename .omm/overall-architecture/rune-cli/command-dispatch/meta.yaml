@@ -1,0 +1,9 @@
+created: 2026-04-09T14:03:16.624Z
+updated: 2026-04-09T14:03:16.652Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: command-dispatch
+children: []
+parentPath:
+  - rune-cli

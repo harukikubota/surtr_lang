@@ -1,0 +1,3 @@
+deferror Boom {
+  "boom"
+}

@@ -88,7 +88,7 @@ impl Completer for ReplHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
-        const COMMANDS: &[&str] = &[":quit", ":v"];
+        const COMMANDS: &[&str] = &[":quit", ":doc", ":save", ":v"];
         let start = line[..pos]
             .rfind(char::is_whitespace)
             .map(|idx| idx + 1)
@@ -233,6 +233,24 @@ fn print_result(result: &ReplResult) {
         ReplOutput::CommandOutput { rendered } => {
             for line in rendered {
                 println!("> {}", line);
+            }
+        }
+        ReplOutput::DocResolved {
+            symbol,
+            signature,
+            summary,
+            source_snippet,
+        } => {
+            println!("> {}", symbol);
+            if let Some(sig) = signature {
+                println!("> sig: {}", sig);
+            }
+            if let Some(text) = source_snippet.as_ref().or(summary.as_ref()) {
+                for line in text.lines() {
+                    if !line.trim().is_empty() {
+                        println!("> {}", line);
+                    }
+                }
             }
         }
         ReplOutput::EvalError { .. } | ReplOutput::StatusMessage(_) => {

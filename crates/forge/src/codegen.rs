@@ -1,11 +1,10 @@
-#![allow(unused_imports, unused_variables)]
-
 use std::collections::HashMap;
 
 use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_meta_by_name;
+use sindr::ir::{CompileInfo, DocEntry, FunctionFlags};
 use sindr::primitives::int;
 use spire::ast::{BinOp, Lit, Span};
 
@@ -18,7 +17,7 @@ use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     let mut gene = Codegen::new();
     gene.emit_program(typed)?;
-    let (opcodes, state) = gene.finalize();
+    let (opcodes, state) = gene.finalize()?;
     Ok(Bytecode {
         opcodes,
         constants: state.constants,
@@ -27,6 +26,16 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         error_templates: state.error_templates,
         functions: state.functions,
         source_map: None,
+        docs: Vec::new(),
+        compile_info: CompileInfo::default(),
+        labels: Vec::new(),
+        imports: Vec::new(),
+        exports: Vec::new(),
+        literals: Vec::new(),
+        lines: Vec::new(),
+        spans: Vec::new(),
+        sources: Vec::new(),
+        pc_spans: Vec::new(),
     })
 }
 
@@ -35,6 +44,7 @@ pub enum ReplTypeKind {
     Struct,
     Record,
     Error,
+    Enum,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +66,7 @@ pub struct ChunkMeta {
     pub bindings: Vec<BindingInfo>,
     pub type_defs: Vec<TypeDefDisplay>,
     pub function_defs: Vec<String>,
+    pub docs: Vec<DocEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,7 +200,7 @@ impl ForgeSession {
         gene.set_chunk_constant_dedup_start(const_base);
         gene.set_top_level_returns_result(top_level_returns_result);
         gene.emit_program_chunk(typed)?;
-        let (mut opcodes, after) = gene.finalize();
+        let (mut opcodes, after) = gene.finalize()?;
         localize_chunk_indices(&mut opcodes, const_base, error_template_base)?;
 
         let new_constants = after.constants[before.constants.len()..].to_vec();
@@ -222,6 +233,7 @@ impl ForgeSession {
                 error_template_base,
                 error_templates,
                 functions,
+                docs: Vec::new(),
             },
             meta,
         ))
@@ -248,7 +260,7 @@ fn localize_chunk_indices(
                 }
                 *idx = (idx_usize - const_base) as u32;
             }
-            Opcode::MakeError(template_id) => {
+            Opcode::MakeError { template_id } => {
                 let id_usize = *template_id as usize;
                 if id_usize < error_template_base {
                     return Err(CodegenError {
@@ -265,6 +277,170 @@ fn localize_chunk_indices(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Codegen;
+    use crate::opcode::Opcode;
+    use scar::typed::{TypedInner, TypedMatchPattern, TypedNode};
+    use scar::types::Ty;
+    use spire::ast::{BinOp, Lit, Span};
+
+    fn span(start: usize, end: usize) -> Span {
+        Span { start, end }
+    }
+
+    fn lit_node(ty: Ty, node: Lit, span: Span) -> TypedNode {
+        TypedNode {
+            ty,
+            span: span.clone(),
+            node: TypedInner::Lit(node),
+        }
+    }
+
+    #[test]
+    fn finalize_rejects_unresolved_labels() {
+        let mut gene = Codegen::new();
+        let label = gene.fresh_label();
+        gene.emit_jump(label);
+
+        let err = gene.finalize().expect_err("unresolved label must fail");
+        assert!(err.message.contains("unresolved jump label"));
+    }
+
+    #[test]
+    fn emit_match_routes_last_failure_through_pattern_mismatch_path() {
+        let mut gene = Codegen::new();
+        let scrutinee = lit_node(Ty::Bool, Lit::Bool(false), span(1, 6));
+        let body = lit_node(Ty::Bool, Lit::Bool(true), span(10, 14));
+
+        gene.emit_match(&scrutinee, &[(TypedMatchPattern::BoolLit(true), body)])
+            .expect("match emission should succeed");
+
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        assert!(opcodes.iter().any(|opcode| {
+            matches!(
+                opcode,
+                Opcode::CallBuiltin {
+                    builtin_id: 5,
+                    arity: 1,
+                    ..
+                }
+            )
+        }));
+        assert!(matches!(opcodes.last(), Some(Opcode::Halt)));
+    }
+
+    #[test]
+    fn unsupported_binop_preserves_original_span() {
+        let gene = Codegen::new();
+        let err = gene
+            .binop_to_opcode(&BinOp::Add, &Ty::Bool, &span(23, 31))
+            .expect_err("bool addition must fail");
+
+        assert_eq!(err.span, span(23, 31));
+        assert!(err.message.contains("Unsupported binop"));
+    }
+
+    #[test]
+    fn emit_assert_builds_result_without_new_opcode() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            span: span(1, 24),
+            node: TypedInner::Assert(
+                Box::new(lit_node(Ty::Bool, Lit::Bool(true), span(1, 5))),
+                Box::new(TypedNode {
+                    ty: Ty::Error,
+                    span: span(10, 19),
+                    node: TypedInner::Var(sigil::resolved::ResolvedId {
+                        name: "NoneError".into(),
+                        qualified_name: Some("NoneError".into()),
+                        unique_id: 99,
+                        span: span(10, 19),
+                    }),
+                }),
+            ),
+        };
+        gene.state.slot_map.insert(99, 0);
+        gene.state.next_slot = 1;
+
+        gene.emit_node(&node)
+            .expect("assert emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::JumpIfFalse(_))));
+        assert!(
+            opcodes
+                .iter()
+                .filter(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 }))
+                .count()
+                >= 2
+        );
+    }
+
+    #[test]
+    fn emit_ensure_stores_value_and_calls_predicate_once() {
+        let mut gene = Codegen::new();
+        let pred_id = sigil::resolved::ResolvedId {
+            name: "is_even".into(),
+            qualified_name: None,
+            unique_id: 7,
+            span: span(8, 16),
+        };
+        let err_id = sigil::resolved::ResolvedId {
+            name: "NoneError".into(),
+            qualified_name: Some("NoneError".into()),
+            unique_id: 8,
+            span: span(18, 27),
+        };
+        gene.state.slot_map.insert(8, 0);
+        gene.state.next_slot = 1;
+
+        let node = TypedNode {
+            ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            span: span(1, 27),
+            node: TypedInner::Ensure(
+                Box::new(lit_node(Ty::Int, Lit::Int(4.into()), span(1, 2))),
+                Box::new(TypedNode {
+                    ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Bool)),
+                    span: span(8, 16),
+                    node: TypedInner::Capture(
+                        Box::new(TypedNode {
+                            ty: Ty::UserFunc {
+                                fun_idx: 3,
+                                type_params: vec![],
+                                params: vec![Ty::Int],
+                                ret: Box::new(Ty::Bool),
+                            },
+                            span: span(8, 16),
+                            node: TypedInner::Var(pred_id),
+                        }),
+                        vec![],
+                    ),
+                }),
+                Box::new(TypedNode {
+                    ty: Ty::Error,
+                    span: span(18, 27),
+                    node: TypedInner::Var(err_id),
+                }),
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("ensure emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::StoreLocal(_))));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
+    }
 }
 
 impl Default for ForgeSession {
@@ -292,6 +468,7 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
         bindings,
         type_defs,
         function_defs,
+        docs: Vec::new(),
     }
 }
 
@@ -334,7 +511,20 @@ fn collect_stmt_meta(
             });
             function_defs.push(id.name.clone());
         }
+        TypedInner::EnumDef(name, variants) => {
+            type_defs.push(TypeDefDisplay {
+                name: name.clone(),
+                kind: ReplTypeKind::Enum,
+                fields: variants
+                    .iter()
+                    .map(|variant| (variant.constructor_name.clone(), String::new()))
+                    .collect(),
+            });
+        }
         TypedInner::Def(_, id, _, _, _) => {
+            function_defs.push(id.name.clone());
+        }
+        TypedInner::ExtractorDef(_, id, _, _, _) => {
             function_defs.push(id.name.clone());
         }
         // `;` keeps Unit as expression result, but for REPL metadata we still
@@ -383,6 +573,11 @@ fn collect_pattern_binding_infos(
         TypedPattern::ResultOk(_, inner) => {
             collect_pattern_binding_infos(inner, slot_map, out);
         }
+        TypedPattern::Extractor { items, .. } => {
+            for item in items {
+                collect_pattern_binding_infos(item, slot_map, out);
+            }
+        }
     }
 }
 
@@ -394,8 +589,16 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
+        Ty::Seq(items) => format!(
+            "Seq<{}>",
+            items
+                .iter()
+                .map(ty_to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
-        Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+        Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.clone(),
         Ty::Error => "Error".into(),
         // Hide internal type-variable IDs from REPL output.
         Ty::Var(_id) => "_".into(),
@@ -416,10 +619,27 @@ fn ty_to_string(ty: &Ty) -> String {
     }
 }
 
+fn format_function_signature(name: &str, params: &[TypedFunParam], ret_ty: &Ty) -> String {
+    let params = params
+        .iter()
+        .map(|param| format!("{}: {}", param.id.name, ty_to_string(&param.ty)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name}({params}) -> {}", ty_to_string(ret_ty))
+}
+
+fn format_error_constructor_signature(name: &str, params: &[TypedFunParam]) -> String {
+    let params = params
+        .iter()
+        .map(|param| format!("{}: {}", param.id.name, ty_to_string(&param.ty)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name}({params}) -> {name}")
+}
+
 // ── IR with labels (resolved to absolute addresses at the end) ──
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum IrOp {
     Op(Opcode),
     /// Jump to label (resolved later)
@@ -441,12 +661,28 @@ struct PendingClosure {
     body: Box<TypedNode>,
 }
 
+#[derive(Debug, Clone)]
+struct PendingCompose {
+    fun_idx: u32,
+    flavor: ComposeFlavor,
+    span: Span,
+}
+
+#[derive(Debug, Clone)]
+struct PendingInjectCall {
+    fun_idx: u32,
+    extra_arg_count: usize,
+    span: Span,
+}
+
 struct Codegen {
     ir: Vec<IrOp>,
     state: CodegenState,
     next_label: u32,
     label_positions: HashMap<Label, usize>, // label → IR index it points to
     pending_closures: Vec<PendingClosure>,
+    pending_composes: Vec<PendingCompose>,
+    pending_inject_calls: Vec<PendingInjectCall>,
     in_function: bool,
     top_level_returns_result: bool,
     constant_dedup_start: usize,
@@ -464,6 +700,8 @@ impl Codegen {
             next_label: 0,
             label_positions: HashMap::new(),
             pending_closures: Vec::new(),
+            pending_composes: Vec::new(),
+            pending_inject_calls: Vec::new(),
             in_function: false,
             top_level_returns_result: false,
             constant_dedup_start: 0,
@@ -501,7 +739,18 @@ impl Codegen {
     }
 
     fn builtin_id(name: &str) -> Option<u16> {
-        builtin_meta_by_name(name).map(|meta| meta.builtin_id)
+        let short_name = name.rsplit("::").next().unwrap_or(name);
+        builtin_meta_by_name(short_name).map(|meta| meta.builtin_id)
+    }
+
+    fn direct_builtin_opcode(name: &str, arity: usize) -> Option<Opcode> {
+        match name.rsplit("::").next().unwrap_or(name) {
+            "bit_not" if arity == 1 => Some(Opcode::BitNotInt),
+            "bit_and" if arity == 2 => Some(Opcode::BitAndInt),
+            "bit_or" if arity == 2 => Some(Opcode::BitOrInt),
+            "bit_xor" if arity == 2 => Some(Opcode::BitXorInt),
+            _ => None,
+        }
     }
 
     fn emit_callable_ref(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
@@ -563,9 +812,8 @@ impl Codegen {
         let total_arity = captures.len() + params.len();
         let prev_in_function = self.in_function;
         self.in_function = true;
-        self.emit_node(body)?;
+        self.emit_tail_node(body)?;
         self.in_function = prev_in_function;
-        self.emit(Opcode::Return);
 
         self.state.functions.push(FunctionEntry {
             fun_idx,
@@ -573,6 +821,17 @@ impl Codegen {
             num_locals: self.state.next_slot,
             arity: total_arity as u8,
             qualified_name: None,
+            signature: None,
+            end_pc: 0,
+            span_start: body.span.start as u32,
+            span_end: body.span.end as u32,
+            flags: FunctionFlags {
+                public: false,
+                closure: true,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: true,
+            },
         });
 
         self.state.slot_map = saved_slot_map;
@@ -590,6 +849,230 @@ impl Codegen {
                     &closure.captures,
                     &closure.body,
                 )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_compose_function(
+        &mut self,
+        fun_idx: u32,
+        flavor: &ComposeFlavor,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        let saved_slot_map = self.state.slot_map.clone();
+        let saved_next_slot = self.state.next_slot;
+
+        self.state.slot_map = HashMap::new();
+        self.state.next_slot = 3;
+
+        let lhs_slot = 0u32;
+        let rhs_slot = 1u32;
+        let input_slot = 2u32;
+        let entry_pc = self.current_pos() as u32;
+        let prev_in_function = self.in_function;
+        self.in_function = true;
+
+        match flavor {
+            ComposeFlavor::Plain => {
+                self.emit(Opcode::LoadLocal(rhs_slot));
+                self.emit(Opcode::LoadLocal(lhs_slot));
+                self.emit(Opcode::LoadLocal(input_slot));
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                self.emit(Opcode::Return);
+            }
+            ComposeFlavor::ResultMap | ComposeFlavor::ResultBind => {
+                self.emit(Opcode::LoadLocal(lhs_slot));
+                self.emit(Opcode::LoadLocal(input_slot));
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                let result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(result_slot));
+
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetTag);
+                let err_tag = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(err_tag));
+                self.emit(Opcode::EqTag);
+
+                let ok_path = self.fresh_label();
+                self.emit_jump_if_false(ok_path);
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::Return);
+
+                self.patch_label(ok_path);
+                match flavor {
+                    ComposeFlavor::ResultMap => {
+                        let ok_tag = self.add_constant(Constant::Tag(0));
+                        self.emit(Opcode::LoadConst(ok_tag));
+                        self.emit(Opcode::LoadLocal(rhs_slot));
+                        self.emit(Opcode::LoadLocal(result_slot));
+                        self.emit(Opcode::GetField { field_index: 0 });
+                        self.emit(Opcode::CallClosure {
+                            arity: 1,
+                            span_start: span.start as u32,
+                            span_end: span.end as u32,
+                        });
+                        self.emit(Opcode::StructNew { field_count: 1 });
+                        self.emit(Opcode::Return);
+                    }
+                    ComposeFlavor::ResultBind => {
+                        self.emit(Opcode::LoadLocal(rhs_slot));
+                        self.emit(Opcode::LoadLocal(result_slot));
+                        self.emit(Opcode::GetField { field_index: 0 });
+                        self.emit(Opcode::CallClosure {
+                            arity: 1,
+                            span_start: span.start as u32,
+                            span_end: span.end as u32,
+                        });
+                        self.emit(Opcode::Return);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            ComposeFlavor::ListMap { helper } | ComposeFlavor::ListBind { helper } => {
+                self.emit(Opcode::LoadLocal(lhs_slot));
+                self.emit(Opcode::LoadLocal(input_slot));
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                self.emit(Opcode::LoadLocal(rhs_slot));
+                match helper {
+                    ListHelperRef::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {
+                        builtin_id: *builtin_id,
+                        arity: 2,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    }),
+                    ListHelperRef::User(fun_idx) => self.emit(Opcode::Call {
+                        fun_idx: *fun_idx,
+                        arity: 2,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    }),
+                }
+                self.emit(Opcode::Return);
+            }
+        }
+
+        self.in_function = prev_in_function;
+        self.state.functions.push(FunctionEntry {
+            fun_idx,
+            entry_pc,
+            num_locals: self.state.next_slot,
+            arity: 3,
+            qualified_name: None,
+            signature: None,
+            end_pc: 0,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+            flags: FunctionFlags {
+                public: false,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: true,
+            },
+        });
+
+        self.state.slot_map = saved_slot_map;
+        self.state.next_slot = saved_next_slot;
+        Ok(())
+    }
+
+    fn emit_inject_call_function(
+        &mut self,
+        fun_idx: u32,
+        extra_arg_count: usize,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        let saved_slot_map = self.state.slot_map.clone();
+        let saved_next_slot = self.state.next_slot;
+
+        self.state.slot_map = HashMap::new();
+        let func_slot = 0u32;
+        let input_slot = (extra_arg_count + 1) as u32;
+        self.state.next_slot = input_slot + 1;
+
+        let entry_pc = self.current_pos() as u32;
+        let prev_in_function = self.in_function;
+        self.in_function = true;
+
+        self.emit(Opcode::LoadLocal(func_slot));
+        self.emit(Opcode::LoadLocal(input_slot));
+        for offset in 0..extra_arg_count {
+            self.emit(Opcode::LoadLocal((offset + 1) as u32));
+        }
+        self.emit(Opcode::CallClosure {
+            arity: (extra_arg_count + 1) as u8,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+        });
+        self.in_function = prev_in_function;
+        self.emit(Opcode::Return);
+
+        self.state.functions.push(FunctionEntry {
+            fun_idx,
+            entry_pc,
+            num_locals: self.state.next_slot,
+            arity: (extra_arg_count + 2) as u8,
+            qualified_name: None,
+            signature: None,
+            end_pc: 0,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+            flags: FunctionFlags {
+                public: false,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: true,
+            },
+        });
+
+        self.state.slot_map = saved_slot_map;
+        self.state.next_slot = saved_next_slot;
+        Ok(())
+    }
+
+    fn emit_pending_callables(&mut self) -> Result<(), CodegenError> {
+        while !self.pending_closures.is_empty()
+            || !self.pending_composes.is_empty()
+            || !self.pending_inject_calls.is_empty()
+        {
+            if !self.pending_closures.is_empty() {
+                self.emit_pending_closures()?;
+            }
+            if !self.pending_composes.is_empty() {
+                let pending = std::mem::take(&mut self.pending_composes);
+                for compose in pending {
+                    self.emit_compose_function(compose.fun_idx, &compose.flavor, &compose.span)?;
+                }
+            }
+            if !self.pending_inject_calls.is_empty() {
+                let pending = std::mem::take(&mut self.pending_inject_calls);
+                for inject_call in pending {
+                    self.emit_inject_call_function(
+                        inject_call.fun_idx,
+                        inject_call.extra_arg_count,
+                        &inject_call.span,
+                    )?;
+                }
             }
         }
         Ok(())
@@ -625,14 +1108,17 @@ impl Codegen {
         self.ir.push(IrOp::JumpIfFalseLabel(label));
     }
 
-    #[allow(dead_code)]
     fn emit_jump_if_true(&mut self, label: Label) {
         self.ir.push(IrOp::JumpIfTrueLabel(label));
     }
 
-    #[allow(dead_code)]
     fn current_pos(&self) -> usize {
         self.ir.len()
+    }
+
+    fn emit_unit_const(&mut self) {
+        let unit_idx = self.add_constant(Constant::Unit);
+        self.emit(Opcode::LoadConst(unit_idx));
     }
 
     // ── Program ──
@@ -661,6 +1147,7 @@ impl Codegen {
             .iter()
             .filter_map(|stmt| match &stmt.node {
                 TypedInner::Def(fun_idx, _, _, _, _) => Some(*fun_idx),
+                TypedInner::ExtractorDef(fun_idx, _, _, _, _) => Some(*fun_idx),
                 TypedInner::DeferrorDef(_, fun_idx, _, _, _) => Some(*fun_idx),
                 _ => None,
             })
@@ -688,12 +1175,15 @@ impl Codegen {
                     .insert(id.name.clone(), (*fun_idx, params.len() as u8));
             }
             match &stmt.node {
-                TypedInner::Def(..) | TypedInner::DeferrorDef(..) => defs.push(stmt),
+                TypedInner::Def(..)
+                | TypedInner::ExtractorDef(..)
+                | TypedInner::DeferrorDef(..) => defs.push(stmt),
                 _ => main_stmts.push(stmt),
             }
         }
         defs.sort_by_key(|stmt| match &stmt.node {
             TypedInner::Def(fun_idx, _, _, _, _) => *fun_idx,
+            TypedInner::ExtractorDef(fun_idx, _, _, _, _) => *fun_idx,
             TypedInner::DeferrorDef(_, fun_idx, _, _, _) => *fun_idx,
             _ => u32::MAX,
         });
@@ -710,19 +1200,20 @@ impl Codegen {
         for def in defs {
             match &def.node {
                 TypedInner::Def(..) => self.emit_function_def(def)?,
+                TypedInner::ExtractorDef(..) => self.emit_extractor_def(def)?,
                 TypedInner::DeferrorDef(..) => self.emit_error_def(def)?,
                 _ => unreachable!(),
             }
         }
 
-        self.emit_pending_closures()?;
+        self.emit_pending_callables()?;
         self.normalize_function_table()?;
 
         Ok(())
     }
 
     fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        let (fun_idx, id, params, _ret_ty, body) = match &node.node {
+        let (fun_idx, id, params, ret_ty, body) = match &node.node {
             TypedInner::Def(fun_idx, id, params, ret_ty, body) => {
                 (fun_idx, id, params, ret_ty, body)
             }
@@ -748,9 +1239,8 @@ impl Codegen {
         let entry_pc = self.current_pos() as u32;
         let prev_in_function = self.in_function;
         self.in_function = true;
-        self.emit_node(body)?;
+        self.emit_tail_node(body)?;
         self.in_function = prev_in_function;
-        self.emit(Opcode::Return);
 
         let num_locals = self.state.next_slot;
         self.state.functions.push(FunctionEntry {
@@ -759,6 +1249,17 @@ impl Codegen {
             num_locals,
             arity: params.len() as u8,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
+            signature: Some(format_function_signature(&id.name, params, ret_ty)),
+            end_pc: 0,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+            flags: FunctionFlags {
+                public: true,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: false,
+            },
         });
         self.state.next_fun_idx = self.state.next_fun_idx.max(*fun_idx + 1);
 
@@ -810,7 +1311,7 @@ impl Codegen {
         self.in_function = true;
         self.emit_node(body)?;
         self.in_function = prev_in_function;
-        self.emit(Opcode::MakeError(template_id));
+        self.emit(Opcode::MakeError { template_id });
         self.emit(Opcode::Return);
 
         let num_locals = self.state.next_slot;
@@ -820,10 +1321,79 @@ impl Codegen {
             num_locals,
             arity: params.len() as u8,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
+            signature: Some(format_error_constructor_signature(&id.name, params)),
+            end_pc: 0,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+            flags: FunctionFlags {
+                public: true,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: false,
+            },
         });
         self.state
             .error_ctor_funs
             .insert(id.name.clone(), (*fun_idx, params.len() as u8));
+
+        self.state.slot_map = saved_slot_map;
+        self.state.next_slot = saved_next_slot;
+        Ok(())
+    }
+
+    fn emit_extractor_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
+        let (fun_idx, id, param, ret_ty, body) = match &node.node {
+            TypedInner::ExtractorDef(fun_idx, id, param, ret_ty, body) => {
+                (fun_idx, id, param, ret_ty, body)
+            }
+            _ => {
+                return Err(CodegenError {
+                    message: "expected extractor definition".into(),
+                    span: node.span.clone(),
+                });
+            }
+        };
+
+        let saved_slot_map = self.state.slot_map.clone();
+        let saved_next_slot = self.state.next_slot;
+
+        self.state.slot_map = HashMap::new();
+        self.state.next_slot = 0;
+        self.state.slot_map.insert(param.id.unique_id, 0);
+        self.state.next_slot = 1;
+
+        let entry_pc = self.current_pos() as u32;
+        let prev_in_function = self.in_function;
+        self.in_function = true;
+        self.emit_tail_node(body)?;
+        self.in_function = prev_in_function;
+
+        let num_locals = self.state.next_slot as u16;
+        self.state.functions.push(FunctionEntry {
+            fun_idx: *fun_idx,
+            entry_pc,
+            num_locals: num_locals.into(),
+            arity: 1,
+            qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
+            signature: Some(format!(
+                "{}({}: {}) -> {}",
+                id.name,
+                param.id.name,
+                ty_to_string(&param.ty),
+                ty_to_string(ret_ty)
+            )),
+            end_pc: 0,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+            flags: FunctionFlags {
+                public: true,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: false,
+            },
+        });
 
         self.state.slot_map = saved_slot_map;
         self.state.next_slot = saved_next_slot;
@@ -884,11 +1454,118 @@ impl Codegen {
                 self.emit_app(node.span.clone(), func, args)?;
             }
 
+            TypedInner::InjectCall(func, args) => {
+                let fun_idx = self.reserve_fun_idx();
+                self.pending_inject_calls.push(PendingInjectCall {
+                    fun_idx,
+                    extra_arg_count: args.len(),
+                    span: node.span.clone(),
+                });
+                self.emit(Opcode::LoadFunctionRef(fun_idx));
+                self.emit_callable_ref(func)?;
+                for arg in args {
+                    self.emit_node(arg)?;
+                }
+                self.emit(Opcode::CaptureClosure((args.len() + 1) as u8));
+            }
+
             TypedInner::BinOp(op, left, right) => {
+                if matches!(op, BinOp::Eq | BinOp::Neq) && matches!(left.ty, Ty::Enum(_, _)) {
+                    self.emit_enum_eq(op, left, right)?;
+                } else {
+                    self.emit_node(left)?;
+                    self.emit_node(right)?;
+                    let opcode = self.binop_to_opcode(op, &left.ty, &node.span)?;
+                    self.emit(opcode);
+                }
+            }
+
+            TypedInner::Pipe(left, right) => {
+                self.emit_callable_ref(right)?;
                 self.emit_node(left)?;
-                self.emit_node(right)?;
-                let opcode = self.binop_to_opcode(op, &left.ty)?;
-                self.emit(opcode);
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
+
+            TypedInner::ResultMap(left, right) => {
+                self.emit_node(left)?;
+                let result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(result_slot));
+
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetTag);
+                let err_tag = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(err_tag));
+                self.emit(Opcode::EqTag);
+
+                let ok_path = self.fresh_label();
+                let end_label = self.fresh_label();
+                self.emit_jump_if_false(ok_path);
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit_jump(end_label);
+
+                self.patch_label(ok_path);
+                let ok_tag = self.add_constant(Constant::Tag(0));
+                self.emit(Opcode::LoadConst(ok_tag));
+                self.emit_callable_ref(right)?;
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetField { field_index: 0 });
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+                self.emit(Opcode::StructNew { field_count: 1 });
+
+                self.patch_label(end_label);
+            }
+
+            TypedInner::ResultBind(left, right) => {
+                self.emit_node(left)?;
+                let result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(result_slot));
+
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetTag);
+                let err_tag = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(err_tag));
+                self.emit(Opcode::EqTag);
+
+                let ok_path = self.fresh_label();
+                let end_label = self.fresh_label();
+                self.emit_jump_if_false(ok_path);
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit_jump(end_label);
+
+                self.patch_label(ok_path);
+                self.emit_callable_ref(right)?;
+                self.emit(Opcode::LoadLocal(result_slot));
+                self.emit(Opcode::GetField { field_index: 0 });
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+
+                self.patch_label(end_label);
+            }
+
+            TypedInner::Compose(flavor, left, right) => {
+                let fun_idx = self.reserve_fun_idx();
+                self.pending_composes.push(PendingCompose {
+                    fun_idx,
+                    flavor: flavor.clone(),
+                    span: node.span.clone(),
+                });
+                self.emit(Opcode::LoadFunctionRef(fun_idx));
+                self.emit_callable_ref(left)?;
+                self.emit_callable_ref(right)?;
+                self.emit(Opcode::CaptureClosure(2));
             }
 
             TypedInner::ListNil => self.emit(Opcode::ListNil),
@@ -901,7 +1578,9 @@ impl Codegen {
                 for elem in elems {
                     self.emit_node(elem)?;
                 }
-                self.emit(Opcode::ListFromItems(elems.len() as u32));
+                self.emit(Opcode::ListFromItems {
+                    len: elems.len() as u32,
+                });
             }
 
             TypedInner::InterpolatedStr(parts) => {
@@ -911,6 +1590,12 @@ impl Codegen {
             TypedInner::If(cond, then, else_opt) => {
                 self.emit_if(cond, then, else_opt)?;
             }
+            TypedInner::Assert(cond, err) => {
+                self.emit_assert(node, cond, err)?;
+            }
+            TypedInner::Ensure(value, pred, err) => {
+                self.emit_ensure(node, value, pred, err)?;
+            }
 
             TypedInner::Match(scrutinee, arms) => {
                 self.emit_match(scrutinee, arms)?;
@@ -918,7 +1603,7 @@ impl Codegen {
 
             TypedInner::FieldAccess(expr, idx) => {
                 self.emit_node(expr)?;
-                self.emit(Opcode::GetField(*idx));
+                self.emit(Opcode::GetField { field_index: *idx });
             }
 
             TypedInner::StructLit(tag, fields) => {
@@ -929,7 +1614,9 @@ impl Codegen {
                     self.emit_node(field)?;
                 }
                 // StructNew expects tag + n fields on stack
-                self.emit(Opcode::StructNew(fields.len() as u32));
+                self.emit(Opcode::StructNew {
+                    field_count: fields.len() as u32,
+                });
             }
 
             TypedInner::ConstructorCall(tag, fields) => {
@@ -938,7 +1625,9 @@ impl Codegen {
                 for field in fields {
                     self.emit_node(field)?;
                 }
-                self.emit(Opcode::StructNew(fields.len() as u32));
+                self.emit(Opcode::StructNew {
+                    field_count: fields.len() as u32,
+                });
             }
 
             TypedInner::Block(stmts) => {
@@ -963,6 +1652,10 @@ impl Codegen {
             }
 
             TypedInner::Def(_fun_idx, _id, _params, _ret_ty, _body) => {
+                let unit_idx = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit_idx));
+            }
+            TypedInner::ExtractorDef(..) | TypedInner::BuiltinExtractorDecl(..) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
@@ -1019,13 +1712,47 @@ impl Codegen {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
+
+            TypedInner::EnumDef(_, variants) => {
+                for variant in variants {
+                    self.state.type_registry.register(TypeEntry {
+                        tag: variant.tag,
+                        name: variant.constructor_name.clone(),
+                        kind: TypeKind::EnumVariant,
+                        field_names: variant.field_names.clone(),
+                    });
+                }
+                let unit_idx = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit_idx));
+            }
         }
         Ok(())
     }
 
     fn emit_safebind(&mut self, pat: &TypedPattern, rhs: &TypedNode) -> Result<(), CodegenError> {
         if !matches!(rhs.ty, Ty::Result(_, _)) {
-            return self.emit_safebind_from_list(pat, rhs);
+            if matches!(rhs.ty, Ty::List(_)) {
+                return self.emit_safebind_from_list(pat, rhs);
+            }
+
+            self.emit_node(rhs)?;
+            let payload_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(payload_slot));
+
+            let pattern_fail = self.fresh_label();
+            self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail, &rhs.span)?;
+            self.emit_pattern_bind_from_local(pat, payload_slot)?;
+            let success_label = self.fresh_label();
+            self.emit_jump(success_label);
+
+            self.patch_label(pattern_fail);
+            self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+
+            self.patch_label(success_label);
+            let unit_idx = self.add_constant(Constant::Unit);
+            self.emit(Opcode::LoadConst(unit_idx));
+            return Ok(());
         }
 
         self.emit_node(rhs)?;
@@ -1049,7 +1776,7 @@ impl Codegen {
         self.patch_label(ok_path);
 
         self.emit(Opcode::LoadLocal(result_slot));
-        self.emit(Opcode::GetField(0));
+        self.emit(Opcode::GetField { field_index: 0 });
         let payload_slot = self.state.next_slot;
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(payload_slot));
@@ -1100,7 +1827,7 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_empty_list_failure(rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(pat, rhs.span.clone())?;
 
         self.patch_label(success_label);
         if matches!(pat, TypedPattern::Wildcard(_)) {
@@ -1168,7 +1895,7 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_empty_list_failure(rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(pat, rhs.span.clone())?;
 
         self.patch_label(success_label);
         let unit_idx = self.add_constant(Constant::Unit);
@@ -1178,6 +1905,29 @@ impl Codegen {
 
     fn emit_empty_list_failure(&mut self, span: Span) -> Result<(), CodegenError> {
         self.emit_pattern_failure("EmptyList", "Empty List.", span)
+    }
+
+    fn emit_safebind_pattern_failure(
+        &mut self,
+        pat: &TypedPattern,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        match pat {
+            TypedPattern::As(_, inner, _) => self.emit_safebind_pattern_failure(inner, span),
+            TypedPattern::ListNil(_) | TypedPattern::ListCons(_, _, _) => {
+                self.emit_empty_list_failure(span)
+            }
+            TypedPattern::Extractor {
+                input_ty,
+                extractor_ty,
+                ..
+            } if matches!(extractor_ty, Ty::BuiltinFunc { name, .. } if name == "uncons")
+                && matches!(input_ty, Ty::List(_)) =>
+            {
+                self.emit_empty_list_failure(span)
+            }
+            _ => self.emit_pattern_mismatch_failure(span),
+        }
     }
 
     fn emit_list_len_mismatch_failure_concrete(
@@ -1246,12 +1996,12 @@ impl Codegen {
             message: "Unknown builtin: to_string".into(),
             span: span.clone(),
         })?;
-        self.emit(Opcode::CallBuiltin(
-            to_string_id,
-            1,
-            span.start as u32,
-            span.end as u32,
-        ));
+        self.emit(Opcode::CallBuiltin {
+            builtin_id: to_string_id,
+            arity: 1,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+        });
         self.emit(Opcode::ConcatStr);
         let suffix_idx = self.add_constant(Constant::Str(")".into()));
         self.emit(Opcode::LoadConst(suffix_idx));
@@ -1274,13 +2024,13 @@ impl Codegen {
             let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Return);
         } else if self.top_level_returns_result {
             let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Halt);
         } else {
             self.emit_error_value(kind, message, &span);
@@ -1288,12 +2038,12 @@ impl Codegen {
                 message: "Unknown builtin: eprint".into(),
                 span: span.clone(),
             })?;
-            self.emit(Opcode::CallBuiltin(
-                eprint_id,
-                1,
-                span.start as u32,
-                span.end as u32,
-            ));
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: eprint_id,
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
             self.emit(Opcode::Halt);
         }
         Ok(())
@@ -1313,7 +2063,7 @@ impl Codegen {
             self.emit(Opcode::LoadConst(tag_const));
             self.emit(Opcode::LoadLocal(msg_slot));
             self.emit_error_value_from_stack(kind, &span);
-            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Return);
         } else if self.top_level_returns_result {
             let msg_slot = self.state.next_slot;
@@ -1324,7 +2074,7 @@ impl Codegen {
             self.emit(Opcode::LoadConst(tag_const));
             self.emit(Opcode::LoadLocal(msg_slot));
             self.emit_error_value_from_stack(kind, &span);
-            self.emit(Opcode::StructNew(1));
+            self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Halt);
         } else {
             self.emit_error_value_from_stack(kind, &span);
@@ -1332,12 +2082,12 @@ impl Codegen {
                 message: "Unknown builtin: eprint".into(),
                 span: span.clone(),
             })?;
-            self.emit(Opcode::CallBuiltin(
-                eprint_id,
-                1,
-                span.start as u32,
-                span.end as u32,
-            ));
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: eprint_id,
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
             self.emit(Opcode::Halt);
         }
         Ok(())
@@ -1347,13 +2097,23 @@ impl Codegen {
         if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
             match arity {
                 0 => {
-                    self.emit(Opcode::Call(fun_idx, 0, span.start as u32, span.end as u32));
+                    self.emit(Opcode::Call {
+                        fun_idx,
+                        arity: 0,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
                     return;
                 }
                 1 => {
                     let message_idx = self.add_constant(Constant::Str(message.into()));
                     self.emit(Opcode::LoadConst(message_idx));
-                    self.emit(Opcode::Call(fun_idx, 1, span.start as u32, span.end as u32));
+                    self.emit(Opcode::Call {
+                        fun_idx,
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
                     return;
                 }
                 _ => {
@@ -1364,19 +2124,32 @@ impl Codegen {
 
         let kind_idx = self.add_constant(Constant::Str(kind.into()));
         let message_idx = self.add_constant(Constant::Str(message.into()));
-        self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
+        self.emit(Opcode::MakeErrorLiteral {
+            kind_const_idx: kind_idx,
+            message_const_idx: message_idx,
+        });
     }
 
     fn emit_error_value_from_stack(&mut self, kind: &str, span: &Span) {
         if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
             match arity {
                 1 => {
-                    self.emit(Opcode::Call(fun_idx, 1, span.start as u32, span.end as u32));
+                    self.emit(Opcode::Call {
+                        fun_idx,
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
                     return;
                 }
                 0 => {
                     self.emit(Opcode::Pop);
-                    self.emit(Opcode::Call(fun_idx, 0, span.start as u32, span.end as u32));
+                    self.emit(Opcode::Call {
+                        fun_idx,
+                        arity: 0,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
                     return;
                 }
                 _ => {
@@ -1388,12 +2161,13 @@ impl Codegen {
         self.emit(Opcode::Pop);
         let kind_idx = self.add_constant(Constant::Str(kind.into()));
         let message_idx = self.add_constant(Constant::Str("Pattern did not match.".into()));
-        self.emit(Opcode::MakeErrorLiteral(kind_idx, message_idx));
+        self.emit(Opcode::MakeErrorLiteral {
+            kind_const_idx: kind_idx,
+            message_const_idx: message_idx,
+        });
     }
 
-    fn collect_exact_list_pattern_items<'a>(
-        pat: &'a TypedPattern,
-    ) -> Option<Vec<&'a TypedPattern>> {
+    fn collect_exact_list_pattern_items(pat: &TypedPattern) -> Option<Vec<&TypedPattern>> {
         fn walk<'a>(pat: &'a TypedPattern, out: &mut Vec<&'a TypedPattern>) -> bool {
             match pat {
                 TypedPattern::As(_, inner, _) => walk(inner.as_ref(), out),
@@ -1574,7 +2348,7 @@ impl Codegen {
                 let inner_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::GetField { field_index: 0 });
                 self.emit(Opcode::StoreLocal(inner_slot));
                 self.emit_pattern_test_from_local_with_mode(
                     inner,
@@ -1583,6 +2357,39 @@ impl Codegen {
                     err_span,
                     propagate_result_error,
                 )?;
+            }
+            TypedPattern::Extractor {
+                input_ty,
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+                ..
+            } => {
+                let item_slots = self.emit_extractor_item_slots_from_local(
+                    input_ty,
+                    extractor,
+                    extractor_ty,
+                    *success_tag,
+                    *no_match_tag,
+                    *err_tag,
+                    seq_tys.len(),
+                    slot,
+                    fail_label,
+                    err_span,
+                )?;
+                for (item, item_slot) in items.iter().zip(item_slots.iter()) {
+                    self.emit_pattern_test_from_local_with_mode(
+                        item,
+                        *item_slot,
+                        fail_label,
+                        err_span,
+                        propagate_result_error,
+                    )?;
+                }
             }
         }
         Ok(())
@@ -1629,9 +2436,42 @@ impl Codegen {
                 let inner_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::GetField(0));
+                self.emit(Opcode::GetField { field_index: 0 });
                 self.emit(Opcode::StoreLocal(inner_slot));
                 self.emit_pattern_bind_from_local(inner, inner_slot)?;
+            }
+            TypedPattern::Extractor {
+                input_ty,
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+                ..
+            } => {
+                let impossible_no_match = self.fresh_label();
+                let done = self.fresh_label();
+                let item_slots = self.emit_extractor_item_slots_from_local(
+                    input_ty,
+                    extractor,
+                    extractor_ty,
+                    *success_tag,
+                    *no_match_tag,
+                    *err_tag,
+                    seq_tys.len(),
+                    slot,
+                    impossible_no_match,
+                    &extractor.span,
+                )?;
+                for (item, item_slot) in items.iter().zip(item_slots.iter()) {
+                    self.emit_pattern_bind_from_local(item, *item_slot)?;
+                }
+                self.emit_jump(done);
+                self.patch_label(impossible_no_match);
+                self.emit_pattern_mismatch_failure(extractor.span.clone())?;
+                self.patch_label(done);
             }
         }
         Ok(())
@@ -1648,20 +2488,309 @@ impl Codegen {
         } else if self.top_level_returns_result {
             self.emit(Opcode::Halt);
         } else {
-            self.emit(Opcode::GetField(0));
+            self.emit(Opcode::GetField { field_index: 0 });
             let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
                 message: "Unknown builtin: eprint".into(),
                 span: span.clone(),
             })?;
-            self.emit(Opcode::CallBuiltin(
-                eprint_id,
-                1,
-                span.start as u32,
-                span.end as u32,
-            ));
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: eprint_id,
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
             self.emit(Opcode::Halt);
         }
         Ok(())
+    }
+
+    fn emit_propagate_error_from_local(
+        &mut self,
+        error_slot: u32,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        if self.in_function {
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit(Opcode::LoadLocal(error_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit(Opcode::Return);
+        } else if self.top_level_returns_result {
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit(Opcode::LoadLocal(error_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit(Opcode::Halt);
+        } else {
+            self.emit(Opcode::LoadLocal(error_slot));
+            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                message: "Unknown builtin: eprint".into(),
+                span: span.clone(),
+            })?;
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: eprint_id,
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
+            self.emit(Opcode::Halt);
+        }
+        Ok(())
+    }
+
+    fn emit_extractor_contract_failure(&mut self, span: Span) -> Result<(), CodegenError> {
+        self.emit_pattern_failure(
+            "ExtractorContractViolation",
+            "Extractor returned malformed Seq.",
+            span,
+        )
+    }
+
+    fn emit_unpack_seq_payload_from_local(
+        &mut self,
+        seq_slot: u32,
+        arity: usize,
+        span: &Span,
+    ) -> Result<Vec<u32>, CodegenError> {
+        let mut current_slot = seq_slot;
+        let mut item_slots = Vec::with_capacity(arity);
+
+        for index in 0..arity {
+            let non_empty = self.fresh_label();
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListIsEmpty);
+            self.emit_jump_if_false(non_empty);
+            self.emit_extractor_contract_failure(span.clone())?;
+            self.patch_label(non_empty);
+
+            let item_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListHead);
+            self.emit(Opcode::StoreLocal(item_slot));
+            item_slots.push(item_slot);
+
+            let tail_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListTail);
+            self.emit(Opcode::StoreLocal(tail_slot));
+            current_slot = tail_slot;
+
+            if index + 1 == arity {
+                let exact_len = self.fresh_label();
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::ListIsEmpty);
+                self.emit_jump_if_true(exact_len);
+                self.emit_extractor_contract_failure(span.clone())?;
+                self.patch_label(exact_len);
+            }
+        }
+
+        Ok(item_slots)
+    }
+
+    fn emit_extractor_item_slots_from_local(
+        &mut self,
+        input_ty: &Ty,
+        extractor: &ResolvedId,
+        extractor_ty: &Ty,
+        success_tag: u32,
+        no_match_tag: u32,
+        err_tag: u32,
+        seq_len: usize,
+        input_slot: u32,
+        no_match_label: Label,
+        span: &Span,
+    ) -> Result<Vec<u32>, CodegenError> {
+        if let Ty::BuiltinFunc { name, .. } = extractor_ty {
+            match name.as_str() {
+                "Ok" => {
+                    if seq_len != 1 {
+                        return Err(CodegenError {
+                            message: "Ok extractor must produce exactly one value".into(),
+                            span: extractor.span.clone(),
+                        });
+                    }
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::GetTag);
+                    let ok_tag = self.add_constant(Constant::Tag(0));
+                    self.emit(Opcode::LoadConst(ok_tag));
+                    self.emit(Opcode::EqTag);
+                    self.emit_jump_if_false(no_match_label);
+
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    return Ok(vec![item_slot]);
+                }
+                "Err" => {
+                    if seq_len != 1 {
+                        return Err(CodegenError {
+                            message: "Err extractor must produce exactly one value".into(),
+                            span: extractor.span.clone(),
+                        });
+                    }
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::GetTag);
+                    let err_tag = self.add_constant(Constant::Tag(1));
+                    self.emit(Opcode::LoadConst(err_tag));
+                    self.emit(Opcode::EqTag);
+                    self.emit_jump_if_false(no_match_label);
+
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    return Ok(vec![item_slot]);
+                }
+                "uncons" => {
+                    if seq_len != 2 {
+                        return Err(CodegenError {
+                            message: "uncons extractor must produce exactly two values".into(),
+                            span: extractor.span.clone(),
+                        });
+                    }
+                    match input_ty {
+                        Ty::List(_) => {
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::ListIsEmpty);
+                            self.emit_jump_if_true(no_match_label);
+
+                            let head_slot = self.state.next_slot;
+                            self.state.next_slot += 1;
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::ListHead);
+                            self.emit(Opcode::StoreLocal(head_slot));
+
+                            let tail_slot = self.state.next_slot;
+                            self.state.next_slot += 1;
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::ListTail);
+                            self.emit(Opcode::StoreLocal(tail_slot));
+                            return Ok(vec![head_slot, tail_slot]);
+                        }
+                        Ty::Str => {
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::StringIsEmpty);
+                            self.emit_jump_if_true(no_match_label);
+
+                            let head_slot = self.state.next_slot;
+                            self.state.next_slot += 1;
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::StringHead);
+                            self.emit(Opcode::StoreLocal(head_slot));
+
+                            let tail_slot = self.state.next_slot;
+                            self.state.next_slot += 1;
+                            self.emit(Opcode::LoadLocal(input_slot));
+                            self.emit(Opcode::StringTail);
+                            self.emit(Opcode::StoreLocal(tail_slot));
+                            return Ok(vec![head_slot, tail_slot]);
+                        }
+                        other => {
+                            return Err(CodegenError {
+                                message: format!(
+                                    "uncons extractor expects List<...> or String, got {}",
+                                    ty_to_string(other)
+                                ),
+                                span: extractor.span.clone(),
+                            });
+                        }
+                    }
+                }
+                other => {
+                    return Err(CodegenError {
+                        message: format!("Unknown builtin extractor: {}", other),
+                        span: extractor.span.clone(),
+                    });
+                }
+            }
+        }
+
+        let fun_idx = match extractor_ty {
+            Ty::UserFunc { fun_idx, .. } => *fun_idx,
+            other => {
+                return Err(CodegenError {
+                    message: format!(
+                        "Extractor {} is not codegen-callable: {}",
+                        extractor.name,
+                        ty_to_string(other)
+                    ),
+                    span: extractor.span.clone(),
+                });
+            }
+        };
+
+        self.emit(Opcode::LoadLocal(input_slot));
+        self.emit(Opcode::Call {
+            fun_idx,
+            arity: 1,
+            span_start: extractor.span.start as u32,
+            span_end: extractor.span.end as u32,
+        });
+        let result_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(result_slot));
+
+        let success_label = self.fresh_label();
+        let check_no_match_label = self.fresh_label();
+        let check_err_label = self.fresh_label();
+        let end_label = self.fresh_label();
+
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let success_tag_const = self.add_constant(Constant::Tag(success_tag));
+        self.emit(Opcode::LoadConst(success_tag_const));
+        self.emit(Opcode::EqTag);
+        self.emit_jump_if_false(check_no_match_label);
+        self.patch_label(success_label);
+
+        let payload_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetField { field_index: 1 });
+        self.emit(Opcode::StoreLocal(payload_slot));
+        let item_slots = self.emit_unpack_seq_payload_from_local(payload_slot, seq_len, span)?;
+        self.emit_jump(end_label);
+
+        self.patch_label(check_no_match_label);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let no_match_tag_const = self.add_constant(Constant::Tag(no_match_tag));
+        self.emit(Opcode::LoadConst(no_match_tag_const));
+        self.emit(Opcode::EqTag);
+        self.emit_jump_if_false(check_err_label);
+        self.emit_jump(no_match_label);
+
+        self.patch_label(check_err_label);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let err_tag_const = self.add_constant(Constant::Tag(err_tag));
+        self.emit(Opcode::LoadConst(err_tag_const));
+        self.emit(Opcode::EqTag);
+        let invalid_outcome_label = self.fresh_label();
+        self.emit_jump_if_false(invalid_outcome_label);
+
+        let error_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetField { field_index: 1 });
+        self.emit(Opcode::StoreLocal(error_slot));
+        self.emit_propagate_error_from_local(error_slot, span.clone())?;
+
+        self.patch_label(invalid_outcome_label);
+        self.emit_pattern_failure(
+            "InvalidMatchResult",
+            "Extractor returned an unknown MatchResult tag.",
+            span.clone(),
+        )?;
+
+        self.patch_label(end_label);
+        Ok(item_slots)
     }
 
     fn normalize_function_table(&mut self) -> Result<(), CodegenError> {
@@ -1687,14 +2816,9 @@ impl Codegen {
         }
 
         for ir in &mut self.ir {
-            if let IrOp::Op(op) = ir {
-                match op {
-                    Opcode::LoadFunctionRef(fun_idx) | Opcode::Call(fun_idx, _, _, _) => {
-                        if let Some(new_idx) = remap.get(fun_idx) {
-                            *fun_idx = *new_idx;
-                        }
-                    }
-                    _ => {}
+            if let IrOp::Op(Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. }) = ir {
+                if let Some(new_idx) = remap.get(fun_idx) {
+                    *fun_idx = *new_idx;
                 }
             }
         }
@@ -1712,19 +2836,23 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         match &func.ty {
             Ty::BuiltinFunc { name, .. } => {
-                let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
-                    message: format!("Unknown builtin: {}", name),
-                    span: func.span.clone(),
-                })?;
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::CallBuiltin(
-                    builtin_id,
-                    args.len() as u8,
-                    call_span.start as u32,
-                    call_span.end as u32,
-                ));
+                if let Some(opcode) = Self::direct_builtin_opcode(name, args.len()) {
+                    self.emit(opcode);
+                } else {
+                    let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                        message: format!("Unknown builtin: {}", name),
+                        span: func.span.clone(),
+                    })?;
+                    self.emit(Opcode::CallBuiltin {
+                        builtin_id,
+                        arity: args.len() as u8,
+                        span_start: call_span.start as u32,
+                        span_end: call_span.end as u32,
+                    });
+                }
             }
             Ty::UserFunc {
                 fun_idx, params, ..
@@ -1742,12 +2870,12 @@ impl Codegen {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::Call(
-                    *fun_idx,
-                    args.len() as u8,
-                    call_span.start as u32,
-                    call_span.end as u32,
-                ));
+                self.emit(Opcode::Call {
+                    fun_idx: *fun_idx,
+                    arity: args.len() as u8,
+                    span_start: call_span.start as u32,
+                    span_end: call_span.end as u32,
+                });
             }
             Ty::Func(params, _) => {
                 if args.len() != params.len() {
@@ -1764,17 +2892,110 @@ impl Codegen {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::CallClosure(
-                    args.len() as u8,
-                    call_span.start as u32,
-                    call_span.end as u32,
-                ));
+                self.emit(Opcode::CallClosure {
+                    arity: args.len() as u8,
+                    span_start: call_span.start as u32,
+                    span_end: call_span.end as u32,
+                });
             }
             _ => {
                 return Err(CodegenError {
                     message: "Non-function value in call position".into(),
                     span: func.span.clone(),
                 });
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_tail_node(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
+        match &node.node {
+            TypedInner::Block(stmts) => {
+                if let Some((last, prefix)) = stmts.split_last() {
+                    for stmt in prefix {
+                        self.emit_node(stmt)?;
+                        self.emit(Opcode::Pop);
+                    }
+                    self.emit_tail_node(last)?;
+                } else {
+                    self.emit_unit_const();
+                    self.emit(Opcode::Return);
+                }
+            }
+            TypedInner::If(cond, then, else_opt) => {
+                self.emit_node(cond)?;
+                match else_opt {
+                    Some(else_branch) => {
+                        let else_label = self.fresh_label();
+                        self.emit_jump_if_false(else_label);
+                        self.emit_tail_node(then)?;
+                        self.patch_label(else_label);
+                        self.emit_tail_node(else_branch)?;
+                    }
+                    None => {
+                        let end_label = self.fresh_label();
+                        self.emit_jump_if_false(end_label);
+                        self.emit_node(then)?;
+                        self.emit(Opcode::Pop);
+                        self.patch_label(end_label);
+                        self.emit_unit_const();
+                        self.emit(Opcode::Return);
+                    }
+                }
+            }
+            TypedInner::Match(scrutinee, arms) => {
+                if arms.is_empty() {
+                    self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
+                    return Ok(());
+                }
+
+                self.emit_node(scrutinee)?;
+
+                let scrut_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(scrut_slot));
+
+                let mismatch_label = self.fresh_label();
+                let mut arm_labels = Vec::with_capacity(arms.len());
+                for _ in arms {
+                    arm_labels.push(self.fresh_label());
+                }
+
+                for (i, (pat, body)) in arms.iter().enumerate() {
+                    let next_arm = if i + 1 < arms.len() {
+                        arm_labels[i + 1]
+                    } else {
+                        mismatch_label
+                    };
+
+                    self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
+                    self.emit_match_pattern_bind(pat, scrut_slot)?;
+                    self.emit_tail_node(body)?;
+
+                    if i + 1 < arms.len() {
+                        self.patch_label(arm_labels[i + 1]);
+                    }
+                }
+
+                self.patch_label(mismatch_label);
+                self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
+            }
+            TypedInner::Semi(inner) => {
+                self.emit_node(inner)?;
+                self.emit(Opcode::Pop);
+                self.emit_unit_const();
+                self.emit(Opcode::Return);
+            }
+            TypedInner::Def(..)
+            | TypedInner::ExtractorDef(..)
+            | TypedInner::BuiltinExtractorDecl(..)
+            | TypedInner::DeferrorDef(..) => {
+                self.emit_unit_const();
+                self.emit(Opcode::Return);
+            }
+            _ => {
+                self.emit_node(node)?;
+                self.emit(Opcode::Return);
             }
         }
         Ok(())
@@ -1819,6 +3040,84 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_assert(
+        &mut self,
+        _node: &TypedNode,
+        cond: &TypedNode,
+        err: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(cond)?;
+        let fail_label = self.fresh_label();
+        let end_label = self.fresh_label();
+        self.emit_jump_if_false(fail_label);
+        self.emit_ok_unit_result()?;
+        self.emit_jump(end_label);
+
+        self.patch_label(fail_label);
+        self.emit_err_result_value(err)?;
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn emit_ensure(
+        &mut self,
+        node: &TypedNode,
+        value: &TypedNode,
+        pred: &TypedNode,
+        err: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(value)?;
+        let value_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(value_slot));
+
+        self.emit_callable_ref(pred)?;
+        self.emit(Opcode::LoadLocal(value_slot));
+        self.emit(Opcode::CallClosure {
+            arity: 1,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+        });
+
+        let fail_label = self.fresh_label();
+        let end_label = self.fresh_label();
+        self.emit_jump_if_false(fail_label);
+        self.emit_ok_result_local(value_slot)?;
+        self.emit_jump(end_label);
+
+        self.patch_label(fail_label);
+        self.emit_err_result_value(err)?;
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn emit_ok_unit_result(&mut self) -> Result<(), CodegenError> {
+        let ok_tag = self.add_constant(Constant::Tag(0));
+        let unit_idx = self.add_constant(Constant::Unit);
+        self.emit(Opcode::LoadConst(ok_tag));
+        self.emit(Opcode::LoadConst(unit_idx));
+        self.emit(Opcode::StructNew { field_count: 1 });
+        Ok(())
+    }
+
+    fn emit_ok_result_local(&mut self, slot: u32) -> Result<(), CodegenError> {
+        let ok_tag = self.add_constant(Constant::Tag(0));
+        self.emit(Opcode::LoadConst(ok_tag));
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::StructNew { field_count: 1 });
+        Ok(())
+    }
+
+    fn emit_err_result_value(&mut self, err: &TypedNode) -> Result<(), CodegenError> {
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit_node(err)?;
+        self.emit(Opcode::StructNew { field_count: 1 });
+        Ok(())
+    }
+
     fn emit_interpolated_str(
         &mut self,
         parts: &[TypedInterpolatedPart],
@@ -1843,12 +3142,12 @@ impl Codegen {
                             message: "Unknown builtin: to_string".into(),
                             span: expr.span.clone(),
                         })?;
-                    self.emit(Opcode::CallBuiltin(
-                        to_string_id,
-                        1,
-                        expr.span.start as u32,
-                        expr.span.end as u32,
-                    ));
+                    self.emit(Opcode::CallBuiltin {
+                        builtin_id: to_string_id,
+                        arity: 1,
+                        span_start: expr.span.start as u32,
+                        span_end: expr.span.end as u32,
+                    });
                 }
             }
 
@@ -1868,6 +3167,10 @@ impl Codegen {
         scrutinee: &TypedNode,
         arms: &[(TypedMatchPattern, TypedNode)],
     ) -> Result<(), CodegenError> {
+        if arms.is_empty() {
+            return self.emit_pattern_mismatch_failure(scrutinee.span.clone());
+        }
+
         self.emit_node(scrutinee)?;
 
         let scrut_slot = self.state.next_slot;
@@ -1875,6 +3178,7 @@ impl Codegen {
         self.emit(Opcode::StoreLocal(scrut_slot));
 
         let end_label = self.fresh_label();
+        let mismatch_label = self.fresh_label();
         let mut arm_labels: Vec<Label> = Vec::new();
 
         for _ in arms {
@@ -1885,7 +3189,7 @@ impl Codegen {
             let next_arm = if i + 1 < arms.len() {
                 arm_labels[i + 1]
             } else {
-                end_label
+                mismatch_label
             };
 
             self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
@@ -1901,6 +3205,8 @@ impl Codegen {
             }
         }
 
+        self.patch_label(mismatch_label);
+        self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
         self.patch_label(end_label);
         Ok(())
     }
@@ -1913,6 +3219,9 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         match pat {
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => {}
+            TypedMatchPattern::As(inner, _) => {
+                self.emit_match_pattern_test(inner, slot, fail_label)?;
+            }
             TypedMatchPattern::BoolLit(b) => {
                 self.emit(Opcode::LoadLocal(slot));
                 let bool_const = self.add_constant(Constant::Bool(*b));
@@ -1934,13 +3243,28 @@ impl Codegen {
                 self.emit(Opcode::EqStr);
                 self.emit_jump_if_false(fail_label);
             }
-            TypedMatchPattern::Constructor(tag, _) => {
+            TypedMatchPattern::Constructor {
+                tag,
+                fields,
+                field_offset,
+            } => {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::GetTag);
                 let tag_const = self.add_constant(Constant::Tag(*tag));
                 self.emit(Opcode::LoadConst(tag_const));
                 self.emit(Opcode::EqTag);
                 self.emit_jump_if_false(fail_label);
+
+                for (idx, field_pat) in fields.iter().enumerate() {
+                    let inner_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetField {
+                        field_index: *field_offset + idx as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(inner_slot));
+                    self.emit_match_pattern_test(field_pat, inner_slot, fail_label)?;
+                }
             }
             TypedMatchPattern::ListNil => {
                 self.emit(Opcode::LoadLocal(slot));
@@ -1966,6 +3290,32 @@ impl Codegen {
                 self.emit(Opcode::StoreLocal(tail_slot));
                 self.emit_match_pattern_test(tail, tail_slot, fail_label)?;
             }
+            TypedMatchPattern::Extractor {
+                input_ty,
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+            } => {
+                let item_slots = self.emit_extractor_item_slots_from_local(
+                    input_ty,
+                    extractor,
+                    extractor_ty,
+                    *success_tag,
+                    *no_match_tag,
+                    *err_tag,
+                    seq_tys.len(),
+                    slot,
+                    fail_label,
+                    &extractor.span,
+                )?;
+                for (item, item_slot) in items.iter().zip(item_slots.iter()) {
+                    self.emit_match_pattern_test(item, *item_slot, fail_label)?;
+                }
+            }
         }
         Ok(())
     }
@@ -1981,17 +3331,31 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::StoreLocal(bind_slot));
             }
+            TypedMatchPattern::As(inner, alias) => {
+                let bind_slot = self.alloc_slot(alias.unique_id);
+                self.emit(Opcode::LoadLocal(slot));
+                self.emit(Opcode::StoreLocal(bind_slot));
+                self.emit_match_pattern_bind(inner, slot)?;
+            }
             TypedMatchPattern::Wildcard
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::ListNil => {}
-            TypedMatchPattern::Constructor(_, inner_id) => {
-                if let Some(inner) = inner_id {
+            TypedMatchPattern::Constructor {
+                fields,
+                field_offset,
+                ..
+            } => {
+                for (idx, field_pat) in fields.iter().enumerate() {
+                    let inner_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
                     self.emit(Opcode::LoadLocal(slot));
-                    self.emit(Opcode::GetField(0));
-                    let inner_slot = self.alloc_slot(inner.unique_id);
+                    self.emit(Opcode::GetField {
+                        field_index: *field_offset + idx as u32,
+                    });
                     self.emit(Opcode::StoreLocal(inner_slot));
+                    self.emit_match_pattern_bind(field_pat, inner_slot)?;
                 }
             }
             TypedMatchPattern::ListCons(head, tail) => {
@@ -2008,6 +3372,38 @@ impl Codegen {
                 self.emit(Opcode::ListTail);
                 self.emit(Opcode::StoreLocal(tail_slot));
                 self.emit_match_pattern_bind(tail, tail_slot)?;
+            }
+            TypedMatchPattern::Extractor {
+                input_ty,
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+            } => {
+                let impossible_no_match = self.fresh_label();
+                let done = self.fresh_label();
+                let item_slots = self.emit_extractor_item_slots_from_local(
+                    input_ty,
+                    extractor,
+                    extractor_ty,
+                    *success_tag,
+                    *no_match_tag,
+                    *err_tag,
+                    seq_tys.len(),
+                    slot,
+                    impossible_no_match,
+                    &extractor.span,
+                )?;
+                for (item, item_slot) in items.iter().zip(item_slots.iter()) {
+                    self.emit_match_pattern_bind(item, *item_slot)?;
+                }
+                self.emit_jump(done);
+                self.patch_label(impossible_no_match);
+                self.emit_pattern_mismatch_failure(extractor.span.clone())?;
+                self.patch_label(done);
             }
         }
         Ok(())
@@ -2032,8 +3428,39 @@ impl Codegen {
         }
     }
 
-    fn binop_to_opcode(&self, op: &BinOp, left_ty: &Ty) -> Result<Opcode, CodegenError> {
-        let dummy_span = Span { start: 0, end: 0 };
+    fn emit_enum_eq(
+        &mut self,
+        op: &BinOp,
+        left: &TypedNode,
+        right: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(left)?;
+        let left_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(left_slot));
+
+        self.emit_node(right)?;
+        let right_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(right_slot));
+
+        self.emit(Opcode::LoadLocal(left_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit(Opcode::LoadLocal(right_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit(Opcode::EqInt);
+        if matches!(op, BinOp::Neq) {
+            self.emit(Opcode::NotBool);
+        }
+        Ok(())
+    }
+
+    fn binop_to_opcode(
+        &self,
+        op: &BinOp,
+        left_ty: &Ty,
+        span: &Span,
+    ) -> Result<Opcode, CodegenError> {
         match (op, left_ty) {
             (BinOp::Add, Ty::Int) => Ok(Opcode::AddInt),
             (BinOp::Sub, Ty::Int) => Ok(Opcode::SubInt),
@@ -2060,14 +3487,14 @@ impl Codegen {
             (BinOp::Concat, Ty::Str) => Ok(Opcode::ConcatStr),
             _ => Err(CodegenError {
                 message: format!("Unsupported binop {:?} for type", op),
-                span: dummy_span,
+                span: span.clone(),
             }),
         }
     }
 
     // ── Finish: resolve labels → absolute addresses ──
 
-    fn finalize(self) -> (Vec<Opcode>, CodegenState) {
+    fn finalize(self) -> Result<(Vec<Opcode>, CodegenState), CodegenError> {
         // Resolve labels to absolute IR indices → opcode positions.
         // IR ops map 1:1 to opcodes, so IR index == opcode index.
         let mut opcodes = Vec::new();
@@ -2075,19 +3502,40 @@ impl Codegen {
             match ir_op {
                 IrOp::Op(op) => opcodes.push(op.clone()),
                 IrOp::JumpLabel(label) => {
-                    let pos = self.label_positions.get(label).copied().unwrap_or(0) as u32;
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!("unresolved jump label {:?}", label),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
                     opcodes.push(Opcode::Jump(pos));
                 }
                 IrOp::JumpIfFalseLabel(label) => {
-                    let pos = self.label_positions.get(label).copied().unwrap_or(0) as u32;
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!("unresolved jump-if-false label {:?}", label),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
                     opcodes.push(Opcode::JumpIfFalse(pos));
                 }
                 IrOp::JumpIfTrueLabel(label) => {
-                    let pos = self.label_positions.get(label).copied().unwrap_or(0) as u32;
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!("unresolved jump-if-true label {:?}", label),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
                     opcodes.push(Opcode::JumpIfTrue(pos));
                 }
             }
         }
-        (opcodes, self.state)
+        Ok((opcodes, self.state))
     }
 }

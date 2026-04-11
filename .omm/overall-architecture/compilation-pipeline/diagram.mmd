@@ -1,0 +1,11 @@
+graph LR
+    spire["Spire\ncrates/spire/"]
+    sigil["Sigil\ncrates/sigil/"]
+    scar["Scar\ncrates/scar/"]
+    forge["Forge\ncrates/forge/"]
+    eldr["Eldr\ncrates/eldr/"]
+
+    spire -->|"parses source text into AST nodes"| sigil
+    sigil -->|"resolves names and special forms"| scar
+    scar -->|"attaches types and validates semantics"| forge
+    forge -->|"emits bytecode, registries, and docs"| eldr

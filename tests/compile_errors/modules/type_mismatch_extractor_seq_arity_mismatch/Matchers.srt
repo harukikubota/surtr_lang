@@ -1,0 +1,5 @@
+defmod Matchers {
+  defextractor one(self: Int) -> MatchResult<Seq<Int>, Error> {
+    MatchResult::NoMatch
+  }
+}

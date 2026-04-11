@@ -1,6 +1,11 @@
 use sindr::primitives::SurtrInt;
 use spire::ast::{AstTy, BinOp, Lit, Span, Symbol};
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ResolvedDeclAttrs {
+    pub doc: Option<String>,
+}
+
 /// A resolved identifier — name + unique id + source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedId {
@@ -34,6 +39,21 @@ pub enum Resolved {
     /// Binary operation
     BinOp(Span, BinOp, Box<Resolved>, Box<Resolved>),
 
+    /// Value pipe
+    Pipe(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Context map
+    ContextMap(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Context bind
+    ContextBind(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Plain function composition
+    Compose(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Kleisli composition
+    KleisliCompose(Span, Box<Resolved>, Box<Resolved>),
+
     /// Empty list literal
     ListNil(Span),
 
@@ -46,11 +66,17 @@ pub enum Resolved {
     /// Interpolated string
     InterpolatedStr(Span, Vec<ResolvedInterpolatedPart>),
 
-    /// `if(cond, then, else)` / `if_then(cond, then)` special form
+    /// `if(flag, then, else)` / `if_then(flag, then)` special form
     If(Span, Box<Resolved>, Box<Resolved>, Option<Box<Resolved>>),
 
+    /// `assert(flag, err)` special form
+    Assert(Span, Box<Resolved>, Box<Resolved>),
+
+    /// `ensure(value, pred, err)` special form
+    Ensure(Span, Box<Resolved>, Box<Resolved>, Box<Resolved>),
+
     /// Match expression
-    Match(Span, Box<Resolved>, Vec<(ResolvedMatchPattern, Resolved)>),
+    Match(Span, Box<Resolved>, Vec<(ResolvedPattern, Resolved)>),
 
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
@@ -70,6 +96,14 @@ pub enum Resolved {
     /// Error type definition
     DeferrorDef(Span, ResolvedId, Vec<ResolvedField>, Box<Resolved>),
 
+    /// Enum definition
+    EnumDef(
+        Span,
+        ResolvedId,
+        Vec<ResolvedTypeParam>,
+        Vec<ResolvedEnumVariant>,
+    ),
+
     /// Function definition
     Def(
         Span,
@@ -77,10 +111,45 @@ pub enum Resolved {
         Vec<ResolvedFunParam>,
         Option<AstTy>,
         Box<Resolved>,
+        ResolvedDeclAttrs,
+    ),
+
+    ExtractorDef(
+        Span,
+        ResolvedId,
+        ResolvedExtractorParam,
+        AstTy,
+        Box<Resolved>,
+        ResolvedDeclAttrs,
     ),
 
     /// Builtin declaration
-    BuiltinDecl(Span, ResolvedId, Vec<ResolvedFunParam>, Option<AstTy>),
+    BuiltinDecl(
+        Span,
+        ResolvedId,
+        Vec<ResolvedFunParam>,
+        Option<AstTy>,
+        ResolvedDeclAttrs,
+    ),
+
+    BuiltinExtractorDecl(
+        Span,
+        ResolvedId,
+        ResolvedExtractorParam,
+        AstTy,
+        ResolvedDeclAttrs,
+    ),
+
+    /// Builtin type declaration
+    BuiltinTypeDecl(Span, ResolvedId, Vec<Symbol>, ResolvedDeclAttrs),
+
+    /// Declaration-only Result constructor contract from std modules.
+    ///
+    /// The parser accepts the surface form
+    /// `@@builtin type Ok(...) -> Result<...>` / `@@builtin type Err(...) -> Result<...>`
+    /// and normalizes both into this resolved node so later phases do not need
+    /// to care about the parser-only spelling trick.
+    ResultCtorDecl(Span, ResolvedId, AstTy, AstTy, ResolvedDeclAttrs),
 
     /// Closure literal
     Closure(
@@ -115,28 +184,9 @@ pub enum ResolvedPattern {
     IntLit(Span, SurtrInt),
     StrLit(Span, String),
     BoolLit(Span, bool),
-    Constructor(ResolvedId, Box<ResolvedPattern>),
+    Constructor(ResolvedId, Vec<ResolvedPattern>),
+    Extractor(ResolvedId, Vec<ResolvedPattern>),
     As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
-}
-
-/// Match pattern (resolved).
-#[derive(Debug, Clone, PartialEq)]
-pub enum ResolvedMatchPattern {
-    Binding(ResolvedId),
-    /// `_`
-    Wildcard(Span),
-    /// `True` / `False`
-    BoolLit(Span, bool),
-    /// Integer literal
-    IntLit(Span, SurtrInt),
-    /// String literal
-    StrLit(Span, String),
-    /// `Ok(var)` / `Err(var)` — constructor tag resolved
-    Constructor(Span, ResolvedId, Option<ResolvedId>),
-    /// `[]`
-    ListNil(Span),
-    /// `[head, ..tail]`
-    ListCons(Box<ResolvedMatchPattern>, Box<ResolvedMatchPattern>),
 }
 
 /// Record literal argument (resolved).
@@ -162,8 +212,29 @@ pub struct ResolvedFunParam {
     pub ty: AstTy,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedExtractorParam {
+    pub id: ResolvedId,
+    pub ty: Option<AstTy>,
+}
+
 /// Closure parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedClosureParam {
     pub id: ResolvedId,
+    pub ty: Option<AstTy>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedEnumVariant {
+    pub id: ResolvedId,
+    pub payload: Vec<AstTy>,
+    pub discriminant: Option<SurtrInt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTypeParam {
+    pub name: Symbol,
+    pub span: Span,
 }

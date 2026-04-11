@@ -72,6 +72,26 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
+        // Doc string — triple double quote
+        if c == '"' && i + 2 < len && chars[i + 1] == '"' && chars[i + 2] == '"' {
+            let start = i;
+            i += 3;
+            let content_start = i;
+            while i + 2 < len && !(chars[i] == '"' && chars[i + 1] == '"' && chars[i + 2] == '"') {
+                i += 1;
+            }
+            if i + 2 >= len {
+                return Err(ParseError::incomplete("\"\"\"", Span { start, end: len }));
+            }
+            let content: String = chars[content_start..i].iter().collect();
+            i += 3;
+            tokens.push(Spanned {
+                token: Token::DocString(content),
+                span: Span { start, end: i },
+            });
+            continue;
+        }
+
         // String — double quote
         if c == '"' {
             let start = i;
@@ -142,6 +162,49 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
+        // FuncLiteral — backtick-quoted function name or operator
+        if c == '`' {
+            let start = i;
+            i += 1;
+            let body_start = i;
+            while i < len && chars[i] != '`' {
+                i += 1;
+            }
+            if i >= len {
+                return Err(ParseError::incomplete("`", Span { start, end: i }));
+            }
+            let body: String = chars[body_start..i].iter().collect();
+            if body.is_empty() {
+                return Err(ParseError::syntax(
+                    "FuncLiteral body must not be empty",
+                    Span { start, end: i + 1 },
+                ));
+            }
+
+            let is_ident = {
+                let mut chars = body.chars();
+                matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
+                    && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            };
+            let is_supported_operator = matches!(
+                body.as_str(),
+                "+" | "-" | "*" | "++" | "==" | "!=" | "<" | ">" | "<=" | ">="
+            );
+            if !is_ident && !is_supported_operator {
+                return Err(ParseError::syntax(
+                    format!("Unsupported FuncLiteral body: `{}`", body),
+                    Span { start, end: i + 1 },
+                ));
+            }
+
+            i += 1;
+            tokens.push(Spanned {
+                token: Token::FuncLiteral(body),
+                span: Span { start, end: i },
+            });
+            continue;
+        }
+
         // Numbers
         if c.is_ascii_digit() {
             let start = i;
@@ -190,7 +253,12 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "defstruct" => Token::Defstruct,
                 "defrecord" => Token::Defrecord,
                 "deferror" => Token::Deferror,
+                "defenum" => Token::Defenum,
+                "defextractor" => Token::Defextractor,
+                "impl" => Token::Impl,
                 "match" => Token::Match,
+                "cond" => Token::Cond,
+                "type" => Token::Type,
                 _ => Token::Ident(text),
             };
             tokens.push(Spanned {
@@ -198,6 +266,28 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 span: Span { start, end: i },
             });
             continue;
+        }
+
+        // Three-character operators
+        if i + 2 < len {
+            let three: String = chars[i..i + 3].iter().collect();
+            let tok = match three.as_str() {
+                "|*>" => Some(Token::PipeMap),
+                "|>=" => Some(Token::PipeBind),
+                "|=>" => Some(Token::PipeCompose),
+                _ => None,
+            };
+            if let Some(t) = tok {
+                tokens.push(Spanned {
+                    token: t,
+                    span: Span {
+                        start: i,
+                        end: i + 3,
+                    },
+                });
+                i += 3;
+                continue;
+            }
         }
 
         // Two-character operators
@@ -213,6 +303,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 ".." => Some(Token::DotDot),
                 "=>" => Some(Token::FatArrow),
                 "->" => Some(Token::Arrow),
+                "|>" => Some(Token::PipeApply),
+                ">>" => Some(Token::Compose),
                 _ => None,
             };
             if let Some(t) = tok {
@@ -299,14 +391,21 @@ mod tests {
 
     #[test]
     fn test_float() {
-        let tokens = tokenize("3.14").unwrap();
-        assert!(matches!(tokens[0].token, Token::Float(f) if (f - 3.14).abs() < 1e-10));
+        let tokens = tokenize("2.5").unwrap();
+        assert!(matches!(tokens[0].token, Token::Float(f) if (f - 2.5).abs() < 1e-10));
     }
 
     #[test]
     fn test_string_escape() {
         let tokens = tokenize(r#""hello\nworld""#).unwrap();
         assert!(matches!(tokens[0].token, Token::Str(ref s) if s == "hello\nworld"));
+    }
+
+    #[test]
+    fn test_doc_string_token() {
+        let tokens = tokenize("@@doc \"\"\"\nHello\n\"\"\"").unwrap();
+        assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "doc"));
+        assert!(matches!(tokens[1].token, Token::DocString(ref s) if s == "\nHello\n"));
     }
 
     #[test]
@@ -335,7 +434,7 @@ mod tests {
 
     #[test]
     fn test_two_char_ops() {
-        let tokens = tokenize("++ =? == != <= >= => ->").unwrap();
+        let tokens = tokenize("++ =? == != <= >= => -> |> >> |*> |>= |=>").unwrap();
         assert!(matches!(tokens[0].token, Token::Concat));
         assert!(matches!(tokens[1].token, Token::SafeBind));
         assert!(matches!(tokens[2].token, Token::EqEq));
@@ -344,6 +443,11 @@ mod tests {
         assert!(matches!(tokens[5].token, Token::GtEq));
         assert!(matches!(tokens[6].token, Token::FatArrow));
         assert!(matches!(tokens[7].token, Token::Arrow));
+        assert!(matches!(tokens[8].token, Token::PipeApply));
+        assert!(matches!(tokens[9].token, Token::Compose));
+        assert!(matches!(tokens[10].token, Token::PipeMap));
+        assert!(matches!(tokens[11].token, Token::PipeBind));
+        assert!(matches!(tokens[12].token, Token::PipeCompose));
     }
 
     #[test]
@@ -359,9 +463,33 @@ mod tests {
     }
 
     #[test]
+    fn test_defenum_keyword() {
+        let tokens = tokenize("defenum Color { Red, Green }").unwrap();
+        assert!(matches!(tokens[0].token, Token::Defenum));
+    }
+
+    #[test]
+    fn test_impl_keyword() {
+        let tokens = tokenize("impl User { def new(self) -> Self { self } }").unwrap();
+        assert!(matches!(tokens[0].token, Token::Impl));
+    }
+
+    #[test]
     fn test_import_keyword() {
         let tokens = tokenize("import Kernel::add").unwrap();
         assert!(matches!(tokens[0].token, Token::Import));
+    }
+
+    #[test]
+    fn test_type_keyword() {
+        let tokens = tokenize("type Int").unwrap();
+        assert!(matches!(tokens[0].token, Token::Type));
+    }
+
+    #[test]
+    fn test_cond_keyword() {
+        let tokens = tokenize("cond { True => 1 }").unwrap();
+        assert!(matches!(tokens[0].token, Token::Cond));
     }
 
     #[test]
@@ -394,5 +522,31 @@ mod tests {
         let tokens = tokenize("$A").unwrap();
         assert!(matches!(tokens[0].token, Token::Dollar));
         assert!(matches!(tokens[1].token, Token::Ident(ref s) if s == "A"));
+    }
+
+    #[test]
+    fn test_func_literal_tokens() {
+        let tokens = tokenize("a `eq` b `+` c `<=` d").unwrap();
+        assert!(matches!(tokens[1].token, Token::FuncLiteral(ref body) if body == "eq"));
+        assert!(matches!(tokens[3].token, Token::FuncLiteral(ref body) if body == "+"));
+        assert!(matches!(tokens[5].token, Token::FuncLiteral(ref body) if body == "<="));
+    }
+
+    #[test]
+    fn test_empty_func_literal_is_error() {
+        let err = tokenize("``").expect_err("expected lexer error");
+        assert!(err.message().contains("FuncLiteral body must not be empty"));
+    }
+
+    #[test]
+    fn test_unclosed_func_literal_is_error() {
+        let err = tokenize("`eq").expect_err("expected lexer error");
+        assert!(err.message().contains("Incomplete"));
+    }
+
+    #[test]
+    fn test_unsupported_func_literal_body_is_error() {
+        let err = tokenize("`User::cmp`").expect_err("expected lexer error");
+        assert!(err.message().contains("Unsupported FuncLiteral body"));
     }
 }

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: expected StepSignal<Int>, got StepSignal<String>

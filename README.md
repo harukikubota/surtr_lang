@@ -1,6 +1,6 @@
 # Surtr
 
-<img src="./vscode-surtr-icons/vsicons-custom-icons/surtr.png" alt="Surtr Icon" width="96" />
+<img src="./icons/surtr.png" alt="Surtr Icon" width="96" />
 
 
 Surtr is a statically typed functional language compiler implemented in Rust.
@@ -27,13 +27,17 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 ## Quick Start
 
 ```bash
-cargo run -p rune -- run lib/hello.srt
+cat > main.srt <<'EOF'
+print("hello, Surtr")
+EOF
+
+cargo run -p rune -- run main.srt
 ```
 
 ```bash
-cargo run -p rune -- build lib/hello.srt lib/hello.eldr
-cargo run -p rune -- run lib/hello.eldr
-cargo run -p rune -- dump lib/hello.eldr --format json | jq .
+cargo run -p rune -- build main.srt main.eldr
+cargo run -p rune -- run main.eldr
+cargo run -p rune -- dump main.eldr --format json | jq .
 ```
 
 ## Testing
@@ -43,6 +47,25 @@ Use `cargo-nextest` as the default test runner for this workspace.
 ```bash
 cargo nextest run
 ```
+
+For coverage runs, install the coverage toolchain once:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov
+```
+
+Then use the repository aliases:
+
+```bash
+cargo cov
+cargo cov-html
+cargo cov-json
+```
+
+- `cargo cov`: runs workspace tests through `cargo llvm-cov nextest --workspace`
+- `cargo cov-html`: writes an HTML report to `target/llvm-cov/html`
+- `cargo cov-json`: writes a machine-readable summary to `target/coverage-summary.json`
 
 For a clean baseline run that includes compilation:
 
@@ -55,15 +78,22 @@ cargo clean
 
 ## Docs
 
-- [Public Docs Index](./doc/site/README.md)
-- [Language Guide](./doc/site/language-guide.md)
-- [Language Reference](./doc/site/language-reference.md)
-- [Compiler Design Guide](./doc/site/compiler-design.md)
-- [Crate Reference](./doc/site/crate-reference.md)
-- [Open Issues](./doc/open-issues.md)
-- [Requirements (V9, Japanese)](./doc/要件定義v9.md)
-- [Float Policy (Japanese)](./doc/float.md)
-- [Improvement Workflow (Japanese)](./作業フロー.md)
+- Canonical specs in `doc/`
+  - [Requirements (V9, Japanese)](./doc/要件定義v9.md)
+  - [VM spec](./doc/EldrVM_spec.md)
+  - [REPL spec](./doc/Xldr_spec.md)
+  - [Test policy](./doc/テスト方針.md)
+  - [Open issues](./doc/open-issues.md)
+  - [Float memo](./doc/float.md)
+- Public guides in `docs/site/`
+  - [Docs index](./docs/site/README.md)
+  - [Language guide](./docs/site/language-guide.md)
+  - [Language reference](./docs/site/language-reference.md)
+  - [Compiler design guide](./docs/site/compiler-design.md)
+  - [Crate reference](./docs/site/crate-reference.md)
+- Standard-library docs live in `lib/*.srt` via `@@doc`
+- Implementation contracts live in Rust doc comments under `crates/**`
+- Working ledger: [作業フロー.md](./作業フロー.md)
 
 ## Status
 
@@ -72,13 +102,17 @@ Current work is focused on stabilizing the V9 baseline and cleanup items from th
 Implemented core includes:
 
 - Primitive types: `Int`, `Float`, `String`, `Boolean`, `Unit`
+- Generic type annotations: `List<T>`, `Result<T>`, user-defined `Name<T, ...>`
 - `List` literals and empty list typing
 - `defstruct` / `defrecord` / `deferror`
-- `if` and `match` (Boolean / Result subset)
+- `if` and `match` (binding / wildcard / literal / list / `Ok(...)` / `Err(...)`)
 - Builtins: `print`, `to_string`, `eprint`
 
 Implementation notes:
 
-- `Int` is being migrated to unbounded `BigInt` semantics across the pipeline
+- `Int` uses unbounded `BigInt` semantics across the pipeline
 - runtime-internal tags stay fixed-width and separate from user-visible `Int`
+- `type` is a reserved keyword; std modules can declare builtin surfaces with `@@builtin def ...` and `@@builtin type ...`
+- std modules are split into `Bootstrap`, `Kernel`, and type-oriented modules (`Int`, `String`, `Boolean`, `Error`, `List`, `Result`, `Float`); cross-cutting builtins live under `defmod Kernel` in `kernel.srt`, and each builtin type head is declared at the top level of its corresponding `lib/*.srt`
+- closure parameter annotations are optional and match-arm LHS follows the same pattern grammar as safe-bind
 - `Float` remains implemented, but its precise contract is tracked separately in [doc/float.md](./doc/float.md)

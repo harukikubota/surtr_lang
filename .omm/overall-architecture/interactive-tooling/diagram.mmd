@@ -1,0 +1,7 @@
+graph LR
+    repl-engine["REPL Engine\ncrates/xldr/src/repl/"]
+    module-loader["Module Loader\ncrates/xldr/src/loader.rs"]
+    tui-surface["TUI Surface\ncrates/xldr/src/repl/ui/tui/"]
+
+    module-loader -->|"stages std, user, and repl sources"| repl-engine
+    repl-engine -->|"feeds incremental session state to widgets"| tui-surface

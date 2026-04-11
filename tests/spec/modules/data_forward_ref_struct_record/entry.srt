@@ -1,0 +1,9 @@
+user: User = make_user("alice")
+print(to_string(user.age))
+
+point = Point(y: 9.5, x: 3.0)
+print(to_string(point.x))
+
+def make_user(name: String) -> User {
+  User(name, 30)
+}

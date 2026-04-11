@@ -1,0 +1,10 @@
+@@doc """
+Standard `Error` type declaration.
+`Error` is an abstract type for recoverable failure values.
+Concrete failures are introduced with `deferror` and then flow through this
+abstract surface, most often inside `Result<T>`.
+The important point is that user code does not normally construct `Error`
+directly; it defines concrete error values and lets them be viewed through this
+shared abstraction.
+"""
+@@builtin type Error

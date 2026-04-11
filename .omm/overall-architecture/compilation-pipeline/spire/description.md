@@ -1,0 +1,1 @@
+The parser crate. `spire` tokenizes Surtr source, enforces source-rule-dependent syntax, and produces AST values that are still close to the surface language, including module declarations, patterns, and builtin declarations.

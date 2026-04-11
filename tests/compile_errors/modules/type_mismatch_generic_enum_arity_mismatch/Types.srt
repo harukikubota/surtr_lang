@@ -1,0 +1,4 @@
+defenum StepSignal<$A> {
+  Resume($A),
+  Stop($A),
+}

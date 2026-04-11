@@ -10,6 +10,20 @@ pub struct Span {
 /// A plain identifier string. Kept as its own type for readability.
 pub type Symbol = String;
 
+/// Attributes attached to a declaration.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeclAttrs {
+    pub doc: Option<String>,
+}
+
+/// Surface builtin type head declaration: `List<$A>`, `Result<$T>`, `Int`, ...
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuiltinTypeHead {
+    pub span: Span,
+    pub name: Symbol,
+    pub params: Vec<Symbol>,
+}
+
 // ── Literals ──
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,32 +83,12 @@ pub enum AstPattern {
     StrLit(Span, String),
     /// Boolean literal in pattern position.
     BoolLit(Span, bool),
-    /// `Ok(inner)` in safe-bind patterns
-    Constructor(Span, Symbol, Box<AstPattern>),
+    /// `Ok(inner)` / `Color::Red` / `KeyInput::Arrow(dir)` in pattern position.
+    Constructor(Span, Symbol, Vec<AstPattern>),
+    /// `uncons(head, tail)` / `User(name, age)` in MatchBlock position.
+    Call(Span, Symbol, Vec<AstPattern>),
     /// `inner @ alias` / `inner @ alias: Ty`
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
-}
-
-// ── Match patterns ──
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AstMatchPattern {
-    /// `x` inside pattern substructure
-    Binding(Span, Symbol),
-    /// `_`
-    Wildcard(Span),
-    /// `True` / `False`
-    BoolLit(Span, bool),
-    /// Integer literal
-    IntLit(Span, SurtrInt),
-    /// String literal
-    StrLit(Span, String),
-    /// `Ok(val)` / `Err(e)` — constructor with optional inner binding
-    Constructor(Span, Symbol, Option<Symbol>),
-    /// `[]`
-    ListNil(Span),
-    /// `[head, ..tail]`
-    ListCons(Span, Box<AstMatchPattern>, Box<AstMatchPattern>),
 }
 
 // ── Struct / Record fields ──
@@ -113,11 +107,32 @@ pub struct RecordField {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    pub name: Symbol,
+    pub payload: Vec<AstTy>,
+    pub discriminant: Option<SurtrInt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: Symbol,
+    pub span: Span,
+}
+
 /// Function parameter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunParam {
     pub name: Symbol,
     pub ty: AstTy,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractorParam {
+    pub name: Symbol,
+    pub ty: Option<AstTy>,
     pub span: Span,
 }
 
@@ -189,6 +204,21 @@ pub enum Ast {
     /// Binary operation: `a + b`, `x == y`
     BinOp(Span, BinOp, Box<Ast>, Box<Ast>),
 
+    /// Value pipe: `value |> f`
+    Pipe(Span, Box<Ast>, Box<Ast>),
+
+    /// Context-preserving map: `value |*> f`
+    ContextMap(Span, Box<Ast>, Box<Ast>),
+
+    /// Context-preserving bind: `value |>= f`
+    ContextBind(Span, Box<Ast>, Box<Ast>),
+
+    /// Plain function composition: `f >> g`
+    Compose(Span, Box<Ast>, Box<Ast>),
+
+    /// Kleisli composition: `f |=> g`
+    KleisliCompose(Span, Box<Ast>, Box<Ast>),
+
     /// Empty list literal: `[]`
     ListNil(Span),
 
@@ -202,7 +232,7 @@ pub enum Ast {
     InterpolatedStr(Span, Vec<InterpolatedPart>),
 
     /// Match expression
-    Match(Span, Box<Ast>, Vec<(AstMatchPattern, Ast)>),
+    Match(Span, Box<Ast>, Vec<(AstPattern, Ast)>),
 
     /// Field access: `user.name`
     FieldAccess(Span, Box<Ast>, Symbol),
@@ -220,16 +250,46 @@ pub enum Ast {
     ConstructorCall(Span, Symbol, Vec<RecordLitArg>),
 
     /// Error type definition: `deferror ParseError(term: String) { "..." }`
-    DeferrorDef(Span, Symbol, Vec<RecordField>, Box<Ast>),
+    DeferrorDef(Span, Symbol, Vec<RecordField>, Box<Ast>, DeclAttrs),
+
+    /// Enum definition: `defenum Color { Red, Green = 4, Blue(Int) }`
+    EnumDef(Span, Symbol, Vec<TypeParam>, Vec<EnumVariant>, DeclAttrs),
 
     /// Function definition: `def add(x: Int, y: Int) -> Int { x + y }`
-    Def(Span, Symbol, Vec<FunParam>, Option<AstTy>, Box<Ast>),
+    Def(
+        Span,
+        Symbol,
+        Vec<FunParam>,
+        Option<AstTy>,
+        Box<Ast>,
+        DeclAttrs,
+    ),
+
+    ExtractorDef(Span, Symbol, ExtractorParam, AstTy, Box<Ast>, DeclAttrs),
 
     /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
-    BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>),
+    BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
+
+    BuiltinExtractorDecl(Span, Symbol, ExtractorParam, AstTy, DeclAttrs),
+
+    /// Builtin type declaration: `@@builtin type Int`
+    BuiltinTypeDecl(Span, BuiltinTypeHead, DeclAttrs),
+
+    /// Declaration-only Result constructor contracts used by std modules.
+    ///
+    /// Surface syntax is intentionally special-cased:
+    /// `@@builtin type Ok($T) -> Result<$T>`
+    /// `@@builtin type Err(Error) -> Result<$T>`
+    ///
+    /// These are not real type declarations, but this syntax keeps them in the
+    /// same declaration layer as the other std-module builtin contracts.
+    ResultCtorDecl(Span, Symbol, AstTy, AstTy, DeclAttrs),
 
     /// Module declaration: `defmod Kernel { ... }`
-    Defmod(Span, Symbol, Vec<Ast>),
+    Defmod(Span, Symbol, Vec<Ast>, DeclAttrs),
+
+    /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
+    ImplDef(Span, Symbol, Vec<Ast>),
 
     /// Import declaration
     Import(Span, AstPath, ImportSpec),
@@ -246,7 +306,7 @@ pub enum Ast {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ast, AstPath, ImportSpec, Lit, Span};
+    use super::{Ast, AstPath, DeclAttrs, ImportSpec, Lit, Span};
     use sindr::primitives::int;
 
     #[test]
@@ -277,12 +337,18 @@ mod tests {
     fn defmod_keeps_body_nodes() {
         let span = Span { start: 0, end: 20 };
         let body = vec![Ast::Lit(span.clone(), Lit::Int(int(1)))];
-        let node = Ast::Defmod(span, "Kernel".to_string(), body.clone());
+        let node = Ast::Defmod(
+            span,
+            "Kernel".to_string(),
+            body.clone(),
+            DeclAttrs::default(),
+        );
 
         match node {
-            Ast::Defmod(_, name, inner) => {
+            Ast::Defmod(_, name, inner, attrs) => {
                 assert_eq!(name, "Kernel");
                 assert_eq!(inner, body);
+                assert_eq!(attrs, DeclAttrs::default());
             }
             _ => panic!("expected defmod"),
         }

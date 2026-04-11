@@ -3,13 +3,24 @@ mod support;
 #[cfg(test)]
 mod e2e {
     use super::support;
+    use eldr::vm::{VmObservation, VmObservationOptions};
+    use eldr::VM;
 
     fn run_surtr(source: &str) -> Result<Vec<String>, String> {
-        support::run_script("language_features.srt", source)
+        support::run_project_script("language_features.srt", source)
     }
 
     fn run_surtr_with_stderr(source: &str) -> Result<(Vec<String>, Vec<String>), String> {
-        support::run_script_with_stderr("language_features.srt", source)
+        support::run_project_script_with_stderr("language_features.srt", source)
+    }
+
+    fn observe_surtr(source: &str) -> VmObservation {
+        let bytecode = support::compile_project_script("language_features.srt", source)
+            .expect("compile should work");
+        let mut vm = VM::new(bytecode);
+        vm.enable_observation(VmObservationOptions::default());
+        vm.run().expect("run should succeed");
+        vm.observation().expect("observation should exist")
     }
 
     fn assert_output(source: &str, expected: &[&str]) {
@@ -28,6 +39,75 @@ mod e2e {
             ),
             Ok(output) => panic!("Expected compile error, got output: {:?}", output),
         }
+    }
+
+    #[test]
+    fn tail_recursive_function_reuses_single_non_top_level_frame() {
+        let observation = observe_surtr(
+            r#"def fib_tail(n: Int, a: Int, b: Int) -> Int {
+  if(n == 0, a, fib_tail(n - 1, b, a + b))
+}
+
+fib_tail(50, 0, 1)"#,
+        );
+
+        assert_eq!(observation.stats.max_frame_depth, 2);
+        assert_eq!(observation.stats.function_calls, 51);
+        assert_eq!(observation.stats.return_count, 1);
+        assert_eq!(observation.stats.tail_calls_optimized, 50);
+    }
+
+    #[test]
+    fn match_arm_tail_calls_are_optimized() {
+        let observation = observe_surtr(
+            r#"def sum_list(values: List<Int>, acc: Int) -> Int {
+  match values {
+    [] => acc,
+    [head, ..tail] => sum_list(tail, acc + head),
+  }
+}
+
+sum_list([1, 2, 3, 4, 5], 0)"#,
+        );
+
+        assert_eq!(observation.stats.max_frame_depth, 2);
+        assert_eq!(observation.stats.tail_calls_optimized, 5);
+    }
+
+    #[test]
+    fn mutual_tail_recursion_is_optimized() {
+        let observation = observe_surtr(
+            r#"def even(n: Int) -> Boolean {
+  if(n == 0, True, odd(n - 1))
+}
+
+def odd(n: Int) -> Boolean {
+  if(n == 0, False, even(n - 1))
+}
+
+even(100)"#,
+        );
+
+        assert_eq!(observation.stats.max_frame_depth, 2);
+        assert_eq!(observation.stats.function_calls, 101);
+        assert_eq!(observation.stats.return_count, 1);
+        assert_eq!(observation.stats.tail_calls_optimized, 100);
+    }
+
+    #[test]
+    fn non_tail_recursion_keeps_growing_frames() {
+        let observation = observe_surtr(
+            r#"def sum_non_tail(n: Int) -> Int {
+  if(n == 0, 0, 1 + sum_non_tail(n - 1))
+}
+
+sum_non_tail(200)"#,
+        );
+
+        assert!(observation.stats.max_frame_depth > 100);
+        assert_eq!(observation.stats.tail_calls_optimized, 0);
+        assert_eq!(observation.stats.function_calls, 201);
+        assert_eq!(observation.stats.return_count, 201);
     }
 
     // Bindings
@@ -146,14 +226,65 @@ print(inspect(Err(MyError)))"#,
     }
 
     #[test]
+    fn kernel_and_or_short_circuit() {
+        assert_output(
+            r#"def log_true(label: String) -> Boolean {
+  print(label)
+  True
+}
+
+def log_false(label: String) -> Boolean {
+  print(label)
+  False
+}
+
+print(to_string(and(True, log_false("and-rhs"))))
+print(to_string(and(False, log_true("and-skip"))))
+print(to_string(or(False, log_true("or-rhs"))))
+print(to_string(or(True, log_false("or-skip"))))"#,
+            &["and-rhs", "False", "False", "or-rhs", "True", "True"],
+        );
+    }
+
+    #[test]
+    fn kernel_eq_neq_helpers_match_operator_behavior() {
+        assert_output(
+            r#"defenum Flag {
+  On,
+  Off,
+}
+
+print(to_string(eq(1, 1)))
+print(to_string(neq("a", "b")))
+print(to_string(eq(True, True)))
+print(to_string(eq(Flag::On, Flag::On)))
+print(to_string(neq(Flag::On, Flag::Off)))"#,
+            &["True", "True", "True", "True", "True"],
+        );
+    }
+
+    #[test]
+    fn kernel_ordering_and_concat_helpers_match_operator_behavior() {
+        assert_output(
+            r#"print(to_string(lt(1, 2)))
+print(to_string(lte(2, 2)))
+print(to_string(gt(3, 2)))
+print(to_string(gte(3, 3)))
+print(concat("hello", " world"))
+print(to_string(lt(1.5, 2.0)))"#,
+            &["True", "True", "True", "True", "hello world", "True"],
+        );
+    }
+
+    #[test]
     fn concat_strings() {
         assert_output(r#"print("hello" ++ " world")"#, &["hello world"]);
     }
 
     #[test]
     fn arithmetic_precedence() {
-        // 2 + 3 * 4 = 2 + 12 = 14
-        assert_output("print(to_string(2 + 3 * 4))", &["14"]);
+        // Expr-class operators are same-precedence and left-associative.
+        assert_output("print(to_string(2 + 3 * 4))", &["20"]);
     }
 
     #[test]
@@ -231,6 +362,28 @@ printer("hello")"#,
     }
 
     #[test]
+    fn func_literal_infix_invocation_works() {
+        assert_output(
+            r#"def eq(left: Int, right: Int) -> Boolean {
+  left == right
+}
+
+print(to_string(10 `+` 5))
+print(to_string(7 `eq` 7))"#,
+            &["15", "True"],
+        );
+    }
+
+    #[test]
+    fn expr_class_operators_are_same_precedence() {
+        assert_output(
+            r#"print(to_string(2 + 3 * 4))
+print(to_string(2 `*` 3 + 4))"#,
+            &["20", "10"],
+        );
+    }
+
+    #[test]
     fn function_partial_application_composition() {
         assert_output(
             r#"def inc(x: Int) -> Int { x + 1 }
@@ -278,7 +431,13 @@ def double(x: Int) -> Int { x * 2 }"#,
   age: Int,
 }
 
-user = User { name: "alice", age: 30 }
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user = User("alice", 30)
 print(to_string(user))
 print(to_string(user.name))
 print(to_string(user.age))"#,
@@ -317,7 +476,7 @@ point = Point(y: 9.5, x: 3.0)
 print(to_string(point.x))
 
 def make_user(name: String) -> User {
-  User { name: name, age: 30 }
+  User(name, 30)
 }
 
 defstruct User {
@@ -325,8 +484,178 @@ defstruct User {
   age: Int,
 }
 
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
 defrecord Point(x: Float, y: Float)"#,
             &["30", "3.0"],
+        );
+    }
+
+    #[test]
+    fn struct_property_update_via_associated_functions() {
+        assert_output(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def with_age(self: Self, age: Int) -> Self {
+    User { name: self.name, age: age }
+  }
+
+  def with_name(self, name: String) -> Self {
+    User { name: name, age: self.age }
+  }
+}
+
+original = User("alice", 30)
+aged = User::with_age(original, 31)
+renamed = User::with_name(aged, "bob")
+
+print(to_string(original.age))
+print(to_string(aged.age))
+print(to_string(renamed.name))
+print(to_string(renamed.age))"#,
+            &["30", "31", "bob", "31"],
+        );
+    }
+
+    #[test]
+    fn struct_constructor_sugar_mixed_named_positional_error() {
+        assert_compile_error(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user = User("alice", age: 30)"#,
+            "Cannot mix positional and named arguments",
+        );
+    }
+
+    #[test]
+    fn impl_method_call_mixed_named_positional_error() {
+        assert_compile_error(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def with_name_and_age(self, name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+user = User("alice", 30)
+updated = User::with_name_and_age(user, "bob", age: 31)"#,
+            "Cannot mix positional and named arguments",
+        );
+    }
+
+    #[test]
+    fn enum_state_transition_via_associated_functions() {
+        assert_output(
+            r#"defenum Light {
+  Red,
+  Yellow,
+  Green,
+}
+
+impl Light {
+  def next(self) -> Self {
+    match self {
+      Light::Red => Light::Green,
+      Light::Green => Light::Yellow,
+      Light::Yellow => Light::Red,
+    }
+  }
+
+  def advance(self: Self, steps: Int) -> Self {
+    if(steps == 0, self, Light::advance(Light::next(self), steps - 1))
+  }
+
+  def rebound_once(self) -> Self {
+    self = Light::next(self)
+    self
+  }
+
+  def is_stop(self) -> Boolean {
+    match self {
+      Light::Red => True,
+      _ => False,
+    }
+  }
+}
+
+initial = Light::Red
+once = Light::next(initial)
+twice = Light::advance(initial, 2)
+rebound = Light::rebound_once(Light::Yellow)
+
+print(to_string(Light::is_stop(initial)))
+print(to_string(Light::is_stop(once)))
+print(to_string(Light::is_stop(twice)))
+print(to_string(Light::is_stop(rebound)))"#,
+            &["True", "False", "False", "True"],
+        );
+    }
+
+    #[test]
+    fn enum_impl_method_call_mixed_named_positional_error() {
+        assert_compile_error(
+            r#"defenum Light {
+  Red,
+  Yellow,
+  Green,
+}
+
+impl Light {
+  def with_steps(self: Self, steps: Int) -> Self {
+    self
+  }
+}
+
+light = Light::Green
+bad = Light::with_steps(light, steps: 1)"#,
+            "Cannot mix positional and named arguments",
+        );
+    }
+
+    #[test]
+    fn enum_self_rebinding_requires_self_type() {
+        assert_compile_error(
+            r#"defenum Light {
+  Red,
+  Green,
+}
+
+impl Light {
+  def bad(self) -> Self {
+    self = 1
+    self
+  }
+}"#,
+            "`self` rebinding requires Self type",
         );
     }
 
@@ -343,10 +672,10 @@ print(to_string(add(y: 2, x: 1)))"#,
 
     #[test]
     fn function_named_args_mixed_with_positional_first() {
-        assert_output(
+        assert_compile_error(
             r#"def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
 print(to_string(add3(1, z: 3, y: 2)))"#,
-            &["6"],
+            "Cannot mix positional and named arguments",
         );
     }
 
@@ -364,7 +693,7 @@ print(to_string(add(z: 1, y: 2)))"#,
         assert_compile_error(
             r#"def add(x: Int, y: Int) -> Int { x + y }
 print(to_string(add(1, x: 2)))"#,
-            "Duplicate argument 'x'",
+            "Cannot mix positional and named arguments",
         );
     }
 
@@ -373,7 +702,7 @@ print(to_string(add(1, x: 2)))"#,
         assert_compile_error(
             r#"def add(x: Int, y: Int) -> Int { x + y }
 print(to_string(add(y: 2, 1)))"#,
-            "Positional arguments must come before named arguments",
+            "Cannot mix positional and named arguments",
         );
     }
 
@@ -527,6 +856,51 @@ print(match n {
         );
     }
 
+    #[test]
+    fn cond_selects_first_true_branch_and_skips_later_branches() {
+        assert_output(
+            r#"print(to_string(cond {
+  False => 0,
+  1 < 2 => 1,
+  True => 2,
+}))"#,
+            &["1"],
+        );
+    }
+
+    #[test]
+    fn cond_allows_block_bodies() {
+        assert_output(
+            r#"print(to_string(cond {
+  False => 0,
+  True => { print("branch"); 42 },
+}))"#,
+            &["branch", "42"],
+        );
+    }
+
+    #[test]
+    fn cond_condition_must_be_boolean() {
+        assert_compile_error(
+            r#"print(to_string(cond {
+  1 => 10,
+  True => 20,
+}))"#,
+            "if condition must be Boolean, got Int",
+        );
+    }
+
+    #[test]
+    fn cond_branch_types_must_match() {
+        assert_compile_error(
+            r#"print(to_string(cond {
+  False => 1,
+  True => "x",
+}))"#,
+            "if branches have different types: Int and String",
+        );
+    }
+
     // String interpolation
 
     #[test]
@@ -656,6 +1030,39 @@ print(to_string(tail))"#,
     }
 
     #[test]
+    fn safebind_uncons_string_ok() {
+        assert_output(
+            r#"value = "source"
+uncons(first, tail) =? value
+print(first)
+print(tail)"#,
+            &["s", "ource"],
+        );
+    }
+
+    #[test]
+    fn safebind_string_pattern_plain_string_ok() {
+        assert_output(
+            r#"value = "source"
+[first, ..tail] =? value
+print(first)
+print(tail)"#,
+            &["s", "ource"],
+        );
+    }
+
+    #[test]
+    fn safebind_string_pattern_handles_multibyte_chars() {
+        assert_output(
+            r#"value = "あい"
+[first, ..tail] =? value
+print(first)
+print(tail)"#,
+            &["あ", "い"],
+        );
+    }
+
+    #[test]
     fn safebind_list_pattern_plain_list_empty_propagates_empty_list() {
         let (_stdout, stderr) = run_surtr_with_stderr(
             r#"value: List<Int> = []
@@ -664,6 +1071,20 @@ print("after")"#,
         )
         .expect("Pipeline failed");
         assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
+    }
+
+    #[test]
+    fn safebind_string_pattern_empty_propagates_pattern_mismatch() {
+        let (_stdout, stderr) = run_surtr_with_stderr(
+            r#"value: String = ""
+[first, ..tail] =? value
+print("after")"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(
+            stderr,
+            vec!["Error: PatternMismatch: Pattern did not match."]
+        );
     }
 
     #[test]
@@ -689,6 +1110,38 @@ print("after")"#,
         assert_eq!(
             stderr,
             vec!["Error: IndexOutOfBounds: LHS.len(2) > RHS.len(1)"]
+        );
+    }
+
+    #[test]
+    fn match_string_empty_and_uncons_is_exhaustive() {
+        assert_output(
+            r#"value = "source"
+print(match value {
+  [] => "empty",
+  [first, ..tail] => tail,
+})"#,
+            &["ource"],
+        );
+    }
+
+    #[test]
+    fn expr_list_cons_does_not_become_string_cons() {
+        assert_compile_error(
+            r#"source = ["x"]
+str: String = ["t", ..source]"#,
+            "expected String, got List<String>",
+        );
+    }
+
+    #[test]
+    fn match_string_uncons_without_empty_arm_is_non_exhaustive() {
+        assert_compile_error(
+            r#"value = "x"
+print(match value {
+  [head, ..tail] => head,
+})"#,
+            "Non-exhaustive match. Missing: []",
         );
     }
 
@@ -816,8 +1269,12 @@ print("after")"#,
     }
 
     #[test]
-    fn safebind_requires_result_rhs() {
-        assert_compile_error("num =? 10", "`=?` requires Result");
+    fn safebind_allows_total_plain_rhs() {
+        assert_output(
+            r#"num =? 10
+print(to_string(num))"#,
+            &["10"],
+        );
     }
 
     #[test]
@@ -840,7 +1297,7 @@ print("after")"#,
     fn plain_bind_rejects_result_test_pattern() {
         assert_compile_error(
             "Ok(num) = Ok(1)",
-            "Result destructuring patterns must use `=?`, not `=`",
+            "Only total MatchBlock patterns can be used with `=`",
         );
     }
 
@@ -980,6 +1437,395 @@ match ok_val {
         );
     }
 
+    #[test]
+    fn pipe_accepts_capture_and_injected_call() {
+        assert_output(
+            r#"def add(x: Int, y: Int) -> Int {
+  x + y
+}
+
+print(to_string(4 |> add(1)))
+print(to_string(4 |> &add(1)))"#,
+            &["5", "5"],
+        );
+    }
+
+    #[test]
+    fn pipe_accepts_qualified_capture_and_injected_call() {
+        assert_output(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def get_name(self) -> String {
+    self.name
+  }
+}
+
+user = User("alice", 30)
+print(user |> &User::get_name)
+print(user |> User::get_name())"#,
+            &["alice", "alice"],
+        );
+    }
+
+    #[test]
+    fn result_pipeline_map_and_bind_work() {
+        assert_output(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+def check(x: Int) -> Result<Int> {
+  Ok(x + 10)
+}
+
+mapped: Result<Int> = Ok(1) |*> inc()
+bound: Result<Int> = Ok(1) |>= check()
+
+match mapped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped err"),
+}
+
+match bound {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("bound err"),
+}"#,
+            &["2", "11"],
+        );
+    }
+
+    #[test]
+    fn result_pipeline_injects_left_value_into_call_rhs() {
+        assert_output(
+            r#"deferror TooSmall {
+  "too small"
+}
+
+def add(x: Int, y: Int) -> Int {
+  x + y
+}
+
+def require_at_least(x: Int, floor: Int) -> Result<Int, TooSmall> {
+  if(x >= floor, Ok(x), Err(TooSmall))
+}
+
+mapped: Result<Int> = Ok(1) |*> add(2)
+bound: Result<Int> = Ok(11) |>= require_at_least(10)
+
+match mapped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped err"),
+}
+
+match bound {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("bound err"),
+}"#,
+            &["3", "11"],
+        );
+    }
+
+    #[test]
+    fn list_pipeline_helpers_and_compose_work() {
+        assert_output(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+def dup(x: Int) -> List<Int> {
+  [x, x + 10]
+}
+
+def singleton(x: Int) -> List<Int> {
+  [x]
+}
+
+nums: List<Int> = [1, 2, 3]
+expand = &singleton |=> &dup
+
+print(to_string(singleton(5)))
+print(to_string(nums |*> inc()))
+print(to_string(nums |>= dup()))
+print(to_string(expand(2)))"#,
+            &["[5]", "[2, 3, 4]", "[1, 11, 2, 12, 3, 13]", "[2, 12]"],
+        );
+    }
+
+    #[test]
+    fn compose_builds_callable_from_capture_only() {
+        assert_output(
+            r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x + 2))
+}
+
+pipeline = &parse |=> &render
+
+match pipeline("x") {
+  Ok(v) => print(v),
+  Err(e) => print("err"),
+}"#,
+            &["3"],
+        );
+    }
+
+    #[test]
+    fn flow_operators_reject_naked_function_refs() {
+        assert_compile_error(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+value = 1 |> inc"#,
+            "requires `&f`, closure, or a function call like `f(...)`",
+        );
+
+        assert_compile_error(
+            r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+pipeline = parse |=> render"#,
+            "requires a closure or capture",
+        );
+    }
+
+    #[test]
+    fn compose_rejects_call_expressions() {
+        assert_compile_error(
+            r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+pipeline = parse() |=> render()"#,
+            "requires a closure or capture",
+        );
+
+        assert_compile_error(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+plain = inc() >> inc()"#,
+            "requires a closure or capture",
+        );
+    }
+
+    #[test]
+    fn flow_operators_reject_context_mismatch_and_monadic_map_rhs() {
+        assert_compile_error(
+            r#"def lift(x: Int) -> Result<Int> {
+  Ok(x + 1)
+}
+
+value: Result<Int> = Ok(1)
+bad = value |*> lift()"#,
+            "expects a plain function on the right-hand side",
+        );
+
+        assert_compile_error(
+            r#"def expand(x: Int) -> List<Int> {
+  [x]
+}
+
+value: Result<Int> = Ok(1)
+bad = value |>= expand()"#,
+            "cannot mix Result and List context",
+        );
+    }
+
+    #[test]
+    fn result_pipeline_usecase_user_lookup_and_render() {
+        assert_output(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+def parse_id(text: String) -> Result<Int> {
+  Ok(7)
+}
+
+def load_user(id: Int) -> Result<User> {
+  Ok(User("alice", 20))
+}
+
+def ensure_adult(user: User) -> Result<User> {
+  Ok(user)
+}
+
+def render(user: User) -> String {
+  user.name ++ ":" ++ to_string(user.age)
+}
+
+lookup = &parse_id |=> &load_user
+summary: Result<String> = lookup("7") |>= ensure_adult() |*> render()
+
+match summary {
+  Ok(v) => print(v),
+  Err(e) => print("err"),
+}"#,
+            &["alice:20"],
+        );
+    }
+
+    #[test]
+    fn kernel_helper_usecase_works_with_funcliteral_and_flow_ops() {
+        assert_output(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+  active: Boolean,
+}
+
+impl User {
+  def new(name: String, age: Int, active: Boolean) -> Self {
+    User { name: name, age: age, active: active }
+  }
+}
+
+deferror HiddenUser {
+  "hidden user"
+}
+
+def parse_key(key: String) -> Result<Int, HiddenUser> {
+  if(eq(key, "alice"), Ok(1), if(eq(key, "boss"), Ok(2), Ok(3)))
+}
+
+def load_user(id: Int) -> Result<User, HiddenUser> {
+  if(
+    eq(id, 1),
+    Ok(User("alice", 21, True)),
+    if(eq(id, 2), Ok(User("boss", 70, True)), Ok(User("guest", 17, False))),
+  )
+}
+
+def allow(user: User) -> Result<User, HiddenUser> {
+  visible = and(
+    user.active,
+    and(
+      user.name `neq` "banned",
+      or(user.age `gte` 20, user.name `eq` "alice"),
+    ),
+  )
+
+  if(visible, Ok(user), Err(HiddenUser))
+}
+
+def age_band(user: User) -> String {
+  if(
+    user.age `lt` 13,
+    "child",
+    if(user.age `lte` 19, "teen", if(user.age `gt` 64, "senior", "adult")),
+  )
+}
+
+def render(user: User) -> String {
+  visibility = if(and(user.active, user.name `neq` "banned"), "visible", "hidden")
+  user.name `concat` ":" `concat` age_band(user) `concat` ":" `concat` visibility
+}
+
+lookup = &parse_key |=> &load_user
+
+match lookup("alice") |>= allow() |*> render() {
+  Ok(v) => print(v),
+  Err(e) => print("hidden"),
+}
+
+match lookup("boss") |>= allow() |*> render() {
+  Ok(v) => print(v),
+  Err(e) => print("hidden"),
+}
+
+match lookup("guest") |>= allow() |*> render() {
+  Ok(v) => print(v),
+  Err(e) => print("hidden"),
+}"#,
+            &["alice:adult:visible", "boss:senior:visible", "hidden"],
+        );
+    }
+
+    #[test]
+    fn safebind_usecase_result_and_list_pipeline() {
+        assert_output(
+            r##"def parse_csv(text: String) -> Result<List<Int>> {
+  Ok([1, 2, 3])
+}
+
+def expand(n: Int) -> List<Int> {
+  [n, n + 10]
+}
+
+def show(n: Int) -> String {
+  "#" ++ to_string(n)
+}
+
+def singleton(n: Int) -> List<Int> {
+  [n]
+}
+
+nums =? parse_csv("1,2,3")
+[head, ..tail] =? nums
+
+print(to_string(head))
+print(to_string(tail |>= expand()))
+print(to_string((head |> singleton()) |*> show()))"##,
+            &["1", "[2, 12, 3, 13]", "[#1]"],
+        );
+    }
+
+    #[test]
+    fn list_pipeline_usecase_expand_and_present_keywords() {
+        assert_output(
+            r#"def aliases(word: String) -> List<String> {
+  [word, word ++ "_alt"]
+}
+
+def wrap_bracket(word: String) -> String {
+  "[" ++ word ++ "]"
+}
+
+def singleton(word: String) -> List<String> {
+  [word]
+}
+
+lift_and_expand = &singleton |=> &aliases
+
+words: List<String> = ["surtr", "vm"]
+print(to_string(words |>= aliases() |*> wrap_bracket()))
+print(to_string(lift_and_expand("bind") |*> wrap_bracket()))"#,
+            &[
+                "[[surtr], [surtr_alt], [vm], [vm_alt]]",
+                "[[bind], [bind_alt]]",
+            ],
+        );
+    }
+
     // Language goal
 
     #[test]
@@ -1004,7 +1850,12 @@ defstruct User {
   name: String,
   age: Int,
 }
-user = User { name: "alice", age: 30 }
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+user = User("alice", 30)
 print(to_string(user))
 print(to_string(user.name))
 defrecord Pair(first: Int, second: String)

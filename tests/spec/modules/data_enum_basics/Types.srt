@@ -1,0 +1,19 @@
+defenum Direction {
+  Up,
+  Down,
+  Left,
+  Right,
+}
+
+defenum KeyInput {
+  Arrow(Direction),
+  Enter,
+  Space,
+}
+
+defenum Code {
+  A = 1,
+  B,
+  C = 10,
+  D,
+}

@@ -1,5 +1,6 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use scar::error::TypeError;
+use serde::{Deserialize, Serialize};
 use spire::ast::Span;
 use std::io::{self, Write};
 
@@ -78,6 +79,27 @@ pub struct DiagnosticLabel {
     pub span: Span,
     pub message: String,
     pub color: Color,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerializableDiagnostic {
+    pub kind: String,
+    pub phase: String,
+    pub line: u32,
+    pub column: u32,
+    pub span: [u32; 2],
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub got: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SerializableDiagnosticReport {
+    pub errors: Vec<SerializableDiagnostic>,
 }
 
 pub fn simple_error(
@@ -199,6 +221,42 @@ fn write_fallback_diagnostic(
     Ok(())
 }
 
+pub fn serializable_report_by_id(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    phase: impl Into<String>,
+    spec: &DiagnosticSpec,
+) -> SerializableDiagnosticReport {
+    SerializableDiagnosticReport {
+        errors: vec![serializable_diagnostic_by_id(
+            sources, source_id, phase, spec,
+        )],
+    }
+}
+
+pub fn serializable_diagnostic_by_id(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    phase: impl Into<String>,
+    spec: &DiagnosticSpec,
+) -> SerializableDiagnostic {
+    let phase = phase.into();
+    let source = sources.source(source_id).unwrap_or("");
+    let (line, column) = line_column_for_offset(source, spec.primary_span.start);
+    let (expected, got) = extract_expected_got(&spec.message);
+    SerializableDiagnostic {
+        kind: spec.kind.clone(),
+        phase,
+        line,
+        column,
+        span: [spec.primary_span.start as u32, spec.primary_span.end as u32],
+        message: spec.message.clone(),
+        expected,
+        got,
+        hint: spec.help.clone(),
+    }
+}
+
 #[derive(Debug, Clone)]
 struct TemplateSpec {
     labels: Vec<DiagnosticLabel>,
@@ -261,6 +319,37 @@ fn infer_type_error_template(source: &str, focus: &Span, message: &str) -> Optio
     }
 
     None
+}
+
+fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
+    let mut line = 1u32;
+    let mut column = 1u32;
+    for (idx, ch) in source.char_indices() {
+        if idx >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
+}
+
+fn extract_expected_got(message: &str) -> (Option<String>, Option<String>) {
+    let Some(expected_start) = message.find("expected ") else {
+        return (None, None);
+    };
+    let expected_part = &message[expected_start + "expected ".len()..];
+    let Some((expected, got)) = expected_part.split_once(", got ") else {
+        return (None, None);
+    };
+    (
+        Some(expected.trim().to_string()),
+        Some(got.trim().to_string()),
+    )
 }
 
 fn infer_if_branch_mismatch_template(
@@ -413,8 +502,8 @@ fn enclosing_def_lines(
     let decl_idx = decl_idx?;
 
     let mut close_idx = None;
-    for idx in (focus_line + 1)..lines.len() {
-        let text = slice_chars(source, lines[idx].0, lines[idx].1);
+    for (idx, line) in lines.iter().enumerate().skip(focus_line + 1) {
+        let text = slice_chars(source, line.0, line.1);
         let trimmed = text.trim();
         if trimmed.starts_with("def ") {
             break;

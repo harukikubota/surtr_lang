@@ -1,6 +1,7 @@
 /// A parsed REPL command (lines beginning with `:`).
 pub enum ReplCommand {
     Quit,
+    Doc { symbol: String },
     ValueRecall { arg: String },
     Save { path: String },
     Unknown { raw: String },
@@ -22,6 +23,9 @@ pub fn parse_repl_command(trimmed: &str) -> Option<ReplCommand> {
 
     let command = match cmd {
         "quit" | "q" => ReplCommand::Quit,
+        "doc" => ReplCommand::Doc {
+            symbol: rest.to_string(),
+        },
         "v" => ReplCommand::ValueRecall {
             arg: rest.to_string(),
         },

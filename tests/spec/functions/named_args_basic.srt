@@ -2,4 +2,4 @@ def add(x: Int, y: Int) -> Int { x + y }
 def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
 
 print(to_string(add(y: 2, x: 1)))
-print(to_string(add3(1, z: 3, y: 2)))
+print(to_string(add3(z: 3, y: 2, x: 1)))

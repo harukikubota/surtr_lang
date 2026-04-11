@@ -1,0 +1,1 @@
+Crate boundaries matter. Phase outputs are public crate types, builtin definitions must originate from `crates/sindr/src/builtin.rs`, and standard modules are loaded in a fixed order so the compiler, REPL, and VM share the same contracts.

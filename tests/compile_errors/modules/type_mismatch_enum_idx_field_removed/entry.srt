@@ -1,0 +1,2 @@
+up: Direction = Direction::Up
+print(to_string(up.idx))

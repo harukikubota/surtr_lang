@@ -1,0 +1,11 @@
+defenum Light {
+  Red,
+  Green,
+}
+
+impl Light {
+  def bad(self) -> Self {
+    self = 1
+    self
+  }
+}

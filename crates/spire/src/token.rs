@@ -13,12 +13,14 @@ pub enum Token {
     Int(SurtrInt),
     Float(f64),
     Str(String),
+    DocString(String),
     True,
     False,
     Unit, // ()
 
     // ── Identifier ──
     Ident(String),
+    FuncLiteral(String),
 
     // ── Arithmetic operators ──
     Plus,   // +
@@ -47,17 +49,22 @@ pub enum Token {
     RBrace, // }
 
     // ── Punctuation ──
-    Comma,     // ,
-    Colon,     // :
-    At,        // @
-    Dot,       // .
-    DotDot,    // ..
-    FatArrow,  // =>
-    Arrow,     // ->
-    Semicolon, // ;
-    Pipe,      // |
-    Amp,       // &
-    Dollar,    // $
+    Comma,       // ,
+    Colon,       // :
+    At,          // @
+    Dot,         // .
+    DotDot,      // ..
+    FatArrow,    // =>
+    Arrow,       // ->
+    Semicolon,   // ;
+    Pipe,        // |
+    PipeApply,   // |>
+    PipeMap,     // |*>
+    PipeBind,    // |>=
+    PipeCompose, // |=>
+    Compose,     // >>
+    Amp,         // &
+    Dollar,      // $
 
     // ── Statement separators ──
     Newline,
@@ -71,7 +78,12 @@ pub enum Token {
     Defstruct,
     Defrecord,
     Deferror,
+    Defenum,
+    Defextractor,
+    Impl,
     Match,
+    Cond,
+    Type,
 
     // ── End of file ──
     Eof,

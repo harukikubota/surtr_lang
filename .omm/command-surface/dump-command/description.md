@@ -1,0 +1,1 @@
+`surtr dump` is the inspection surface. It emits JSON summaries of headers, chunks, opcode counts, constants, docs, and entrypoint traces so bytecode can be examined without executing the program normally.

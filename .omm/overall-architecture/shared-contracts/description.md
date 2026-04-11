@@ -1,0 +1,1 @@
+Support crates that stabilize cross-phase contracts. `crates/sindr/` carries shared IR and builtin metadata, while `crates/diagnostics/` centralizes human-facing error rendering on top of compiler spans and source registries.

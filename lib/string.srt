@@ -1,0 +1,80 @@
+@@doc """
+Standard `String` type declaration.
+Text values produced by literals, interpolation, and textual conversion use this
+head.
+The compiler validates this exact top-level declaration as the canonical
+surface shape for strings.
+"""
+@@builtin type String
+
+@@doc """
+Concrete string-module error for `String::repeat`.
+Negative counts stay as recoverable values instead of becoming implicit
+runtime traps.
+"""
+deferror NegativeRepeatCount(count: Int) {
+  "repeat count must be non-negative: #{count}"
+}
+
+@@doc """
+String module.
+Groups string-oriented helpers.
+This module is loaded with the standard library and documented from source so
+the module docs and the actual surface stay in one place.
+"""
+defmod String {
+  @@doc """
+  Return `True` when `value` is the empty string.
+  """
+  def is_empty(value: String) -> Boolean {
+    value == ""
+  }
+
+  @@doc """
+  Return `True` when `value` is not the empty string.
+  """
+  def non_empty(value: String) -> Boolean {
+    value != ""
+  }
+
+  @@doc """
+  Wrap `value` with `prefix` and `suffix`.
+  """
+  def surround(value: String, prefix: String, suffix: String) -> String {
+    prefix ++ value ++ suffix
+  }
+
+  def _join_go(parts: List<String>, separator: String, acc: String) -> String {
+    match parts {
+      [] => acc,
+      [head, ..tail] => String::_join_go(tail, separator, acc ++ separator ++ head),
+    }
+  }
+
+  @@doc """
+  Join string elements with `separator`.
+  Empty input returns the empty string.
+  """
+  def join(parts: List<String>, separator: String) -> String {
+    match parts {
+      [] => "",
+      [head, ..tail] => String::_join_go(tail, separator, head),
+    }
+  }
+
+  def _repeat_go(value: String, remaining: Int, acc: String) -> String {
+    if(remaining == 0, acc, String::_repeat_go(value, remaining - 1, acc ++ value))
+  }
+
+  @@doc """
+  Repeat `value` `count` times.
+  Negative counts return `Err(NegativeRepeatCount(...))`.
+  """
+  def repeat(value: String, count: Int) -> Result<String, NegativeRepeatCount> {
+    if(
+      count < 0,
+      Err(NegativeRepeatCount(count)),
+      Ok(String::_repeat_go(value, count, "")),
+    )
+  }
+}

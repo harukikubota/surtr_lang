@@ -1,0 +1,1 @@
+The workspace couples language specs, standard-library declarations, compiler phases, and runtime behavior. Changes to ASTs, opcodes, builtin metadata, or type registry rules must stay synchronized across multiple crates and documents.

@@ -1,0 +1,10 @@
+created: 2026-04-09T14:03:39.273Z
+updated: 2026-04-09T14:03:39.277Z
+update_count: 1
+last_field: description
+kind: nested-class
+title: build-command
+children: []
+parentPath:
+  - rune-cli
+  - command-implementations

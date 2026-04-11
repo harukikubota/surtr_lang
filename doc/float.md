@@ -28,7 +28,7 @@
 - `Float` 実装は残す
 - ただし、正本仕様では「暫定実装」であることを明記する
 - 新規の `Float` 依存 API は、契約が確定するまで慎重に追加する
-- レビュー上の `Float` 指摘は、本ファイルと `doc/surtr_runtime_failure_policy.md` を起点に追う
+- レビュー上の `Float` 指摘は、本ファイルと `doc/要件定義v9.md` / `doc/open-issues.md` を起点に追う
 
 ## 今後の確定項目
 

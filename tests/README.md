@@ -4,6 +4,13 @@ This repository uses a spec-first test layout.
 
 Preferred runner: `cargo nextest run`
 
+Coverage runner:
+
+- Install once: `rustup component add llvm-tools-preview` and `cargo install cargo-llvm-cov`
+- Summary run: `cargo cov`
+- HTML report: `cargo cov-html`
+- JSON summary: `cargo cov-json`
+
 - `tests/spec/**.srt` + `.expected`
   - End-to-end behavior fixtures (`stdout` match)
   - Runner: `tests/integration/run_srt.rs` (`spec_fixtures_match_expected_stdout`)

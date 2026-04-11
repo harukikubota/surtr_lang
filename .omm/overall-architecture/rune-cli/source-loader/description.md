@@ -1,0 +1,1 @@
+The file-system adapter in `crates/rune/src/loader.rs`. It reads `lib/*.srt`, derives module paths, filters out default standard modules already embedded elsewhere, and packages extra module inputs for the compile driver.

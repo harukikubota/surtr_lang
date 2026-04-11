@@ -1,0 +1,1 @@
+value = concat(left: "a", right: "b")

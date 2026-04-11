@@ -1,5 +1,251 @@
+@@doc """
+Standard `Unit` type declaration.
+`Unit` is the type of `()`, typically used for effectful functions that do not
+return a meaningful value.
+
+There is intentionally no dedicated `unit.srt`.
+Instead, `Unit` lives in `kernel.srt` because it behaves more like shared
+execution glue than a user-facing namespace with its own helper family.
+"""
+@@builtin type Unit
+
+@@doc """
+Kernel module.
+
+Provides the small auto-imported standard surface for cross-cutting builtins
+and lightweight helpers.
+Use this layer for operations that are not owned by a single primitive module
+such as conditional special forms, printing, textual conversion, debug
+inspection, and process-oriented entrypoint control.
+"""
 defmod Kernel {
-  def add(x: Int, y: Int) -> Int {
-    x + y
-  }
+  @@doc """
+  Conditional execution for side-effect-oriented code paths.
+
+  The declared type is:
+  `if_then(Boolean, (-> Unit)) -> Unit`
+
+  The function type on the second argument is a contract-level way to express
+  Surtr's evaluation rule: the branch is selected lazily and only the chosen
+  side is evaluated.
+  This does not mean everyday source code must wrap the argument in an explicit
+  closure or block.
+
+  Ordinary expression form stays available:
+  `if_then(flag, print("flag is true"))`
+
+  In other words, the signature describes the language semantics, while the
+  surface syntax keeps the convenient expression-oriented style.
+  """
+  @@builtin def if_then(flag: Boolean, then_branch: (-> Unit)) -> Unit
+
+  @@doc """
+  Branching expression that returns one value from two alternatives.
+
+  The declared type is:
+  `if(Boolean, (-> $A), (-> $A)) -> $A`
+
+  Both branches are written as zero-argument function types in the declaration
+  because Surtr treats `if` as a language-level special form.
+  Only the selected branch is evaluated, and both branches must agree on the
+  same result type.
+
+  This is a semantic contract, not a requirement that user code spell the
+  branches as explicit closures.
+  Plain expression style is valid and is the normal way to write code:
+
+  `if(flag, "ok", err_reason)`
+
+  When the branches both return `Unit`, prefer `if_then(...)` to make the
+  intent explicit.
+  """
+  @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
+
+  @@doc """
+  Logical conjunction with short-circuit evaluation.
+
+  The declared type is:
+  `and(Boolean, Boolean) -> Boolean`
+
+  Even though the surface contract looks like an ordinary 2-argument function,
+  the compiler evaluates the right-hand side only when the left-hand side is
+  `True`.
+  This keeps call-style source syntax while preserving short-circuit behavior.
+  """
+  @@builtin def and(left: Boolean, right: Boolean) -> Boolean
+
+  @@doc """
+  Logical disjunction with short-circuit evaluation.
+
+  The declared type is:
+  `or(Boolean, Boolean) -> Boolean`
+
+  The compiler evaluates the right-hand side only when the left-hand side is
+  `False`.
+  Like `and`, this is exposed as ordinary call-style syntax while keeping
+  short-circuit semantics.
+  """
+  @@builtin def or(left: Boolean, right: Boolean) -> Boolean
+
+  @@doc """
+  Call-style equality comparison.
+
+  The declared type is:
+  `eq($A, $A) -> Boolean`
+
+  `eq(left, right)` lowers to `left == right` and therefore shares the same
+  phase-1 comparison support and restrictions as the operator form.
+  """
+  @@builtin def eq(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style inequality comparison.
+
+  The declared type is:
+  `neq($A, $A) -> Boolean`
+
+  `neq(left, right)` lowers to `left != right` and therefore shares the same
+  phase-1 comparison support and restrictions as the operator form.
+  """
+  @@builtin def neq(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style less-than comparison.
+
+  The declared type is:
+  `lt($A, $A) -> Boolean`
+
+  `lt(left, right)` lowers to `left < right` and therefore shares the same
+  comparison support and restrictions as the operator form.
+  """
+  @@builtin def lt(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style less-than-or-equal comparison.
+
+  The declared type is:
+  `lte($A, $A) -> Boolean`
+
+  `lte(left, right)` lowers to `left <= right` and therefore shares the same
+  comparison support and restrictions as the operator form.
+  """
+  @@builtin def lte(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style greater-than comparison.
+
+  The declared type is:
+  `gt($A, $A) -> Boolean`
+
+  `gt(left, right)` lowers to `left > right` and therefore shares the same
+  comparison support and restrictions as the operator form.
+  """
+  @@builtin def gt(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style greater-than-or-equal comparison.
+
+  The declared type is:
+  `gte($A, $A) -> Boolean`
+
+  `gte(left, right)` lowers to `left >= right` and therefore shares the same
+  comparison support and restrictions as the operator form.
+  """
+  @@builtin def gte(left: $A, right: $A) -> Boolean
+
+  @@doc """
+  Call-style string concatenation.
+
+  The declared type is:
+  `concat(String, String) -> String`
+
+  `concat(left, right)` lowers to `left ++ right` and therefore shares the same
+  string-only restriction as the operator form.
+  """
+  @@builtin def concat(left: String, right: String) -> String
+
+  @@doc """
+  Guard a precondition and return `Result<Unit>`.
+
+  The declared type is:
+  `assert(Boolean, Error) -> Result<Unit>`
+
+  Like `if`, this is a special form. The error branch is evaluated only when
+  the condition is `False`, so success does not pay to build diagnostics.
+
+  Ordinary expression form stays available:
+  `assert(user.age >= 0, InvalidUserAge(user.age))`
+  """
+  @@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>
+
+  @@doc """
+  Validate a value and return it unchanged on success.
+
+  The declared type is:
+  `ensure($A, ($A -> Boolean), Error) -> Result<$A>`
+
+  The first argument is evaluated once, passed to the predicate, and returned
+  inside `Ok(...)` when the predicate succeeds.
+  The error branch is evaluated only when validation fails.
+
+  The predicate must be a unary callable value such as a capture or closure:
+  `ensure(num, &is_even, SomeError)` or `ensure(num, {|x| x > 0 }, SomeError)`.
+  Call expressions such as `ensure(num, is_even(), SomeError)` are rejected.
+  """
+  @@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>
+
+  @@doc """
+  Decompose a non-empty sequence in MatchBlock positions.
+
+  `uncons(term)` is a builtin Extractor used by `=?` and `match`.
+  It accepts both `List` and `String`.
+
+  - `List<$A>` becomes `(head: $A, tail: List<$A>)`
+  - `String` becomes `(head: String, tail: String)`
+
+  In pattern position, `[head, ..tail]` is an alias of `uncons(head, tail)`.
+  This alias is MatchBlock-only; expression position keeps list construction
+  semantics, so `["t", ..source]` is still a list expression.
+
+  Empty input returns `NoMatch`.
+  """
+  @@builtin defextractor uncons(term) -> MatchResult<Seq<$Head, $Tail>, Error>
+
+  @@doc """
+  Print a string to stdout.
+  Use `to_string(...)` first when the value is not already `String`.
+  This builtin belongs under `Kernel` because printing is part of the shared
+  execution surface rather than a helper owned by one primitive type.
+  """
+  @@builtin def print(a: String) -> Unit
+
+  @@doc """
+  Convert any displayable value into `String`.
+  This is the standard bridge from typed values to user-visible text.
+  Because the input is polymorphic, it belongs under `Kernel` instead of a
+  single primitive module.
+  """
+  @@builtin def to_string(a: $A) -> String
+
+  @@doc """
+  Produce a debug-oriented textual representation of a value.
+  Prefer this when structure is more important than presentation polish.
+  Bare callable values are shown with module/name/signature metadata when it is
+  available at runtime.
+  """
+  @@builtin def inspect(a: $A) -> String
+
+  @@doc """
+  Print an `Error` value to stderr-oriented output.
+  This stays under `Kernel` because it is part of the cross-cutting runtime
+  surface, not an `Error`-specific helper family.
+  """
+  @@builtin def eprint(err: Error) -> Unit
+
+  @@doc """
+  Request a process exit code for the current entrypoint execution.
+  This is effectful and compile-unit aware, so it stays in the `Kernel`
+  surface instead of a primitive-type module.
+  """
+  @@builtin def set_exit_code(code: Int) -> Unit
 }

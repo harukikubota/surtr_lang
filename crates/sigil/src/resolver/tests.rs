@@ -1,0 +1,1683 @@
+use super::*;
+use sindr::primitives::int;
+use spire::ast::{AstTy, BinOp, Lit};
+
+fn permissive_module_rules() -> spire::SourceRules {
+    spire::SourceRules {
+        allow_top_level_expr: false,
+        allowed_top_level_decl_kinds: spire::TopLevelDeclPolicy::Any,
+        set_exit_code_policy: spire::SetExitCodePolicy::Forbidden,
+        normalized_entrypoint: None,
+    }
+}
+
+fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
+    let _ = module_path;
+    spire::parse_with_context(
+        src,
+        spire::ParserContext::module(0, Some(module_path.to_string()))
+            .with_rules(permissive_module_rules()),
+    )
+    .expect("module source should parse")
+}
+
+fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
+    let ast =
+        spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
+    resolve(ast)
+}
+
+fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
+    StagedModuleAst {
+        module_path: module_path.to_string(),
+        ast,
+        module_doc: None,
+    }
+}
+
+fn resolve_user_with_modules(
+    user_src: &str,
+    module_stages: &[Vec<StagedModuleAst>],
+) -> Result<Vec<Resolved>, ResolveError> {
+    let user_ast = spire::parse_with_context(user_src, spire::ParserContext::project(0))
+        .expect("user script should parse");
+    let mut full_stages = vec![vec![staged_module(
+        "Bootstrap",
+        parse_module_ast(
+            r#"@@builtin def print(a: String) -> Unit
+@@builtin def to_string(a: $A) -> String
+@@builtin def inspect(a: $A) -> String
+@@builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
+@@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+@@builtin def eprint(err: Error) -> Unit
+@@builtin def set_exit_code(code: Int) -> Unit
+deferror NoneError { "none" }
+deferror ZeroDivisionError { "division by zero" }
+deferror EmptyList { "Empty List." }
+deferror IndexOutOfBounds(detail: String) { detail }"#,
+            "Bootstrap",
+        ),
+    )]];
+    full_stages.extend(module_stages.iter().cloned());
+    let declaration_index =
+        precollect_declaration_index(&full_stages).expect("precollect should succeed");
+    resolve_staged_program(
+        &full_stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+}
+
+#[test]
+fn test_precollect_declaration_index_succeeds_without_body_resolution() {
+    let module_stages = vec![vec![staged_module(
+        "Bootstrap",
+        parse_module_ast(
+            r#"def to_int(x: String) -> Int { unknown_name }
+defrecord Pair(left: Int, right: Int)
+deferror Oops(reason: String) { reason }"#,
+            "Bootstrap",
+        ),
+    )]];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    assert!(index.contains_key("Bootstrap::to_int"));
+    assert!(index.contains_key("Bootstrap::Pair"));
+    assert!(index.contains_key("Bootstrap::Oops"));
+}
+
+#[test]
+fn test_precollect_builtin_decl_in_module() {
+    let module_stages = vec![vec![staged_module(
+        "Int",
+        parse_module_ast(
+            r#"@@builtin def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>"#,
+            "Int",
+        ),
+    )]];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    assert!(index.contains_key("Int::shl"));
+}
+
+#[test]
+fn test_precollect_declaration_index_rejects_duplicate_fully_qualified_name() {
+    let module_stages = vec![vec![
+        staged_module(
+            "Std::Math",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Std::Math"),
+        ),
+        staged_module(
+            "Std::Math",
+            parse_module_ast(r#"def add(a: Int, b: Int) -> Int { a + b }"#, "Std::Math"),
+        ),
+    ]];
+
+    let err = precollect_declaration_index(&module_stages)
+        .expect_err("duplicate fully-qualified declaration must fail");
+    assert!(err
+        .message
+        .contains("Duplicate fully-qualified declaration: Std::Math::add"));
+}
+
+#[test]
+fn test_precollect_declaration_index_is_deterministic_when_stage_input_order_changes() {
+    let mod_a = staged_module(
+        "Std::A",
+        parse_module_ast(r#"def same(x: Int) -> Int { x }"#, "Std::A"),
+    );
+    let mod_b = staged_module(
+        "Std::B",
+        parse_module_ast(r#"def same(x: Int) -> Int { x }"#, "Std::B"),
+    );
+
+    let index_first = precollect_declaration_index(&[vec![mod_a.clone(), mod_b.clone()]]).unwrap();
+    let index_swapped =
+        precollect_declaration_index(&[vec![mod_b.clone(), mod_a.clone()]]).unwrap();
+
+    assert_eq!(index_first, index_swapped);
+    assert!(index_first.contains_key("Std::A::same"));
+    assert!(index_first.contains_key("Std::B::same"));
+}
+
+#[test]
+fn test_precollect_declaration_index_tracks_bootstrap_std_user_stage_split() {
+    let module_stages = vec![
+        vec![staged_module(
+            "Bootstrap",
+            parse_module_ast(r#"deferror NoneError { "none" }"#, "Bootstrap"),
+        )],
+        vec![staged_module(
+            "Std::Math",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Std::Math"),
+        )],
+        vec![staged_module(
+            "User::Main",
+            parse_module_ast(r#"def main() -> Int { 1 }"#, "User::Main"),
+        )],
+    ];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    assert_eq!(index["Bootstrap::NoneError"].stage_index, 0);
+    assert_eq!(index["Std::Math::add"].stage_index, 1);
+    assert_eq!(index["User::Main::main"].stage_index, 2);
+}
+
+#[test]
+fn test_precollect_impl_methods_as_type_namespace_members() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+            "",
+        ),
+    )]];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    let ctor = index.get("User::new").expect("new should be indexed");
+    assert_eq!(ctor.module_path, "User");
+    assert_eq!(ctor.name, "new");
+    assert_eq!(ctor.kind, DeclarationKind::ImplCtorNew);
+
+    let normalize = index
+        .get("User::normalize")
+        .expect("normalize should be indexed");
+    assert_eq!(normalize.module_path, "User");
+    assert_eq!(normalize.name, "normalize");
+    assert_eq!(normalize.kind, DeclarationKind::ImplMethod);
+}
+
+#[test]
+fn test_precollect_rejects_multiple_impl_blocks_for_same_type() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}
+impl User {
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+            "",
+        ),
+    )]];
+
+    let err = precollect_declaration_index(&module_stages).expect_err("duplicate impl must fail");
+    assert!(err
+        .message
+        .contains("Multiple impl blocks for `User` are not allowed"));
+}
+
+#[test]
+fn test_precollect_rejects_impl_target_for_record() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"defrecord Pair(first: Int, second: Int)
+impl Pair {
+  def new(first: Int, second: Int) -> Self {
+    Pair(first, second)
+  }
+}"#,
+            "",
+        ),
+    )]];
+
+    let err =
+        precollect_declaration_index(&module_stages).expect_err("record impl should be rejected");
+    assert!(err
+        .message
+        .contains("impl target `Pair` must be struct or enum"));
+}
+
+#[test]
+fn test_import_new_from_impl_is_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+            "",
+        ),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import User::new
+User("alice")"#,
+        &module_stages,
+    )
+    .expect_err("new import should fail");
+    assert!(err.message.contains("is not importable"));
+}
+
+#[test]
+fn test_import_root_struct_is_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+            "",
+        ),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import User
+value = User("alice")"#,
+        &module_stages,
+    )
+    .expect_err("root struct import should fail");
+    assert!(err
+        .message
+        .contains("Import target `User` is not importable"));
+}
+
+#[test]
+fn test_root_struct_constructor_call_resolves_without_import() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+            "",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(r#"user = User("alice")"#, &module_stages)
+        .expect("root struct constructor should resolve without import");
+
+    let constructor_name = resolved.iter().find_map(|node| match node {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::ConstructorCall(_, rid, _) => Some(rid.name.clone()),
+            _ => None,
+        },
+        _ => None,
+    });
+
+    assert_eq!(constructor_name.as_deref(), Some("User::new"));
+}
+
+#[test]
+fn test_constructor_call_sugars_to_type_new_resolution() {
+    let resolved = parse_and_resolve(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+user = User("alice", 30)"#,
+    )
+    .expect("source should resolve");
+
+    let constructor_name = resolved.iter().find_map(|node| match node {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::ConstructorCall(_, rid, _) => Some(rid.name.clone()),
+            _ => None,
+        },
+        _ => None,
+    });
+    assert_eq!(constructor_name.as_deref(), Some("User::new"));
+}
+
+#[test]
+fn test_simple_bind() {
+    let resolved = parse_and_resolve("x = 10").unwrap();
+    assert_eq!(resolved.len(), 1);
+    match &resolved[0] {
+        Resolved::Bind(_, ResolvedPattern::Var(id), _) => {
+            assert_eq!(id.name, "x");
+        }
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_builtin_ref() {
+    let resolved = parse_and_resolve("print(to_string(42))").unwrap();
+    match &resolved[0] {
+        Resolved::App(_, func, _) => match func.as_ref() {
+            Resolved::Var(_, id) => assert_eq!(id.name, "print"),
+            _ => panic!("Expected Var for print"),
+        },
+        _ => panic!("Expected App"),
+    }
+}
+
+#[test]
+fn test_builtin_decl_resolution() {
+    let ast = spire::parse_with_context(
+        "@@builtin def print(a: String) -> Unit",
+        spire::ParserContext::module(0, Some("Bootstrap".into()))
+            .with_rules(spire::SourceRules::std_module()),
+    )
+    .expect("std module should parse builtin declarations");
+    let mut resolver = Resolver::new();
+    let resolved = resolver
+        .resolve_program(ast)
+        .expect("builtin declaration should resolve");
+    match &resolved[0] {
+        Resolved::BuiltinDecl(_, id, params, ret_ty, attrs) => {
+            assert_eq!(id.name, "print");
+            assert_eq!(id.unique_id, 2); // 0=Ok, 1=Err, 2=print
+            assert_eq!(params.len(), 1);
+            assert_eq!(*attrs, ResolvedDeclAttrs::default());
+            assert!(matches!(
+                ret_ty,
+                Some(spire::ast::AstTy::Named(_, ty)) if ty == "Unit"
+            ));
+        }
+        _ => panic!("Expected BuiltinDecl"),
+    }
+}
+
+#[test]
+fn test_builtin_type_decl_resolution() {
+    let ast = spire::parse_with_context(
+        "@@builtin type Int",
+        spire::ParserContext::module(0, Some("Bootstrap".into()))
+            .with_rules(spire::SourceRules::std_module()),
+    )
+    .expect("std module should parse builtin type declarations");
+    let mut resolver = Resolver::new();
+    let resolved = resolver
+        .resolve_program(ast)
+        .expect("builtin type declaration should resolve");
+    match &resolved[0] {
+        Resolved::BuiltinTypeDecl(_, id, params, attrs) => {
+            assert_eq!(id.name, "Int");
+            assert!(params.is_empty());
+            assert_eq!(*attrs, ResolvedDeclAttrs::default());
+        }
+        _ => panic!("Expected BuiltinTypeDecl"),
+    }
+}
+
+#[test]
+fn test_module_builtin_can_be_resolved_by_qualified_name() {
+    let module_stages = vec![vec![staged_module(
+        "Int",
+        parse_module_ast(
+            r#"@@builtin def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>"#,
+            "Int",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules("value = Int::shl(2, 3)", &module_stages)
+        .expect("qualified builtin should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("expected bind in resolved output");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, _) => match func.as_ref() {
+                Resolved::Var(_, id) => {
+                    assert_eq!(id.name, "Int::shl");
+                    assert_eq!(id.qualified_name.as_deref(), Some("Int::shl"));
+                }
+                _ => panic!("Expected builtin var"),
+            },
+            _ => panic!("Expected app"),
+        },
+        _ => panic!("Expected bind"),
+    }
+}
+
+#[test]
+fn test_named_args_resolution() {
+    let resolved = parse_and_resolve(
+        r#"def add(x: Int, y: Int) -> Int { x + y }
+result = add(y: 2, x: 1)"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, _, args) => {
+                assert!(matches!(&args[0], ResolvedRecordLitArg::Named(n, _) if n == "y"));
+                assert!(matches!(&args[1], ResolvedRecordLitArg::Named(n, _) if n == "x"));
+            }
+            _ => panic!("Expected App"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_function_def_resolution() {
+    let resolved = parse_and_resolve(
+        r#"def add(x: Int, y: Int) -> Int { x + y }
+print(to_string(1))"#,
+    )
+    .unwrap();
+    match &resolved[0] {
+        Resolved::Def(_, id, params, ret_ty, body, attrs) => {
+            assert_eq!(id.name, "add");
+            assert_eq!(params.len(), 2);
+            assert_eq!(*attrs, ResolvedDeclAttrs::default());
+            assert!(matches!(ret_ty, Some(spire::ast::AstTy::Named(_, ty)) if ty == "Int"));
+            assert!(
+                matches!(body.as_ref(), Resolved::Block(_, stmts) if matches!(stmts.as_slice(), [Resolved::BinOp(_, _, _, _)]))
+            );
+        }
+        _ => panic!("Expected Def"),
+    }
+    match &resolved[1] {
+        Resolved::App(_, func, _) => match func.as_ref() {
+            Resolved::Var(_, id) => assert_eq!(id.name, "print"),
+            _ => panic!("Expected Var"),
+        },
+        _ => panic!("Expected App"),
+    }
+}
+
+#[test]
+fn test_undefined_var() {
+    let result = parse_and_resolve("print(unknown_var)");
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_if_conversion() {
+    let resolved = parse_and_resolve("x = if(True, 1, 2)").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Resolved::If(_, _, _, Some(_))));
+        }
+        _ => panic!("Expected Bind with If"),
+    }
+}
+
+#[test]
+fn test_if_then_conversion() {
+    let resolved = parse_and_resolve("x = if_then(True, 1)").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Resolved::If(_, _, _, None)));
+        }
+        _ => panic!("Expected Bind with If"),
+    }
+}
+
+#[test]
+fn test_assert_conversion() {
+    let resolved = parse_and_resolve(
+        r#"deferror SomeError { "boom" }
+x = assert(True, SomeError)"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Resolved::Assert(_, _, _)));
+        }
+        _ => panic!("Expected Bind with Assert"),
+    }
+}
+
+#[test]
+fn test_ensure_conversion() {
+    let resolved = parse_and_resolve(
+        r#"def is_even(n: Int) -> Boolean { True }
+deferror SomeError { "boom" }
+x = ensure(1, &is_even, SomeError)"#,
+    )
+    .unwrap();
+    match &resolved[2] {
+        Resolved::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Resolved::Ensure(_, _, _, _)));
+        }
+        _ => panic!("Expected Bind with Ensure"),
+    }
+}
+
+#[test]
+fn test_and_conversion() {
+    let resolved = parse_and_resolve(
+        r#"def rhs() -> Boolean { True }
+x = and(False, rhs())"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
+                assert!(matches!(
+                    else_branch.as_ref(),
+                    Resolved::Lit(_, Lit::Bool(false))
+                ));
+            }
+            other => panic!("Expected If for and(...), got {:?}", other),
+        },
+        _ => panic!("Expected Bind with If"),
+    }
+}
+
+#[test]
+fn test_or_conversion() {
+    let resolved = parse_and_resolve(
+        r#"def rhs() -> Boolean { False }
+x = or(True, rhs())"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                assert!(matches!(
+                    then_branch.as_ref(),
+                    Resolved::Lit(_, Lit::Bool(true))
+                ));
+                assert!(matches!(else_branch.as_ref(), Resolved::App(_, _, _)));
+            }
+            other => panic!("Expected If for or(...), got {:?}", other),
+        },
+        _ => panic!("Expected Bind with If"),
+    }
+}
+
+#[test]
+fn test_eq_conversion() {
+    let resolved = parse_and_resolve("x = eq(1, 2)").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Eq, _, _)));
+        }
+        _ => panic!("Expected Bind with Eq binop"),
+    }
+}
+
+#[test]
+fn test_neq_conversion() {
+    let resolved = parse_and_resolve("x = neq(1, 2)").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Neq, _, _)));
+        }
+        _ => panic!("Expected Bind with Neq binop"),
+    }
+}
+
+#[test]
+fn test_lt_conversion() {
+    let resolved = parse_and_resolve("x = lt(1, 2)").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Lt, _, _)));
+        }
+        _ => panic!("Expected Bind with Lt binop"),
+    }
+}
+
+#[test]
+fn test_concat_conversion() {
+    let resolved = parse_and_resolve(r#"x = concat("a", "b")"#).unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Resolved::BinOp(_, BinOp::Concat, _, _)
+            ));
+        }
+        _ => panic!("Expected Bind with Concat binop"),
+    }
+}
+
+#[test]
+fn test_and_named_arg_is_error() {
+    let err =
+        parse_and_resolve("x = and(left: True, right: False)").expect_err("named args must fail");
+    assert!(err.message.contains("and does not accept named argument"));
+}
+
+#[test]
+fn test_eq_wrong_arity_is_error() {
+    let err = parse_and_resolve("x = eq(1)").expect_err("wrong arity must fail");
+    assert!(err.message.contains("eq expects 2 arguments, got 1"));
+}
+
+#[test]
+fn test_concat_named_arg_is_error() {
+    let err = parse_and_resolve(r#"x = concat(left: "a", right: "b")"#)
+        .expect_err("named args must fail");
+    assert!(err
+        .message
+        .contains("concat does not accept named argument"));
+}
+
+#[test]
+fn test_duplicate_top_level_def_is_error() {
+    let result = parse_and_resolve("def f() -> Int { 1 }\ndef f() -> Int { 2 }");
+    let err = result.expect_err("duplicate def must fail");
+    assert!(err.message.contains("Duplicate top-level definition: f"));
+}
+
+#[test]
+fn test_forward_reference_to_function_resolves_to_same_unique_id() {
+    let resolved = parse_and_resolve(
+        r#"result = add(1, 2)
+def add(x: Int, y: Int) -> Int { x + y }"#,
+    )
+    .unwrap();
+
+    let call_id = match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, _) => match func.as_ref() {
+                Resolved::Var(_, id) => id.unique_id,
+                _ => panic!("Expected function variable in App"),
+            },
+            _ => panic!("Expected App on forward function reference"),
+        },
+        _ => panic!("Expected Bind"),
+    };
+
+    let def_id = match &resolved[1] {
+        Resolved::Def(_, id, _, _, _, _) => id.unique_id,
+        _ => panic!("Expected Def"),
+    };
+
+    assert_eq!(call_id, def_id);
+}
+
+#[test]
+fn test_forward_reference_to_struct_literal_resolves_to_same_unique_id() {
+    let resolved = parse_and_resolve(
+        r#"user = User { name: "alice", age: 30 }
+defstruct User {
+  name: String,
+  age: Int,
+}"#,
+    )
+    .unwrap();
+
+    let lit_id = match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::StructLit(_, id, _) => id.unique_id,
+            _ => panic!("Expected StructLit"),
+        },
+        _ => panic!("Expected Bind"),
+    };
+
+    let def_id = match &resolved[1] {
+        Resolved::StructDef(_, id, _) => id.unique_id,
+        _ => panic!("Expected StructDef"),
+    };
+
+    assert_eq!(lit_id, def_id);
+}
+
+#[test]
+fn test_forward_reference_to_record_constructor_resolves_to_same_unique_id() {
+    let resolved = parse_and_resolve(
+        r#"point = Point(1.0, 2.0)
+defrecord Point(x: Float, y: Float)"#,
+    )
+    .unwrap();
+
+    let ctor_id = match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::ConstructorCall(_, id, _) => id.unique_id,
+            _ => panic!("Expected ConstructorCall"),
+        },
+        _ => panic!("Expected Bind"),
+    };
+
+    let def_id = match &resolved[1] {
+        Resolved::RecordDef(_, id, _) => id.unique_id,
+        _ => panic!("Expected RecordDef"),
+    };
+
+    assert_eq!(ctor_id, def_id);
+}
+
+#[test]
+fn test_forward_reference_to_deferror_constructor_resolves_to_same_unique_id() {
+    let resolved = parse_and_resolve(
+        r#"err = PageNotFound("404")
+deferror PageNotFound(html: String) {
+  "Page Not Found. #{html}"
+}"#,
+    )
+    .unwrap();
+
+    let ctor_id = match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::ConstructorCall(_, id, _) => id.unique_id,
+            _ => panic!("Expected ConstructorCall"),
+        },
+        _ => panic!("Expected Bind"),
+    };
+
+    let def_id = match &resolved[1] {
+        Resolved::DeferrorDef(_, id, _, _) => id.unique_id,
+        _ => panic!("Expected DeferrorDef"),
+    };
+
+    assert_eq!(ctor_id, def_id);
+}
+
+#[test]
+fn test_forward_reference_unique_ids_are_deterministic_across_runs() {
+    let source = r#"result = build_user("alice")
+point = Point(1, 2)
+err = NotFound("404")
+
+def build_user(name: String) -> String { name }
+defrecord Point(x: Int, y: Int)
+deferror NotFound(code: String) {
+  "missing #{code}"
+}"#;
+
+    let first = parse_and_resolve(source).unwrap();
+    let second = parse_and_resolve(source).unwrap();
+
+    fn collect_top_level_ids(nodes: &[Resolved]) -> Vec<u32> {
+        nodes
+            .iter()
+            .flat_map(|node| match node {
+                Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                    Resolved::App(_, func, _) => match func.as_ref() {
+                        Resolved::Var(_, id) => vec![id.unique_id],
+                        _ => Vec::new(),
+                    },
+                    Resolved::ConstructorCall(_, id, _) | Resolved::StructLit(_, id, _) => {
+                        vec![id.unique_id]
+                    }
+                    _ => Vec::new(),
+                },
+                Resolved::Def(_, id, _, _, _, _)
+                | Resolved::RecordDef(_, id, _)
+                | Resolved::StructDef(_, id, _)
+                | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    assert_eq!(
+        collect_top_level_ids(&first),
+        collect_top_level_ids(&second)
+    );
+}
+
+#[test]
+fn test_unresolved_forward_constructor_is_error() {
+    let result = parse_and_resolve(r#"value = MissingType(1)"#);
+    let err = result.expect_err("unknown forward constructor must fail");
+    assert!(err.message.contains("Undefined type: MissingType"));
+}
+
+#[test]
+fn test_duplicate_top_level_struct_is_error() {
+    let result = parse_and_resolve(
+        r#"defstruct User { name: String }
+defstruct User { name: String }"#,
+    );
+    let err = result.expect_err("duplicate struct must fail");
+    assert!(err.message.contains("Duplicate top-level definition: User"));
+}
+
+#[test]
+fn test_shadowing() {
+    let resolved = parse_and_resolve("x = 1\nx = x + 1").unwrap();
+    // The second x should have a different unique_id
+    match (&resolved[0], &resolved[1]) {
+        (
+            Resolved::Bind(_, ResolvedPattern::Var(id1), _),
+            Resolved::Bind(_, ResolvedPattern::Var(id2), _),
+        ) => {
+            assert_ne!(id1.unique_id, id2.unique_id);
+        }
+        _ => panic!("Expected two Binds"),
+    }
+}
+
+#[test]
+fn test_match_wildcard_and_literals() {
+    let resolved = parse_and_resolve(
+        r#"s = "a"
+x = match s {
+  "a" => 1,
+  2 => 2,
+  _ => 0,
+}"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => {
+                assert!(matches!(&arms[0].0, ResolvedPattern::StrLit(_, s) if s == "a"));
+                assert!(matches!(&arms[1].0, ResolvedPattern::IntLit(_, n) if n == &int(2)));
+                assert!(matches!(&arms[2].0, ResolvedPattern::Wildcard(_)));
+            }
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_closure_and_capture_resolution() {
+    let resolved = parse_and_resolve(
+        r#"x = 1
+f = {|y| x + y}
+g = &print(1)"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Closure(_, params, captures, body) => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(captures.len(), 1);
+                assert!(matches!(
+                    body.as_ref(),
+                    Resolved::BinOp(_, BinOp::Add, _, _)
+                ));
+            }
+            _ => panic!("Expected Closure"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+    match &resolved[2] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Capture(_, target, args) => {
+                assert_eq!(args.len(), 1);
+                assert!(matches!(target.as_ref(), Resolved::Var(_, id) if id.name == "print"));
+            }
+            _ => panic!("Expected Capture"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_safebind_resolution() {
+    let resolved = parse_and_resolve("num =? Ok(1)").unwrap();
+    match &resolved[0] {
+        Resolved::SafeBind(_, ResolvedPattern::Var(id), rhs) => {
+            assert_eq!(id.name, "num");
+            assert!(matches!(rhs.as_ref(), Resolved::ConstructorCall(_, _, _)));
+        }
+        _ => panic!("Expected SafeBind"),
+    }
+}
+
+#[test]
+fn test_safebind_constructor_pattern_resolution() {
+    let resolved = parse_and_resolve(
+        r#"value: Result<Result<Int>> = Ok(Ok(1))
+Ok(num) =? value"#,
+    )
+    .unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, _) => {}
+        _ => panic!("Expected prelude bind"),
+    }
+    match &resolved[1] {
+        Resolved::SafeBind(_, ResolvedPattern::Constructor(ctor, inner), rhs) => {
+            assert_eq!(ctor.name, "Ok");
+            assert!(matches!(inner.as_slice(), [ResolvedPattern::Var(id)] if id.name == "num"));
+            assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
+        }
+        _ => panic!("Expected SafeBind with constructor pattern"),
+    }
+}
+
+#[test]
+fn test_safebind_list_with_constructor_literal_pattern_resolution() {
+    let resolved = parse_and_resolve(
+        r#"lr: Result<List<Result<Int>>> = Ok([Ok(1), Ok(2)])
+[Ok(1), ..tail] =? lr"#,
+    )
+    .unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, _) => {}
+        _ => panic!("Expected prelude bind"),
+    }
+    match &resolved[1] {
+        Resolved::SafeBind(_, ResolvedPattern::ListCons(head, tail), rhs) => {
+            assert!(matches!(
+                head.as_ref(),
+                ResolvedPattern::Constructor(ctor, inner)
+                    if ctor.name == "Ok"
+                    && matches!(inner.as_slice(), [ResolvedPattern::IntLit(_, n)] if n == &int(1))
+            ));
+            assert!(matches!(tail.as_ref(), ResolvedPattern::Var(id) if id.name == "tail"));
+            assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "lr"));
+        }
+        _ => panic!("Expected SafeBind list constructor pattern"),
+    }
+}
+
+#[test]
+fn test_as_pattern_resolution() {
+    let resolved = parse_and_resolve(
+        r#"value: Result<List<Int>> = Ok([1, 2, 3])
+[head, ..tail] @ list_dup: List<Int> =? value"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::SafeBind(_, ResolvedPattern::As(inner, alias, Some(_)), rhs) => {
+            assert_eq!(alias.name, "list_dup");
+            assert!(matches!(inner.as_ref(), ResolvedPattern::ListCons(_, _)));
+            assert!(matches!(rhs.as_ref(), Resolved::Var(_, id) if id.name == "value"));
+        }
+        _ => panic!("Expected SafeBind with as-pattern"),
+    }
+}
+
+#[test]
+fn test_duplicate_binding_in_pattern_is_error() {
+    let err = parse_and_resolve(
+        r#"value: Result<List<Int>> = Ok([1, 2, 3])
+[head, ..tail] @ head =? value"#,
+    )
+    .expect_err("duplicate pattern binding should fail");
+    assert!(err.message.contains("Duplicate binding in pattern: head"));
+}
+
+#[test]
+fn test_block_binding_does_not_escape() {
+    let result = parse_and_resolve(
+        r#"{
+  x = 1
+  x
+}
+x"#,
+    );
+    let err = result.expect_err("block-local binding must not escape");
+    assert!(err.message.contains("Undefined variable: x"));
+}
+
+#[test]
+fn test_match_arm_binding_does_not_escape() {
+    let result = parse_and_resolve(
+        r#"value: Result<Int> = Ok(1)
+match value {
+  Ok(x) => x,
+  Err(e) => 0,
+}
+x"#,
+    );
+    let err = result.expect_err("match-arm binding must not escape");
+    assert!(err.message.contains("Undefined variable: x"));
+}
+
+#[test]
+fn test_match_arm_binding_does_not_leak_to_other_arms() {
+    let result = parse_and_resolve(
+        r#"value: Result<Int> = Ok(1)
+match value {
+  Ok(x) => x,
+  Err(e) => x,
+}"#,
+    );
+    let err = result.expect_err("match-arm binding must stay within its own arm");
+    assert!(err.message.contains("Undefined variable: x"));
+}
+
+#[test]
+fn test_nested_closure_does_not_overcapture_outer_local() {
+    let resolved = parse_and_resolve(r#"f = {|x| {|y| x + y}}"#).unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Closure(_, outer_params, outer_captures, outer_body) => {
+                assert_eq!(outer_params.len(), 1);
+                assert!(outer_captures.is_empty());
+                match outer_body.as_ref() {
+                    Resolved::Closure(_, inner_params, inner_captures, inner_body) => {
+                        assert_eq!(inner_params.len(), 1);
+                        assert_eq!(inner_captures.len(), 1);
+                        assert_eq!(inner_captures[0].name, "x");
+                        assert!(matches!(
+                            inner_body.as_ref(),
+                            Resolved::BinOp(_, BinOp::Add, _, _)
+                        ));
+                    }
+                    _ => panic!("Expected inner Closure"),
+                }
+            }
+            _ => panic!("Expected outer Closure"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_closure_param_annotations_are_preserved() {
+    let resolved = parse_and_resolve(r#"f = {|x: Int, y| x}"#).unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Closure(_, params, captures, _) => {
+                assert!(captures.is_empty());
+                assert_eq!(params.len(), 2);
+                assert!(matches!(
+                    params[0].ty.as_ref(),
+                    Some(AstTy::Named(_, name)) if name == "Int"
+                ));
+                assert_eq!(params[1].ty, None);
+            }
+            _ => panic!("Expected Closure"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_explicit_auto_import_is_rejected() {
+    let err = parse_and_resolve(
+        r#"import Bootstrap;
+print("ok")"#,
+    )
+    .expect_err("explicit auto-import must fail");
+    assert!(err.message.contains("Duplicate import"));
+    assert!(err.message.contains("Bootstrap"));
+}
+
+#[test]
+fn test_explicit_kernel_auto_import_is_rejected() {
+    let err = parse_and_resolve(
+        r#"import Kernel;
+print(to_string(add(1, 2)))"#,
+    )
+    .expect_err("explicit kernel auto-import must fail");
+    assert!(err.message.contains("Duplicate import"));
+    assert!(err.message.contains("Kernel"));
+}
+
+#[test]
+fn test_duplicate_module_import_is_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import Helper;
+import Helper;
+print(to_string(add(1, 2)))"#,
+        &module_stages,
+    )
+    .expect_err("duplicate module import must fail");
+    assert!(
+        err.message.contains("Duplicate import"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Helper"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_duplicate_module_then_member_import_is_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import Helper;
+import Helper::add;
+print(to_string(add(1, 2)))"#,
+        &module_stages,
+    )
+    .expect_err("module followed by member import must fail");
+    assert!(
+        err.message.contains("Duplicate import"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Helper::add"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_duplicate_member_then_module_import_is_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import Helper::add;
+import Helper;
+print(to_string(add(1, 2)))"#,
+        &module_stages,
+    )
+    .expect_err("member followed by module import must fail");
+    assert!(
+        err.message.contains("Duplicate import"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Helper"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_duplicate_member_import_is_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import Helper::add;
+import Helper::add;
+print(to_string(add(1, 2)))"#,
+        &module_stages,
+    )
+    .expect_err("duplicate member import must fail");
+    assert!(
+        err.message.contains("Duplicate import"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Helper::add"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_explicit_import_shadows_auto_imported_kernel_function() {
+    let module_stages = vec![
+        vec![staged_module(
+            "Kernel",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+        )],
+        vec![staged_module(
+            "Helper",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x - y }"#, "Helper"),
+        )],
+    ];
+
+    let resolved = resolve_user_with_modules(
+        r#"import Helper::add;
+print(to_string(add(7, 3)))"#,
+        &module_stages,
+    )
+    .expect("explicit import should shadow auto-imported function");
+
+    let helper_add_uid = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, _)
+                if id.qualified_name.as_deref() == Some("Helper::add") =>
+            {
+                Some(id.unique_id)
+            }
+            _ => None,
+        })
+        .expect("helper add should be resolved");
+
+    let imported_add_uid = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::App(_, print_func, print_args) => {
+                if !matches!(print_func.as_ref(), Resolved::Var(_, id) if id.name == "print") {
+                    return None;
+                }
+                let call = match print_args.first()? {
+                    ResolvedRecordLitArg::Positional(inner) => inner,
+                    _ => return None,
+                };
+                let call = match call {
+                    Resolved::App(_, func, args) => {
+                        if !matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "to_string")
+                        {
+                            return None;
+                        }
+                        match args.first()? {
+                            ResolvedRecordLitArg::Positional(inner) => inner,
+                            _ => return None,
+                        }
+                    }
+                    _ => return None,
+                };
+                match call {
+                    Resolved::App(_, func, _) => match func.as_ref() {
+                        Resolved::Var(_, id) if id.name == "add" => Some(id.unique_id),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .expect("user call should resolve imported add");
+
+    assert_eq!(imported_add_uid, helper_add_uid);
+}
+
+#[test]
+fn test_capture_prefers_shadowed_local_function_name() {
+    let resolved = parse_and_resolve(
+        r#"print = {|x| x}
+captured = &print"#,
+    )
+    .expect("shadowing + capture should resolve");
+
+    let local_print_id = match &resolved[0] {
+        Resolved::Bind(_, ResolvedPattern::Var(id), _) => id.unique_id,
+        _ => panic!("Expected local print binding"),
+    };
+
+    let captured_target_id = match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Capture(_, target, _) => match target.as_ref() {
+                Resolved::Var(_, id) => id.unique_id,
+                _ => panic!("Expected captured var target"),
+            },
+            _ => panic!("Expected capture expression"),
+        },
+        _ => panic!("Expected captured binding"),
+    };
+
+    assert_eq!(captured_target_id, local_print_id);
+}
+
+// --- SigilSession tests ---
+
+#[test]
+fn test_sigil_session_basic_resolve() {
+    let mut session = SigilSession::new();
+    let ast = spire::parse("x = 1").expect("parse failed");
+    let resolved = session.resolve(ast).expect("resolve failed");
+    assert_eq!(resolved.len(), 1);
+    assert!(
+        matches!(&resolved[0], Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "x")
+    );
+}
+
+#[test]
+fn test_sigil_session_scope_persists_across_calls() {
+    let mut session = SigilSession::new();
+
+    let ast1 = spire::parse("x = 1").expect("parse failed");
+    session.resolve(ast1).expect("first resolve failed");
+
+    // x must be in scope for the second call
+    let ast2 = spire::parse("y = x + 1").expect("parse failed");
+    let resolved = session.resolve(ast2).expect("second resolve failed");
+    assert!(
+        matches!(&resolved[0], Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "y")
+    );
+}
+
+#[test]
+fn test_sigil_session_lookup_uid_returns_bound_id() {
+    let mut session = SigilSession::new();
+    let ast = spire::parse("answer = 42").expect("parse failed");
+    let resolved = session.resolve(ast).expect("resolve failed");
+
+    let expected_id = match &resolved[0] {
+        Resolved::Bind(_, ResolvedPattern::Var(id), _) => id.unique_id,
+        _ => panic!("Expected Bind"),
+    };
+
+    assert_eq!(session.lookup_uid("answer"), Some(expected_id));
+}
+
+#[test]
+fn test_sigil_session_checkpoint_rollback_removes_later_bindings() {
+    let mut session = SigilSession::new();
+
+    // Define x
+    let ast1 = spire::parse("x = 1").expect("parse failed");
+    session.resolve(ast1).expect("first resolve failed");
+    let x_id = session
+        .lookup_uid("x")
+        .expect("x should be defined after first resolve");
+
+    // Save checkpoint before defining y
+    let checkpoint = session.checkpoint();
+
+    // Define y
+    let ast2 = spire::parse("y = 2").expect("parse failed");
+    session.resolve(ast2).expect("second resolve failed");
+    assert!(
+        session.lookup_uid("y").is_some(),
+        "y should be visible before rollback"
+    );
+
+    // Rollback to before y was added
+    session.rollback(checkpoint);
+
+    assert!(
+        session.lookup_uid("y").is_none(),
+        "y should be gone after rollback"
+    );
+    assert_eq!(
+        session.lookup_uid("x"),
+        Some(x_id),
+        "x should remain after rollback"
+    );
+}
+
+#[test]
+fn test_sigil_session_failed_resolve_does_not_pollute_scope() {
+    let mut session = SigilSession::new();
+
+    // Define x
+    let ast1 = spire::parse("x = 1").expect("parse failed");
+    session.resolve(ast1).expect("first resolve failed");
+    let x_id = session.lookup_uid("x").expect("x should be defined");
+
+    // Attempt to resolve something with an undefined variable — must fail
+    let ast_fail = spire::parse("y = undefined_name + 1").expect("parse failed");
+    assert!(
+        session.resolve(ast_fail).is_err(),
+        "resolve of undefined var must fail"
+    );
+
+    // x should survive; y must not be committed to scope
+    assert_eq!(
+        session.lookup_uid("x"),
+        Some(x_id),
+        "x should remain after failed resolve"
+    );
+    assert!(
+        session.lookup_uid("y").is_none(),
+        "y must not be in scope after a failed resolve"
+    );
+}
+
+// --- Expression resolution tests ---
+
+#[test]
+fn test_interpolated_string_resolves_embedded_variable() {
+    let resolved = parse_and_resolve(
+        r#"name = "alice"
+greeting = "Hello #{name}!""#,
+    )
+    .unwrap();
+
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::InterpolatedStr(_, parts) => {
+                let has_text = parts
+                    .iter()
+                    .any(|p| matches!(p, ResolvedInterpolatedPart::Text(s) if s.contains("Hello")));
+                let has_name_var = parts.iter().any(|p| {
+                    matches!(p, ResolvedInterpolatedPart::Expr(e)
+                            if matches!(e.as_ref(), Resolved::Var(_, id) if id.name == "name"))
+                });
+                assert!(
+                    has_text,
+                    "expected 'Hello' text part in interpolated string"
+                );
+                assert!(
+                    has_name_var,
+                    "expected resolved `name` variable in interpolated string"
+                );
+            }
+            _ => panic!("Expected InterpolatedStr, got {:?}", rhs),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_field_access_resolves_correct_target() {
+    let resolved = parse_and_resolve(
+        r#"defstruct Point { x: Int, y: Int }
+p = Point { x: 1, y: 2 }
+val = p.x"#,
+    )
+    .unwrap();
+
+    match &resolved[2] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::FieldAccess(_, expr, field) => {
+                assert_eq!(field, "x");
+                assert!(
+                    matches!(expr.as_ref(), Resolved::Var(_, id) if id.name == "p"),
+                    "field access target should be `p`"
+                );
+            }
+            _ => panic!("Expected FieldAccess"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_list_literal_resolves_all_elements() {
+    let resolved = parse_and_resolve("items = [1, 2, 3]").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::ListLiteral(_, elems) => {
+                assert_eq!(elems.len(), 3);
+                assert!(matches!(&elems[0], Resolved::Lit(_, Lit::Int(n)) if n == &int(1)));
+                assert!(matches!(&elems[1], Resolved::Lit(_, Lit::Int(n)) if n == &int(2)));
+                assert!(matches!(&elems[2], Resolved::Lit(_, Lit::Int(n)) if n == &int(3)));
+            }
+            _ => panic!("Expected ListLiteral"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_semicolon_expression_wraps_inner_node() {
+    let resolved = parse_and_resolve(r#"print("hello");"#).unwrap();
+    match &resolved[0] {
+        Resolved::Semi(_, inner) => match inner.as_ref() {
+            Resolved::App(_, func, _) => match func.as_ref() {
+                Resolved::Var(_, id) => assert_eq!(id.name, "print"),
+                _ => panic!("Expected Var(print) inside Semi"),
+            },
+            _ => panic!("Expected App inside Semi"),
+        },
+        _ => panic!("Expected Semi at top level"),
+    }
+}
+
+// --- Import error tests ---
+
+#[test]
+fn test_unknown_import_member_is_error() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import Helper::nonexistent;
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("importing a non-existent member must fail");
+
+    assert!(
+        err.message.contains("Unknown import member"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Helper::nonexistent"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+// --- Match arm binding tests ---
+
+#[test]
+fn test_match_arm_constructor_binding_resolves_to_same_uid_in_body() {
+    let resolved = parse_and_resolve(
+        r#"value: Result<Int> = Ok(42)
+result = match value {
+  Ok(x) => x,
+  Err(e) => 0,
+}"#,
+    )
+    .unwrap();
+
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => {
+                match &arms[0] {
+                    (ResolvedPattern::Constructor(ctor_id, inner), body) => {
+                        assert_eq!(ctor_id.name, "Ok");
+                        let binding_id = match inner.as_slice() {
+                            [ResolvedPattern::Var(binding_id)] => binding_id,
+                            _ => panic!("Expected constructor inner var binding"),
+                        };
+                        assert_eq!(binding_id.name, "x");
+                        // The arm body `x` must refer to the same uid as the pattern binding
+                        match body {
+                            Resolved::Var(_, var_id) => {
+                                assert_eq!(
+                                    var_id.unique_id, binding_id.unique_id,
+                                    "body var uid must match pattern binding uid"
+                                );
+                            }
+                            _ => panic!("Expected Var as match arm body"),
+                        }
+                    }
+                    _ => panic!("Expected Constructor arm pattern with binding"),
+                }
+            }
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_match_first_binding_pattern_binds_and_is_visible_in_body() {
+    let resolved = parse_and_resolve(
+        r#"result = match 42 {
+  fallback => fallback,
+  _ => 0,
+}"#,
+    )
+    .unwrap();
+
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => match &arms[0] {
+                (ResolvedPattern::Var(binding_id), Resolved::Var(_, body_id)) => {
+                    assert_eq!(binding_id.name, "fallback");
+                    assert_eq!(binding_id.unique_id, body_id.unique_id);
+                }
+                _ => panic!("Expected first arm to be a binding pattern"),
+            },
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_match_as_pattern_and_annotation_resolve_end_to_end() {
+    let resolved = parse_and_resolve(
+        r#"value = [1, 2]
+result = match value {
+  [head, ..tail] @ whole: List<Int> => head,
+  _ => 0,
+}"#,
+    )
+    .unwrap();
+
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => match &arms[0] {
+                (
+                    ResolvedPattern::As(inner, alias, Some(AstTy::Generic(_, ty_name, ty_args))),
+                    body,
+                ) => {
+                    assert_eq!(alias.name, "whole");
+                    assert_eq!(ty_name, "List");
+                    assert_eq!(ty_args.len(), 1);
+                    assert!(matches!(inner.as_ref(), ResolvedPattern::ListCons(_, _)));
+                    assert!(matches!(body, Resolved::Var(_, id) if id.name == "head"));
+                }
+                _ => panic!("Expected as-pattern with generic annotation"),
+            },
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+// --- build_scope_for_module tests ---
+
+#[test]
+fn test_build_scope_for_module_includes_prior_stage_declarations() {
+    let module_stages = vec![
+        vec![staged_module(
+            "Util",
+            parse_module_ast(r#"def helper(x: Int) -> Int { x }"#, "Util"),
+        )],
+        vec![staged_module(
+            "App",
+            parse_module_ast(r#"def main() -> Int { 0 }"#, "App"),
+        )],
+    ];
+
+    // Stage index 1 (App) — Util::helper from stage 0 should appear by fully-qualified name
+    let scope = build_scope_for_module(&module_stages, Some("App"), 1)
+        .expect("build_scope_for_module should succeed");
+
+    assert!(
+        scope.lookup("Util::helper").is_some(),
+        "Util::helper should be accessible by qualified name in App's scope"
+    );
+}

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: if branches have different types

@@ -1,0 +1,1 @@
+This view intentionally stays one level above implementation details. Recursive drill-down is provided for the CLI, pipeline, shared support crates, and interactive tooling where the current codebase has meaningful internal structure.

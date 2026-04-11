@@ -1,0 +1,4 @@
+print(to_string(cond {
+  1 => 10,
+  True => 20,
+}))

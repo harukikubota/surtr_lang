@@ -1,0 +1,3 @@
+deferror PageNotFound(html: String) {
+  "Page Not Found. #{html}"
+}

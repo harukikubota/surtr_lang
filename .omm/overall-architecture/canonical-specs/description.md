@@ -1,0 +1,1 @@
+The canonical specifications in `doc/`. These documents define the language, VM, testing policy, and focused design memos that implementation changes are expected to follow before code drift accumulates.

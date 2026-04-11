@@ -1,0 +1,4 @@
+defenum Loop {
+  A(Loop),
+  B(Loop),
+}

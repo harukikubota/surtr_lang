@@ -1,0 +1,1 @@
+High-level map of the Surtr compiler workspace. It shows how the Rune CLI, the compiler pipeline crates, shared runtime contracts, interactive tooling, standard-library source files, and canonical specification documents fit together.

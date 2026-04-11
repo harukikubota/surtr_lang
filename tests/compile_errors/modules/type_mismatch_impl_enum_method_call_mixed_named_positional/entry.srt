@@ -1,0 +1,2 @@
+light = Light::Green
+bad = Light::with_steps(light, steps: 1)

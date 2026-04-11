@@ -1,0 +1,3 @@
+deferror GuardError(detail: String) {
+  detail
+}

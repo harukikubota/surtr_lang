@@ -12,6 +12,9 @@ pub enum Ty {
     /// `List<T>`
     List(Box<Ty>),
 
+    /// MatchBlock-only heterogenous payload, represented at runtime as a list.
+    Seq(Vec<Ty>),
+
     /// Generic function type: `(params) -> ret`
     Func(Vec<Ty>, Box<Ty>),
 
@@ -25,6 +28,7 @@ pub enum Ty {
     /// User-defined function (phase 2)
     UserFunc {
         fun_idx: u32,
+        type_params: Vec<u32>,
         params: Vec<Ty>,
         ret: Box<Ty>,
     },
@@ -37,6 +41,9 @@ pub enum Ty {
 
     /// Named record: `Point(x: Float, y: Float)`
     Record(Symbol, Vec<(Symbol, Ty)>),
+
+    /// Named enum: `Direction`, `ReduceStep<Int>`
+    Enum(Symbol, Vec<Ty>),
 
     /// `Result<Ok, Err>`
     Result(Box<Ty>, Box<Ty>),

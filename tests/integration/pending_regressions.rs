@@ -1,50 +1,54 @@
 mod support;
 
-use spire::{parse, parse_with_context, ParserContext, SourceRules};
-
 #[test]
-#[ignore = "pending: parser support for @@builtin + type declarations"]
-fn pending_std_module_builtin_type_declaration_parses() {
-    let source = r#"defmod Bootstrap {
-  @@builtin
-  type Int
-}"#;
-    let ast = parse_with_context(
-        source,
-        ParserContext::module(0, Some("Bootstrap".into())).with_rules(SourceRules::std_module()),
-    )
-    .expect("std module should accept builtin type declarations once implemented");
-    assert_eq!(ast.len(), 1);
+#[ignore = "pending: stronger closure inference for expected=None without let-generalization"]
+fn pending_closure_without_expected_type_can_be_reused_polymorphically() {
+    let source = r#"id = {|value| value}
+left: Int = id(1)
+right: String = id("ok")"#;
+    let bytecode = support::compile_script("pending_closure_poly.srt", source)
+        .expect("closure should typecheck once expected=None inference is strengthened");
+    assert!(!bytecode.opcodes.is_empty());
 }
 
 #[test]
-#[ignore = "pending: SourceRules boundary for builtin type declarations"]
-fn pending_user_module_builtin_type_declaration_is_rejected() {
-    let source = r#"defmod UserExt {
-  @@builtin
-  type Int
+#[ignore = "pending: runtime fuel budget should stop non-terminating execution with a stable reason"]
+fn pending_runtime_fuel_budget_stops_recursive_loop() {
+    let source = r#"def loop() -> Result<()> {
+  loop()
+}
+
+def main() -> Result<()> {
+  loop()
 }"#;
-    let err = parse_with_context(
-        source,
-        ParserContext::module(0, Some("UserExt".into())).with_rules(SourceRules::module()),
-    )
-    .expect_err("user modules must not accept builtin type declarations");
+    let err = support::run_script("pending_fuel_budget.srt", source)
+        .expect_err("fuel-based execution should stop runaway programs once implemented");
     assert!(
-        err.message().contains("not allowed") || err.message().contains("@@builtin"),
-        "unexpected error: {}",
-        err.message()
+        err.contains("fuel") || err.contains("budget") || err.contains("step limit"),
+        "future fuel error should mention the stop reason: {err}"
     );
 }
 
 #[test]
-#[ignore = "pending: AstTy::Generic should preserve generic arguments"]
-fn pending_generic_type_arguments_are_preserved() {
-    let ast = parse("value: Option<Int> = make()").expect("generic surface syntax should parse");
-    let debug = format!("{ast:?}");
-    assert!(
-        debug.contains("Generic"),
-        "generic arguments should survive parse instead of collapsing: {debug}"
-    );
+#[ignore = "pending: host-dependent OOM policy and reporting contract are not fixed yet"]
+fn pending_host_dependent_oom_policy_is_surfaced_consistently() {
+    let _message = "future OOM policy should decide whether allocation failure is a runtime error, process failure, or host abort";
+}
+
+#[test]
+#[ignore = "pending: std-module @@builtin and @@test coexistence is not implemented yet"]
+fn pending_std_module_builtin_and_test_annotations_can_coexist() {
+    let module_source = r#"defmod Bootstrap {
+  @@builtin
+  type Int
+
+  @@builtin
+  def print(a: String) -> Unit
+
+  @@test 1 == 1
+  def smoke() -> Boolean { True }
+}"#;
+    assert!(module_source.contains("@@builtin"));
 }
 
 #[test]

@@ -1,0 +1,4 @@
+defenum Light {
+  Red,
+  Green,
+}

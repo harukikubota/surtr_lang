@@ -1,0 +1,3 @@
+import Matchers::never
+
+never(value) = 1

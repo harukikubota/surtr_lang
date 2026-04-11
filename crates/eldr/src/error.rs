@@ -1,5 +1,6 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use sindr::runtime::Location;
+use std::io::{self, Write};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RuntimeErrorContext {
@@ -13,19 +14,19 @@ pub struct RuntimeErrorContext {
 #[derive(Debug, Clone)]
 pub struct RuntimeError {
     pub message: String,
-    pub context: RuntimeErrorContext,
+    pub context: Box<RuntimeErrorContext>,
 }
 
 impl RuntimeError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            context: RuntimeErrorContext::default(),
+            context: Box::new(RuntimeErrorContext::default()),
         }
     }
 
     pub fn with_context(mut self, context: RuntimeErrorContext) -> Self {
-        self.context = context;
+        self.context = Box::new(context);
         self
     }
 }
@@ -81,6 +82,25 @@ pub fn report_runtime_error(
     fallback_file: Option<&str>,
     location: Option<Location>,
 ) {
+    let mut stderr = io::stderr().lock();
+    let _ = report_runtime_error_to(
+        &mut stderr,
+        err,
+        source,
+        fallback_file,
+        location,
+        runtime_error_verbose_enabled(),
+    );
+}
+
+fn report_runtime_error_to(
+    writer: &mut impl Write,
+    err: &RuntimeError,
+    source: Option<&str>,
+    fallback_file: Option<&str>,
+    location: Option<Location>,
+    verbose: bool,
+) -> io::Result<()> {
     let mut rendered = false;
 
     if let (Some(source), Some(location)) = (source, location.clone()) {
@@ -103,24 +123,29 @@ pub fn report_runtime_error(
                     .with_message(&err.message)
                     .with_color(Color::Red),
             )
-            .finish()
-            .eprint((file_name, Source::from(source)));
+            .finish();
 
-        if report.is_ok() {
+        if report
+            .write((file_name, Source::from(source)), &mut *writer)
+            .is_ok()
+        {
             rendered = true;
         }
     }
 
     if !rendered {
-        eprintln!(
+        writeln!(
+            writer,
             "{}",
             format_runtime_error_with_location(err, location.as_ref())
-        );
+        )?;
     }
 
-    if runtime_error_verbose_enabled() {
-        eprintln!("{}", format_runtime_error_verbose(err));
+    if verbose {
+        writeln!(writer, "{}", format_runtime_error_verbose(err))?;
     }
+
+    Ok(())
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -142,9 +167,15 @@ fn runtime_error_verbose_enabled() -> bool {
 mod tests {
     use super::{
         format_runtime_error, format_runtime_error_verbose, format_runtime_error_with_location,
-        RuntimeError, RuntimeErrorContext,
+        report_runtime_error_to, runtime_error_verbose_enabled, RuntimeError, RuntimeErrorContext,
     };
     use sindr::runtime::Location;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn format_runtime_error_uses_shared_shape() {
@@ -194,5 +225,79 @@ mod tests {
         assert!(formatted.contains("call_site: main.srt:5:9"));
         assert!(formatted.contains("detail: stack_depth=2"));
         assert!(formatted.contains("detail: locals_len=1"));
+    }
+
+    #[test]
+    fn report_runtime_error_to_falls_back_without_source() {
+        let err = RuntimeError::new("boom");
+        let location = Location {
+            file: "main.srt".into(),
+            func: "<runtime>".into(),
+            line: 3,
+            column: 7,
+            span_start: 10,
+            span_end: 14,
+        };
+        let mut buf = Vec::new();
+        report_runtime_error_to(&mut buf, &err, None, None, Some(location), false)
+            .expect("fallback rendering should succeed");
+        let rendered = String::from_utf8(buf).expect("stderr should be utf-8");
+        assert!(rendered.contains("RuntimeError: boom (main.srt:3:7)"));
+    }
+
+    #[test]
+    fn report_runtime_error_to_renders_source_report_and_verbose_block() {
+        let err = RuntimeError::new("boom").with_context(RuntimeErrorContext {
+            pc: Some(9),
+            opcode: Some("AddInt".into()),
+            function: None,
+            call_site: None,
+            details: vec!["stack_depth=1".into()],
+        });
+        let location = Location {
+            file: "main.srt".into(),
+            func: "<runtime>".into(),
+            line: 1,
+            column: 1,
+            span_start: 0,
+            span_end: 4,
+        };
+        let mut buf = Vec::new();
+        report_runtime_error_to(&mut buf, &err, Some("boom"), None, Some(location), true)
+            .expect("report rendering should succeed");
+        let rendered = String::from_utf8(buf).expect("stderr should be utf-8");
+        assert!(rendered.contains("RuntimeError"));
+        assert!(rendered.contains("boom"));
+        assert!(rendered.contains("pc: 9"));
+        assert!(rendered.contains("opcode: AddInt"));
+        assert!(rendered.contains("detail: stack_depth=1"));
+    }
+
+    #[test]
+    fn runtime_error_verbose_enabled_accepts_expected_values() {
+        let _guard = env_lock().lock().expect("env lock");
+        let previous = std::env::var("SURTR_VERBOSE_RUNTIME_ERROR").ok();
+
+        for (value, expected) in [
+            (None, false),
+            (Some("0"), false),
+            (Some("1"), true),
+            (Some("true"), true),
+            (Some("TRUE"), true),
+            (Some("yes"), true),
+            (Some("YES"), true),
+            (Some("no"), false),
+        ] {
+            match value {
+                Some(value) => std::env::set_var("SURTR_VERBOSE_RUNTIME_ERROR", value),
+                None => std::env::remove_var("SURTR_VERBOSE_RUNTIME_ERROR"),
+            }
+            assert_eq!(runtime_error_verbose_enabled(), expected, "value={value:?}");
+        }
+
+        match previous {
+            Some(value) => std::env::set_var("SURTR_VERBOSE_RUNTIME_ERROR", value),
+            None => std::env::remove_var("SURTR_VERBOSE_RUNTIME_ERROR"),
+        }
     }
 }

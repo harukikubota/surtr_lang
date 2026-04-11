@@ -1,7 +1,9 @@
 use std::env;
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn surtr_bin() -> String {
     if let Ok(path) = env::var("CARGO_BIN_EXE_surtr") {
@@ -25,15 +27,22 @@ fn surtr_bin() -> String {
 }
 
 fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
+    run_repl_session_with_args_in_dir(args, input, None)
+}
+
+fn run_repl_session_with_args_in_dir(args: &[&str], input: &str, cwd: Option<&PathBuf>) -> Output {
     let bin = PathBuf::from(surtr_bin());
-    let mut child = Command::new(bin)
+    let mut command = Command::new(bin);
+    command
         .arg("repl")
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn surtr repl");
+        .stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    let mut child = command.spawn().expect("failed to spawn surtr repl");
 
     child
         .stdin
@@ -69,6 +78,16 @@ fn strip_ansi(input: &str) -> String {
     out
 }
 
+fn temp_dir(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after unix epoch")
+        .as_nanos();
+    let dir = env::temp_dir().join(format!("surtr-{prefix}-{nanos}"));
+    fs::create_dir_all(&dir).expect("failed to create temp dir");
+    dir
+}
+
 #[test]
 fn repl_quit_exits_cleanly() {
     let output = run_repl_session(":quit\n");
@@ -78,6 +97,27 @@ fn repl_quit_exits_cleanly() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn repl_fails_fast_when_additional_stdlib_bootstrap_fails() {
+    let dir = temp_dir("repl-bootstrap-failure");
+    let lib_dir = dir.join("lib");
+    fs::create_dir_all(&lib_dir).expect("failed to create lib dir");
+    fs::write(lib_dir.join("bad.srt"), "defmod Broken { def nope( }")
+        .expect("failed to write bad module");
+
+    let output = run_repl_session_with_args_in_dir(&["--quiet"], "", Some(&dir));
+    assert!(
+        !output.status.success(),
+        "repl init should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stderr.contains("bootstrap failed during parse"));
+    assert!(stderr.contains("lib/bad.srt"));
 }
 
 #[test]
@@ -227,6 +267,42 @@ fn repl_infers_closure_argument_type_from_add_constraint() {
 }
 
 #[test]
+fn repl_accepts_top_level_function_definition() {
+    let output = run_repl_session("def add(x: Int, y: Int) -> Int { x + y }\nadd(1, 2)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("3"),
+        "expected function call result in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_rejects_top_level_struct_definition() {
+    let output = run_repl_session("defstruct User { name: String }\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl should remain alive after parse error\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("This top-level declaration is not allowed in the current source policy"),
+        "expected declaration policy parse error, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
 fn repl_compile_error_does_not_break_session_state() {
     let output = run_repl_session("x = 1\nbad: Int = \"oops\"\nx\n:quit\n");
     assert!(
@@ -282,10 +358,37 @@ fn repl_value_recall_by_line_number() {
 }
 
 #[test]
-fn repl_deferror_builder_survives_incremental_execution() {
-    let output = run_repl_session(
-        "deferror PageNotFound(html: String) {\n  \"Page Not Found. #{html}\"\n}\nerr_result: Result<Int> = Err(PageNotFound(\"404\"))\n:quit\n",
+fn repl_doc_command_shows_builtin_docs() {
+    let output = run_repl_session(":doc print\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Kernel::print"),
+        "expected :doc to resolve the builtin symbol, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("sig: print(a: String) -> Unit"),
+        "expected :doc to print the builtin signature, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Print a string to stdout."),
+        "expected :doc to print the builtin summary, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_displays_bare_std_callable_refs_with_named_inspect_format() {
+    let output =
+        run_repl_session("&Int::shr\n&Boolean::xor\nprint(inspect(&Boolean::xor))\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -296,10 +399,97 @@ fn repl_deferror_builder_survives_incremental_execution() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains(
-            "err_result: Result<Int, Error> = Err(PageNotFound(\"Page Not Found. 404\"))"
+            "FnCapture(module: Int, name: shr, signature: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
         ),
-        "expected incremental err_result binding, got:\n{}",
+        "expected builtin callable inspect format, got:\n{}",
         stdout
+    );
+    assert!(
+        stdout.contains(
+            "FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)"
+        ),
+        "expected function callable inspect format, got:\n{}",
+        stdout
+    );
+    assert_eq!(
+        stdout
+            .matches(
+                "FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)"
+            )
+            .count(),
+        2,
+        "expected bare display and inspect(...) to agree for Boolean::xor, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_displays_local_function_refs_with_named_inspect_format() {
+    let output = run_repl_session(
+        "def add(x: Int, y: Int) -> Int { x + y }\n&add\nprint(inspect(&add))\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("FnCapture(module:"),
+        "expected named callable inspect output, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("name: add, signature: add(x: Int, y: Int) -> Int)"),
+        "expected local function signature in inspect output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_save_command_writes_decodable_eldr_snapshot() {
+    let dir = temp_dir("repl-save");
+    let save_base = dir.join("session");
+    let input = format!("x = 1\n:save {}\n:quit\n", save_base.to_string_lossy());
+    let output = run_repl_session(&input);
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let saved_path = save_base.with_extension("eldr");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!("saved to {}", saved_path.display())),
+        "expected :save to report the output path, got:\n{}",
+        stdout
+    );
+
+    let bytes = fs::read(&saved_path).expect("saved .eldr snapshot should exist");
+    forge::bytecode::Bytecode::decode(&bytes).expect("saved .eldr snapshot should decode");
+
+    fs::remove_dir_all(&dir).expect("failed to clean temp dir");
+}
+
+#[test]
+fn repl_rejects_top_level_deferror_definition() {
+    let output = run_repl_session("deferror PageNotFound(html: String) { html }\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl should remain alive after parse error\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("This top-level declaration is not allowed in the current source policy"),
+        "expected declaration policy parse error, got:\n{}",
+        stderr
     );
 }
 
@@ -540,7 +730,7 @@ fn repl_duplicate_function_name_is_rejected() {
 #[test]
 fn repl_eprint_reports_generation_site_line() {
     let output = run_repl_session(
-        "deferror PageNotFound(html: String) {\n  \"Page Not Found. #{html}\"\n}\nerr_result: Result<Int> = Err(PageNotFound(\"404\"))\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",
+        "err_result: Result<Int> = Err(NoneError)\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",
     );
     assert!(
         output.status.success(),

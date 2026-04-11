@@ -1,0 +1,1 @@
+The executable command surface in `crates/rune/`. It parses CLI arguments, loads Surtr source or `.eldr` artifacts, runs the compile pipeline for script-oriented commands, and reports diagnostics or runtime failures to the user.

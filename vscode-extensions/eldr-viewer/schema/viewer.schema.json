@@ -1,0 +1,1556 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ViewerFile",
+  "type": "object",
+  "required": [
+    "chunks",
+    "constants",
+    "errors",
+    "format",
+    "functions",
+    "header",
+    "opcodes",
+    "schema_version",
+    "sources"
+  ],
+  "properties": {
+    "chunks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ChunkView"
+      }
+    },
+    "constants": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ConstantView"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ErrorTemplateView"
+      }
+    },
+    "format": {
+      "type": "string"
+    },
+    "functions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/FunctionView"
+      }
+    },
+    "header": {
+      "$ref": "#/definitions/ViewerHeader"
+    },
+    "opcodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/OpcodeRowView"
+      }
+    },
+    "schema_version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/SourceFileView"
+      }
+    }
+  },
+  "definitions": {
+    "ChunkView": {
+      "type": "object",
+      "required": [
+        "chunk_id",
+        "padded_size",
+        "payload_offset",
+        "size",
+        "tag"
+      ],
+      "properties": {
+        "chunk_id": {
+          "type": "string"
+        },
+        "padded_size": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "payload_offset": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "tag": {
+          "type": "string"
+        }
+      }
+    },
+    "ConstantView": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "idx",
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Int"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "idx",
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Tag"
+              ]
+            },
+            "value": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "idx",
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Float"
+              ]
+            },
+            "value": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "idx",
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Str"
+              ]
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "idx",
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Bool"
+              ]
+            },
+            "value": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "idx",
+            "kind"
+          ],
+          "properties": {
+            "idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Unit"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ErrorTemplateView": {
+      "type": "object",
+      "required": [
+        "format",
+        "kind",
+        "num_params",
+        "template_id"
+      ],
+      "properties": {
+        "format": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "num_params": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "source_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SourceRefView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "template_id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "FunctionView": {
+      "type": "object",
+      "required": [
+        "arity",
+        "chunk_id",
+        "entry_pc",
+        "fun_idx",
+        "function_id",
+        "num_locals",
+        "opcode_pcs"
+      ],
+      "properties": {
+        "arity": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "chunk_id": {
+          "type": "string"
+        },
+        "end_pc": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "entry_pc": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "fun_idx": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "function_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "num_locals": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "opcode_pcs": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        },
+        "source_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SourceRefView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "OpcodeRowView": {
+      "type": "object",
+      "required": [
+        "op",
+        "pc"
+      ],
+      "properties": {
+        "function_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "op": {
+          "$ref": "#/definitions/OpcodeView"
+        },
+        "pc": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "source_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SourceRefView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "OpcodeView": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "const_idx",
+            "kind"
+          ],
+          "properties": {
+            "const_idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LoadConst"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "builtin",
+            "builtin_id",
+            "kind"
+          ],
+          "properties": {
+            "builtin": {
+              "type": "string"
+            },
+            "builtin_id": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LoadBuiltinRef"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "fun_idx",
+            "kind"
+          ],
+          "properties": {
+            "fun_idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LoadFunctionRef"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "local_idx"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LoadLocal"
+              ]
+            },
+            "local_idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "local_idx"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StoreLocal"
+              ]
+            },
+            "local_idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "AddInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SubInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "MulInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "BitNotInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "BitAndInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "BitOrInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "BitXorInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "AddFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "SubFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "MulFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EqInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "NeqInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LtInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "GtInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LteInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "GteInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EqFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "NeqFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LtFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "GtFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "LteFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "GteFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EqStr"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "NeqStr"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EqBool"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "NeqBool"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ConcatStr"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StringIsEmpty"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StringHead"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StringTail"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "NegInt"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "NegFloat"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "NotBool"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "len"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ListNew"
+              ]
+            },
+            "len": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ListEmpty"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ListNil"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ListCons"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ListIsEmpty"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ListHead"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ListTail"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "len"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ListFromItems"
+              ]
+            },
+            "len": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "field_count",
+            "kind"
+          ],
+          "properties": {
+            "field_count": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "StructNew"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "field_index",
+            "kind"
+          ],
+          "properties": {
+            "field_index": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "GetField"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "GetTag"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "EqTag"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "arity",
+            "builtin",
+            "builtin_id",
+            "kind",
+            "span_end",
+            "span_start"
+          ],
+          "properties": {
+            "arity": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "builtin": {
+              "type": "string"
+            },
+            "builtin_id": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CallBuiltin"
+              ]
+            },
+            "span_end": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "span_start": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "arity",
+            "fun_idx",
+            "kind",
+            "span_end",
+            "span_start"
+          ],
+          "properties": {
+            "arity": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "fun_idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Call"
+              ]
+            },
+            "span_end": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "span_start": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "capture_count",
+            "kind"
+          ],
+          "properties": {
+            "capture_count": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CaptureClosure"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "arg_count",
+            "kind"
+          ],
+          "properties": {
+            "arg_count": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CapturePartial"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "template_id"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "MakeError"
+              ]
+            },
+            "template_id": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "kind_const_idx",
+            "message_const_idx"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "MakeErrorLiteral"
+              ]
+            },
+            "kind_const_idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "message_const_idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "arity",
+            "kind",
+            "span_end",
+            "span_start"
+          ],
+          "properties": {
+            "arity": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 0.0
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CallClosure"
+              ]
+            },
+            "span_end": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "span_start": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "target_pc"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Jump"
+              ]
+            },
+            "target_pc": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "target_pc"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "JumpIfFalse"
+              ]
+            },
+            "target_pc": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "target_pc"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "JumpIfTrue"
+              ]
+            },
+            "target_pc": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Pop"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Return"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Halt"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "SourceFileView": {
+      "type": "object",
+      "required": [
+        "source_id"
+      ],
+      "properties": {
+        "content_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "normalized_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SourceRefView": {
+      "type": "object",
+      "required": [
+        "column",
+        "line",
+        "source_id",
+        "span_end",
+        "span_start"
+      ],
+      "properties": {
+        "column": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "line": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "span_end": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "span_start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ViewerHeader": {
+      "type": "object",
+      "required": [
+        "debug_level",
+        "magic",
+        "num_chunks",
+        "version"
+      ],
+      "properties": {
+        "debug_level": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "magic": {
+          "type": "string"
+        },
+        "num_chunks": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    }
+  }
+}

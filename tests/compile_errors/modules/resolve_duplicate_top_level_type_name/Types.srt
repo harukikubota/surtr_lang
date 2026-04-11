@@ -1,0 +1,5 @@
+defstruct User {
+  name: String,
+}
+
+defrecord User(id: Int)

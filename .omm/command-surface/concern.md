@@ -1,0 +1,1 @@
+The CLI owns several subtly different execution environments: run, build, dump-source, dump-bytecode, repl, tui, and test. Error messages and source rules need to stay aligned even when commands bypass different parts of the pipeline.

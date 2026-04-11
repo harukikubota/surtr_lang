@@ -1,0 +1,9 @@
+initial = Light::Red
+once = Light::next(initial)
+twice = Light::advance(initial, 2)
+rebound = Light::rebound_once(Light::Yellow)
+
+print(to_string(Light::is_stop(initial)))
+print(to_string(Light::is_stop(once)))
+print(to_string(Light::is_stop(twice)))
+print(to_string(Light::is_stop(rebound)))

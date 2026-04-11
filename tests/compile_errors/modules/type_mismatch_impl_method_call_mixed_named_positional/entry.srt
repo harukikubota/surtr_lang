@@ -1,0 +1,2 @@
+user = User("alice", 30)
+updated = User::with_name_and_age(user, "bob", age: 31)

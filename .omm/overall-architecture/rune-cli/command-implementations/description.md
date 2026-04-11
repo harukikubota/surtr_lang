@@ -1,0 +1,1 @@
+The subcommand handlers in `crates/rune/src/commands/`. They parse command-specific flags and choose whether to compile source files, inspect bytecode, start the REPL or TUI, or run Surtr test annotations.

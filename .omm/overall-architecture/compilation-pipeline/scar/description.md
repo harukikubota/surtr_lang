@@ -1,0 +1,1 @@
+The typechecker crate. `scar` validates expression types, pattern exhaustiveness, builtin contracts, and field access semantics, producing typed nodes where record field names are already converted into numeric field indexes.

@@ -1,0 +1,38 @@
+@@doc """
+Standard `Float` type declaration.
+Floating-point support is implemented, but the exact language contract is still
+provisional.
+This top-level declaration exists so the rest of the pipeline can talk about
+`Float` consistently while the finer contract remains under active review.
+"""
+@@builtin type Float
+
+@@doc """
+Float module.
+Groups float-specific helpers while the exact `Float` contract continues to be
+refined.
+This module stays intentionally small and focuses on arithmetic helpers that
+are independent of rounding-policy decisions.
+"""
+defmod Float {
+  @@doc """
+  Return the absolute value of `value`.
+  """
+  def abs(value: Float) -> Float {
+    if(value < 0.0, 0.0 - value, value)
+  }
+
+  @@doc """
+  Return the smaller of `a` and `b`.
+  """
+  def min(a: Float, b: Float) -> Float {
+    if(a <= b, a, b)
+  }
+
+  @@doc """
+  Return the larger of `a` and `b`.
+  """
+  def max(a: Float, b: Float) -> Float {
+    if(a >= b, a, b)
+  }
+}

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: expects a plain function on the right-hand side

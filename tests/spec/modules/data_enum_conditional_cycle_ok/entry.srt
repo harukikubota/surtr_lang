@@ -1,0 +1,5 @@
+value: Loop = Loop::End
+print(match value {
+  Loop::End => "END",
+  Loop::Next(_) => "NEXT",
+})

@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, FocusPane, ReplMode, ResultEntryKind};
+use super::app::{App, FocusPane, ResultEntryKind};
 
 pub(super) fn draw(frame: &mut Frame, app: &App) {
     let completion_h = if app.completion.visible { 5u16 } else { 1 };
@@ -146,9 +146,18 @@ fn draw_docs(frame: &mut Frame, app: &App, area: Rect) {
             .iter()
             .map(|d| {
                 let sig = d.signature.clone().unwrap_or_default();
+                let summary = d.summary.clone().unwrap_or_default();
                 let focused = app.selected_doc == Some(d.idx);
                 let marker = if focused { ">" } else { " " };
-                Line::from(format!("{marker} [{}] {} {}", d.idx, d.symbol, sig))
+                let suffix = if summary.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", summary)
+                };
+                Line::from(format!(
+                    "{marker} [{}] {} {}{}",
+                    d.idx, d.symbol, sig, suffix
+                ))
             })
             .collect()
     };

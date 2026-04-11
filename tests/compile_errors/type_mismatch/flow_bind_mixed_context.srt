@@ -1,0 +1,6 @@
+def expand(x: Int) -> List<Int> {
+  [x]
+}
+
+value: Result<Int> = Ok(1)
+bad = value |>= expand()

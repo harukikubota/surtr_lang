@@ -1,7 +1,7 @@
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
 ///
-/// Surtr source files such as `lib/bootstrap.srt` may declare these builtins
-/// with `@@builtin`, but the canonical definition order and ids live here.
+/// Surtr source files under `lib/*.srt` may declare these builtins with
+/// `@@builtin`, but the canonical definition order and ids live here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltinMeta {
     pub name: &'static str,
@@ -11,6 +11,15 @@ pub struct BuiltinMeta {
     pub sig_str: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinTypeMeta {
+    /// Canonical builtin type head that std-module `@@builtin type`
+    /// declarations must match exactly.
+    pub name: &'static str,
+    pub params: &'static [&'static str],
+}
+
+/// Builtin unique ids start after the first two scope-reserved ids.
 pub const BUILTIN_UID_BASE: u32 = 2;
 
 pub const BUILTIN_METAS: &[BuiltinMeta] = &[
@@ -36,13 +45,13 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "safe_div",
         builtin_id: 3,
         arity: 2,
-        sig_str: "($A, $A) -> Result<$A>",
+        sig_str: "($A, $A) -> Result<$A, ZeroDivisionError>",
     },
     BuiltinMeta {
         name: "safe_mod",
         builtin_id: 4,
         arity: 2,
-        sig_str: "(Int, Int) -> Result<Int>",
+        sig_str: "(Int, Int) -> Result<Int, ZeroDivisionError>",
     },
     BuiltinMeta {
         name: "eprint",
@@ -60,13 +69,110 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "shl",
         builtin_id: 7,
         arity: 2,
-        sig_str: "(Int, Int) -> Int",
+        sig_str: "(Int, Int) -> Result<Int, NegativeShiftCount>",
     },
     BuiltinMeta {
         name: "shr",
         builtin_id: 8,
         arity: 2,
+        sig_str: "(Int, Int) -> Result<Int, NegativeShiftCount>",
+    },
+    BuiltinMeta {
+        name: "len",
+        builtin_id: 9,
+        arity: 1,
+        sig_str: "(List<$A>) -> Int",
+    },
+    BuiltinMeta {
+        name: "bit_and",
+        builtin_id: 10,
+        arity: 2,
         sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "bit_or",
+        builtin_id: 11,
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "bit_xor",
+        builtin_id: 12,
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "bit_not",
+        builtin_id: 13,
+        arity: 1,
+        sig_str: "(Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "test_bit",
+        builtin_id: 14,
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Boolean, NegativeBitIndex>",
+    },
+    BuiltinMeta {
+        name: "set_bit",
+        builtin_id: 15,
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
+    },
+    BuiltinMeta {
+        name: "clear_bit",
+        builtin_id: 16,
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
+    },
+    BuiltinMeta {
+        name: "toggle_bit",
+        builtin_id: 17,
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
+    },
+];
+
+/// Canonical builtin type declarations accepted from std-module sources.
+///
+/// These entries define the exact source-level heads the compiler accepts,
+/// including generic parameter names such as `List<$A>` and `Result<$T>`.
+pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
+    BuiltinTypeMeta {
+        name: "Int",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "Float",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "String",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "Boolean",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "Unit",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "Error",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "List",
+        params: &["$A"],
+    },
+    BuiltinTypeMeta {
+        name: "Result",
+        params: &["$T"],
+    },
+    BuiltinTypeMeta {
+        name: "Seq",
+        params: &["$Type"],
     },
 ];
 
@@ -81,13 +187,17 @@ pub fn builtin_meta_by_id(builtin_id: u16) -> Option<&'static BuiltinMeta> {
         .filter(|meta| meta.builtin_id == builtin_id)
 }
 
+pub fn builtin_type_meta_by_name(name: &str) -> Option<&'static BuiltinTypeMeta> {
+    BUILTIN_TYPE_METAS.iter().find(|meta| meta.name == name)
+}
+
 pub fn builtin_uid(builtin_id: u16) -> u32 {
     BUILTIN_UID_BASE + u32::from(builtin_id)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{builtin_uid, BUILTIN_METAS};
+    use super::{builtin_meta_by_id, builtin_meta_by_name, builtin_uid, BUILTIN_METAS};
 
     #[test]
     fn builtin_ids_match_definition_order() {
@@ -95,5 +205,11 @@ mod tests {
             assert_eq!(meta.builtin_id as usize, idx);
             assert_eq!(builtin_uid(meta.builtin_id), 2 + idx as u32);
         }
+    }
+
+    #[test]
+    fn builtin_lookup_returns_none_for_unknown_values() {
+        assert!(builtin_meta_by_id(u16::MAX).is_none());
+        assert!(builtin_meta_by_name("__missing__").is_none());
     }
 }

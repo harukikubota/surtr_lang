@@ -1,0 +1,12 @@
+graph LR
+    run-command["run\ncrates/rune/src/commands/run.rs"]
+    build-command["build\ncrates/rune/src/commands/build.rs"]
+    dump-command["dump\ncrates/rune/src/commands/dump.rs"]
+    repl-command["repl\ncrates/rune/src/commands/repl.rs"]
+    tui-command["tui\ncrates/rune/src/commands/tui.rs"]
+    test-command["test\ncrates/rune/src/commands/test.rs"]
+
+    run-command -->|"executes compiled bytecode or decoded images"| build-command
+    build-command -->|"shares compilation and bytecode encoding flow"| dump-command
+    repl-command -->|"starts interactive compiler and VM session"| tui-command
+    test-command -->|"compiles and runs annotated expressions"| run-command

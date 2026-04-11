@@ -1,5 +1,0 @@
-deferror PageNotFound(html: String) {
-  "Page Not Found. #{html}"
-}
-
-bad = PageNotFound("404")

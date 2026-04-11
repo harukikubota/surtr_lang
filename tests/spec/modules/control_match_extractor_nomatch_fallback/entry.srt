@@ -1,0 +1,6 @@
+import Matchers::never
+
+print(match 1 {
+  never(value) => "bad",
+  _ => "fallback",
+})

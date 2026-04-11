@@ -21,7 +21,9 @@ surtr/
 │   ├── forge/             # Codegen       : Vec<TypedNode> → Bytecode
 │   ├── eldr/              # VM            : Bytecode → execution
 │   └── rune/              # CLI           : entrypoint
-├── doc/                   # 仕様ドキュメント（読み取り専用）
+├── doc/                   # 正本仕様ドキュメント
+├── docs/                  # 補助資料・公開向けガイド
+├── lib/                   # 標準モジュール source (`@@doc` を含む)
 └── tests/
     ├── spec/              # 仕様ベース成功系テスト (.srt + .expected)
     └── compile_errors/    # 仕様ベース失敗系テスト (.srt + .error)
@@ -39,17 +41,19 @@ surtr/
 | `doc/EldrVM_spec.md`         | VM仕様書 |
 | `doc/テスト方針.md`            | テストの分離方法・レイヤー |
 | `doc/float.md`               | `Float` の暫定仕様メモ |
+| `doc/Rune_observability.md`  | `Rune` / `Eldr` の観測系オプション設計 |
 
 ---
 
 ## Documentation Workflow
 
-- 要件定義書: 大元の仕様書（正本）
-- `doc/open-issues.md`: 仕様策定の課題一覧（未解決・先送り）
-- `doc/phase-N.md`: そのフェーズで実装する機能一覧（実装作業の起点）
-- `doc/Idea-N.md`: 追加機能ドラフト（採択後に要件定義書または `open-issues` へ取り込む）
+- `doc/`: 正本仕様
+  - `要件定義v9.md`, `EldrVM_spec.md`, `Xldr_spec.md`, `テスト方針.md`, `open-issues.md`, `float.md`, `Rune_observability.md`, `Enum.md`
+- `docs/`: 補助資料・公開向けガイド
+- `lib/*.srt`: 標準モジュールの利用者向けドキュメント。`@@doc` を正本とする
+- `crates/**`: 実装者向け内部契約。公開境界は rustdoc で残す
 
-実装タスクの着手時は、`phase-N.md` を最優先で参照し、要件定義書との不整合があれば先にドキュメントを更新してからコードを変更すること。
+実装タスクの着手時は `doc/要件定義v9.md` と該当 spec を最優先で参照し、不整合があれば先に正本を更新してからコードを変更すること。
 
 ---
 
@@ -130,7 +134,9 @@ Forge は `GetField(idx)` を emit するだけでよい。
 - `Int` は `BigInt` を採用し、通常算術でオーバーフローしない前提で扱う
 - runtime 内部 ID（tag / builtin_id / fun_idx）は固定幅の内部識別子として扱い、user-visible `Int` と混同しない
 - `Float` は実装を維持するが、厳密契約は `doc/float.md` で継続整理する
-- `@@builtin` の surface 宣言は標準 module 内の宣言層であり、追加・変更の正本ではない
+- `type` は予約語として扱う
+- `@@builtin` の surface 宣言は標準 module 内の宣言層であり、`@@builtin def` / `@@builtin type` を受理するが、追加・変更の正本ではない
+- 標準モジュールの利用者向け説明は `lib/*.srt` の `@@doc` に載せる
 
 ---
 
@@ -138,7 +144,7 @@ Forge は `GetField(idx)` を emit するだけでよい。
 
 ### ユニットテスト
 
-各クレートに `#[test]` を書く。`cargo test` ですべて通ること。
+各クレートに `#[test]` を書く。デフォルトのテストランナーは `cargo nextest run` とし、workspace 全体が通ること。
 
 将来仕様の先置きには `#[ignore]` テストを使ってよい。pending 理由をテスト名か ignore 理由で明記すること。
 
@@ -159,7 +165,8 @@ tests/compile_errors/
 実行方法:
 
 ```bash
-cargo test -p rune --test spec_fixture_tests
+cargo nextest run --workspace
+cargo nextest run -p rune --test run_srt
 ```
 
 `spec` は `stdout` を `.expected` と比較して一致すれば合格。

@@ -1,7 +1,8 @@
 {
     "chatgpt.openOnStartup": true,
     "workbench.iconTheme": "vscode-icons",
-    "vsicons.customIconFolderPath": "/Users/haruca/work/rust/surtr/vscode-surtr-icons",
+    "surtr.compiler.path": "/Users/haruca/.cargo/bin/surtr",
+    "vsicons.customIconFolderPath": "/Users/haruca/work/rust/surtr/vscode-extensions/surtr-file-icons",
     "vsicons.associations.files": [
         {
             "icon": "surtr",

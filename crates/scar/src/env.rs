@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use sindr::primitives::SurtrInt;
 use spire::ast::Symbol;
 
 use crate::types::Ty;
@@ -10,6 +11,7 @@ pub enum TypeKind {
     Struct,
     Record,
     Error,
+    Enum,
 }
 
 /// Metadata for a user-defined type (struct, record, error).
@@ -18,6 +20,7 @@ pub struct TypeDefInfo {
     pub tag: u32,
     pub kind: TypeKind,
     pub name: Symbol,
+    pub type_params: Vec<Symbol>,
     pub fields: Vec<(Symbol, Ty)>,
     pub state: TypeDefState,
 }
@@ -29,6 +32,17 @@ pub enum TypeDefState {
     Declared,
     /// Full field signature is available.
     SignatureResolved,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariantInfo {
+    pub constructor_name: Symbol,
+    pub short_name: Symbol,
+    pub enum_name: Symbol,
+    pub enum_ty: Ty,
+    pub tag: u32,
+    pub payload: Vec<Ty>,
+    pub discriminant: SurtrInt,
 }
 
 /// Type environment — tracks variable types and type definitions.
@@ -48,6 +62,18 @@ pub struct TypeEnv {
     pub error_type_names: HashSet<Symbol>,
     /// `deferror` constructor bindings by unique_id
     pub error_constructor_ids: HashSet<u32>,
+    /// enum constructor unique_id -> variant metadata
+    pub enum_constructor_ids: HashMap<u32, EnumVariantInfo>,
+    /// enum tag -> variant metadata
+    pub enum_variant_tags: HashMap<u32, EnumVariantInfo>,
+    /// enum type name -> variants
+    pub enum_variants_by_enum: HashMap<Symbol, Vec<EnumVariantInfo>>,
+}
+
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TypeEnv {
@@ -60,6 +86,9 @@ impl TypeEnv {
             next_tyvar: 0,
             error_type_names: HashSet::new(),
             error_constructor_ids: HashSet::new(),
+            enum_constructor_ids: HashMap::new(),
+            enum_variant_tags: HashMap::new(),
+            enum_variants_by_enum: HashMap::new(),
         }
     }
 
@@ -77,11 +106,21 @@ impl TypeEnv {
     ///
     /// Tags are assigned in declaration traversal order from the caller.
     /// Re-predeclaring the same type name reuses the already reserved tag.
-    pub fn predeclare_type_def(&mut self, name: Symbol, kind: TypeKind) -> u32 {
+    pub fn predeclare_type_def(
+        &mut self,
+        name: Symbol,
+        kind: TypeKind,
+        type_params: Vec<Symbol>,
+    ) -> u32 {
         if let Some(existing) = self.type_defs.get(&name) {
             debug_assert!(
                 existing.kind == kind,
                 "Type predeclared with different kind: {}",
+                name
+            );
+            debug_assert!(
+                existing.type_params == type_params,
+                "Type predeclared with different type params: {}",
                 name
             );
             return existing.tag;
@@ -95,6 +134,7 @@ impl TypeEnv {
                 tag,
                 kind,
                 name,
+                type_params,
                 fields: Vec::new(),
                 state: TypeDefState::Declared,
             },
@@ -116,18 +156,10 @@ impl TypeEnv {
         Some(def.tag)
     }
 
-    /// Register a type definition using the legacy single-step API.
-    ///
-    /// This keeps existing call-sites working while internally using the
-    /// predeclare/resolve flow.
-    pub fn register_type_def(
-        &mut self,
-        name: Symbol,
-        kind: TypeKind,
-        fields: Vec<(Symbol, Ty)>,
-    ) -> u32 {
-        let tag = self.predeclare_type_def(name.clone(), kind);
-        let _ = self.resolve_type_def_signature(&name, fields);
+    /// Reserve a fresh runtime tag.
+    pub fn reserve_tag(&mut self) -> u32 {
+        let tag = self.next_tag;
+        self.next_tag += 1;
         tag
     }
 
@@ -164,6 +196,43 @@ impl TypeEnv {
     pub fn is_declared_error_type_name(&self, name: &str) -> bool {
         self.error_type_names.contains(name)
     }
+
+    pub fn register_enum_variant(
+        &mut self,
+        constructor_id: u32,
+        variant: EnumVariantInfo,
+    ) -> Result<(), String> {
+        if self.enum_constructor_ids.contains_key(&constructor_id) {
+            return Err(format!(
+                "enum constructor id {} already registered",
+                constructor_id
+            ));
+        }
+        if self.enum_variant_tags.contains_key(&variant.tag) {
+            return Err(format!("enum tag {} already registered", variant.tag));
+        }
+
+        self.enum_constructor_ids
+            .insert(constructor_id, variant.clone());
+        self.enum_variant_tags.insert(variant.tag, variant.clone());
+        self.enum_variants_by_enum
+            .entry(variant.enum_name.clone())
+            .or_default()
+            .push(variant);
+        Ok(())
+    }
+
+    pub fn enum_variant_by_constructor_id(&self, unique_id: u32) -> Option<&EnumVariantInfo> {
+        self.enum_constructor_ids.get(&unique_id)
+    }
+
+    pub fn enum_variant_by_tag(&self, tag: u32) -> Option<&EnumVariantInfo> {
+        self.enum_variant_tags.get(&tag)
+    }
+
+    pub fn enum_variants_of(&self, enum_name: &str) -> Option<&Vec<EnumVariantInfo>> {
+        self.enum_variants_by_enum.get(enum_name)
+    }
 }
 
 #[cfg(test)]
@@ -175,9 +244,9 @@ mod tests {
     fn predeclare_type_def_assigns_deterministic_tags() {
         let mut env = TypeEnv::new();
 
-        let user_tag = env.predeclare_type_def("User".into(), TypeKind::Struct);
-        let point_tag = env.predeclare_type_def("Point".into(), TypeKind::Record);
-        let user_tag_again = env.predeclare_type_def("User".into(), TypeKind::Struct);
+        let user_tag = env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new());
+        let point_tag = env.predeclare_type_def("Point".into(), TypeKind::Record, Vec::new());
+        let user_tag_again = env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new());
 
         assert_eq!(user_tag, 2);
         assert_eq!(point_tag, 3);
@@ -188,7 +257,7 @@ mod tests {
     #[test]
     fn resolve_type_def_signature_finalizes_predeclared_entry() {
         let mut env = TypeEnv::new();
-        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::Error);
+        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::Error, Vec::new());
 
         let before = env.lookup_type_def("ApiError").expect("must exist");
         assert_eq!(before.state, TypeDefState::Declared);
@@ -210,15 +279,16 @@ mod tests {
     }
 
     #[test]
-    fn register_type_def_still_behaves_as_single_step_api() {
+    fn predeclare_and_resolve_replace_legacy_single_step_registration() {
         let mut env = TypeEnv::new();
-        let tag = env.register_type_def(
-            "Pair".into(),
-            TypeKind::Record,
+        let tag = env.predeclare_type_def("Pair".into(), TypeKind::Record, Vec::new());
+        let resolved = env.resolve_type_def_signature(
+            "Pair",
             vec![("first".into(), Ty::Int), ("second".into(), Ty::Str)],
         );
 
         assert_eq!(tag, 2);
+        assert_eq!(resolved, Some(2));
         let def = env.lookup_type_def("Pair").expect("must exist");
         assert_eq!(def.state, TypeDefState::SignatureResolved);
         assert_eq!(def.tag, 2);

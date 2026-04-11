@@ -1,0 +1,1 @@
+Command behavior depends on input kind. `.srt` files can honor entrypoint selection and require source loading, while `.eldr` artifacts skip parsing and are decoded directly for execution, inspection, or TUI loading.

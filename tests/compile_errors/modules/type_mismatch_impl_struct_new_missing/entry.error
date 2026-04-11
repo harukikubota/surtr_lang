@@ -1,0 +1,2 @@
+phase: typecheck
+contains: must define `new` in its impl block

@@ -5,10 +5,9 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
-use xldr::{
-    collect_module_sources_with_module_stages, compose_script_compile_sources, CompileSources,
-    ModuleInput,
-};
+use xldr::ModuleInput;
+
+mod support;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -170,74 +169,20 @@ fn collect_module_input_stages(case_dir: &Path) -> Vec<Vec<ModuleInput>> {
     }
 }
 
-fn parse_program_with_loader(
-    compile_sources: &CompileSources,
-) -> Result<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>), String> {
-    let sources = &compile_sources.sources;
-    let user_source_id = compile_sources.user_source_id;
-    let staged_module_asts = xldr::parse_module_stages_from_compile_sources(
-        compile_sources,
-        spire::CompileUnitKind::Script,
-    )
-    .map_err(|e| {
-        let file_name = sources.file_name(e.source_id).unwrap_or("<unknown>");
-        format!("phase=parse; file={}; message={}", file_name, e.message())
-    })?;
-
-    let user_source = sources.source(user_source_id).unwrap_or("");
-    let user_ast = spire::parse_with_context(
-        user_source,
-        spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
-            spire::CompileUnitKind::Script,
-            xldr::SourceKind::Script,
-            None,
-        )),
-    )
-    .map_err(|e| {
-        let file_name = sources.file_name(user_source_id).unwrap_or("<unknown>");
-        format!("phase=parse; file={}; message={}", file_name, e.message())
-    })?;
-
-    Ok((staged_module_asts, user_ast))
-}
-
 fn compile_multi_source_case(case_dir: &Path) -> Result<forge::bytecode::Bytecode, String> {
     let entry_path = case_dir.join("entry.srt");
     let entry_source = fs::read_to_string(&entry_path)
         .unwrap_or_else(|e| panic!("failed to read {}: {}", entry_path.display(), e));
     let module_stages = collect_module_input_stages(case_dir);
 
-    let module_sources = collect_module_sources_with_module_stages(&module_stages)
-        .map_err(|e| format!("phase=load; message={}", e))?;
-    let compile_sources = compose_script_compile_sources(
+    let module_sources = support::collect_module_sources(&module_stages)?;
+    let compile_sources = support::compose_script_sources(
         &entry_path.to_string_lossy(),
         &entry_source,
         module_sources,
     );
 
-    let (module_asts, user_ast) = parse_program_with_loader(&compile_sources)?;
-    let declaration_index = sigil::precollect_declaration_index(&module_asts)
-        .map_err(|e| format!("phase=resolve; message={}", e))?;
-
-    let resolved = sigil::resolve_staged_program(
-        &module_asts,
-        user_ast,
-        &declaration_index,
-        Some(compile_sources.user_module_path.clone()),
-    )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
-    let typed = scar::typecheck_with_context(
-        resolved,
-        scar::TypecheckContext {
-            source_rules: xldr::derive_source_rules(
-                spire::CompileUnitKind::Script,
-                xldr::SourceKind::Script,
-                None,
-            ),
-        },
-    )
-    .map_err(|e| format!("phase=typecheck; message={}", e))?;
-    forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))
+    support::compile_script_sources(&compile_sources)
 }
 
 fn run_multi_source_case(case_dir: &Path) -> Result<Vec<String>, String> {
@@ -327,6 +272,31 @@ fn module_compile_error_fixtures_match_expectations_via_loader() {
             }
         }
     }
+}
+
+#[test]
+fn direct_module_file_compiles_without_module_resolution_stub_error() {
+    let module_path =
+        repo_root().join("tests/compile_errors/modules/duplicate_import_all_all/Kernel.srt");
+    let output = Command::new(surtr_bin())
+        .args([
+            "check",
+            module_path.to_str().expect("module path must be utf-8"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run surtr check");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "direct module compile should succeed for {}\nstdout:\n{}\nstderr:\n{}",
+        module_path.display(),
+        stdout,
+        stderr
+    );
 }
 
 #[test]

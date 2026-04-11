@@ -1,0 +1,7 @@
+deferror SomeError(detail: String) {
+  detail
+}
+
+deferror OtherError(detail: String) {
+  detail
+}

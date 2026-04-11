@@ -1,0 +1,1 @@
+The top-level entrypoint in `crates/rune/src/main.rs`. It handles process startup, prints the version banner, dispatches known subcommands, and converts `RuneError` values into emitted diagnostics plus exit codes.

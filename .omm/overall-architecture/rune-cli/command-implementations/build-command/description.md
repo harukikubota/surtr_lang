@@ -1,0 +1,1 @@
+Handles `surtr build`. It compiles a source file to bytecode, encodes the result as an `.eldr` artifact, and writes it to the explicit output path or the default output path derived from the input file.

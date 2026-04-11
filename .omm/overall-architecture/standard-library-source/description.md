@@ -1,0 +1,1 @@
+The Surtr standard-library sources in `lib/*.srt`. These files define bootstrap declarations, builtin surface signatures, module docs, and type-oriented standard modules that are loaded ahead of user code.

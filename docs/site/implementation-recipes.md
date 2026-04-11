@@ -138,20 +138,29 @@ builtin は共有メタデータを正本にして、宣言層と VM 実装を�
 - `builtin_id` は定義順と一致させる
 - ここが正本であり、他 crate はこの定義を参照する
 
-### 3.2 `Bootstrap` 宣言を追加する
+### 3.2 標準モジュール側の宣言を追加する
 
 変更先:
 
-- [`lib/bootstrap.srt`](/Users/haruca/work/rust/surtr/lib/bootstrap.srt)
+- cross-cutting builtin なら [`lib/kernel.srt`](/Users/haruca/work/rust/surtr/lib/kernel.srt)
+- type-owned builtin なら対応する type module file
+  - 例: [`lib/int.srt`](/Users/haruca/work/rust/surtr/lib/int.srt)
+  - 例: [`lib/result.srt`](/Users/haruca/work/rust/surtr/lib/result.srt)
+  - 例: [`lib/list.srt`](/Users/haruca/work/rust/surtr/lib/list.srt)
 
 やること:
 
-- `@@builtin def ...` を追加する
+- `print` のような cross-cutting builtin なら `kernel.srt` の `defmod Kernel` に `@@builtin def ...` を追加する
+- builtin type を増減するなら対応 file のトップレベル `@@builtin type ...` を更新する
+- `Unit` の builtin type は `kernel.srt` で扱う
+- module API を追加するなら `defmod Name { ... }` 側も合わせて更新する
 
 注意:
 
 - これは宣言層であって builtin の正本ではない
 - ユーザ source に同様の宣言を足すのではない
+- `Result<$T>` と `List<$A>` のような canonical head は compiler 側契約と一致している必要がある
+- `Ok` / `Err` は `result.srt` の `@@builtin type ...` special contract として宣言する
 
 ### 3.3 Eldr の実装を追加する
 
@@ -198,9 +207,15 @@ builtin は共有メタデータを正本にして、宣言層と VM 実装を�
 
 - [`doc/要件定義v9.md`](/Users/haruca/work/rust/surtr/doc/要件定義v9.md)
 - [`doc/EldrVM_spec.md`](/Users/haruca/work/rust/surtr/doc/EldrVM_spec.md)
-- [`lib/bootstrap.srt`](/Users/haruca/work/rust/surtr/lib/bootstrap.srt) と metadata の整合テスト
+- [`lib/kernel.srt`](/Users/haruca/work/rust/surtr/lib/kernel.srt) または対応する `lib/*.srt`
+- [`docs/site/standard-library.md`](/Users/haruca/work/rust/surtr/docs/site/standard-library.md)
 - Eldr builtin 単体テスト
 - spec / compile_errors
+
+追加で確認したいこと:
+
+- `@@doc` が source 変更に追従している
+- `.eldr` の docs metadata に公開したい説明だけが載る
 
 ## 4. 実装順序のおすすめ
 
@@ -219,7 +234,7 @@ sindr::ir
 
 ```text
 sindr::builtin
--> lib/bootstrap.srt
+-> lib/kernel.srt / 対応する lib/<type>.srt
 -> eldr::builtin
 -> 必要なら scar::checker
 -> docs
@@ -319,3 +334,7 @@ sindr::builtin
 - `Bootstrap` と `Kernel` の責務を壊していないか
 - 既存の Phase 範囲外機能を混入させていないか
 - Rust 実装依存で進める箇所と、言語仕様として保証する箇所を混同していないか
+- 最適化検討を正本仕様へ混ぜていないか
+
+最適化方針が未確定なら、正本 (`doc/要件定義v9.md`) へは入れず、
+[`doc/open-issues.md`](/Users/haruca/work/rust/surtr/doc/open-issues.md) に open issue として追跡します。
