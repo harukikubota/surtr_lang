@@ -109,12 +109,29 @@ pub enum Resolved {
         ResolvedDeclAttrs,
     ),
 
+    ExtractorDef(
+        Span,
+        ResolvedId,
+        ResolvedExtractorParam,
+        AstTy,
+        Box<Resolved>,
+        ResolvedDeclAttrs,
+    ),
+
     /// Builtin declaration
     BuiltinDecl(
         Span,
         ResolvedId,
         Vec<ResolvedFunParam>,
         Option<AstTy>,
+        ResolvedDeclAttrs,
+    ),
+
+    BuiltinExtractorDecl(
+        Span,
+        ResolvedId,
+        ResolvedExtractorParam,
+        AstTy,
         ResolvedDeclAttrs,
     ),
 
@@ -163,6 +180,7 @@ pub enum ResolvedPattern {
     StrLit(Span, String),
     BoolLit(Span, bool),
     Constructor(ResolvedId, Vec<ResolvedPattern>),
+    Extractor(ResolvedId, Vec<ResolvedPattern>),
     As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
 }
 
@@ -187,6 +205,12 @@ pub struct ResolvedField {
 pub struct ResolvedFunParam {
     pub id: ResolvedId,
     pub ty: AstTy,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedExtractorParam {
+    pub id: ResolvedId,
+    pub ty: Option<AstTy>,
 }
 
 /// Closure parameter.

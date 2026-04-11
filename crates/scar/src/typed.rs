@@ -70,6 +70,12 @@ pub enum TypedInner {
     /// Function definition — tag + name + params + return type + body
     Def(u32, ResolvedId, Vec<TypedFunParam>, Ty, Box<TypedNode>),
 
+    /// Extractor definition — function-shaped runtime entry with MatchResult return type.
+    ExtractorDef(u32, ResolvedId, TypedFunParam, Ty, Box<TypedNode>),
+
+    /// Builtin extractor declaration.
+    BuiltinExtractorDecl(ResolvedId, Ty, Ty),
+
     /// Closure literal — params + captures + body
     Closure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
 
@@ -106,6 +112,16 @@ pub enum TypedPattern {
     BoolLit(Ty, bool),
     /// `Ok(inner)` pattern node in safe-bind recursion.
     ResultOk(Ty, Box<TypedPattern>),
+    Extractor {
+        input_ty: Ty,
+        extractor: ResolvedId,
+        extractor_ty: Ty,
+        success_tag: u32,
+        no_match_tag: u32,
+        err_tag: u32,
+        seq_tys: Vec<Ty>,
+        items: Vec<TypedPattern>,
+    },
 }
 
 /// Match pattern (typed).
@@ -132,6 +148,15 @@ pub enum TypedMatchPattern {
     ListNil,
     /// `[head, ..tail]`
     ListCons(Box<TypedMatchPattern>, Box<TypedMatchPattern>),
+    Extractor {
+        extractor: ResolvedId,
+        extractor_ty: Ty,
+        success_tag: u32,
+        no_match_tag: u32,
+        err_tag: u32,
+        seq_tys: Vec<Ty>,
+        items: Vec<TypedMatchPattern>,
+    },
 }
 
 /// Function parameter (typed).

@@ -2,18 +2,22 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{
-    Ast, AstPattern, AstTy, BinOp, ClosureParam, DeclAttrs, FunParam, Lit, RecordLitArg, Span,
+    Ast, AstPattern, AstTy, BinOp, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit,
+    RecordLitArg, Span,
 };
 
 use crate::error::ResolveError;
 use crate::resolved::*;
 use crate::scope::Scope;
 
-const AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel"];
+const AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel", "Result"];
 
 fn initialize_base_scope() -> Scope {
     let mut scope = Scope::new();
     let dummy = Span { start: 0, end: 0 };
+    // Standalone resolver tests do not stage std modules, so keep placeholders
+    // for `Ok` / `Err` here. Real module builds auto-import `Result`, which
+    // overwrites these bindings with the canonical constructor declarations.
     scope.define("Ok", dummy.clone());
     scope.define("Err", dummy);
     scope
@@ -78,6 +82,7 @@ pub fn resolve_staged_program(
     user_module_path: Option<String>,
 ) -> Result<Vec<Resolved>, ResolveError> {
     let declaration_uids = assign_declaration_uids(declaration_index);
+    let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
     let global_scope = build_global_scope(declaration_index, &declaration_uids);
     let mut resolved = Vec::new();
 
@@ -87,6 +92,7 @@ pub fn resolve_staged_program(
                 &global_scope,
                 declaration_index,
                 &declaration_uids,
+                &declaration_uid_kinds,
                 &module.ast,
                 Some(module.module_path.as_str()),
                 stage_index,
@@ -94,6 +100,7 @@ pub fn resolve_staged_program(
             let mut resolver = Resolver::with_scope(scope);
             resolver.current_module_path = Some(module.module_path.clone());
             resolver.declaration_uids = declaration_uids.clone();
+            resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
             resolver.allow_top_level_shadowing = true;
             resolved.extend(resolver.resolve_program(module.ast.clone())?);
         }
@@ -103,12 +110,14 @@ pub fn resolve_staged_program(
         &global_scope,
         declaration_index,
         &declaration_uids,
+        &declaration_uid_kinds,
         &user_ast,
         user_module_path.as_deref(),
         module_stages.len(),
     )?;
     let mut user_resolver = Resolver::with_scope(user_scope);
     user_resolver.declaration_uids = declaration_uids;
+    user_resolver.declaration_uid_kinds = declaration_uid_kinds;
     user_resolver.current_module_path = user_module_path;
     user_resolver.allow_top_level_shadowing = true;
     resolved.extend(user_resolver.resolve_program(user_ast)?);
@@ -122,11 +131,13 @@ pub fn build_scope_for_module(
 ) -> Result<Scope, ResolveError> {
     let declaration_index = precollect_declaration_index(module_stages)?;
     let declaration_uids = assign_declaration_uids(&declaration_index);
+    let declaration_uid_kinds = declaration_uid_kind_map(&declaration_index, &declaration_uids);
     let global_scope = build_global_scope(&declaration_index, &declaration_uids);
     build_module_scope(
         &global_scope,
         &declaration_index,
         &declaration_uids,
+        &declaration_uid_kinds,
         &[],
         current_module_path,
         current_stage_index,
@@ -143,11 +154,13 @@ pub struct StagedModuleAst {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclarationKind {
     Def,
+    Extractor,
     Struct,
     Record,
     Deferror,
     Enum,
     EnumVariant,
+    ResultCtor,
     ImplMethod,
     ImplCtorNew,
     BuiltinType,
@@ -164,10 +177,14 @@ pub struct DeclarationEntry {
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
 
+fn is_module_visible_declaration(kind: &DeclarationKind) -> bool {
+    !matches!(kind, DeclarationKind::BuiltinType)
+}
+
 fn is_importable_declaration(kind: &DeclarationKind) -> bool {
     !matches!(
         kind,
-        DeclarationKind::BuiltinType | DeclarationKind::ImplCtorNew
+        DeclarationKind::BuiltinType | DeclarationKind::ImplCtorNew | DeclarationKind::Struct
     )
 }
 
@@ -221,6 +238,14 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
             Box::new(rewrite_self_pattern(*tail, target)),
         ),
         AstPattern::Constructor(span, name, inners) => AstPattern::Constructor(
+            span,
+            name,
+            inners
+                .into_iter()
+                .map(|inner| rewrite_self_pattern(inner, target))
+                .collect(),
+        ),
+        AstPattern::Call(span, name, inners) => AstPattern::Call(
             span,
             name,
             inners
@@ -374,6 +399,18 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             Box::new(rewrite_self_ast(*body, target)),
             attrs,
         ),
+        Ast::ExtractorDef(span, name, param, ret_ty, body, attrs) => Ast::ExtractorDef(
+            span,
+            name,
+            ExtractorParam {
+                name: param.name,
+                ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
+                span: param.span,
+            },
+            rewrite_self_type(ret_ty, target),
+            Box::new(rewrite_self_ast(*body, target)),
+            attrs,
+        ),
         Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
             span,
             name,
@@ -388,6 +425,19 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             ret_ty.map(|ret| rewrite_self_type(ret, target)),
             attrs,
         ),
+        Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => {
+            Ast::BuiltinExtractorDecl(
+                span,
+                name,
+                ExtractorParam {
+                    name: param.name,
+                    ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
+                    span: param.span,
+                },
+                rewrite_self_type(ret_ty, target),
+                attrs,
+            )
+        }
         Ast::BuiltinTypeDecl(span, head, attrs) => Ast::BuiltinTypeDecl(
             span,
             spire::ast::BuiltinTypeHead {
@@ -437,6 +487,21 @@ fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
     declaration_uids
 }
 
+fn declaration_uid_kind_map(
+    index: &DeclarationIndex,
+    declaration_uids: &HashMap<String, u32>,
+) -> HashMap<u32, DeclarationKind> {
+    let mut out = HashMap::new();
+    out.insert(0, DeclarationKind::ResultCtor);
+    out.insert(1, DeclarationKind::ResultCtor);
+    for (fq_name, entry) in index {
+        if let Some(uid) = declaration_uids.get(fq_name) {
+            out.insert(*uid, entry.kind.clone());
+        }
+    }
+    out
+}
+
 fn build_global_scope(index: &DeclarationIndex, declaration_uids: &HashMap<String, u32>) -> Scope {
     let mut scope = initialize_scope();
     for (fq_name, entry) in index {
@@ -454,6 +519,7 @@ fn build_module_scope(
     global_scope: &Scope,
     declaration_index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
+    declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
     stmts: &[Ast],
     current_module_path: Option<&str>,
     current_stage_index: usize,
@@ -463,6 +529,7 @@ fn build_module_scope(
     let mut import_context = ImportContext {
         declaration_index,
         declaration_uids,
+        declaration_uid_kinds,
         current_stage_index,
         import_state: &mut import_state,
     };
@@ -489,7 +556,7 @@ fn build_module_scope(
     if let Some(module_path) = current_module_path {
         for entry in declaration_index.values() {
             if entry.module_path == module_path {
-                if !is_importable_declaration(&entry.kind) {
+                if !is_module_visible_declaration(&entry.kind) {
                     continue;
                 }
                 if let Some(uid) = declaration_uids.get(&entry.fq_name) {
@@ -505,6 +572,7 @@ fn build_module_scope(
 struct ImportContext<'a> {
     declaration_index: &'a DeclarationIndex,
     declaration_uids: &'a HashMap<String, u32>,
+    declaration_uid_kinds: &'a HashMap<u32, DeclarationKind>,
     current_stage_index: usize,
     import_state: &'a mut ImportState,
 }
@@ -587,6 +655,7 @@ fn import_module_into_scope(
         let uid = import_context.declaration_uids[&entry.fq_name];
         bind_import_name(
             scope,
+            import_context,
             &entry.name,
             uid,
             module_name,
@@ -604,6 +673,16 @@ fn import_module_into_scope(
                 "Import target `{}` is not available in the current stage",
                 module_name
             ),
+            span,
+        })
+    } else if matches!(
+        import_context.declaration_index.get(module_name),
+        Some(entry) if entry.kind == DeclarationKind::Struct
+    ) {
+        // Struct declarations stay directly visible by name so `User()` can
+        // dispatch by BlockKind, but the type name itself is not importable.
+        Err(ResolveError {
+            message: format!("Import target `{}` is not importable", module_name),
             span,
         })
     } else {
@@ -660,6 +739,7 @@ fn import_single_into_scope(
 
     bind_import_name(
         scope,
+        import_context,
         &entry.name,
         import_context.declaration_uids[&entry.fq_name],
         module_name,
@@ -670,6 +750,7 @@ fn import_single_into_scope(
 
 fn bind_import_name(
     scope: &mut Scope,
+    import_context: &ImportContext<'_>,
     short_name: &str,
     uid: u32,
     module_name: &str,
@@ -678,6 +759,14 @@ fn bind_import_name(
 ) -> Result<(), ResolveError> {
     if let Some(existing_uid) = scope.lookup(short_name) {
         if existing_uid == uid {
+            return Ok(());
+        }
+        if auto_import
+            && module_name == "Result"
+            && matches!(short_name, "Ok" | "Err")
+            && !import_context.declaration_uid_kinds.contains_key(&existing_uid)
+        {
+            scope.define_with_id(short_name, uid);
             return Ok(());
         }
         if auto_import {
@@ -741,7 +830,8 @@ impl ImportState {
 ///
 /// The index key is fully-qualified name `ModulePath::Name`.
 /// Only declaration forms covered by Issue 6 are collected:
-/// `def`, `@@builtin def`, `@@builtin type`, `defstruct`, `defrecord`, `deferror`.
+/// `def`, `defextractor`, `@@builtin def`, `@@builtin defextractor`, `@@builtin type`,
+/// `defstruct`, `defrecord`, `deferror`.
 pub fn precollect_declaration_index(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<DeclarationIndex, ResolveError> {
@@ -915,11 +1005,19 @@ pub fn precollect_declaration_index(
 
                 let (span, name, kind) = match stmt {
                     Ast::Def(span, name, _, _, _, _) => (span, name.as_str(), DeclarationKind::Def),
+                    Ast::ExtractorDef(span, name, _, _, _, _) => {
+                        (span, name.as_str(), DeclarationKind::Extractor)
+                    }
                     Ast::BuiltinDecl(span, name, _, _, _) => {
                         (span, name.as_str(), DeclarationKind::Def)
                     }
+                    Ast::BuiltinExtractorDecl(span, name, _, _, _) => {
+                        (span, name.as_str(), DeclarationKind::Extractor)
+                    }
                     Ast::ImplDef(_, _, _) => continue,
-                    Ast::ResultCtorDecl(_, _, _, _, _) => continue,
+                    Ast::ResultCtorDecl(span, name, _, _, _) => {
+                        (span, name.as_str(), DeclarationKind::ResultCtor)
+                    }
                     Ast::BuiltinTypeDecl(span, head, _) => {
                         (span, head.name.as_str(), DeclarationKind::BuiltinType)
                     }
@@ -1032,6 +1130,7 @@ struct Resolver {
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
     declaration_uids: HashMap<String, u32>,
+    declaration_uid_kinds: HashMap<u32, DeclarationKind>,
     current_module_path: Option<String>,
     allow_top_level_shadowing: bool,
 }
@@ -1042,6 +1141,10 @@ impl Resolver {
             scope: initialize_scope(),
             predeclared_ids: HashMap::new(),
             declaration_uids: HashMap::new(),
+            declaration_uid_kinds: HashMap::from([
+                (0, DeclarationKind::ResultCtor),
+                (1, DeclarationKind::ResultCtor),
+            ]),
             current_module_path: None,
             allow_top_level_shadowing: false,
         }
@@ -1052,6 +1155,10 @@ impl Resolver {
             scope,
             predeclared_ids: HashMap::new(),
             declaration_uids: HashMap::new(),
+            declaration_uid_kinds: HashMap::from([
+                (0, DeclarationKind::ResultCtor),
+                (1, DeclarationKind::ResultCtor),
+            ]),
             current_module_path: None,
             allow_top_level_shadowing: false,
         }
@@ -1073,9 +1180,47 @@ impl Resolver {
         f: impl FnOnce(&mut Resolver) -> Result<T, ResolveError>,
     ) -> Result<T, ResolveError> {
         let mut child = Resolver::with_scope(self.scope.clone());
+        child.declaration_uids = self.declaration_uids.clone();
+        child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+        child.current_module_path = self.current_module_path.clone();
+        child.allow_top_level_shadowing = self.allow_top_level_shadowing;
         let out = f(&mut child)?;
         self.scope.advance_next_id_to(child.scope.next_id());
         Ok(out)
+    }
+
+    fn is_constructor_style_head(name: &str) -> bool {
+        name.rsplit("::")
+            .next()
+            .and_then(|segment| segment.chars().next())
+            .is_some_and(|ch| ch.is_uppercase())
+    }
+
+    fn declaration_fq_name_for_uid(&self, uid: u32) -> Option<String> {
+        self.declaration_uids
+            .iter()
+            .find_map(|(fq_name, entry_uid)| (*entry_uid == uid).then(|| fq_name.clone()))
+    }
+
+    fn attached_extractor_for_struct(
+        &self,
+        struct_uid: u32,
+        surface_head: &str,
+    ) -> Option<(Option<String>, u32, DeclarationKind)> {
+        // Struct heads are resolved by declaration name, not by `import`.
+        // In MatchBlock, `User(...)` is sugar for `User::deconstruct(...)`.
+        let surface_extractor_name = format!("{}::deconstruct", surface_head);
+        if let Some(extractor_uid) = self.scope.lookup(&surface_extractor_name) {
+            let extractor_kind = self.declaration_uid_kinds.get(&extractor_uid).cloned()?;
+            let qualified_name = self.declaration_fq_name_for_uid(extractor_uid);
+            return Some((qualified_name, extractor_uid, extractor_kind));
+        }
+
+        let struct_fq_name = self.declaration_fq_name_for_uid(struct_uid)?;
+        let extractor_fq_name = format!("{}::deconstruct", struct_fq_name);
+        let extractor_uid = *self.declaration_uids.get(&extractor_fq_name)?;
+        let extractor_kind = self.declaration_uid_kinds.get(&extractor_uid).cloned()?;
+        Some((Some(extractor_fq_name), extractor_uid, extractor_kind))
     }
 
     fn resolve_program(&mut self, stmts: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
@@ -1256,8 +1401,35 @@ impl Resolver {
                         .entry(name.clone())
                         .or_default()
                         .push_back(uid);
+                    self.declaration_uid_kinds.insert(uid, DeclarationKind::Def);
                     // Keep the outer scope at the most recent declaration,
                     // so forward references resolve to the latest top-level definition.
+                    self.scope.define_with_id(name, uid);
+                }
+                Ast::ExtractorDef(span, name, _, _, _, _) => {
+                    if !declared_in_batch.insert(name.clone()) {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                    let uid = self
+                        .declaration_uids
+                        .get(&self.qualify_current_declaration_name(name))
+                        .copied()
+                        .unwrap_or_else(|| self.scope.reserve_id());
+                    self.predeclared_ids
+                        .entry(name.clone())
+                        .or_default()
+                        .push_back(uid);
+                    self.declaration_uid_kinds
+                        .insert(uid, DeclarationKind::Extractor);
                     self.scope.define_with_id(name, uid);
                 }
                 Ast::BuiltinDecl(_, name, _, _, _) => {
@@ -1277,6 +1449,26 @@ impl Resolver {
                         .entry(name.clone())
                         .or_default()
                         .push_back(uid);
+                    self.declaration_uid_kinds.insert(uid, DeclarationKind::Def);
+                    self.scope.define_with_id(name, uid);
+                }
+                Ast::BuiltinExtractorDecl(_, name, _, _, _) => {
+                    if !declared_in_batch.insert(name.clone()) {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: stmt.span().clone(),
+                        });
+                    }
+                    let uid = self
+                        .scope
+                        .lookup(name)
+                        .unwrap_or_else(|| self.scope.reserve_id());
+                    self.predeclared_ids
+                        .entry(name.clone())
+                        .or_default()
+                        .push_back(uid);
+                    self.declaration_uid_kinds
+                        .insert(uid, DeclarationKind::Extractor);
                     self.scope.define_with_id(name, uid);
                 }
                 Ast::ResultCtorDecl(span, name, _, _, _) => {
@@ -1300,6 +1492,8 @@ impl Resolver {
                         .entry(name.clone())
                         .or_default()
                         .push_back(uid);
+                    self.declaration_uid_kinds
+                        .insert(uid, DeclarationKind::ResultCtor);
                     self.scope.define_with_id(name, uid);
                 }
                 Ast::BuiltinTypeDecl(span, head, _) => {
@@ -1320,6 +1514,8 @@ impl Resolver {
                         .entry(head.name.clone())
                         .or_default()
                         .push_back(uid);
+                    self.declaration_uid_kinds
+                        .insert(uid, DeclarationKind::BuiltinType);
                 }
                 Ast::StructDef(span, name, _)
                 | Ast::RecordDef(span, name, _)
@@ -1345,6 +1541,13 @@ impl Resolver {
                         .entry(name.clone())
                         .or_default()
                         .push_back(uid);
+                    let kind = match stmt {
+                        Ast::StructDef(_, _, _) => DeclarationKind::Struct,
+                        Ast::RecordDef(_, _, _) => DeclarationKind::Record,
+                        Ast::DeferrorDef(_, _, _, _, _) => DeclarationKind::Deferror,
+                        _ => unreachable!(),
+                    };
+                    self.declaration_uid_kinds.insert(uid, kind);
                     self.scope.define_with_id(name, uid);
                 }
                 Ast::EnumDef(span, name, _, variants, _) => {
@@ -1369,6 +1572,7 @@ impl Resolver {
                         .entry(name.clone())
                         .or_default()
                         .push_back(uid);
+                    self.declaration_uid_kinds.insert(uid, DeclarationKind::Enum);
                     self.scope.define_with_id(name, uid);
 
                     for variant in variants {
@@ -1402,6 +1606,8 @@ impl Resolver {
                             .entry(qualified_ctor.clone())
                             .or_default()
                             .push_back(ctor_uid);
+                        self.declaration_uid_kinds
+                            .insert(ctor_uid, DeclarationKind::EnumVariant);
                         self.scope.define_with_id(&qualified_ctor, ctor_uid);
                     }
                 }
@@ -1796,6 +2002,40 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
+            Ast::ExtractorDef(span, name, param, ret_ty, body, attrs) => {
+                let fun_uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                let mut body_scope = self.scope.clone();
+                body_scope.define_with_id(&name, fun_uid);
+                let mut body_resolver = Resolver::with_scope(body_scope);
+                body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                body_resolver.current_module_path = self.current_module_path.clone();
+                body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                let resolved_param = body_resolver.resolve_extractor_param(param)?;
+                let resolved_body = body_resolver.resolve_node(*body)?;
+
+                self.scope.advance_next_id_to(body_resolver.scope.next_id());
+                self.scope.define_with_id(&name, fun_uid);
+                let qualified_name = self.qualify_current_declaration_name(&name);
+                let rid = ResolvedId {
+                    name,
+                    qualified_name: Some(qualified_name),
+                    unique_id: fun_uid,
+                    span: span.clone(),
+                };
+
+                Ok(Resolved::ExtractorDef(
+                    span,
+                    rid,
+                    resolved_param,
+                    ret_ty,
+                    Box::new(resolved_body),
+                    resolve_decl_attrs(&attrs),
+                ))
+            }
 
             Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => {
                 if !is_runtime_builtin_decl(&name) && !is_special_form_builtin_decl(&name) {
@@ -1827,6 +2067,28 @@ impl Resolver {
                     span,
                     rid,
                     resolved_params,
+                    ret_ty,
+                    resolve_decl_attrs(&attrs),
+                ))
+            }
+            Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => {
+                let uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                self.scope.define_with_id(&name, uid);
+                let qualified_name = self.qualify_current_declaration_name(&name);
+                let rid = ResolvedId {
+                    name,
+                    qualified_name: Some(qualified_name),
+                    unique_id: uid,
+                    span: span.clone(),
+                };
+                let resolved_param = self.resolve_extractor_param(param)?;
+                Ok(Resolved::BuiltinExtractorDecl(
+                    span,
+                    rid,
+                    resolved_param,
                     ret_ty,
                     resolve_decl_attrs(&attrs),
                 ))
@@ -1946,6 +2208,8 @@ impl Resolver {
 
             Ast::ConstructorCall(span, type_name, args) => {
                 let normalized_name = {
+                    // In ExprBlock, a struct head like `User(...)` dispatches to
+                    // `User::new(...)` when that constructor exists.
                     let sugared = format!("{}::new", type_name);
                     if self.scope.lookup(&sugared).is_some() {
                         sugared
@@ -2001,6 +2265,22 @@ impl Resolver {
     fn resolve_fun_param(&mut self, param: FunParam) -> Result<ResolvedFunParam, ResolveError> {
         let uid = self.scope.define(&param.name, param.span.clone());
         Ok(ResolvedFunParam {
+            id: ResolvedId {
+                name: param.name,
+                qualified_name: None,
+                unique_id: uid,
+                span: param.span,
+            },
+            ty: param.ty,
+        })
+    }
+
+    fn resolve_extractor_param(
+        &mut self,
+        param: ExtractorParam,
+    ) -> Result<ResolvedExtractorParam, ResolveError> {
+        let uid = self.scope.define(&param.name, param.span.clone());
+        Ok(ResolvedExtractorParam {
             id: ResolvedId {
                 name: param.name,
                 qualified_name: None,
@@ -2286,6 +2566,112 @@ impl Resolver {
                         .collect::<Result<Vec<_>, _>>()?,
                 ))
             }
+            AstPattern::Call(span, head_name, inners) => {
+                let head_uid = self.scope.lookup(&head_name).ok_or_else(|| ResolveError {
+                    message: if Self::is_constructor_style_head(&head_name) {
+                        format!("Undefined constructor: {}", head_name)
+                    } else {
+                        format!("Undefined MatchBlock head: {}", head_name)
+                    },
+                    span: span.clone(),
+                })?;
+                let head_kind = self
+                    .declaration_uid_kinds
+                    .get(&head_uid)
+                    .cloned()
+                    .or_else(|| {
+                        if matches!(head_name.as_str(), "Ok" | "Err") {
+                            Some(DeclarationKind::ResultCtor)
+                        } else if head_name.contains("::") {
+                            Some(DeclarationKind::EnumVariant)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| ResolveError {
+                        message: format!("Unknown MatchBlock head: {}", head_name),
+                        span: span.clone(),
+                    })?;
+                let resolved_id = ResolvedId {
+                    name: head_name.clone(),
+                    qualified_name: None,
+                    unique_id: head_uid,
+                    span: span.clone(),
+                };
+                let resolved_inners = inners
+                    .into_iter()
+                    .map(|inner| self.resolve_pattern_inner(inner, seen))
+                    .collect::<Result<Vec<_>, _>>()?;
+                match head_kind {
+                    DeclarationKind::Extractor => {
+                        if Self::is_constructor_style_head(&head_name) {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "Extractor names must not use constructor-style names like `{}`; implement `{}`::deconstruct(...) instead",
+                                    head_name, head_name
+                                ),
+                                span,
+                            });
+                        }
+                        Ok(ResolvedPattern::Extractor(resolved_id, resolved_inners))
+                    }
+                    DeclarationKind::EnumVariant | DeclarationKind::ResultCtor => {
+                        Ok(ResolvedPattern::Constructor(resolved_id, resolved_inners))
+                    }
+                    DeclarationKind::Struct => {
+                        let Some((extractor_qualified_name, extractor_uid, extractor_kind)) =
+                            self.attached_extractor_for_struct(head_uid, &head_name)
+                        else {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "MatchBlock head `{}` requires attached extractor `{}::deconstruct`, but it is not defined",
+                                    head_name, head_name
+                                ),
+                                span,
+                            });
+                        };
+                        if !matches!(
+                            extractor_kind,
+                            DeclarationKind::ImplMethod | DeclarationKind::Def
+                        ) {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "Attached extractor for `{}` must be implemented as `impl {} {{ def deconstruct(...) ... }}`",
+                                    head_name, head_name
+                                ),
+                                span,
+                            });
+                        }
+                        Ok(ResolvedPattern::Extractor(
+                            ResolvedId {
+                                name: format!("{}::deconstruct", head_name),
+                                qualified_name: extractor_qualified_name,
+                                unique_id: extractor_uid,
+                                span,
+                            },
+                            resolved_inners,
+                        ))
+                    }
+                    DeclarationKind::Record => {
+                        // Records will eventually gain compiler-generated deconstructors.
+                        // For now, keep `Record(...)` MatchBlock heads explicitly unsupported.
+                        Err(ResolveError {
+                            message: format!(
+                                "Record MatchBlock heads like `{}` are not supported yet",
+                                head_name
+                            ),
+                            span,
+                        })
+                    }
+                    other => Err(ResolveError {
+                        message: format!(
+                            "MatchBlock head `{}` is not a constructor or extractor ({:?})",
+                            head_name, other
+                        ),
+                        span,
+                    }),
+                }
+            }
             AstPattern::As(span, inner, alias, alias_ty) => {
                 let resolved_inner = self.resolve_pattern_inner(*inner, seen)?;
                 let alias_id = self.define_pattern_binding(alias, span, seen)?;
@@ -2376,11 +2762,19 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                             local_bound.insert(param.id.unique_id);
                         }
                     }
+                    Resolved::ExtractorDef(_, id, param, _, _, _) => {
+                        local_bound.insert(id.unique_id);
+                        local_bound.insert(param.id.unique_id);
+                    }
                     Resolved::BuiltinDecl(_, id, params, _, _) => {
                         local_bound.insert(id.unique_id);
                         for param in params {
                             local_bound.insert(param.id.unique_id);
                         }
+                    }
+                    Resolved::BuiltinExtractorDecl(_, id, param, _, _) => {
+                        local_bound.insert(id.unique_id);
+                        local_bound.insert(param.id.unique_id);
                     }
                     Resolved::BuiltinTypeDecl(_, _, _, _) => {}
                     Resolved::ResultCtorDecl(_, _, _, _, _) => {}
@@ -2477,6 +2871,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::DeferrorDef(_, _, _, _)
         | Resolved::EnumDef(_, _, _, _)
         | Resolved::BuiltinDecl(_, _, _, _, _)
+        | Resolved::BuiltinExtractorDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)
         | Resolved::ResultCtorDecl(_, _, _, _, _) => {}
         Resolved::Def(_, id, params, _, body, _) => {
@@ -2485,6 +2880,12 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             for param in params {
                 fun_bound.insert(param.id.unique_id);
             }
+            collect_captures_inner(body, &mut fun_bound, free);
+        }
+        Resolved::ExtractorDef(_, id, param, _, body, _) => {
+            let mut fun_bound = bound.clone();
+            fun_bound.insert(id.unique_id);
+            fun_bound.insert(param.id.unique_id);
             collect_captures_inner(body, &mut fun_bound, free);
         }
         Resolved::Closure(_, _, captures, _) => {
@@ -2552,6 +2953,11 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
                 collect_bind_pattern_bindings(inner, bound);
             }
         }
+        ResolvedPattern::Extractor(_, inners) => {
+            for inner in inners {
+                collect_bind_pattern_bindings(inner, bound);
+            }
+        }
         ResolvedPattern::As(inner, id, _) => {
             bound.insert(id.unique_id);
             collect_bind_pattern_bindings(inner, bound);
@@ -2574,9 +2980,22 @@ mod tests {
     use sindr::primitives::int;
     use spire::ast::{AstTy, BinOp, Lit};
 
+    fn permissive_module_rules() -> spire::SourceRules {
+        spire::SourceRules {
+            allow_top_level_expr: false,
+            allowed_top_level_decl_kinds: spire::TopLevelDeclPolicy::Any,
+            set_exit_code_policy: spire::SetExitCodePolicy::Forbidden,
+            normalized_entrypoint: None,
+        }
+    }
+
     fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
         let _ = module_path;
-        spire::parse_with_context(src, spire::ParserContext::project(0))
+        spire::parse_with_context(
+            src,
+            spire::ParserContext::module(0, Some(module_path.to_string()))
+                .with_rules(permissive_module_rules()),
+        )
             .expect("module source should parse")
     }
 
@@ -2845,6 +3264,63 @@ User("alice")"#,
     }
 
     #[test]
+    fn test_import_root_struct_is_rejected() {
+        let module_stages = vec![vec![staged_module(
+            "",
+            parse_module_ast(
+                r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+                "",
+            ),
+        )]];
+
+        let err = resolve_user_with_modules(
+            r#"import User
+value = User("alice")"#,
+            &module_stages,
+        )
+        .expect_err("root struct import should fail");
+        assert!(err.message.contains("Import target `User` is not importable"));
+    }
+
+    #[test]
+    fn test_root_struct_constructor_call_resolves_without_import() {
+        let module_stages = vec![vec![staged_module(
+            "",
+            parse_module_ast(
+                r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+                "",
+            ),
+        )]];
+
+        let resolved = resolve_user_with_modules(r#"user = User("alice")"#, &module_stages)
+            .expect("root struct constructor should resolve without import");
+
+        let constructor_name = resolved.iter().find_map(|node| match node {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::ConstructorCall(_, rid, _) => Some(rid.name.clone()),
+                _ => None,
+            },
+            _ => None,
+        });
+
+        assert_eq!(constructor_name.as_deref(), Some("User::new"));
+    }
+
+    #[test]
     fn test_constructor_call_sugars_to_type_new_resolution() {
         let resolved = parse_and_resolve(
             r#"defstruct User {
@@ -2896,7 +3372,16 @@ user = User("alice", 30)"#,
 
     #[test]
     fn test_builtin_decl_resolution() {
-        let resolved = parse_and_resolve("@@builtin def print(a: String) -> Unit").unwrap();
+        let ast = spire::parse_with_context(
+            "@@builtin def print(a: String) -> Unit",
+            spire::ParserContext::module(0, Some("Bootstrap".into()))
+                .with_rules(spire::SourceRules::std_module()),
+        )
+        .expect("std module should parse builtin declarations");
+        let mut resolver = Resolver::new();
+        let resolved = resolver
+            .resolve_program(ast)
+            .expect("builtin declaration should resolve");
         match &resolved[0] {
             Resolved::BuiltinDecl(_, id, params, ret_ty, attrs) => {
                 assert_eq!(id.name, "print");

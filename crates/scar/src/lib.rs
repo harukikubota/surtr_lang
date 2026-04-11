@@ -145,14 +145,19 @@ mod tests {
         ]
     }
 
-    fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
+    fn resolve_with_builtin_prelude_result(
+        source: &str,
+    ) -> Result<Vec<sigil::resolved::Resolved>, sigil::error::ResolveError> {
         let module_stages = std_module_stages();
         let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
             .expect("source should parse");
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");
         sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
-            .expect("source should resolve")
+    }
+
+    fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
+        resolve_with_builtin_prelude_result(source).expect("source should resolve")
     }
 
     fn typecheck_with_builtin_prelude(source: &str) -> Vec<TypedNode> {
@@ -245,10 +250,13 @@ print(match flag {
     }
 
     #[test]
-    fn safebind_rhs_must_be_result() {
+    fn safebind_total_pattern_accepts_plain_rhs() {
         let resolved = resolve_with_builtin_prelude("num =? 10");
-        let err = typecheck(resolved).expect_err("typecheck should fail");
-        assert!(err.message.contains("`=?` requires Result"));
+        let typed = typecheck(resolved).expect("typecheck should succeed");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::SafeBind(_, _))
+        ));
     }
 
     #[test]
@@ -312,6 +320,54 @@ Ok(num) =? value"#,
         assert!(matches!(
             typed.last().map(|node| &node.node),
             Some(TypedInner::SafeBind(_, _))
+        ));
+    }
+
+    #[test]
+    fn struct_matchblock_head_uses_attached_deconstruct_method() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+}
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+  def deconstruct(self: Self) -> MatchResult<Seq<String, Int>, Error> {
+    MatchResult::NoMatch
+  }
+}
+user = User("alice", 30)
+print(match user {
+  User(name, age) => "bad",
+  _ => "fallback",
+})"#,
+        );
+        let typed = typecheck(resolved).expect("typecheck should succeed");
+        assert!(!typed.is_empty());
+    }
+
+    #[test]
+    fn struct_matchblock_head_requires_attached_deconstruct_method() {
+        let err = resolve_with_builtin_prelude_result(
+            r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}
+user = User("alice")
+print(match user {
+  User(name) => name,
+  _ => "fallback",
+})"#,
+        )
+        .expect_err("resolve should fail");
+        assert!(err.message.contains(
+            "MatchBlock head `User` requires attached extractor `User::deconstruct`, but it is not defined"
         ));
     }
 

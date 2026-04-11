@@ -61,6 +61,7 @@ impl SetExitCodePolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TopLevelDeclKind {
     Def,
+    ExtractorDef,
     Defmod,
     ImplDef,
     Import,
@@ -69,6 +70,7 @@ pub enum TopLevelDeclKind {
     DeferrorDef,
     EnumDef,
     BuiltinDecl,
+    BuiltinExtractorDecl,
     BuiltinTypeDecl,
 }
 
@@ -155,7 +157,10 @@ impl SourceRules {
     pub fn module_member() -> Self {
         Self {
             allow_top_level_expr: false,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![TopLevelDeclKind::Def]),
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::ExtractorDef,
+            ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
         }
@@ -166,7 +171,9 @@ impl SourceRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
+                TopLevelDeclKind::ExtractorDef,
                 TopLevelDeclKind::BuiltinDecl,
+                TopLevelDeclKind::BuiltinExtractorDecl,
                 TopLevelDeclKind::BuiltinTypeDecl,
             ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
@@ -189,7 +196,16 @@ impl SourceRules {
     pub fn project() -> Self {
         Self {
             allow_top_level_expr: true,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::ImplDef,
+                TopLevelDeclKind::Import,
+                TopLevelDeclKind::StructDef,
+                TopLevelDeclKind::RecordDef,
+                TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::EnumDef,
+            ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
         }
@@ -474,6 +490,7 @@ impl Parser {
                     | Token::Defrecord
                     | Token::Deferror
                     | Token::Defenum
+                    | Token::Defextractor
             )
         {
             return Err(ParseError::syntax(
@@ -493,6 +510,7 @@ impl Parser {
             Token::Defrecord => self.parse_record_def()?,
             Token::Deferror => self.parse_deferror_def()?,
             Token::Defenum => self.parse_enum_def()?,
+            Token::Defextractor => self.parse_extractor_def()?,
             _ => {
                 if self.is_pattern_bind_stmt_start() {
                     let save = self.pos;
@@ -561,6 +579,7 @@ impl Parser {
     fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         match ast {
             Ast::Def(_, _, _, _, _, _) => Some(TopLevelDeclKind::Def),
+            Ast::ExtractorDef(_, _, _, _, _, _) => Some(TopLevelDeclKind::ExtractorDef),
             Ast::Defmod(_, _, _, _) => Some(TopLevelDeclKind::Defmod),
             Ast::ImplDef(_, _, _) => Some(TopLevelDeclKind::ImplDef),
             Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
@@ -569,6 +588,9 @@ impl Parser {
             Ast::DeferrorDef(_, _, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
             Ast::EnumDef(_, _, _, _, _) => Some(TopLevelDeclKind::EnumDef),
             Ast::BuiltinDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
+            Ast::BuiltinExtractorDecl(_, _, _, _, _) => {
+                Some(TopLevelDeclKind::BuiltinExtractorDecl)
+            }
             Ast::BuiltinTypeDecl(_, _, _) => Some(TopLevelDeclKind::BuiltinTypeDecl),
             Ast::ResultCtorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
             _ => None,
@@ -1817,40 +1839,42 @@ impl Parser {
                     segments.push(seg);
                 }
 
+                let callee_name = segments.join("::");
+                if matches!(self.peek(), Token::LParen) {
+                    self.advance();
+                    self.skip_newlines();
+                    let mut inners = Vec::new();
+                    if !matches!(self.peek(), Token::RParen) {
+                        inners.push(self.parse_bind_pattern()?);
+                        self.skip_newlines();
+                        while matches!(self.peek(), Token::Comma) {
+                            self.advance();
+                            self.skip_newlines();
+                            if matches!(self.peek(), Token::RParen) {
+                                break;
+                            }
+                            inners.push(self.parse_bind_pattern()?);
+                            self.skip_newlines();
+                        }
+                    }
+                    let end = self.expect(&Token::RParen)?;
+                    return Ok(AstPattern::Call(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        callee_name,
+                        inners,
+                    ));
+                }
+
                 let is_ctor = segments
                     .last()
                     .and_then(|segment| segment.chars().next())
                     .map(|ch| ch.is_uppercase())
                     .unwrap_or(false);
                 if is_ctor {
-                    let ctor_name = segments.join("::");
-                    if matches!(self.peek(), Token::LParen) {
-                        self.advance();
-                        self.skip_newlines();
-                        let mut inners = Vec::new();
-                        if !matches!(self.peek(), Token::RParen) {
-                            inners.push(self.parse_bind_pattern()?);
-                            self.skip_newlines();
-                            while matches!(self.peek(), Token::Comma) {
-                                self.advance();
-                                self.skip_newlines();
-                                if matches!(self.peek(), Token::RParen) {
-                                    break;
-                                }
-                                inners.push(self.parse_bind_pattern()?);
-                                self.skip_newlines();
-                            }
-                        }
-                        let end = self.expect(&Token::RParen)?;
-                        return Ok(AstPattern::Constructor(
-                            Span {
-                                start: sp.start,
-                                end: end.end,
-                            },
-                            ctor_name,
-                            inners,
-                        ));
-                    }
+                    let ctor_name = callee_name;
                     if matches!(self.peek(), Token::Unit) {
                         let end = self.advance().span.clone();
                         return Ok(AstPattern::Constructor(
@@ -2551,6 +2575,66 @@ impl Parser {
         Ok((sp, name, params, ret_ty))
     }
 
+    fn parse_extractor_signature(
+        &mut self,
+    ) -> Result<(Span, Symbol, ExtractorParam, AstTy), ParseError> {
+        self.parse_extractor_signature_with_name_mode(false)
+    }
+
+    fn parse_extractor_signature_with_name_mode(
+        &mut self,
+        allow_builtin_keyword_name: bool,
+    ) -> Result<(Span, Symbol, ExtractorParam, AstTy), ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Defextractor)?;
+        let (name, name_span) = if allow_builtin_keyword_name {
+            self.expect_builtin_decl_name()?
+        } else {
+            self.expect_ident()?
+        };
+        if Self::is_constructor_style_name(&name) {
+            return Err(ParseError::syntax(
+                format!(
+                    "Extractor names must not use constructor-style names like `{}`; implement `{}`::deconstruct(...) instead",
+                    name, name
+                ),
+                name_span,
+            ));
+        }
+        self.skip_newlines();
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let (param_name, param_span) = self.expect_ident()?;
+        self.skip_newlines();
+        let param_ty = if matches!(self.peek(), Token::Colon) {
+            self.advance();
+            self.skip_newlines();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.skip_newlines();
+        self.expect(&Token::RParen)?;
+        self.skip_newlines();
+        self.expect(&Token::Arrow)?;
+        self.skip_newlines();
+        let ret_ty = self.parse_type()?;
+        Ok((
+            sp,
+            name,
+            ExtractorParam {
+                name: param_name,
+                ty: param_ty,
+                span: param_span,
+            },
+            ret_ty,
+        ))
+    }
+
+    fn is_constructor_style_name(name: &str) -> bool {
+        name.chars().next().is_some_and(|ch| ch.is_uppercase())
+    }
+
     fn parse_annotated_decl(&mut self) -> Result<Ast, ParseError> {
         let mut attrs = DeclAttrs::default();
         let mut saw_builtin = false;
@@ -2614,9 +2698,10 @@ impl Parser {
         if saw_builtin {
             match self.peek() {
                 Token::Def => self.parse_builtin_decl(start, attrs),
+                Token::Defextractor => self.parse_builtin_extractor_decl(start, attrs),
                 Token::Type => self.parse_builtin_type_decl(start, attrs),
                 _ => Err(ParseError::syntax(
-                    "Expected `def` or `type` after @@builtin",
+                    "Expected `def`, `defextractor`, or `type` after @@builtin",
                     self.peek_span(),
                 )),
             }
@@ -2626,9 +2711,10 @@ impl Parser {
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
                 Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
+                Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
-                    "@@doc must annotate `def`, `defmod`, `deferror`, `defenum`, or `@@builtin type/def`",
+                    "@@doc must annotate `def`, `defmod`, `deferror`, `defenum`, `defextractor`, or `@@builtin type/def/defextractor`",
                     self.peek_span(),
                 )),
             }
@@ -2666,6 +2752,46 @@ impl Parser {
             Span { start, end },
             name,
             params,
+            ret_ty,
+            attrs,
+        ))
+    }
+
+    fn parse_builtin_extractor_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        let (_sp, name, param, ret_ty) = self.parse_extractor_signature_with_name_mode(true)?;
+
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::Newline)
+        ) {
+            lookahead += 1;
+        }
+
+        if matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::LBrace)
+        ) {
+            return Err(ParseError::syntax(
+                "@@builtin extractor declaration must not have a function body",
+                self.tokens[lookahead].span.clone(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+
+        Ok(Ast::BuiltinExtractorDecl(
+            Span { start, end },
+            name,
+            param,
             ret_ty,
             attrs,
         ))
@@ -2792,6 +2918,10 @@ impl Parser {
         self.parse_def_with_attrs(DeclAttrs::default(), None)
     }
 
+    fn parse_extractor_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_extractor_def_with_attrs(DeclAttrs::default(), None)
+    }
+
     fn parse_def_with_attrs(
         &mut self,
         attrs: DeclAttrs,
@@ -2828,6 +2958,44 @@ impl Parser {
             },
             name,
             params,
+            ret_ty,
+            Box::new(body),
+            attrs,
+        ))
+    }
+
+    fn parse_extractor_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
+        let (sp, name, param, ret_ty) = self.parse_extractor_signature()?;
+
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        let body_stmts = self.parse_block_stmts()?;
+        if body_stmts.is_empty() {
+            return Err(ParseError::syntax(
+                "Extractor body must not be empty",
+                self.peek_span(),
+            ));
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let body = Ast::Block(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            body_stmts,
+        );
+
+        Ok(Ast::ExtractorDef(
+            Span {
+                start: annotator_start.unwrap_or(sp.start),
+                end: end.end,
+            },
+            name,
+            param,
             ret_ty,
             Box::new(body),
             attrs,
@@ -3217,6 +3385,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::StrLit(span, _)
         | AstPattern::BoolLit(span, _)
         | AstPattern::Constructor(span, _, _)
+        | AstPattern::Call(span, _, _)
         | AstPattern::As(span, _, _, _) => span,
     }
 }
@@ -3273,6 +3442,14 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
                 .map(|inner| shift_pattern(inner, delta))
                 .collect(),
         ),
+        AstPattern::Call(span, name, inners) => AstPattern::Call(
+            shift_span(span, delta),
+            name,
+            inners
+                .into_iter()
+                .map(|inner| shift_pattern(inner, delta))
+                .collect(),
+        ),
         AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
             shift_span(span, delta),
             Box::new(shift_pattern(*inner, delta)),
@@ -3286,6 +3463,14 @@ fn shift_fun_param(param: FunParam, delta: usize) -> FunParam {
     FunParam {
         name: param.name,
         ty: shift_ast_ty(param.ty, delta),
+        span: shift_span(param.span, delta),
+    }
+}
+
+fn shift_extractor_param(param: ExtractorParam, delta: usize) -> ExtractorParam {
+    ExtractorParam {
+        name: param.name,
+        ty: param.ty.map(|ty| shift_ast_ty(ty, delta)),
         span: shift_span(param.span, delta),
     }
 }
@@ -3506,6 +3691,14 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*body, delta)),
             shift_decl_attrs(attrs),
         ),
+        Ast::ExtractorDef(span, name, param, ret_ty, body, attrs) => Ast::ExtractorDef(
+            shift_span(span, delta),
+            name,
+            shift_extractor_param(param, delta),
+            shift_ast_ty(ret_ty, delta),
+            Box::new(shift_ast_span(*body, delta)),
+            shift_decl_attrs(attrs),
+        ),
         Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
             shift_span(span, delta),
             name,
@@ -3514,6 +3707,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|p| shift_fun_param(p, delta))
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
+            shift_span(span, delta),
+            name,
+            shift_extractor_param(param, delta),
+            shift_ast_ty(ret_ty, delta),
             shift_decl_attrs(attrs),
         ),
         Ast::BuiltinTypeDecl(span, head, attrs) => Ast::BuiltinTypeDecl(
@@ -3600,7 +3800,9 @@ impl Ast {
             | Ast::DeferrorDef(s, _, _, _, _)
             | Ast::EnumDef(s, _, _, _, _)
             | Ast::Def(s, _, _, _, _, _)
+            | Ast::ExtractorDef(s, _, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _, _)
+            | Ast::BuiltinExtractorDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)
             | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)
@@ -4289,7 +4491,7 @@ Construct the error branch.
             Ast::SafeBind(_, pattern, rhs) => {
                 assert!(matches!(
                     pattern,
-                    AstPattern::Constructor(_, ctor, inner)
+                    AstPattern::Call(_, ctor, inner)
                         if ctor == "Ok"
                         && matches!(inner.as_slice(), [AstPattern::Var(_, name)] if name == "num")
                 ));
@@ -4332,7 +4534,7 @@ Construct the error branch.
                     pattern,
                     AstPattern::ListCons(_, first, rest)
                         if matches!(first.as_ref(),
-                            AstPattern::Constructor(_, ctor, inner)
+                            AstPattern::Call(_, ctor, inner)
                             if ctor == "Ok" && matches!(inner.as_slice(), [AstPattern::IntLit(_, n)] if n == &int(1))
                         )
                         && matches!(rhs.as_ref(), Ast::Var(_, name) if name == "lr")
@@ -4914,7 +5116,7 @@ Construct the error branch.
                 Ast::Match(_, _, arms) => {
                     assert!(matches!(
                         &arms[0].0,
-                        AstPattern::Constructor(_, name, inner)
+                        AstPattern::Call(_, name, inner)
                             if name == "Some"
                                 && matches!(inner.as_slice(), [AstPattern::Var(_, bound)] if bound == "y")
                     ));
@@ -5141,6 +5343,18 @@ y = KeyInput::Arrow(Direction::Down)"#,
     }
 
     #[test]
+    fn test_module_compile_unit_rejects_top_level_defextractor() {
+        let err = parse_with_context(
+            "defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> { MatchResult::NoMatch }",
+            ParserContext::module(1, None),
+        )
+        .expect_err("module compile unit should require defmod wrappers for extractors");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
     fn test_module_compile_unit_accepts_top_level_defmod() {
         let ast = parse_with_context(
             "defmod Kernel { def add(x: Int, y: Int) -> Int { x + y } }",
@@ -5148,6 +5362,25 @@ y = KeyInput::Arrow(Direction::Down)"#,
         )
         .expect("module compile unit should accept defmod declarations");
         assert!(matches!(ast.as_slice(), [Ast::Defmod(_, _, _, _)]));
+    }
+
+    #[test]
+    fn test_defmod_body_accepts_defextractor() {
+        let ast = parse_with_context(
+            r#"defmod Matchers {
+  defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> {
+    MatchResult::NoMatch
+  }
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("defmod should accept extractor declarations");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Defmod(_, name, body, _)]
+                if name == "Matchers"
+                    && matches!(body.as_slice(), [Ast::ExtractorDef(_, extractor_name, _, _, _, _)] if extractor_name == "never")
+        ));
     }
 
     #[test]
@@ -5269,6 +5502,18 @@ y = KeyInput::Arrow(Direction::Down)"#,
         let ast = parse_with_context("x = 42", ParserContext::project(1))
             .expect("project compile unit should accept top-level expressions");
         assert!(matches!(ast.as_slice(), [Ast::Bind(_, _, _)]));
+    }
+
+    #[test]
+    fn test_project_compile_unit_rejects_top_level_defextractor() {
+        let err = parse_with_context(
+            "defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> { MatchResult::NoMatch }",
+            ParserContext::project(1),
+        )
+        .expect_err("project compile unit should reject top-level extractor declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
     }
 
     #[test]

@@ -86,6 +86,11 @@ Surtr では、builtin Extractor と user-defined Extractor を
 - builtin Extractor も surface では同じレベルの宣言として見せてよい
 - compiler は builtin Extractor の lowering / 型規則 / 実行意味だけを特別扱いする
 - これにより、シグネチャ記述と `@@doc` 付与の形式を user-defined と揃えられる
+- constructor-style な名前（`User`, `Ok`, `Err` など）は Extractor 宣言名に使わない
+- `User(...)` のような struct head は import せず宣言名で直接解決する
+- 同じ `User(...)` でも BlockKind によって実体を切り替える
+- ExprBlock では `User::new(...)` の sugar として扱う
+- MatchBlock では attached extractor `User::deconstruct(...)` の sugar として扱う
 
 ---
 
@@ -185,13 +190,15 @@ MatchBlock evaluator は概念的に 3 状態を返す。
 surface では special form として扱ってよいが、内部モデルは次の形を基本とする。
 
 ```surtr
-defenum MatchState {
-  Success(Seq),
+defenum MatchResult<$Value> {
+  Success($Value),
   NoMatch,
+  Err(Error),
 }
-
-MatchResult<$E> = Result<MatchState, $E>
 ```
+
+surface では `MatchResult<$Value, Error>` を canonical spelling として扱ってよい。
+ただし第 2 引数の `Error` は型変数ではなく、抽象型 `Error` そのものを指す。
 
 ここで `Seq` は MatchBlock evaluator が束縛対象の値列を運ぶための特別扱い型である。
 
@@ -216,13 +223,7 @@ MatchResult<$E> = Result<MatchState, $E>
 
 - `Success(Seq)` を保持できる
 - `NoMatch` を保持できる
-- 必要なら独自 error を `Err` で返せる
-
-### 5.3 未指定 error の扱い
-
-Extractor が error 型を明示しない場合、compiler は既定の match error を与えてよい。
-
-ただし `NoMatch` は error へ潰さず、独立状態として保持する。
+- `Err(Error)` を保持できる
 
 ---
 
@@ -320,10 +321,15 @@ Extractor が error 型を明示しない場合、compiler は既定の match er
 - `User(name, age)`
 - `uncons(head, tail)`
 - `idx(2, value)`
-- `Ok(value)`
-- `Err(err)`
 
 MatchBlock 文脈では、これらは通常 call ではなく matcher invocation として扱う。
+
+補足:
+
+- constructor-style な head は通常の `defextractor` 名としては宣言しない
+- 構造体名は import 対象ではない。`import User` は無効で、struct head `User` は宣言名として直接見える
+- `User(name, age)` のような struct head は、`User::deconstruct(...)` が定義されていれば attached extractor として解決する
+- `Ok(value)` / `Err(err)` は Extractor call ではなく constructor pattern として扱う
 
 意味:
 
@@ -533,12 +539,74 @@ user-defined Extractor と同列に置けることを重視する。
 
 例:
 
-- `Ok`
-- `Err`
 - `uncons`
 
 これらは surface では Extractor 宣言として表せても、runtime 実装や lowering は
 compiler-special のままでよい。
+
+### 10.7 code-level イメージ
+
+以下は MatchBlock / Extractor を code-level に置くときのイメージである。
+これは厳密な token 列や parser 契約を固定するためのものではなく、
+宣言レベルで何を見せたいかを共有するための擬似コードである。
+
+```surtr
+@@doc """
+MatchBlock / Extractor が返す列挙結果。
+"""
+defenum MatchResult<$Value> {
+  Success($Value),
+  NoMatch,
+  Err(Error),
+}
+
+@@doc """
+Extractor の分解結果を運ぶ compiler-special な型。
+一般の tuple 機能ではなく、MatchBlock 用の型付き値列を表す。
+"""
+@@builtin type Seq<$Type>
+
+defmod List {
+  @@doc """
+  非空 List を `(head, tail)` へ分解する builtin Extractor。
+  空 List のときは `NoMatch` を返す。
+  """
+  @@builtin defextractor uncons(self: List<$A>) -> MatchResult<Seq<$A, List<$A>>, Error>
+}
+
+@@doc """
+user-defined Extractor の例。
+"""
+deferror UserMatchError(detail: String) {
+  "user extractor failed: #{detail}"
+}
+
+defextractor user(self) -> MatchResult<Seq<String, Int>, Error> {
+  MatchResult::Err(UserMatchError("not yet implemented in surface"))
+}
+
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def deconstruct(self: Self) -> MatchResult<Seq<String, Int>, Error> {
+    MatchResult::Err(UserMatchError("not yet implemented in surface"))
+  }
+}
+```
+
+補足:
+
+- `Seq<$Type>` は「型付きの分解結果を返す」という意図を code-level に見せるための表現である
+- `Seq` の arity や各要素型の厳密な扱いは compiler が吸収してよい
+- builtin Extractor も user-defined Extractor も、宣言レベルでは同じ段に置けることを重視する
+- `uncons` は code-level に宣言があっても、内部実装は compiler-special のままでよい
+- constructor-style な head は `defextractor` 名ではなく attached extractor sugar として使う
+- `defextractor` / `@@builtin defextractor` は module / impl の下でのみ宣言する
+- `User(...)` は `User::deconstruct(...)` が定義されているときだけ Extractor call として成立する
+- 構造体 head `User` 自体は import しない
 
 ---
 

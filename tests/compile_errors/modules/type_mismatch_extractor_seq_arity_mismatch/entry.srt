@@ -1,0 +1,6 @@
+import Matchers::one
+
+print(match 1 {
+  one(a, b) => "bad",
+  _ => "ok",
+})

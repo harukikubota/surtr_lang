@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Only total MatchBlock patterns can be used with `=`

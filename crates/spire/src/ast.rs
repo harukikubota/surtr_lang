@@ -85,6 +85,8 @@ pub enum AstPattern {
     BoolLit(Span, bool),
     /// `Ok(inner)` / `Color::Red` / `KeyInput::Arrow(dir)` in pattern position.
     Constructor(Span, Symbol, Vec<AstPattern>),
+    /// `uncons(head, tail)` / `User(name, age)` in MatchBlock position.
+    Call(Span, Symbol, Vec<AstPattern>),
     /// `inner @ alias` / `inner @ alias: Ty`
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
 }
@@ -124,6 +126,13 @@ pub struct TypeParam {
 pub struct FunParam {
     pub name: Symbol,
     pub ty: AstTy,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractorParam {
+    pub name: Symbol,
+    pub ty: Option<AstTy>,
     pub span: Span,
 }
 
@@ -256,8 +265,19 @@ pub enum Ast {
         DeclAttrs,
     ),
 
+    ExtractorDef(
+        Span,
+        Symbol,
+        ExtractorParam,
+        AstTy,
+        Box<Ast>,
+        DeclAttrs,
+    ),
+
     /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
+
+    BuiltinExtractorDecl(Span, Symbol, ExtractorParam, AstTy, DeclAttrs),
 
     /// Builtin type declaration: `@@builtin type Int`
     BuiltinTypeDecl(Span, BuiltinTypeHead, DeclAttrs),

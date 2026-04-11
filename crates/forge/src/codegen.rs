@@ -514,6 +514,9 @@ fn collect_stmt_meta(
         TypedInner::Def(_, id, _, _, _) => {
             function_defs.push(id.name.clone());
         }
+        TypedInner::ExtractorDef(_, id, _, _, _) => {
+            function_defs.push(id.name.clone());
+        }
         // `;` keeps Unit as expression result, but for REPL metadata we still
         // want to surface bindings/type defs introduced by the wrapped statement.
         TypedInner::Semi(inner) => {
@@ -560,6 +563,11 @@ fn collect_pattern_binding_infos(
         TypedPattern::ResultOk(_, inner) => {
             collect_pattern_binding_infos(inner, slot_map, out);
         }
+        TypedPattern::Extractor { items, .. } => {
+            for item in items {
+                collect_pattern_binding_infos(item, slot_map, out);
+            }
+        }
     }
 }
 
@@ -571,6 +579,14 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
+        Ty::Seq(items) => format!(
+            "Seq<{}>",
+            items
+                .iter()
+                .map(ty_to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
         Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.clone(),
         Ty::Error => "Error".into(),
@@ -1123,6 +1139,7 @@ impl Codegen {
             .iter()
             .filter_map(|stmt| match &stmt.node {
                 TypedInner::Def(fun_idx, _, _, _, _) => Some(*fun_idx),
+                TypedInner::ExtractorDef(fun_idx, _, _, _, _) => Some(*fun_idx),
                 TypedInner::DeferrorDef(_, fun_idx, _, _, _) => Some(*fun_idx),
                 _ => None,
             })
@@ -1150,12 +1167,15 @@ impl Codegen {
                     .insert(id.name.clone(), (*fun_idx, params.len() as u8));
             }
             match &stmt.node {
-                TypedInner::Def(..) | TypedInner::DeferrorDef(..) => defs.push(stmt),
+                TypedInner::Def(..)
+                | TypedInner::ExtractorDef(..)
+                | TypedInner::DeferrorDef(..) => defs.push(stmt),
                 _ => main_stmts.push(stmt),
             }
         }
         defs.sort_by_key(|stmt| match &stmt.node {
             TypedInner::Def(fun_idx, _, _, _, _) => *fun_idx,
+            TypedInner::ExtractorDef(fun_idx, _, _, _, _) => *fun_idx,
             TypedInner::DeferrorDef(_, fun_idx, _, _, _) => *fun_idx,
             _ => u32::MAX,
         });
@@ -1172,6 +1192,7 @@ impl Codegen {
         for def in defs {
             match &def.node {
                 TypedInner::Def(..) => self.emit_function_def(def)?,
+                TypedInner::ExtractorDef(..) => self.emit_extractor_def(def)?,
                 TypedInner::DeferrorDef(..) => self.emit_error_def(def)?,
                 _ => unreachable!(),
             }
@@ -1307,6 +1328,64 @@ impl Codegen {
         self.state
             .error_ctor_funs
             .insert(id.name.clone(), (*fun_idx, params.len() as u8));
+
+        self.state.slot_map = saved_slot_map;
+        self.state.next_slot = saved_next_slot;
+        Ok(())
+    }
+
+    fn emit_extractor_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
+        let (fun_idx, id, param, ret_ty, body) = match &node.node {
+            TypedInner::ExtractorDef(fun_idx, id, param, ret_ty, body) => {
+                (fun_idx, id, param, ret_ty, body)
+            }
+            _ => {
+                return Err(CodegenError {
+                    message: "expected extractor definition".into(),
+                    span: node.span.clone(),
+                });
+            }
+        };
+
+        let saved_slot_map = self.state.slot_map.clone();
+        let saved_next_slot = self.state.next_slot;
+
+        self.state.slot_map = HashMap::new();
+        self.state.next_slot = 0;
+        self.state.slot_map.insert(param.id.unique_id, 0);
+        self.state.next_slot = 1;
+
+        let entry_pc = self.current_pos() as u32;
+        let prev_in_function = self.in_function;
+        self.in_function = true;
+        self.emit_tail_node(body)?;
+        self.in_function = prev_in_function;
+
+        let num_locals = self.state.next_slot as u16;
+        self.state.functions.push(FunctionEntry {
+            fun_idx: *fun_idx,
+            entry_pc,
+            num_locals: num_locals.into(),
+            arity: 1,
+            qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
+            signature: Some(format!(
+                "{}({}: {}) -> {}",
+                id.name,
+                param.id.name,
+                ty_to_string(&param.ty),
+                ty_to_string(ret_ty)
+            )),
+            end_pc: 0,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+            flags: FunctionFlags {
+                public: true,
+                closure: false,
+                builtin_wrapper: false,
+                tail_entry: false,
+                generated: false,
+            },
+        });
 
         self.state.slot_map = saved_slot_map;
         self.state.next_slot = saved_next_slot;
@@ -1568,6 +1647,10 @@ impl Codegen {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
+            TypedInner::ExtractorDef(..) | TypedInner::BuiltinExtractorDecl(..) => {
+                let unit_idx = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit_idx));
+            }
 
             TypedInner::Closure(params, captures, body) => {
                 let filtered_captures: Vec<ResolvedId> = captures
@@ -1640,7 +1723,28 @@ impl Codegen {
 
     fn emit_safebind(&mut self, pat: &TypedPattern, rhs: &TypedNode) -> Result<(), CodegenError> {
         if !matches!(rhs.ty, Ty::Result(_, _)) {
-            return self.emit_safebind_from_list(pat, rhs);
+            if matches!(rhs.ty, Ty::List(_)) {
+                return self.emit_safebind_from_list(pat, rhs);
+            }
+
+            self.emit_node(rhs)?;
+            let payload_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(payload_slot));
+
+            let pattern_fail = self.fresh_label();
+            self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail, &rhs.span)?;
+            self.emit_pattern_bind_from_local(pat, payload_slot)?;
+            let success_label = self.fresh_label();
+            self.emit_jump(success_label);
+
+            self.patch_label(pattern_fail);
+            self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+
+            self.patch_label(success_label);
+            let unit_idx = self.add_constant(Constant::Unit);
+            self.emit(Opcode::LoadConst(unit_idx));
+            return Ok(());
         }
 
         self.emit_node(rhs)?;
@@ -2223,6 +2327,37 @@ impl Codegen {
                     propagate_result_error,
                 )?;
             }
+            TypedPattern::Extractor {
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+                ..
+            } => {
+                let item_slots = self.emit_extractor_item_slots_from_local(
+                    extractor,
+                    extractor_ty,
+                    *success_tag,
+                    *no_match_tag,
+                    *err_tag,
+                    seq_tys.len(),
+                    slot,
+                    fail_label,
+                    err_span,
+                )?;
+                for (item, item_slot) in items.iter().zip(item_slots.iter()) {
+                    self.emit_pattern_test_from_local_with_mode(
+                        item,
+                        *item_slot,
+                        fail_label,
+                        err_span,
+                        propagate_result_error,
+                    )?;
+                }
+            }
         }
         Ok(())
     }
@@ -2272,6 +2407,37 @@ impl Codegen {
                 self.emit(Opcode::StoreLocal(inner_slot));
                 self.emit_pattern_bind_from_local(inner, inner_slot)?;
             }
+            TypedPattern::Extractor {
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+                ..
+            } => {
+                let impossible_no_match = self.fresh_label();
+                let done = self.fresh_label();
+                let item_slots = self.emit_extractor_item_slots_from_local(
+                    extractor,
+                    extractor_ty,
+                    *success_tag,
+                    *no_match_tag,
+                    *err_tag,
+                    seq_tys.len(),
+                    slot,
+                    impossible_no_match,
+                    &extractor.span,
+                )?;
+                for (item, item_slot) in items.iter().zip(item_slots.iter()) {
+                    self.emit_pattern_bind_from_local(item, *item_slot)?;
+                }
+                self.emit_jump(done);
+                self.patch_label(impossible_no_match);
+                self.emit_pattern_mismatch_failure(extractor.span.clone())?;
+                self.patch_label(done);
+            }
         }
         Ok(())
     }
@@ -2301,6 +2467,263 @@ impl Codegen {
             self.emit(Opcode::Halt);
         }
         Ok(())
+    }
+
+    fn emit_propagate_error_from_local(
+        &mut self,
+        error_slot: u32,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        if self.in_function {
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit(Opcode::LoadLocal(error_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit(Opcode::Return);
+        } else if self.top_level_returns_result {
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit(Opcode::LoadLocal(error_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit(Opcode::Halt);
+        } else {
+            self.emit(Opcode::LoadLocal(error_slot));
+            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                message: "Unknown builtin: eprint".into(),
+                span: span.clone(),
+            })?;
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: eprint_id,
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
+            self.emit(Opcode::Halt);
+        }
+        Ok(())
+    }
+
+    fn emit_extractor_contract_failure(&mut self, span: Span) -> Result<(), CodegenError> {
+        self.emit_pattern_failure(
+            "ExtractorContractViolation",
+            "Extractor returned malformed Seq.",
+            span,
+        )
+    }
+
+    fn emit_unpack_seq_payload_from_local(
+        &mut self,
+        seq_slot: u32,
+        arity: usize,
+        span: &Span,
+    ) -> Result<Vec<u32>, CodegenError> {
+        let mut current_slot = seq_slot;
+        let mut item_slots = Vec::with_capacity(arity);
+
+        for index in 0..arity {
+            let non_empty = self.fresh_label();
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListIsEmpty);
+            self.emit_jump_if_false(non_empty);
+            self.emit_extractor_contract_failure(span.clone())?;
+            self.patch_label(non_empty);
+
+            let item_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListHead);
+            self.emit(Opcode::StoreLocal(item_slot));
+            item_slots.push(item_slot);
+
+            let tail_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListTail);
+            self.emit(Opcode::StoreLocal(tail_slot));
+            current_slot = tail_slot;
+
+            if index + 1 == arity {
+                let exact_len = self.fresh_label();
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::ListIsEmpty);
+                self.emit_jump_if_true(exact_len);
+                self.emit_extractor_contract_failure(span.clone())?;
+                self.patch_label(exact_len);
+            }
+        }
+
+        Ok(item_slots)
+    }
+
+    fn emit_extractor_item_slots_from_local(
+        &mut self,
+        extractor: &ResolvedId,
+        extractor_ty: &Ty,
+        success_tag: u32,
+        no_match_tag: u32,
+        err_tag: u32,
+        seq_len: usize,
+        input_slot: u32,
+        no_match_label: Label,
+        span: &Span,
+    ) -> Result<Vec<u32>, CodegenError> {
+        if let Ty::BuiltinFunc { name, .. } = extractor_ty {
+            match name.as_str() {
+                "Ok" => {
+                    if seq_len != 1 {
+                        return Err(CodegenError {
+                            message: "Ok extractor must produce exactly one value".into(),
+                            span: extractor.span.clone(),
+                        });
+                    }
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::GetTag);
+                    let ok_tag = self.add_constant(Constant::Tag(0));
+                    self.emit(Opcode::LoadConst(ok_tag));
+                    self.emit(Opcode::EqTag);
+                    self.emit_jump_if_false(no_match_label);
+
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    return Ok(vec![item_slot]);
+                }
+                "Err" => {
+                    if seq_len != 1 {
+                        return Err(CodegenError {
+                            message: "Err extractor must produce exactly one value".into(),
+                            span: extractor.span.clone(),
+                        });
+                    }
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::GetTag);
+                    let err_tag = self.add_constant(Constant::Tag(1));
+                    self.emit(Opcode::LoadConst(err_tag));
+                    self.emit(Opcode::EqTag);
+                    self.emit_jump_if_false(no_match_label);
+
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    return Ok(vec![item_slot]);
+                }
+                "uncons" => {
+                    if seq_len != 2 {
+                        return Err(CodegenError {
+                            message: "uncons extractor must produce exactly two values".into(),
+                            span: extractor.span.clone(),
+                        });
+                    }
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::ListIsEmpty);
+                    self.emit_jump_if_true(no_match_label);
+
+                    let head_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::ListHead);
+                    self.emit(Opcode::StoreLocal(head_slot));
+
+                    let tail_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::ListTail);
+                    self.emit(Opcode::StoreLocal(tail_slot));
+                    return Ok(vec![head_slot, tail_slot]);
+                }
+                other => {
+                    return Err(CodegenError {
+                        message: format!("Unknown builtin extractor: {}", other),
+                        span: extractor.span.clone(),
+                    });
+                }
+            }
+        }
+
+        let fun_idx = match extractor_ty {
+            Ty::UserFunc { fun_idx, .. } => *fun_idx,
+            other => {
+                return Err(CodegenError {
+                    message: format!(
+                        "Extractor {} is not codegen-callable: {}",
+                        extractor.name,
+                        ty_to_string(other)
+                    ),
+                    span: extractor.span.clone(),
+                });
+            }
+        };
+
+        self.emit(Opcode::LoadLocal(input_slot));
+        self.emit(Opcode::Call {
+            fun_idx,
+            arity: 1,
+            span_start: extractor.span.start as u32,
+            span_end: extractor.span.end as u32,
+        });
+        let result_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(result_slot));
+
+        let success_label = self.fresh_label();
+        let check_no_match_label = self.fresh_label();
+        let check_err_label = self.fresh_label();
+        let end_label = self.fresh_label();
+
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let success_tag_const = self.add_constant(Constant::Tag(success_tag));
+        self.emit(Opcode::LoadConst(success_tag_const));
+        self.emit(Opcode::EqTag);
+        self.emit_jump_if_false(check_no_match_label);
+        self.patch_label(success_label);
+
+        let payload_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetField { field_index: 1 });
+        self.emit(Opcode::StoreLocal(payload_slot));
+        let item_slots = self.emit_unpack_seq_payload_from_local(payload_slot, seq_len, span)?;
+        self.emit_jump(end_label);
+
+        self.patch_label(check_no_match_label);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let no_match_tag_const = self.add_constant(Constant::Tag(no_match_tag));
+        self.emit(Opcode::LoadConst(no_match_tag_const));
+        self.emit(Opcode::EqTag);
+        self.emit_jump_if_false(check_err_label);
+        self.emit_jump(no_match_label);
+
+        self.patch_label(check_err_label);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let err_tag_const = self.add_constant(Constant::Tag(err_tag));
+        self.emit(Opcode::LoadConst(err_tag_const));
+        self.emit(Opcode::EqTag);
+        let invalid_outcome_label = self.fresh_label();
+        self.emit_jump_if_false(invalid_outcome_label);
+
+        let error_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetField { field_index: 1 });
+        self.emit(Opcode::StoreLocal(error_slot));
+        self.emit_propagate_error_from_local(error_slot, span.clone())?;
+
+        self.patch_label(invalid_outcome_label);
+        self.emit_pattern_failure(
+            "InvalidMatchResult",
+            "Extractor returned an unknown MatchResult tag.",
+            span.clone(),
+        )?;
+
+        self.patch_label(end_label);
+        Ok(item_slots)
     }
 
     fn normalize_function_table(&mut self) -> Result<(), CodegenError> {
@@ -2493,6 +2916,13 @@ impl Codegen {
             TypedInner::Semi(inner) => {
                 self.emit_node(inner)?;
                 self.emit(Opcode::Pop);
+                self.emit_unit_const();
+                self.emit(Opcode::Return);
+            }
+            TypedInner::Def(..)
+            | TypedInner::ExtractorDef(..)
+            | TypedInner::BuiltinExtractorDecl(..)
+            | TypedInner::DeferrorDef(..) => {
                 self.emit_unit_const();
                 self.emit(Opcode::Return);
             }
@@ -2793,6 +3223,30 @@ impl Codegen {
                 self.emit(Opcode::StoreLocal(tail_slot));
                 self.emit_match_pattern_test(tail, tail_slot, fail_label)?;
             }
+            TypedMatchPattern::Extractor {
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+            } => {
+                let item_slots = self.emit_extractor_item_slots_from_local(
+                    extractor,
+                    extractor_ty,
+                    *success_tag,
+                    *no_match_tag,
+                    *err_tag,
+                    seq_tys.len(),
+                    slot,
+                    fail_label,
+                    &extractor.span,
+                )?;
+                for (item, item_slot) in items.iter().zip(item_slots.iter()) {
+                    self.emit_match_pattern_test(item, *item_slot, fail_label)?;
+                }
+            }
         }
         Ok(())
     }
@@ -2849,6 +3303,36 @@ impl Codegen {
                 self.emit(Opcode::ListTail);
                 self.emit(Opcode::StoreLocal(tail_slot));
                 self.emit_match_pattern_bind(tail, tail_slot)?;
+            }
+            TypedMatchPattern::Extractor {
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+            } => {
+                let impossible_no_match = self.fresh_label();
+                let done = self.fresh_label();
+                let item_slots = self.emit_extractor_item_slots_from_local(
+                    extractor,
+                    extractor_ty,
+                    *success_tag,
+                    *no_match_tag,
+                    *err_tag,
+                    seq_tys.len(),
+                    slot,
+                    impossible_no_match,
+                    &extractor.span,
+                )?;
+                for (item, item_slot) in items.iter().zip(item_slots.iter()) {
+                    self.emit_match_pattern_bind(item, *item_slot)?;
+                }
+                self.emit_jump(done);
+                self.patch_label(impossible_no_match);
+                self.emit_pattern_mismatch_failure(extractor.span.clone())?;
+                self.patch_label(done);
             }
         }
         Ok(())

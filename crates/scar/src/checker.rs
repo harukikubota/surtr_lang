@@ -767,6 +767,12 @@ impl Checker {
             TypedPattern::ResultOk(_, inner) => {
                 self.ensure_self_rebinding_types_inner(inner, span, expected_self)
             }
+            TypedPattern::Extractor { items, .. } => {
+                for item in items {
+                    self.ensure_self_rebinding_types_inner(item, span, expected_self)?;
+                }
+                Ok(())
+            }
             TypedPattern::Wildcard(_)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
@@ -846,6 +852,31 @@ impl Checker {
                         },
                     );
                 }
+                Resolved::BuiltinExtractorDecl(_, id, param, ret_ty, _) => {
+                    self.register_function_id(id);
+                    let mut tyvars = HashMap::new();
+                    let param_ty = match &param.ty {
+                        Some(ty) => self.resolve_builtin_ast_ty_in_context(
+                            ty,
+                            TypeSyntaxContext::General,
+                            &mut tyvars,
+                        )?,
+                        None => self.env.fresh_tyvar(),
+                    };
+                    let ret = self.resolve_builtin_ast_ty_in_context(
+                        ret_ty,
+                        TypeSyntaxContext::FunctionReturn,
+                        &mut tyvars,
+                    )?;
+                    self.env.bind_var(
+                        id.unique_id,
+                        Ty::BuiltinFunc {
+                            name: id.name.clone(),
+                            params: vec![param_ty],
+                            ret: Box::new(ret),
+                        },
+                    );
+                }
                 Resolved::Def(_, id, params, ret_ty, _, _) => {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
@@ -891,6 +922,40 @@ impl Checker {
                     if Self::split_impl_method_name(&id.name).is_some() {
                         self.impl_method_uids.insert(id.name.clone(), id.unique_id);
                     }
+                    fun_idx += 1;
+                }
+                Resolved::ExtractorDef(_, id, param, ret_ty, _, _) => {
+                    self.register_function_id(id);
+                    let mut tyvars = HashMap::new();
+                    let param_ty = match &param.ty {
+                        Some(ty) => self.resolve_signature_ast_ty_in_context(
+                            ty,
+                            TypeSyntaxContext::General,
+                            &mut tyvars,
+                        )?,
+                        None => self.env.fresh_tyvar(),
+                    };
+                    let ret = self.resolve_signature_ast_ty_in_context(
+                        ret_ty,
+                        TypeSyntaxContext::FunctionReturn,
+                        &mut tyvars,
+                    )?;
+                    let type_params = tyvars
+                        .values()
+                        .filter_map(|ty| match ty {
+                            Ty::Var(var) => Some(*var),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    self.env.bind_var(
+                        id.unique_id,
+                        Ty::UserFunc {
+                            fun_idx,
+                            type_params,
+                            params: vec![param_ty],
+                            ret: Box::new(ret),
+                        },
+                    );
                     fun_idx += 1;
                 }
                 Resolved::DeferrorDef(_, id, fields, _) => {
@@ -987,12 +1052,12 @@ impl Checker {
             }
 
             Resolved::Bind(span, pat, rhs) => {
-                if Self::contains_result_test_pattern(pat) {
+                if !Self::is_total_bind_pattern(pat) {
                     return Err(TypeError {
-                        message: "Result destructuring patterns must use `=?`, not `=`".into(),
+                        message: "Only total MatchBlock patterns can be used with `=`".into(),
                         span: span.clone(),
                         hint: Some(
-                            "Use `=?` for `Ok(...)` / nested Result pattern matching.".into(),
+                            "Use `=?` for partial destructuring and extractor-driven matches.".into(),
                         ),
                     });
                 }
@@ -1099,8 +1164,14 @@ impl Checker {
             Resolved::Def(span, id, params, ret_ty, body, _) => {
                 self.check_def(span, id, params, ret_ty, body)
             }
+            Resolved::ExtractorDef(span, id, param, ret_ty, body, _) => {
+                self.check_extractor_def(span, id, param, ret_ty, body)
+            }
             Resolved::BuiltinDecl(span, id, params, ret_ty, _) => {
                 self.check_builtin_decl(span, id, params, ret_ty)
+            }
+            Resolved::BuiltinExtractorDecl(span, id, param, ret_ty, _) => {
+                self.check_builtin_extractor_decl(span, id, param, ret_ty)
             }
             Resolved::BuiltinTypeDecl(span, id, params, attrs) => {
                 self.check_builtin_type_decl(span, id, params, attrs)
@@ -1136,23 +1207,22 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
+        let pattern_can_nomatch = !Self::is_total_bind_pattern(pat);
         let (ok_ty, mut propagated_err_tys) = match rhs_ty {
-            Ty::Result(ok, err) => (ok.as_ref().clone(), vec![err.as_ref().clone()]),
-            Ty::List(_) if Self::is_top_level_list_pattern(pat) => {
-                // `uncons(List<A>) -> Result<_, Error>`-like behavior for list destructuring.
-                (self.resolve_ty(&typed_rhs.ty), vec![Ty::Error])
+            Ty::Result(ok, err) => {
+                let mut err_tys = vec![err.as_ref().clone()];
+                if pattern_can_nomatch {
+                    err_tys.push(Ty::Error);
+                }
+                (ok.as_ref().clone(), err_tys)
             }
             other => {
-                return Err(TypeError {
-                    message: format!(
-                        "`=?` requires Result on the right-hand side, got {}",
-                        self.ty_name(&other)
-                    ),
-                    span: typed_rhs.span.clone(),
-                    hint: Some(
-                        "Use `=` for plain values, or return Result<T> from the expression".into(),
-                    ),
-                });
+                let err_tys = if pattern_can_nomatch {
+                    vec![Ty::Error]
+                } else {
+                    Vec::new()
+                };
+                (other, err_tys)
             }
         };
 
@@ -1274,7 +1344,9 @@ impl Checker {
             | Resolved::DeferrorDef(span, _, _, _)
             | Resolved::EnumDef(span, _, _, _)
             | Resolved::Def(span, _, _, _, _, _)
+            | Resolved::ExtractorDef(span, _, _, _, _, _)
             | Resolved::BuiltinDecl(span, _, _, _, _)
+            | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
             | Resolved::ResultCtorDecl(span, _, _, _, _)
             | Resolved::Closure(span, _, _, _)
@@ -1783,31 +1855,130 @@ impl Checker {
         }
     }
 
-    fn is_top_level_list_pattern(pat: &ResolvedPattern) -> bool {
-        matches!(
-            pat,
-            ResolvedPattern::ListNil(_) | ResolvedPattern::ListCons(_, _)
-        )
-    }
-
-    fn contains_result_test_pattern(pat: &ResolvedPattern) -> bool {
+    fn is_total_bind_pattern(pat: &ResolvedPattern) -> bool {
         match pat {
-            ResolvedPattern::Constructor(ctor, inners) => {
-                ctor.name == "Ok"
-                    || ctor.name == "Err"
-                    || inners.iter().any(Self::contains_result_test_pattern)
-            }
-            ResolvedPattern::As(inner, _, _) => Self::contains_result_test_pattern(inner),
-            ResolvedPattern::ListCons(head, tail) => {
-                Self::contains_result_test_pattern(head) || Self::contains_result_test_pattern(tail)
-            }
             ResolvedPattern::Var(_)
             | ResolvedPattern::Annotated(_, _)
-            | ResolvedPattern::Wildcard(_)
-            | ResolvedPattern::ListNil(_)
+            | ResolvedPattern::Wildcard(_) => true,
+            ResolvedPattern::As(inner, _, _) => Self::is_total_bind_pattern(inner),
+            ResolvedPattern::ListNil(_)
+            | ResolvedPattern::ListCons(_, _)
             | ResolvedPattern::IntLit(_, _)
             | ResolvedPattern::StrLit(_, _)
-            | ResolvedPattern::BoolLit(_, _) => false,
+            | ResolvedPattern::BoolLit(_, _)
+            | ResolvedPattern::Constructor(_, _)
+            | ResolvedPattern::Extractor(_, _) => false,
+        }
+    }
+
+    fn match_result_variant_tags(&self, span: &Span) -> Result<(u32, u32, u32), TypeError> {
+        let variants = self
+            .env
+            .enum_variants_of("MatchResult")
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: "MatchResult enum is not available in the current environment".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let mut success_tag = None;
+        let mut no_match_tag = None;
+        let mut err_tag = None;
+        for variant in variants {
+            match variant.short_name.as_str() {
+                "Success" => success_tag = Some(variant.tag),
+                "NoMatch" => no_match_tag = Some(variant.tag),
+                "Err" => err_tag = Some(variant.tag),
+                _ => {}
+            }
+        }
+        match (success_tag, no_match_tag, err_tag) {
+            (Some(success), Some(no_match), Some(err)) => Ok((success, no_match, err)),
+            _ => Err(TypeError {
+                message: "MatchResult enum must define Success, NoMatch, and Err variants".into(),
+                span: span.clone(),
+                hint: None,
+            }),
+        }
+    }
+
+    fn extractor_contract(
+        &mut self,
+        extractor_id: &ResolvedId,
+        span: &Span,
+    ) -> Result<(Ty, Vec<Ty>, u32, u32, u32), TypeError> {
+        let extractor_ty = self
+            .env
+            .lookup_var(extractor_id.unique_id)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Undefined extractor: {}", extractor_id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let extractor_ty = self.instantiate_builtin_ty(&extractor_ty);
+        let (params, ret) = match &extractor_ty {
+            Ty::BuiltinFunc { params, ret, .. }
+            | Ty::UserFunc { params, ret, .. }
+            | Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "Extractor {} is not callable (got {})",
+                        extractor_id.name,
+                        self.ty_name(other)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        };
+        if params.len() != 1 {
+            return Err(TypeError {
+                message: format!(
+                    "Extractor {} must accept exactly one input value, got {} parameter(s)",
+                    extractor_id.name,
+                    params.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let input_ty = params[0].clone();
+        let seq_tys =
+            self.require_match_result_seq_ty(&self.resolve_ty(&ret), span, &extractor_id.name)?;
+        let (success_tag, no_match_tag, err_tag) = self.match_result_variant_tags(span)?;
+        Ok((input_ty, seq_tys, success_tag, no_match_tag, err_tag))
+    }
+
+    fn require_match_result_seq_ty(
+        &self,
+        ty: &Ty,
+        span: &Span,
+        context: &str,
+    ) -> Result<Vec<Ty>, TypeError> {
+        match self.resolve_ty(ty) {
+            Ty::Enum(name, args) if name == "MatchResult" && args.len() == 1 => match &args[0] {
+                Ty::Seq(items) => Ok(items.clone()),
+                other => Err(TypeError {
+                    message: format!(
+                        "{} must return MatchResult<Seq<...>>, got MatchResult<{}>",
+                        context,
+                        self.ty_name(other)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                }),
+            },
+            other => Err(TypeError {
+                message: format!(
+                    "{} must return MatchResult<Seq<...>>, got {}",
+                    context,
+                    self.ty_name(&other)
+                ),
+                span: span.clone(),
+                hint: None,
+            }),
         }
     }
 
@@ -1904,6 +2075,45 @@ impl Checker {
                 }
             },
             AstTy::Generic(span, name, args) => match name.as_str() {
+                "Seq" => {
+                    if args.is_empty() {
+                        return Err(TypeError {
+                            message: "Seq<T1, ...> requires at least 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let items = args
+                        .iter()
+                        .map(|arg| self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(Ty::Seq(items))
+                }
+                "MatchResult" => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(TypeError {
+                            message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let value =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    if args.len() == 2 {
+                        let err = self.resolve_ast_ty_in_context(
+                            &args[1],
+                            TypeSyntaxContext::General,
+                        )?;
+                        if !matches!(err, Ty::Error) {
+                            return Err(TypeError {
+                                message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                    }
+                    Ok(Ty::Enum("MatchResult".into(), vec![value]))
+                }
                 "List" => {
                     if args.len() != 1 {
                         return Err(TypeError {
@@ -2033,6 +2243,55 @@ impl Checker {
                 )?;
                 Ok(Ty::List(Box::new(inner)))
             }
+            AstTy::Generic(span, name, args) if name == "Seq" => {
+                if args.is_empty() {
+                    return Err(TypeError {
+                        message: "Seq<T1, ...> requires at least 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let items = args
+                    .iter()
+                    .map(|arg| {
+                        self.resolve_signature_ast_ty_in_context(
+                            arg,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Seq(items))
+            }
+            AstTy::Generic(span, name, args) if name == "MatchResult" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(TypeError {
+                        message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let value = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                if args.len() == 2 {
+                    let err = self.resolve_signature_ast_ty_in_context(
+                        &args[1],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    if !matches!(err, Ty::Error) {
+                        return Err(TypeError {
+                            message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+                Ok(Ty::Enum("MatchResult".into(), vec![value]))
+            }
             AstTy::Generic(span, name, args) if name == "Result" => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
@@ -2148,6 +2407,55 @@ impl Checker {
                 Ok(fresh)
             }
             AstTy::Generic(span, name, args) => match name.as_str() {
+                "Seq" => {
+                    if args.is_empty() {
+                        return Err(TypeError {
+                            message: "Seq<T1, ...> requires at least 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let items = args
+                        .iter()
+                        .map(|arg| {
+                            self.resolve_builtin_ast_ty_in_context(
+                                arg,
+                                TypeSyntaxContext::General,
+                                tyvars,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(Ty::Seq(items))
+                }
+                "MatchResult" => {
+                    if args.is_empty() || args.len() > 2 {
+                        return Err(TypeError {
+                            message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let value = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    if args.len() == 2 {
+                        let err = self.resolve_builtin_ast_ty_in_context(
+                            &args[1],
+                            TypeSyntaxContext::General,
+                            tyvars,
+                        )?;
+                        if !matches!(err, Ty::Error) {
+                            return Err(TypeError {
+                                message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                    }
+                    Ok(Ty::Enum("MatchResult".into(), vec![value]))
+                }
                 "List" => {
                     if args.len() != 1 {
                         return Err(TypeError {
@@ -2274,6 +2582,12 @@ impl Checker {
             | (Ty::Unit, Ty::Unit)
             | (Ty::Error, Ty::Error) => true,
             (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
+            (Ty::Seq(a), Ty::Seq(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
             (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
                 a_params.len() == b_params.len()
                     && a_params
@@ -2315,6 +2629,7 @@ impl Checker {
         match self.resolve_ty(ty) {
             Ty::Var(var) => var == needle,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
+            Ty::Seq(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
             Ty::Func(params, ret) => {
                 params
                     .iter()
@@ -2345,6 +2660,7 @@ impl Checker {
                 None => Ty::Var(*var),
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
+            Ty::Seq(items) => Ty::Seq(items.iter().map(|item| self.resolve_ty(item)).collect()),
             Ty::Func(params, ret) => Ty::Func(
                 params.iter().map(|param| self.resolve_ty(param)).collect(),
                 Box::new(self.resolve_ty(ret)),
@@ -2397,6 +2713,12 @@ impl Checker {
                 .or_insert_with(|| self.env.fresh_tyvar())
                 .clone(),
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
+            Ty::Seq(items) => Ty::Seq(
+                items
+                    .iter()
+                    .map(|item| self.instantiate_ty_with_fresh(item, fresh))
+                    .collect(),
+            ),
             Ty::Func(params, ret) => Ty::Func(
                 params
                     .iter()
@@ -2492,6 +2814,14 @@ impl Checker {
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
+            Ty::Seq(items) => format!(
+                "Seq<{}>",
+                items
+                    .iter()
+                    .map(|item| self.ty_name(item))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Ty::Result(ok, _) => format!("Result<{}>", self.ty_name(ok)),
             Ty::Var(n) => format!("${}", n),
             Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
@@ -2619,7 +2949,12 @@ impl Checker {
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.resolve_typed_node(*scrutinee)),
                 arms.into_iter()
-                    .map(|(pat, body)| (pat, self.resolve_typed_node(body)))
+                    .map(|(pat, body)| {
+                        (
+                            self.resolve_typed_match_pattern(pat),
+                            self.resolve_typed_node(body),
+                        )
+                    })
                     .collect(),
             ),
             TypedInner::FieldAccess(expr, idx) => {
@@ -2665,6 +3000,25 @@ impl Checker {
                 self.resolve_ty(&ret_ty),
                 Box::new(self.resolve_typed_node(*body)),
             ),
+            TypedInner::ExtractorDef(fun_idx, id, param, ret_ty, body) => {
+                TypedInner::ExtractorDef(
+                    fun_idx,
+                    id,
+                    TypedFunParam {
+                        id: param.id,
+                        ty: self.resolve_ty(&param.ty),
+                    },
+                    self.resolve_ty(&ret_ty),
+                    Box::new(self.resolve_typed_node(*body)),
+                )
+            }
+            TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
+                TypedInner::BuiltinExtractorDecl(
+                    id,
+                    self.resolve_ty(&param_ty),
+                    self.resolve_ty(&ret_ty),
+                )
+            }
             TypedInner::Closure(params, captures, body) => TypedInner::Closure(
                 params
                     .into_iter()
@@ -2717,6 +3071,84 @@ impl Checker {
                 self.resolve_ty(&ty),
                 Box::new(self.resolve_typed_pattern(*inner)),
             ),
+            TypedPattern::Extractor {
+                input_ty,
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+            } => TypedPattern::Extractor {
+                input_ty: self.resolve_ty(&input_ty),
+                extractor,
+                extractor_ty: self.resolve_ty(&extractor_ty),
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys: seq_tys
+                    .into_iter()
+                    .map(|ty| self.resolve_ty(&ty))
+                    .collect(),
+                items: items
+                    .into_iter()
+                    .map(|item| self.resolve_typed_pattern(item))
+                    .collect(),
+            },
+        }
+    }
+
+    fn resolve_typed_match_pattern(&self, pattern: TypedMatchPattern) -> TypedMatchPattern {
+        match pattern {
+            TypedMatchPattern::Binding(id) => TypedMatchPattern::Binding(id),
+            TypedMatchPattern::As(inner, id) => {
+                TypedMatchPattern::As(Box::new(self.resolve_typed_match_pattern(*inner)), id)
+            }
+            TypedMatchPattern::Wildcard => TypedMatchPattern::Wildcard,
+            TypedMatchPattern::BoolLit(value) => TypedMatchPattern::BoolLit(value),
+            TypedMatchPattern::IntLit(value) => TypedMatchPattern::IntLit(value),
+            TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
+            TypedMatchPattern::Constructor {
+                tag,
+                fields,
+                field_offset,
+            } => TypedMatchPattern::Constructor {
+                tag,
+                fields: fields
+                    .into_iter()
+                    .map(|field| self.resolve_typed_match_pattern(field))
+                    .collect(),
+                field_offset,
+            },
+            TypedMatchPattern::ListNil => TypedMatchPattern::ListNil,
+            TypedMatchPattern::ListCons(head, tail) => TypedMatchPattern::ListCons(
+                Box::new(self.resolve_typed_match_pattern(*head)),
+                Box::new(self.resolve_typed_match_pattern(*tail)),
+            ),
+            TypedMatchPattern::Extractor {
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+            } => TypedMatchPattern::Extractor {
+                extractor,
+                extractor_ty: self.resolve_ty(&extractor_ty),
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys: seq_tys
+                    .into_iter()
+                    .map(|ty| self.resolve_ty(&ty))
+                    .collect(),
+                items: items
+                    .into_iter()
+                    .map(|item| self.resolve_typed_match_pattern(item))
+                    .collect(),
+            },
         }
     }
 
@@ -2966,6 +3398,64 @@ impl Checker {
                     rhs_ty,
                 ))
             }
+            ResolvedPattern::Extractor(extractor_id, items) => {
+                let (input_ty, seq_tys, success_tag, no_match_tag, err_tag) =
+                    self.extractor_contract(extractor_id, &extractor_id.span)?;
+                let extractor_ty = self
+                    .env
+                    .lookup_var(extractor_id.unique_id)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        message: format!("Undefined extractor: {}", extractor_id.name),
+                        span: extractor_id.span.clone(),
+                        hint: None,
+                    })?;
+                let extractor_ty = self.instantiate_builtin_ty(&extractor_ty);
+                let extractor_ty = self.resolve_ty(&extractor_ty);
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                if !self.types_compatible(&input_ty, &rhs_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Extractor {} expects {}, got {}",
+                            extractor_id.name,
+                            self.ty_name(&input_ty),
+                            self.ty_name(&rhs_ty)
+                        ),
+                        span: extractor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+                if items.len() != seq_tys.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Extractor {} returns {} value(s), but pattern expects {}",
+                            extractor_id.name,
+                            seq_tys.len(),
+                            items.len()
+                        ),
+                        span: extractor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+                let mut typed_items = Vec::with_capacity(items.len());
+                for (item, item_ty) in items.iter().zip(seq_tys.iter()) {
+                    let (typed_item, _) = self.check_pattern(item, item_ty, span)?;
+                    typed_items.push(typed_item);
+                }
+                Ok((
+                    TypedPattern::Extractor {
+                        input_ty: rhs_ty.clone(),
+                        extractor: extractor_id.clone(),
+                        extractor_ty,
+                        success_tag,
+                        no_match_tag,
+                        err_tag,
+                        seq_tys,
+                        items: typed_items,
+                    },
+                    rhs_ty,
+                ))
+            }
         }
     }
 
@@ -3000,6 +3490,11 @@ impl Checker {
                 };
                 self.bind_typed_pattern(inner, &ok_ty);
             }
+            TypedPattern::Extractor { seq_tys, items, .. } => {
+                for (item, item_ty) in items.iter().zip(seq_tys.iter()) {
+                    self.bind_typed_pattern(item, item_ty);
+                }
+            }
         }
     }
 
@@ -3026,6 +3521,12 @@ impl Checker {
             }
             TypedPattern::As(_, inner, _) => {
                 self.collect_pattern_result_error_types(inner, out);
+            }
+            TypedPattern::Extractor { items, .. } => {
+                out.push(Ty::Error);
+                for item in items {
+                    self.collect_pattern_result_error_types(item, out);
+                }
             }
             TypedPattern::Var(_, _)
             | TypedPattern::Wildcard(_)
@@ -4319,6 +4820,57 @@ impl Checker {
                     Box::new(typed_tail),
                 ))
             }
+            ResolvedPattern::Extractor(extractor_id, items) => {
+                let (input_ty, seq_tys, success_tag, no_match_tag, err_tag) =
+                    self.extractor_contract(extractor_id, &extractor_id.span)?;
+                let expected_ty = self.resolve_ty(expected_ty);
+                if !self.types_compatible(&input_ty, &expected_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Extractor {} expects {}, got {}",
+                            extractor_id.name,
+                            self.ty_name(&input_ty),
+                            self.ty_name(&expected_ty)
+                        ),
+                        span: extractor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+                if items.len() != seq_tys.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Extractor {} returns {} value(s), but pattern expects {}",
+                            extractor_id.name,
+                            seq_tys.len(),
+                            items.len()
+                        ),
+                        span: extractor_id.span.clone(),
+                        hint: None,
+                    });
+                }
+                let mut typed_items = Vec::with_capacity(items.len());
+                for (item, item_ty) in items.iter().zip(seq_tys.iter()) {
+                    typed_items.push(self.check_match_subpattern(item, item_ty)?);
+                }
+                let extractor_ty = self
+                    .env
+                    .lookup_var(extractor_id.unique_id)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        message: format!("Undefined extractor: {}", extractor_id.name),
+                        span: extractor_id.span.clone(),
+                        hint: None,
+                    })?;
+                Ok(TypedMatchPattern::Extractor {
+                    extractor: extractor_id.clone(),
+                    extractor_ty: self.instantiate_builtin_ty(&extractor_ty),
+                    success_tag,
+                    no_match_tag,
+                    err_tag,
+                    seq_tys,
+                    items: typed_items,
+                })
+            }
         }
     }
 
@@ -4331,7 +4883,8 @@ impl Checker {
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::Constructor { .. }
             | TypedMatchPattern::ListNil
-            | TypedMatchPattern::ListCons(_, _) => false,
+            | TypedMatchPattern::ListCons(_, _)
+            | TypedMatchPattern::Extractor { .. } => false,
         }
     }
 
@@ -4642,6 +5195,45 @@ impl Checker {
         })
     }
 
+    fn check_builtin_extractor_decl(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        param: &ResolvedExtractorParam,
+        ret_ty: &AstTy,
+    ) -> Result<TypedNode, TypeError> {
+        let mut tyvars = HashMap::new();
+        let param_ty = match &param.ty {
+            Some(ty) => self.resolve_builtin_ast_ty_in_context(
+                ty,
+                TypeSyntaxContext::General,
+                &mut tyvars,
+            )?,
+            None => self.env.fresh_tyvar(),
+        };
+        let ret = self.resolve_builtin_ast_ty_in_context(
+            ret_ty,
+            TypeSyntaxContext::FunctionReturn,
+            &mut tyvars,
+        )?;
+        self.require_match_result_seq_ty(&ret, &param.id.span, &format!("Extractor {}", id.name))?;
+
+        self.env.bind_var(
+            id.unique_id,
+            Ty::BuiltinFunc {
+                name: id.name.clone(),
+                params: vec![param_ty.clone()],
+                ret: Box::new(ret.clone()),
+            },
+        );
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::BuiltinExtractorDecl(id.clone(), param_ty, ret),
+        })
+    }
+
     fn check_result_ctor_decl(
         &mut self,
         span: &Span,
@@ -4931,6 +5523,90 @@ impl Checker {
                 id.clone(),
                 typed_params,
                 expected_ret,
+                Box::new(typed_body),
+            ),
+        })
+    }
+
+    fn check_extractor_def(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        param: &ResolvedExtractorParam,
+        ret_ty: &AstTy,
+        body: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let mut fun_env = self.env.clone();
+        let mut tyvars = HashMap::new();
+
+        let param_ty = match &param.ty {
+            Some(ty) => self.resolve_signature_ast_ty_in_context(
+                ty,
+                TypeSyntaxContext::General,
+                &mut tyvars,
+            )?,
+            None => self.env.fresh_tyvar(),
+        };
+        fun_env.bind_var(param.id.unique_id, param_ty.clone());
+        let typed_param = TypedFunParam {
+            id: param.id.clone(),
+            ty: param_ty,
+        };
+
+        let expected_ret = self.resolve_signature_ast_ty_in_context(
+            ret_ty,
+            TypeSyntaxContext::FunctionReturn,
+            &mut tyvars,
+        )?;
+        self.require_match_result_seq_ty(&expected_ret, &param.id.span, &format!("Extractor {}", id.name))?;
+
+        let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
+        let mut body_checker = self.spawn_child_checker(fun_env);
+        body_checker.function_return_ty = Some(expected_ret.clone());
+        body_checker.current_function_symbol = Some(current_symbol);
+        let typed_body = body_checker.check_node(body)?;
+        let typed_body = body_checker.resolve_typed_node(typed_body);
+        self.absorb_child_progress(&body_checker);
+
+        if !self.types_compatible(&expected_ret, &typed_body.ty) {
+            let hint = if matches!(typed_body.ty, Ty::Unit) {
+                body_checker.describe_unit_return_hint(&typed_body)
+            } else {
+                None
+            };
+            return Err(TypeError {
+                message: format!(
+                    "expected {}, got {}",
+                    self.ty_name(&expected_ret),
+                    self.ty_name(&typed_body.ty)
+                ),
+                span: body_checker.return_mismatch_span(&typed_body),
+                hint,
+            });
+        }
+
+        let fun_idx = match self.env.lookup_var(id.unique_id) {
+            Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
+            _ => {
+                return Err(TypeError {
+                    message: format!("Undefined extractor: {}", id.name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        };
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::ExtractorDef(
+                fun_idx,
+                id.clone(),
+                TypedFunParam {
+                    id: typed_param.id,
+                    ty: self.resolve_ty(&typed_param.ty),
+                },
+                self.resolve_ty(&expected_ret),
                 Box::new(typed_body),
             ),
         })

@@ -12,6 +12,9 @@ pub enum Ty {
     /// `List<T>`
     List(Box<Ty>),
 
+    /// MatchBlock-only heterogenous payload, represented at runtime as a list.
+    Seq(Vec<Ty>),
+
     /// Generic function type: `(params) -> ret`
     Func(Vec<Ty>, Box<Ty>),
 

@@ -1,0 +1,3 @@
+defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> {
+  MatchResult::NoMatch
+}

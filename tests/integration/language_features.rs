@@ -1190,8 +1190,12 @@ print("after")"#,
     }
 
     #[test]
-    fn safebind_requires_result_rhs() {
-        assert_compile_error("num =? 10", "`=?` requires Result");
+    fn safebind_allows_total_plain_rhs() {
+        assert_output(
+            r#"num =? 10
+print(to_string(num))"#,
+            &["10"],
+        );
     }
 
     #[test]
@@ -1214,7 +1218,7 @@ print("after")"#,
     fn plain_bind_rejects_result_test_pattern() {
         assert_compile_error(
             "Ok(num) = Ok(1)",
-            "Result destructuring patterns must use `=?`, not `=`",
+            "Only total MatchBlock patterns can be used with `=`",
         );
     }
 

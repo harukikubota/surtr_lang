@@ -1,0 +1,2 @@
+phase: typecheck
+contains: MatchResult<$Value, Error> requires Error as the second argument

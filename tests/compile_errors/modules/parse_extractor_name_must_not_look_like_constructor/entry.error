@@ -1,0 +1,2 @@
+phase: parse
+contains: Extractor names must not use constructor-style names
