@@ -3,7 +3,7 @@ use crate::value::Value;
 use crate::vm::VM;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
 use sindr::ir::DocKind;
-use sindr::primitives::{ToPrimitive, Zero};
+use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{Callable, CallableTarget, Location, RichError};
 
 /// Function pointer type for built-in implementations.
@@ -49,6 +49,21 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         func: builtin_bit_xor,
+    },
+    BuiltinImpl {
+        func: builtin_bit_not,
+    },
+    BuiltinImpl {
+        func: builtin_test_bit,
+    },
+    BuiltinImpl {
+        func: builtin_set_bit,
+    },
+    BuiltinImpl {
+        func: builtin_clear_bit,
+    },
+    BuiltinImpl {
+        func: builtin_toggle_bit,
     },
 ];
 
@@ -254,6 +269,61 @@ fn builtin_bit_xor(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
     Ok(Value::Int(left ^ right))
 }
 
+fn builtin_bit_not(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Int(value) = &args[0] else {
+        return Err(RuntimeError::new("bit_not expects Int"));
+    };
+    Ok(Value::Int(!value.clone()))
+}
+
+fn builtin_test_bit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(value), Value::Int(index)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("test_bit expects (Int, Int)"));
+    };
+    let bit_index = match bit_index_to_usize(vm, index)? {
+        Ok(bit_index) => bit_index,
+        Err(err) => return Ok(err),
+    };
+    let mask = bit_mask(bit_index);
+    Ok(ok_result(Value::Bool(!(value.clone() & mask).is_zero())))
+}
+
+fn builtin_set_bit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(value), Value::Int(index)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("set_bit expects (Int, Int)"));
+    };
+    let bit_index = match bit_index_to_usize(vm, index)? {
+        Ok(bit_index) => bit_index,
+        Err(err) => return Ok(err),
+    };
+    let mask = bit_mask(bit_index);
+    Ok(ok_result(Value::Int(value.clone() | mask)))
+}
+
+fn builtin_clear_bit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(value), Value::Int(index)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("clear_bit expects (Int, Int)"));
+    };
+    let bit_index = match bit_index_to_usize(vm, index)? {
+        Ok(bit_index) => bit_index,
+        Err(err) => return Ok(err),
+    };
+    let mask = bit_mask(bit_index);
+    Ok(ok_result(Value::Int(value.clone() & !mask)))
+}
+
+fn builtin_toggle_bit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(value), Value::Int(index)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("toggle_bit expects (Int, Int)"));
+    };
+    let bit_index = match bit_index_to_usize(vm, index)? {
+        Ok(bit_index) => bit_index,
+        Err(err) => return Ok(err),
+    };
+    let mask = bit_mask(bit_index);
+    Ok(ok_result(Value::Int(value.clone() ^ mask)))
+}
+
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     if let Value::Callable(callable) = value {
         if let Some(display) = inspect_callable(vm, callable) {
@@ -310,6 +380,25 @@ fn split_qualified_name(qualified_name: &str) -> (&str, &str) {
         Some((module, name)) if !module.is_empty() => (module, name),
         _ => ("<local>", qualified_name),
     }
+}
+
+fn bit_mask(bit_index: usize) -> SurtrInt {
+    int(1) << bit_index
+}
+
+fn bit_index_to_usize(vm: &VM, index: &SurtrInt) -> Result<Result<usize, Value>, RuntimeError> {
+    if index < &int(0) {
+        return Ok(Err(err_result(
+            vm,
+            "NegativeBitIndex",
+            &format!("bit index must be non-negative: {}", index),
+        )));
+    }
+
+    index
+        .to_usize()
+        .map(Ok)
+        .ok_or_else(|| RuntimeError::new(format!("bit index out of range for usize: {}", index)))
 }
 
 fn ok_result(value: Value) -> Value {
@@ -563,6 +652,64 @@ mod tests {
         let bit_xor = call_builtin(&mut vm, 12, vec![Value::Int(int(6)), Value::Int(int(3))])
             .expect("bit_xor should succeed");
         assert_eq!(bit_xor, Value::Int(int(5)));
+
+        let bit_not =
+            call_builtin(&mut vm, 13, vec![Value::Int(int(6))]).expect("bit_not should succeed");
+        assert_eq!(bit_not, Value::Int(int(-7)));
+    }
+
+    #[test]
+    fn bit_index_helpers_return_results_and_negative_index_errors() {
+        let mut vm = test_vm();
+
+        let tested = call_builtin(&mut vm, 14, vec![Value::Int(int(5)), Value::Int(int(2))])
+            .expect("test_bit should return Result");
+        match tested {
+            Value::Tagged { tag: 0, fields } => {
+                assert!(matches!(fields.first(), Some(Value::Bool(true))));
+            }
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+
+        let negative = call_builtin(&mut vm, 14, vec![Value::Int(int(5)), Value::Int(int(-1))])
+            .expect("negative test_bit should still return Result");
+        match negative {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "NegativeBitIndex");
+                    assert_eq!(rich.message, "bit index must be non-negative: -1");
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+
+        let set = call_builtin(&mut vm, 15, vec![Value::Int(int(0)), Value::Int(int(1))])
+            .expect("set_bit should return Result");
+        match set {
+            Value::Tagged { tag: 0, fields } => {
+                assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(2)));
+            }
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+
+        let cleared = call_builtin(&mut vm, 16, vec![Value::Int(int(7)), Value::Int(int(1))])
+            .expect("clear_bit should return Result");
+        match cleared {
+            Value::Tagged { tag: 0, fields } => {
+                assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(5)));
+            }
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+
+        let toggled = call_builtin(&mut vm, 17, vec![Value::Int(int(5)), Value::Int(int(0))])
+            .expect("toggle_bit should return Result");
+        match toggled {
+            Value::Tagged { tag: 0, fields } => {
+                assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(4)));
+            }
+            other => panic!("expected Ok result, got {:?}", other),
+        }
     }
 
     #[test]

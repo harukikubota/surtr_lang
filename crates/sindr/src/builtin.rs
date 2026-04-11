@@ -101,6 +101,36 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "(Int, Int) -> Int",
     },
+    BuiltinMeta {
+        name: "bit_not",
+        builtin_id: 13,
+        arity: 1,
+        sig_str: "(Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "test_bit",
+        builtin_id: 14,
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Boolean, NegativeBitIndex>",
+    },
+    BuiltinMeta {
+        name: "set_bit",
+        builtin_id: 15,
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
+    },
+    BuiltinMeta {
+        name: "clear_bit",
+        builtin_id: 16,
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
+    },
+    BuiltinMeta {
+        name: "toggle_bit",
+        builtin_id: 17,
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

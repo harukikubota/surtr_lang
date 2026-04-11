@@ -744,13 +744,11 @@ impl Codegen {
     }
 
     fn direct_builtin_opcode(name: &str, arity: usize) -> Option<Opcode> {
-        if arity != 2 {
-            return None;
-        }
         match name.rsplit("::").next().unwrap_or(name) {
-            "bit_and" => Some(Opcode::BitAndInt),
-            "bit_or" => Some(Opcode::BitOrInt),
-            "bit_xor" => Some(Opcode::BitXorInt),
+            "bit_not" if arity == 1 => Some(Opcode::BitNotInt),
+            "bit_and" if arity == 2 => Some(Opcode::BitAndInt),
+            "bit_or" if arity == 2 => Some(Opcode::BitOrInt),
+            "bit_xor" if arity == 2 => Some(Opcode::BitXorInt),
             _ => None,
         }
     }

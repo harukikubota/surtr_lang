@@ -236,11 +236,16 @@ print("ok")"#,
     #[test]
     fn direct_int_bitwise_builtin_calls_lower_to_specialized_opcodes() {
         let bytecode = codegen_source(
-            r#"left = Int::bit_and(6, 3)
+            r#"negated = Int::bit_not(6)
+left = Int::bit_and(6, 3)
 mid = Int::bit_or(6, 3)
 right = Int::bit_xor(6, 3)"#,
         );
 
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::BitNotInt)));
         assert!(bytecode
             .opcodes
             .iter()
@@ -254,6 +259,9 @@ right = Int::bit_xor(6, 3)"#,
             .iter()
             .any(|op| matches!(op, Opcode::BitXorInt)));
 
+        let bit_not_id = builtin_meta_by_name("bit_not")
+            .expect("bit_not builtin metadata must exist")
+            .builtin_id;
         let bit_and_id = builtin_meta_by_name("bit_and")
             .expect("bit_and builtin metadata must exist")
             .builtin_id;
@@ -269,10 +277,38 @@ right = Int::bit_xor(6, 3)"#,
                 op,
                 Opcode::CallBuiltin {
                     builtin_id,
-                    arity: 2,
                     ..
-                } if *builtin_id == bit_and_id || *builtin_id == bit_or_id || *builtin_id == bit_xor_id
+                } if *builtin_id == bit_not_id
+                    || *builtin_id == bit_and_id
+                    || *builtin_id == bit_or_id
+                    || *builtin_id == bit_xor_id
             )
         }));
+    }
+
+    #[test]
+    fn int_bit_index_helpers_stay_as_builtin_calls() {
+        let bytecode = codegen_source(
+            r#"tested = Int::test_bit(5, 0)
+setted = Int::set_bit(0, 1)
+cleared = Int::clear_bit(7, 1)
+toggled = Int::toggle_bit(5, 0)"#,
+        );
+
+        for name in ["test_bit", "set_bit", "clear_bit", "toggle_bit"] {
+            let builtin_id = builtin_meta_by_name(name)
+                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"))
+                .builtin_id;
+            assert!(bytecode.opcodes.iter().any(|op| {
+                matches!(
+                    op,
+                    Opcode::CallBuiltin {
+                        builtin_id: id,
+                        arity: 2,
+                        ..
+                    } if *id == builtin_id
+                )
+            }));
+        }
     }
 }

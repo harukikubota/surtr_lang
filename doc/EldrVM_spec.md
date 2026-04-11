@@ -143,7 +143,7 @@ Opcode は以下のカテゴリを持つ。
 補足:
 
 - `CallBuiltin` は `builtin_id` ベースでディスパッチする
-- `BitAndInt` / `BitOrInt` / `BitXorInt` は `Int::bit_and` / `bit_or` / `bit_xor` の direct call を対象にした monomorphic fast-path とする
+- `BitNotInt` / `BitAndInt` / `BitOrInt` / `BitXorInt` は `Int::bit_not` / `bit_and` / `bit_or` / `bit_xor` の direct call を対象にした monomorphic fast-path とする
 
 実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。
 

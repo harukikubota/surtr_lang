@@ -1,0 +1,12 @@
+-1
+-7
+Ok(True)
+Ok(False)
+Ok(True)
+Ok(2)
+Ok(5)
+Ok(4)
+Err(NegativeBitIndex("bit index must be non-negative: -1"))
+Err(NegativeBitIndex("bit index must be non-negative: -1"))
+Err(NegativeBitIndex("bit index must be non-negative: -1"))
+Err(NegativeBitIndex("bit index must be non-negative: -1"))

@@ -1027,6 +1027,10 @@ impl VM {
             Opcode::AddInt => self.int_binop(|a, b| Ok(Value::Int(a + b)))?,
             Opcode::SubInt => self.int_binop(|a, b| Ok(Value::Int(a - b)))?,
             Opcode::MulInt => self.int_binop(|a, b| Ok(Value::Int(a * b)))?,
+            Opcode::BitNotInt => {
+                let a = self.pop_int()?;
+                self.stack.push(Value::Int(!a));
+            }
             Opcode::BitAndInt => self.int_binop(|a, b| Ok(Value::Int(a & b)))?,
             Opcode::BitOrInt => self.int_binop(|a, b| Ok(Value::Int(a | b)))?,
             Opcode::BitXorInt => self.int_binop(|a, b| Ok(Value::Int(a ^ b)))?,
@@ -2527,6 +2531,8 @@ mod tests {
     fn int_bitwise_opcodes_execute_successfully() {
         let mut bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),
+            Opcode::BitNotInt,
+            Opcode::LoadConst(0),
             Opcode::LoadConst(1),
             Opcode::BitAndInt,
             Opcode::LoadConst(0),
@@ -2543,6 +2549,7 @@ mod tests {
         vm.run().expect("run should succeed");
 
         assert_eq!(vm.last_result, Some(Value::Int(int(5))));
+        assert!(matches!(vm.stack.first(), Some(Value::Int(value)) if *value == int(-7)));
     }
 
     #[test]

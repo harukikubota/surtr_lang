@@ -909,9 +909,123 @@ impl Checker {
         id: &ResolvedId,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
+        if id.name == "Ok" || id.name == "Err" {
+            if args.len() != 1 {
+                return Err(TypeError {
+                    message: format!("{} expects 1 argument(s), got {}", id.name, args.len()),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            let inner = match &args[0] {
+                ResolvedRecordLitArg::Positional(expr) => {
+                    let typed = self.check_node(expr)?;
+                    self.maybe_call_zero_arg_function(typed, span.clone())
+                }
+                ResolvedRecordLitArg::Named(_, _) => {
+                    return Err(TypeError {
+                        message: format!("{} does not accept named arguments", id.name),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            };
+            if id.name == "Err" {
+                if !matches!(inner.ty, Ty::Error) {
+                    return Err(TypeError {
+                        message: "Err(...) requires a concrete deferror value.".into(),
+                        span: inner.span.clone(),
+                        hint: Some(
+                            "Use a deferror-defined value in Err(...), not a plain value.".into(),
+                        ),
+                    });
+                }
+                if !self.is_concrete_error_value(&inner) {
+                    return Err(TypeError {
+                        message: "Error is abstract and cannot be constructed directly.".into(),
+                        span: inner.span.clone(),
+                        hint: Some("Use a concrete deferror value in Err(...).".into()),
+                    });
+                }
+            }
+            let (tag, result_ty) = if id.name == "Ok" {
+                (
+                    0u32,
+                    Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error)),
+                )
+            } else {
+                let ok_var = self.env.fresh_tyvar();
+                (1u32, Ty::Result(Box::new(ok_var), Box::new(Ty::Error)))
+            };
+            return Ok(TypedNode {
+                ty: result_ty,
+                span: span.clone(),
+                node: TypedInner::ConstructorCall(tag, vec![inner]),
+            });
+        }
+
+        if let Some(variant) = self
+            .env
+            .enum_variant_by_constructor_id(id.unique_id)
+            .cloned()
+        {
+            let variant = self.instantiate_enum_variant(&variant);
+            if args.len() != variant.payload.len() {
+                return Err(TypeError {
+                    message: format!(
+                        "{} expects {} argument(s), got {}",
+                        id.name,
+                        variant.payload.len(),
+                        args.len()
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            let mut payload_values = Vec::new();
+            for (idx, arg) in args.iter().enumerate() {
+                let expected = &variant.payload[idx];
+                let typed = match arg {
+                    ResolvedRecordLitArg::Positional(expr) => self.check_node(expr)?,
+                    ResolvedRecordLitArg::Named(_, _) => {
+                        return Err(TypeError {
+                            message: "Enum constructors do not accept named arguments".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                };
+                if !self.types_compatible(expected, &typed.ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Argument type mismatch: expected {}, got {}",
+                            self.ty_name(expected),
+                            self.ty_name(&typed.ty)
+                        ),
+                        span: typed.span.clone(),
+                        hint: None,
+                    });
+                }
+                payload_values.push(typed);
+            }
+
+            let mut fields = Vec::with_capacity(payload_values.len() + 1);
+            fields.push(TypedNode {
+                ty: Ty::Int,
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Int(variant.discriminant)),
+            });
+            fields.extend(payload_values);
+
+            return Ok(TypedNode {
+                ty: self.resolve_ty(&variant.enum_ty),
+                span: span.clone(),
+                node: TypedInner::ConstructorCall(variant.tag, fields),
+            });
+        }
+
         if let Some(ty) = self.env.lookup_var(id.unique_id).cloned() {
             match &ty {
-                Ty::BuiltinFunc { name, .. } if name == "Ok" || name == "Err" => {}
                 Ty::BuiltinFunc { params, ret, .. } => {
                     if args.len() != params.len() {
                         return Err(TypeError {
@@ -1038,121 +1152,6 @@ impl Checker {
                 }
                 _ => {}
             }
-        }
-
-        if id.name == "Ok" || id.name == "Err" {
-            if args.len() != 1 {
-                return Err(TypeError {
-                    message: format!("{} expects 1 argument(s), got {}", id.name, args.len()),
-                    span: span.clone(),
-                    hint: None,
-                });
-            }
-            let inner = match &args[0] {
-                ResolvedRecordLitArg::Positional(expr) => {
-                    let typed = self.check_node(expr)?;
-                    self.maybe_call_zero_arg_function(typed, span.clone())
-                }
-                ResolvedRecordLitArg::Named(_, _) => {
-                    return Err(TypeError {
-                        message: format!("{} does not accept named arguments", id.name),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-            };
-            if id.name == "Err" {
-                if !matches!(inner.ty, Ty::Error) {
-                    return Err(TypeError {
-                        message: "Err(...) requires a concrete deferror value.".into(),
-                        span: inner.span.clone(),
-                        hint: Some(
-                            "Use a deferror-defined value in Err(...), not a plain value.".into(),
-                        ),
-                    });
-                }
-                if !self.is_concrete_error_value(&inner) {
-                    return Err(TypeError {
-                        message: "Error is abstract and cannot be constructed directly.".into(),
-                        span: inner.span.clone(),
-                        hint: Some("Use a concrete deferror value in Err(...).".into()),
-                    });
-                }
-            }
-            let (tag, result_ty) = if id.name == "Ok" {
-                (
-                    0u32,
-                    Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error)),
-                )
-            } else {
-                let ok_var = self.env.fresh_tyvar();
-                (1u32, Ty::Result(Box::new(ok_var), Box::new(Ty::Error)))
-            };
-            return Ok(TypedNode {
-                ty: result_ty,
-                span: span.clone(),
-                node: TypedInner::ConstructorCall(tag, vec![inner]),
-            });
-        }
-
-        if let Some(variant) = self
-            .env
-            .enum_variant_by_constructor_id(id.unique_id)
-            .cloned()
-        {
-            let variant = self.instantiate_enum_variant(&variant);
-            if args.len() != variant.payload.len() {
-                return Err(TypeError {
-                    message: format!(
-                        "{} expects {} argument(s), got {}",
-                        id.name,
-                        variant.payload.len(),
-                        args.len()
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                });
-            }
-            let mut payload_values = Vec::new();
-            for (idx, arg) in args.iter().enumerate() {
-                let expected = &variant.payload[idx];
-                let typed = match arg {
-                    ResolvedRecordLitArg::Positional(expr) => self.check_node(expr)?,
-                    ResolvedRecordLitArg::Named(_, _) => {
-                        return Err(TypeError {
-                            message: "Enum constructors do not accept named arguments".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                };
-                if !self.types_compatible(expected, &typed.ty) {
-                    return Err(TypeError {
-                        message: format!(
-                            "Argument type mismatch: expected {}, got {}",
-                            self.ty_name(expected),
-                            self.ty_name(&typed.ty)
-                        ),
-                        span: typed.span.clone(),
-                        hint: None,
-                    });
-                }
-                payload_values.push(typed);
-            }
-
-            let mut fields = Vec::with_capacity(payload_values.len() + 1);
-            fields.push(TypedNode {
-                ty: Ty::Int,
-                span: span.clone(),
-                node: TypedInner::Lit(Lit::Int(variant.discriminant)),
-            });
-            fields.extend(payload_values);
-
-            return Ok(TypedNode {
-                ty: self.resolve_ty(&variant.enum_ty),
-                span: span.clone(),
-                node: TypedInner::ConstructorCall(variant.tag, fields),
-            });
         }
 
         let def = self

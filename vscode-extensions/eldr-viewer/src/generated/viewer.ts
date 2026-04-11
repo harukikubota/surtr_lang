@@ -77,6 +77,22 @@ export type OpcodeView =
       [k: string]: unknown;
     }
   | {
+      kind: "BitNotInt";
+      [k: string]: unknown;
+    }
+  | {
+      kind: "BitAndInt";
+      [k: string]: unknown;
+    }
+  | {
+      kind: "BitOrInt";
+      [k: string]: unknown;
+    }
+  | {
+      kind: "BitXorInt";
+      [k: string]: unknown;
+    }
+  | {
       kind: "AddFloat";
       [k: string]: unknown;
     }
@@ -154,6 +170,18 @@ export type OpcodeView =
     }
   | {
       kind: "ConcatStr";
+      [k: string]: unknown;
+    }
+  | {
+      kind: "StringIsEmpty";
+      [k: string]: unknown;
+    }
+  | {
+      kind: "StringHead";
+      [k: string]: unknown;
+    }
+  | {
+      kind: "StringTail";
       [k: string]: unknown;
     }
   | {

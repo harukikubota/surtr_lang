@@ -562,6 +562,88 @@ deferror NotFound(code: String) {
     }
 
     #[test]
+    fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
+        let resolved = resolve_with_builtin_prelude("width = BitWidth::W8");
+
+        let use_uid = match resolved
+            .last()
+            .expect("user bind should be present after std modules")
+        {
+            sigil::resolved::Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                sigil::resolved::Resolved::ConstructorCall(_, id, args) => {
+                    assert!(args.is_empty(), "W8 should be zero-arg");
+                    id.unique_id
+                }
+                other => panic!("expected zero-arg constructor call, got {other:?}"),
+            },
+            other => panic!("expected user bind, got {other:?}"),
+        };
+
+        let variant_uid = resolved
+            .iter()
+            .find_map(|node| match node {
+                sigil::resolved::Resolved::EnumDef(_, id, _, variants) if id.name == "BitWidth" => {
+                    variants
+                        .iter()
+                        .find(|variant| variant.id.name == "BitWidth::W8")
+                        .map(|variant| variant.id.unique_id)
+                }
+                _ => None,
+            })
+            .expect("BitWidth::W8 variant should exist");
+
+        assert_eq!(use_uid, variant_uid);
+
+        let colliding_defs = resolved
+            .iter()
+            .filter_map(|node| match node {
+                sigil::resolved::Resolved::BuiltinDecl(_, id, _, _, _)
+                    if id.unique_id == use_uid =>
+                {
+                    Some(format!("builtin {}", id.name))
+                }
+                sigil::resolved::Resolved::Def(_, id, _, _, _, _) if id.unique_id == use_uid => {
+                    Some(format!("def {}", id.name))
+                }
+                sigil::resolved::Resolved::ExtractorDef(_, id, _, _, _, _)
+                    if id.unique_id == use_uid =>
+                {
+                    Some(format!("extractor {}", id.name))
+                }
+                sigil::resolved::Resolved::StructDef(_, id, _) if id.unique_id == use_uid => {
+                    Some(format!("struct {}", id.name))
+                }
+                sigil::resolved::Resolved::RecordDef(_, id, _) if id.unique_id == use_uid => {
+                    Some(format!("record {}", id.name))
+                }
+                sigil::resolved::Resolved::DeferrorDef(_, id, _, _) if id.unique_id == use_uid => {
+                    Some(format!("deferror {}", id.name))
+                }
+                sigil::resolved::Resolved::EnumDef(_, _, _, variants) => variants
+                    .iter()
+                    .find(|variant| variant.id.unique_id == use_uid)
+                    .map(|variant| format!("enum variant {}", variant.id.name)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            colliding_defs,
+            vec!["enum variant BitWidth::W8".to_string()],
+            "unexpected declarations sharing uid {use_uid}: {colliding_defs:?}"
+        );
+    }
+
+    #[test]
+    fn bitwidth_zero_arg_variant_typechecks_with_builtin_prelude() {
+        let typed = typecheck_with_builtin_prelude("width = BitWidth::W8");
+        assert!(matches!(
+            typed.last().expect("user bind should be present").node,
+            TypedInner::Bind(_, _)
+        ));
+    }
+
+    #[test]
     fn ensure_special_form_typechecks_to_result_value() {
         let typed = typecheck_with_builtin_prelude(
             r#"def is_even(n: Int) -> Boolean { Int::is_even(n) }
