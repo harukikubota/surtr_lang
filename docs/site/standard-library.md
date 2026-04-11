@@ -31,13 +31,17 @@ concrete error は、最初の標準ステージから使えるようここに�
 
 ### `Kernel`
 
-- `defmod Kernel` の中に `if`, `if_then`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
+- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `concat`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
 - auto import される最小の標準 API を置く
 - 専用 file を持たない `Unit` の builtin type 宣言を置く
 
 primitive type に強く結びつかない builtin は、ここへ集めます。
 特に `if` / `if_then` は言語特性に近い special form ですが、source 上の契約と
 説明を標準 surface に残すため `Kernel` に置きます。
+`and` / `or` も宣言上は通常の 2 引数関数ですが、コンパイラが short-circuit
+評価へ lower する call-style helper としてここに置きます。
+comparison / concat 系の call-style helper (`eq`, `lt`, `concat` など) も
+primitive module をまたぐ読みやすさを優先して `Kernel` に置きます。
 
 ### type modules
 
@@ -167,7 +171,8 @@ defmod String {
 
 ## 7. 更新するときのルール
 
-- cross-cutting builtin value を足すときは `kernel.srt` の `defmod Kernel` と shared builtin metadata の両方を更新する
+- cross-cutting runtime builtin value を足すときは `kernel.srt` の `defmod Kernel` と shared builtin metadata の両方を更新する
+- `if` / `assert` / `and` / `eq` のような compiler-handled helper を足すときは `kernel.srt` と resolver/checker の canonical contract を同時に更新する
 - builtin type を変えるときは、対応する `lib/*.srt` の `@@builtin type` と compiler 側の canonical contract を同時に更新する
 - `Result` constructor contract を変えるときは `result.srt` の `Ok` / `Err` 宣言と checker 側の canonical rule を同時に更新する
 - module API を足すときは `defmod Name` に実装し、まず `@@doc` を先に書く

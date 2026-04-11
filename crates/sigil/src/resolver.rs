@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{
-    Ast, AstPattern, AstTy, ClosureParam, DeclAttrs, FunParam, RecordLitArg, Span,
+    Ast, AstPattern, AstTy, BinOp, ClosureParam, DeclAttrs, FunParam, Lit, RecordLitArg, Span,
 };
 
 use crate::error::ResolveError;
@@ -47,7 +47,22 @@ fn is_runtime_builtin_decl(name: &str) -> bool {
 }
 
 fn is_special_form_builtin_decl(name: &str) -> bool {
-    matches!(name, "if" | "if_then" | "assert" | "ensure")
+    matches!(
+        name,
+        "if"
+            | "if_then"
+            | "assert"
+            | "ensure"
+            | "and"
+            | "or"
+            | "eq"
+            | "neq"
+            | "lt"
+            | "lte"
+            | "gt"
+            | "gte"
+            | "concat"
+    )
 }
 
 /// Resolve all identifiers in the AST to unique references.
@@ -1453,6 +1468,33 @@ impl Resolver {
                     if name == "ensure" {
                         return self.resolve_ensure(span, args);
                     }
+                    if name == "and" {
+                        return self.resolve_logic_call(span, args, LogicKind::And);
+                    }
+                    if name == "or" {
+                        return self.resolve_logic_call(span, args, LogicKind::Or);
+                    }
+                    if name == "eq" {
+                        return self.resolve_compare_call(span, args, CompareKind::Eq);
+                    }
+                    if name == "neq" {
+                        return self.resolve_compare_call(span, args, CompareKind::Neq);
+                    }
+                    if name == "lt" {
+                        return self.resolve_compare_call(span, args, CompareKind::Lt);
+                    }
+                    if name == "lte" {
+                        return self.resolve_compare_call(span, args, CompareKind::Lte);
+                    }
+                    if name == "gt" {
+                        return self.resolve_compare_call(span, args, CompareKind::Gt);
+                    }
+                    if name == "gte" {
+                        return self.resolve_compare_call(span, args, CompareKind::Gte);
+                    }
+                    if name == "concat" {
+                        return self.resolve_concat_call(span, args);
+                    }
                 }
 
                 let resolved_func = self.resolve_node(*func)?;
@@ -2024,7 +2066,11 @@ impl Resolver {
         ))
     }
 
-    fn resolve_assert(&mut self, span: Span, args: Vec<RecordLitArg>) -> Result<Resolved, ResolveError> {
+    fn resolve_assert(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
         if args.len() != 2 {
             return Err(ResolveError {
                 message: format!("assert expects 2 arguments, got {}", args.len()),
@@ -2051,7 +2097,11 @@ impl Resolver {
         Ok(Resolved::Assert(span, Box::new(cond), Box::new(err)))
     }
 
-    fn resolve_ensure(&mut self, span: Span, args: Vec<RecordLitArg>) -> Result<Resolved, ResolveError> {
+    fn resolve_ensure(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
         if args.len() != 3 {
             return Err(ResolveError {
                 message: format!("ensure expects 3 arguments, got {}", args.len()),
@@ -2081,6 +2131,88 @@ impl Resolver {
             Box::new(value),
             Box::new(pred),
             Box::new(err),
+        ))
+    }
+
+    fn resolve_logic_call(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+        kind: LogicKind,
+    ) -> Result<Resolved, ResolveError> {
+        let callee_name = match kind {
+            LogicKind::And => "and",
+            LogicKind::Or => "or",
+        };
+        let positional = collect_positional_args(span.clone(), args, callee_name, 2)?;
+        let mut iter = positional.into_iter();
+        let left = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let right = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let bool_lit = |value| Resolved::Lit(span.clone(), Lit::Bool(value));
+
+        let (then_branch, else_branch) = match kind {
+            LogicKind::And => (right, bool_lit(false)),
+            LogicKind::Or => (bool_lit(true), right),
+        };
+
+        Ok(Resolved::If(
+            span,
+            Box::new(left),
+            Box::new(then_branch),
+            Some(Box::new(else_branch)),
+        ))
+    }
+
+    fn resolve_compare_call(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+        kind: CompareKind,
+    ) -> Result<Resolved, ResolveError> {
+        let callee_name = match kind {
+            CompareKind::Eq => "eq",
+            CompareKind::Neq => "neq",
+            CompareKind::Lt => "lt",
+            CompareKind::Lte => "lte",
+            CompareKind::Gt => "gt",
+            CompareKind::Gte => "gte",
+        };
+        let positional = collect_positional_args(span.clone(), args, callee_name, 2)?;
+        let mut iter = positional.into_iter();
+        let left = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let right = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let op = match kind {
+            CompareKind::Eq => BinOp::Eq,
+            CompareKind::Neq => BinOp::Neq,
+            CompareKind::Lt => BinOp::Lt,
+            CompareKind::Lte => BinOp::Lte,
+            CompareKind::Gt => BinOp::Gt,
+            CompareKind::Gte => BinOp::Gte,
+        };
+
+        Ok(Resolved::BinOp(
+            span,
+            op,
+            Box::new(left),
+            Box::new(right),
+        ))
+    }
+
+    fn resolve_concat_call(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let positional = collect_positional_args(span.clone(), args, "concat", 2)?;
+        let mut iter = positional.into_iter();
+        let left = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let right = self.resolve_node(iter.next().expect("checked arg length"))?;
+
+        Ok(Resolved::BinOp(
+            span,
+            BinOp::Concat,
+            Box::new(left),
+            Box::new(right),
         ))
     }
 
@@ -2183,6 +2315,20 @@ impl Resolver {
 enum IfKind {
     If3,
     IfThen2,
+}
+
+enum LogicKind {
+    And,
+    Or,
+}
+
+enum CompareKind {
+    Eq,
+    Neq,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
 }
 
 fn collect_captures(body: &Resolved, params: &[ResolvedClosureParam]) -> Vec<ResolvedId> {
@@ -2358,6 +2504,42 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::Semi(_, inner) => collect_captures_inner(inner, bound, free),
     }
+}
+
+fn collect_positional_args(
+    span: Span,
+    args: Vec<RecordLitArg>,
+    callee_name: &str,
+    expected_arity: usize,
+) -> Result<Vec<Ast>, ResolveError> {
+    if args.len() != expected_arity {
+        return Err(ResolveError {
+            message: format!(
+                "{} expects {} arguments, got {}",
+                callee_name,
+                expected_arity,
+                args.len()
+            ),
+            span,
+        });
+    }
+
+    let mut positional = Vec::with_capacity(args.len());
+    for arg in args {
+        match arg {
+            RecordLitArg::Positional(expr) => positional.push(expr),
+            RecordLitArg::Named(name, _) => {
+                return Err(ResolveError {
+                    message: format!(
+                        "{} does not accept named argument '{}'",
+                        callee_name, name
+                    ),
+                    span,
+                });
+            }
+        }
+    }
+    Ok(positional)
 }
 
 fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>) {
@@ -2887,6 +3069,112 @@ x = ensure(1, &is_even, SomeError)"#,
             }
             _ => panic!("Expected Bind with Ensure"),
         }
+    }
+
+    #[test]
+    fn test_and_conversion() {
+        let resolved = parse_and_resolve(
+            r#"def rhs() -> Boolean { True }
+x = and(False, rhs())"#,
+        )
+        .unwrap();
+        match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                    assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                    assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
+                    assert!(matches!(else_branch.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                }
+                other => panic!("Expected If for and(...), got {:?}", other),
+            },
+            _ => panic!("Expected Bind with If"),
+        }
+    }
+
+    #[test]
+    fn test_or_conversion() {
+        let resolved = parse_and_resolve(
+            r#"def rhs() -> Boolean { False }
+x = or(True, rhs())"#,
+        )
+        .unwrap();
+        match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                    assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                    assert!(matches!(then_branch.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                    assert!(matches!(else_branch.as_ref(), Resolved::App(_, _, _)));
+                }
+                other => panic!("Expected If for or(...), got {:?}", other),
+            },
+            _ => panic!("Expected Bind with If"),
+        }
+    }
+
+    #[test]
+    fn test_eq_conversion() {
+        let resolved = parse_and_resolve("x = eq(1, 2)").unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Eq, _, _)));
+            }
+            _ => panic!("Expected Bind with Eq binop"),
+        }
+    }
+
+    #[test]
+    fn test_neq_conversion() {
+        let resolved = parse_and_resolve("x = neq(1, 2)").unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Neq, _, _)));
+            }
+            _ => panic!("Expected Bind with Neq binop"),
+        }
+    }
+
+    #[test]
+    fn test_lt_conversion() {
+        let resolved = parse_and_resolve("x = lt(1, 2)").unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Lt, _, _)));
+            }
+            _ => panic!("Expected Bind with Lt binop"),
+        }
+    }
+
+    #[test]
+    fn test_concat_conversion() {
+        let resolved = parse_and_resolve(r#"x = concat("a", "b")"#).unwrap();
+        match &resolved[0] {
+            Resolved::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Concat, _, _)));
+            }
+            _ => panic!("Expected Bind with Concat binop"),
+        }
+    }
+
+    #[test]
+    fn test_and_named_arg_is_error() {
+        let err = parse_and_resolve("x = and(left: True, right: False)")
+            .expect_err("named args must fail");
+        assert!(err.message.contains("and does not accept named argument"));
+    }
+
+    #[test]
+    fn test_eq_wrong_arity_is_error() {
+        let err = parse_and_resolve("x = eq(1)").expect_err("wrong arity must fail");
+        assert!(err.message.contains("eq expects 2 arguments, got 1"));
+    }
+
+    #[test]
+    fn test_concat_named_arg_is_error() {
+        let err = parse_and_resolve(r#"x = concat(left: "a", right: "b")"#)
+            .expect_err("named args must fail");
+        assert!(err
+            .message
+            .contains("concat does not accept named argument"));
     }
 
     #[test]

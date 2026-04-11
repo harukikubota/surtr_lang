@@ -4445,6 +4445,15 @@ impl Checker {
             "if_then" => "Kernel::if_then",
             "assert" => "Kernel::assert",
             "ensure" => "Kernel::ensure",
+            "and" => "Kernel::and",
+            "or" => "Kernel::or",
+            "eq" => "Kernel::eq",
+            "neq" => "Kernel::neq",
+            "lt" => "Kernel::lt",
+            "lte" => "Kernel::lte",
+            "gt" => "Kernel::gt",
+            "gte" => "Kernel::gte",
+            "concat" => "Kernel::concat",
             _ => unreachable!(),
         };
 
@@ -4492,6 +4501,30 @@ impl Checker {
                         .as_ref()
                         .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
             }
+            "and" | "or" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "Boolean")
+                    && Self::is_named_type(&params[1].ty, "Boolean")
+                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
+            }
+            "eq" | "neq" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "$A")
+                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
+            }
+            "lt" | "lte" | "gt" | "gte" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "$A")
+                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
+            }
+            "concat" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "String")
+                    && Self::is_named_type(&params[1].ty, "String")
+                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "String"))
+            }
             _ => false,
         };
 
@@ -4501,6 +4534,15 @@ impl Checker {
                 "if_then" => "@@builtin def if_then(flag: Boolean, then_branch: (-> ())) -> ()",
                 "assert" => "@@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>",
                 "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>",
+                "and" => "@@builtin def and(left: Boolean, right: Boolean) -> Boolean",
+                "or" => "@@builtin def or(left: Boolean, right: Boolean) -> Boolean",
+                "eq" => "@@builtin def eq(left: $A, right: $A) -> Boolean",
+                "neq" => "@@builtin def neq(left: $A, right: $A) -> Boolean",
+                "lt" => "@@builtin def lt(left: $A, right: $A) -> Boolean",
+                "lte" => "@@builtin def lte(left: $A, right: $A) -> Boolean",
+                "gt" => "@@builtin def gt(left: $A, right: $A) -> Boolean",
+                "gte" => "@@builtin def gte(left: $A, right: $A) -> Boolean",
+                "concat" => "@@builtin def concat(left: String, right: String) -> String",
                 _ => unreachable!(),
             };
             return Err(TypeError {
@@ -4704,7 +4746,22 @@ impl Checker {
     }
 
     fn is_special_form_builtin_decl_name(name: &str) -> bool {
-        matches!(name, "if" | "if_then" | "assert" | "ensure")
+        matches!(
+            name,
+            "if"
+                | "if_then"
+                | "assert"
+                | "ensure"
+                | "and"
+                | "or"
+                | "eq"
+                | "neq"
+                | "lt"
+                | "lte"
+                | "gt"
+                | "gte"
+                | "concat"
+        )
     }
 
     fn is_result_of_named(ast_ty: &AstTy, expected_name: &str) -> bool {

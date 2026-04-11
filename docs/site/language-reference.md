@@ -264,10 +264,19 @@ value: Int =? parse_int("1")
 - `value |> normalize` は不許可
 - `pipeline = parse |=> validate` も不許可
 - 関数値として保持できるのは capture または closure
+- backtick FuncLiteral は中置位置専用で、値にはならない
+- ``left `name` right`` は `name(left, right)` に lower される
+- ``left `operator` right`` は対応する通常演算に lower される
+- V1 の FuncLiteral は unqualified name と symbolic operator のみを許可する
+- `` `Type::method` `` のような qualified backtick path は未対応
+- `&` 側で operator を capture する構文と placeholder capture (`&1`) は未実装
 - bare capture を `inspect` / `to_string` すると、metadata があれば
   `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
 - `Result` と `List` を `|*>`, `|>=`, `|=>` で混在させない
 - `|>`, `|*>`, `|>=`, `|=>`, `=?` は同一優先度・左結合
+- 結合優先度は `Bind < Apply=Compose < Logical < Expr`
+- `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
+- comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
 
 ## 5. パターン
 
@@ -310,6 +319,17 @@ value.field
 |---|---|
 | `if` | `(Boolean, (-> $A), (-> $A)) -> $A` |
 | `if_then` | `(Boolean, (-> Unit)) -> Unit` |
+| `assert` | `(Boolean, Error) -> Result<Unit>` |
+| `ensure` | `($A, ($A -> Boolean), Error) -> Result<$A>` |
+| `and` | `(Boolean, Boolean) -> Boolean` |
+| `or` | `(Boolean, Boolean) -> Boolean` |
+| `eq` | `($A, $A) -> Boolean` |
+| `neq` | `($A, $A) -> Boolean` |
+| `lt` | `($A, $A) -> Boolean` |
+| `lte` | `($A, $A) -> Boolean` |
+| `gt` | `($A, $A) -> Boolean` |
+| `gte` | `($A, $A) -> Boolean` |
+| `concat` | `(String, String) -> String` |
 | `print` | `(String) -> Unit` |
 | `to_string` | `($A) -> String` |
 | `inspect` | `($A) -> String` |
@@ -322,6 +342,10 @@ value.field
 
 - `if` / `if_then` の branch が関数型で書かれているのは、選ばれた側だけを評価する special form であることを型で表しているため
 - 普段の source では block を明示せず `if(flag, "ok", err_reason)` や `if_then(flag, print("ok"))` のように書ける
+- `and` / `or` は宣言上は普通の 2 引数関数だが、コンパイラが short-circuit として解釈する
+- `eq` / `neq` は call-style helper で、`==` / `!=` と同じ比較制約に従う
+- `lt` / `lte` / `gt` / `gte` は call-style helper で、`<` / `<=` / `>` / `>=` と同じ比較制約に従う
+- `concat` は call-style helper で、`++` と同じく `String` 同士だけを受ける
 - `safe_div` / `safe_mod` は失敗時に `Err(ZeroDivisionError)` を返す
 - `set_exit_code` は処理系側で使用位置制約を持つ
 

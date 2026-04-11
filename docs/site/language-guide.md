@@ -446,6 +446,40 @@ value |> &normalize
 pipeline = &parse |=> &validate
 ```
 
+### 10.6 Backtick FuncLiteral
+
+2 引数関数や既存演算子は backtick 付きの中置記法でも書けます。
+
+```surtr
+def eq(left: Int, right: Int) -> Boolean {
+  left == right
+}
+
+print(to_string(10 `+` 5))
+print(to_string(7 `eq` 7))
+```
+
+この構文は「関数値を作る」ものではなく、その場で 2 引数 call として解釈されます。
+
+- ``left `name` right`` は `name(left, right)` と同じ
+- ``left `+` right`` のような operator 版は対応する通常演算と同じ
+- 単独の `` `eq` `` のような書き方はできない
+- V1 では unqualified name と symbolic operator だけを対象にする
+- `` `Type::method` `` のような qualified backtick path は未対応
+
+優先度は通常の pipeline / compose より強く、comparison より強い `Expr` クラスとして扱います。  
+`+`, `-`, `*`, `++` は同列・左結合です。
+
+```surtr
+print(to_string(2 + 3 * 4))   # => 20
+```
+
+一方、capture 側の operator 版や placeholder capture はまだありません。
+
+```surtr
+f = &`+`   # 未実装
+```
+
 ## 11. 組込み関数
 
 現時点で公開済みとして扱える主な組込み関数は次のとおりです。

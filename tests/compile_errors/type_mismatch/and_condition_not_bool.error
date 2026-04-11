@@ -1,0 +1,2 @@
+phase: typecheck
+contains: if condition must be Boolean

@@ -935,7 +935,7 @@ impl Parser {
     }
 
     fn parse_flow_expr(&mut self) -> Result<Ast, ParseError> {
-        let mut left = self.parse_binop_expr(0)?;
+        let mut left = self.parse_logical_expr()?;
         loop {
             let next = match self.peek() {
                 Token::PipeApply => 0,
@@ -946,7 +946,7 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let right = self.parse_binop_expr(0)?;
+            let right = self.parse_logical_expr()?;
             let span = Span {
                 start: left.span().start,
                 end: right.span().end,
@@ -999,42 +999,130 @@ impl Parser {
         )
     }
 
-    // ── Binary operators with precedence climbing ──
+    // ── Infix operators grouped by OpKind ──
 
-    fn binop_precedence(tok: &Token) -> Option<(u8, BinOp)> {
+    fn expr_binop(tok: &Token) -> Option<BinOp> {
         match tok {
-            // Comparison (lowest)
-            Token::EqEq => Some((1, BinOp::Eq)),
-            Token::BangEq => Some((1, BinOp::Neq)),
-            Token::Lt => Some((2, BinOp::Lt)),
-            Token::Gt => Some((2, BinOp::Gt)),
-            Token::LtEq => Some((2, BinOp::Lte)),
-            Token::GtEq => Some((2, BinOp::Gte)),
-            // Concat
-            Token::Concat => Some((3, BinOp::Concat)),
-            // Additive
-            Token::Plus => Some((4, BinOp::Add)),
-            Token::Minus => Some((4, BinOp::Sub)),
-            // Multiplicative
-            Token::Star => Some((5, BinOp::Mul)),
+            Token::Plus => Some(BinOp::Add),
+            Token::Minus => Some(BinOp::Sub),
+            Token::Star => Some(BinOp::Mul),
+            Token::Concat => Some(BinOp::Concat),
             _ => None,
         }
     }
 
-    fn parse_binop_expr(&mut self, min_prec: u8) -> Result<Ast, ParseError> {
+    fn logical_binop(tok: &Token) -> Option<BinOp> {
+        match tok {
+            Token::EqEq => Some(BinOp::Eq),
+            Token::BangEq => Some(BinOp::Neq),
+            Token::Lt => Some(BinOp::Lt),
+            Token::Gt => Some(BinOp::Gt),
+            Token::LtEq => Some(BinOp::Lte),
+            Token::GtEq => Some(BinOp::Gte),
+            _ => None,
+        }
+    }
+
+    fn expr_binop_from_func_literal(body: &str) -> Option<BinOp> {
+        match body {
+            "+" => Some(BinOp::Add),
+            "-" => Some(BinOp::Sub),
+            "*" => Some(BinOp::Mul),
+            "++" => Some(BinOp::Concat),
+            _ => None,
+        }
+    }
+
+    fn logical_binop_from_func_literal(body: &str) -> Option<BinOp> {
+        match body {
+            "==" => Some(BinOp::Eq),
+            "!=" => Some(BinOp::Neq),
+            "<" => Some(BinOp::Lt),
+            ">" => Some(BinOp::Gt),
+            "<=" => Some(BinOp::Lte),
+            ">=" => Some(BinOp::Gte),
+            _ => None,
+        }
+    }
+
+    fn lower_binop(left: Ast, op: BinOp, right: Ast) -> Ast {
+        let span = Span {
+            start: left.span().start,
+            end: right.span().end,
+        };
+        Ast::BinOp(span, op, Box::new(left), Box::new(right))
+    }
+
+    fn lower_func_literal_call(left: Ast, func_span: Span, name: Symbol, right: Ast) -> Ast {
+        let span = Span {
+            start: left.span().start,
+            end: right.span().end,
+        };
+        Ast::App(
+            span,
+            Box::new(Ast::Var(func_span, name)),
+            vec![
+                RecordLitArg::Positional(left),
+                RecordLitArg::Positional(right),
+            ],
+        )
+    }
+
+    fn parse_expr_class_expr(&mut self) -> Result<Ast, ParseError> {
         let mut left = self.parse_postfix()?;
 
-        while let Some((prec, op)) = Self::binop_precedence(self.peek()) {
-            if prec < min_prec {
+        loop {
+            if let Some(op) = Self::expr_binop(self.peek()) {
+                self.advance();
+                let right = self.parse_postfix()?;
+                left = Self::lower_binop(left, op, right);
+                continue;
+            }
+
+            let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
+                break;
+            };
+
+            if let Some(op) = Self::expr_binop_from_func_literal(&body) {
+                self.advance();
+                let right = self.parse_postfix()?;
+                left = Self::lower_binop(left, op, right);
+                continue;
+            }
+
+            if Self::logical_binop_from_func_literal(&body).is_some() {
                 break;
             }
-            self.advance(); // consume operator
-            let right = self.parse_binop_expr(prec + 1)?;
-            let span = Span {
-                start: left.span().start,
-                end: right.span().end,
+
+            let func_span = self.advance().span.clone();
+            let right = self.parse_postfix()?;
+            left = Self::lower_func_literal_call(left, func_span, body, right);
+        }
+
+        Ok(left)
+    }
+
+    fn parse_logical_expr(&mut self) -> Result<Ast, ParseError> {
+        let mut left = self.parse_expr_class_expr()?;
+
+        loop {
+            if let Some(op) = Self::logical_binop(self.peek()) {
+                self.advance();
+                let right = self.parse_expr_class_expr()?;
+                left = Self::lower_binop(left, op, right);
+                continue;
+            }
+
+            let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
+                break;
             };
-            left = Ast::BinOp(span, op, Box::new(left), Box::new(right));
+
+            let Some(op) = Self::logical_binop_from_func_literal(&body) else {
+                break;
+            };
+            self.advance();
+            let right = self.parse_expr_class_expr()?;
+            left = Self::lower_binop(left, op, right);
         }
 
         Ok(left)
@@ -1174,6 +1262,11 @@ impl Parser {
 
             // Capture / partial application: &foo, &foo(1)
             Token::Amp => self.parse_capture_expr(sp),
+
+            Token::FuncLiteral(_) => Err(ParseError::syntax(
+                "FuncLiteral must appear in infix position",
+                sp,
+            )),
 
             // Match expression
             Token::Match => self.parse_match_expr(),
@@ -3966,18 +4059,107 @@ Construct the error branch.
 
     #[test]
     fn test_precedence() {
-        // 1 + 2 * 3 should parse as 1 + (2 * 3)
+        // Expr-class operators are same-precedence and left-associative.
         let ast = parse("x = 1 + 2 * 3").unwrap();
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
-                Ast::BinOp(_, BinOp::Add, left, right) => {
-                    assert!(matches!(left.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1)));
-                    assert!(matches!(right.as_ref(), Ast::BinOp(_, BinOp::Mul, _, _)));
+                Ast::BinOp(_, BinOp::Mul, left, right) => {
+                    assert!(matches!(right.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(3)));
+                    assert!(matches!(
+                        left.as_ref(),
+                        Ast::BinOp(_, BinOp::Add, ll, lr)
+                            if matches!(ll.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1))
+                                && matches!(lr.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(2))
+                    ));
                 }
-                _ => panic!("Expected Add at top"),
+                _ => panic!("Expected left-associative Expr-class parse at top"),
             },
             _ => panic!("Expected Bind"),
         }
+    }
+
+    #[test]
+    fn test_logical_precedence_is_lower_than_expr_class() {
+        let ast = parse("x = a + b == c").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::BinOp(_, BinOp::Eq, left, right) => {
+                    assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "c"));
+                    assert!(matches!(
+                        left.as_ref(),
+                        Ast::BinOp(_, BinOp::Add, ll, lr)
+                            if matches!(ll.as_ref(), Ast::Var(_, name) if name == "a")
+                                && matches!(lr.as_ref(), Ast::Var(_, name) if name == "b")
+                    ));
+                }
+                other => panic!("Expected logical top-level parse, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_func_literal_name_lowers_to_binary_call() {
+        let ast = parse("x = left `eq` right").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::App(_, func, args) => {
+                    assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "eq"));
+                    assert!(matches!(
+                        args.as_slice(),
+                        [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                            if matches!(left, Ast::Var(_, name) if name == "left")
+                                && matches!(right, Ast::Var(_, name) if name == "right")
+                    ));
+                }
+                other => panic!("Expected lowered App, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_func_literal_operator_lowers_to_binop() {
+        let ast = parse("x = left `+` right").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(
+                    rhs.as_ref(),
+                    Ast::BinOp(_, BinOp::Add, left, right)
+                        if matches!(left.as_ref(), Ast::Var(_, name) if name == "left")
+                            && matches!(right.as_ref(), Ast::Var(_, name) if name == "right")
+                ));
+            }
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_func_literal_operator_comparison_uses_logical_tier() {
+        let ast = parse("x = a `==` b + c").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::BinOp(_, BinOp::Eq, left, right) => {
+                    assert!(matches!(left.as_ref(), Ast::Var(_, name) if name == "a"));
+                    assert!(matches!(
+                        right.as_ref(),
+                        Ast::BinOp(_, BinOp::Add, rl, rr)
+                            if matches!(rl.as_ref(), Ast::Var(_, name) if name == "b")
+                                && matches!(rr.as_ref(), Ast::Var(_, name) if name == "c")
+                    ));
+                }
+                other => panic!("Expected logical-tier func literal parse, got {:?}", other),
+            },
+            other => panic!("Expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_standalone_func_literal_is_error() {
+        let err = parse("`eq`").expect_err("expected parse error");
+        assert!(err
+            .message()
+            .contains("FuncLiteral must appear in infix position"));
     }
 
     #[test]

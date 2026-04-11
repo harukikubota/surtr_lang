@@ -226,14 +226,65 @@ print(inspect(Err(MyError)))"#,
     }
 
     #[test]
+    fn kernel_and_or_short_circuit() {
+        assert_output(
+            r#"def log_true(label: String) -> Boolean {
+  print(label)
+  True
+}
+
+def log_false(label: String) -> Boolean {
+  print(label)
+  False
+}
+
+print(to_string(and(True, log_false("and-rhs"))))
+print(to_string(and(False, log_true("and-skip"))))
+print(to_string(or(False, log_true("or-rhs"))))
+print(to_string(or(True, log_false("or-skip"))))"#,
+            &["and-rhs", "False", "False", "or-rhs", "True", "True"],
+        );
+    }
+
+    #[test]
+    fn kernel_eq_neq_helpers_match_operator_behavior() {
+        assert_output(
+            r#"defenum Flag {
+  On,
+  Off,
+}
+
+print(to_string(eq(1, 1)))
+print(to_string(neq("a", "b")))
+print(to_string(eq(True, True)))
+print(to_string(eq(Flag::On, Flag::On)))
+print(to_string(neq(Flag::On, Flag::Off)))"#,
+            &["True", "True", "True", "True", "True"],
+        );
+    }
+
+    #[test]
+    fn kernel_ordering_and_concat_helpers_match_operator_behavior() {
+        assert_output(
+            r#"print(to_string(lt(1, 2)))
+print(to_string(lte(2, 2)))
+print(to_string(gt(3, 2)))
+print(to_string(gte(3, 3)))
+print(concat("hello", " world"))
+print(to_string(lt(1.5, 2.0)))"#,
+            &["True", "True", "True", "True", "hello world", "True"],
+        );
+    }
+
+    #[test]
     fn concat_strings() {
         assert_output(r#"print("hello" ++ " world")"#, &["hello world"]);
     }
 
     #[test]
     fn arithmetic_precedence() {
-        // 2 + 3 * 4 = 2 + 12 = 14
-        assert_output("print(to_string(2 + 3 * 4))", &["14"]);
+        // Expr-class operators are same-precedence and left-associative.
+        assert_output("print(to_string(2 + 3 * 4))", &["20"]);
     }
 
     #[test]
@@ -307,6 +358,28 @@ print(to_string(fun(3)))"#,
             r#"printer = &print
 printer("hello")"#,
             &["hello"],
+        );
+    }
+
+    #[test]
+    fn func_literal_infix_invocation_works() {
+        assert_output(
+            r#"def eq(left: Int, right: Int) -> Boolean {
+  left == right
+}
+
+print(to_string(10 `+` 5))
+print(to_string(7 `eq` 7))"#,
+            &["15", "True"],
+        );
+    }
+
+    #[test]
+    fn expr_class_operators_are_same_precedence() {
+        assert_output(
+            r#"print(to_string(2 + 3 * 4))
+print(to_string(2 `*` 3 + 4))"#,
+            &["20", "10"],
         );
     }
 
@@ -1539,6 +1612,82 @@ match summary {
     }
 
     #[test]
+    fn kernel_helper_usecase_works_with_funcliteral_and_flow_ops() {
+        assert_output(
+            r#"defstruct User {
+  name: String,
+  age: Int,
+  active: Boolean,
+}
+
+impl User {
+  def new(name: String, age: Int, active: Boolean) -> Self {
+    User { name: name, age: age, active: active }
+  }
+}
+
+deferror HiddenUser {
+  "hidden user"
+}
+
+def parse_key(key: String) -> Result<Int, HiddenUser> {
+  if(eq(key, "alice"), Ok(1), if(eq(key, "boss"), Ok(2), Ok(3)))
+}
+
+def load_user(id: Int) -> Result<User, HiddenUser> {
+  if(
+    eq(id, 1),
+    Ok(User("alice", 21, True)),
+    if(eq(id, 2), Ok(User("boss", 70, True)), Ok(User("guest", 17, False))),
+  )
+}
+
+def allow(user: User) -> Result<User, HiddenUser> {
+  visible = and(
+    user.active,
+    and(
+      user.name `neq` "banned",
+      or(user.age `gte` 20, user.name `eq` "alice"),
+    ),
+  )
+
+  if(visible, Ok(user), Err(HiddenUser))
+}
+
+def age_band(user: User) -> String {
+  if(
+    user.age `lt` 13,
+    "child",
+    if(user.age `lte` 19, "teen", if(user.age `gt` 64, "senior", "adult")),
+  )
+}
+
+def render(user: User) -> String {
+  visibility = if(and(user.active, user.name `neq` "banned"), "visible", "hidden")
+  user.name `concat` ":" `concat` age_band(user) `concat` ":" `concat` visibility
+}
+
+lookup = &parse_key |=> &load_user
+
+match lookup("alice") |>= allow() |*> render() {
+  Ok(v) => print(v),
+  Err(e) => print("hidden"),
+}
+
+match lookup("boss") |>= allow() |*> render() {
+  Ok(v) => print(v),
+  Err(e) => print("hidden"),
+}
+
+match lookup("guest") |>= allow() |*> render() {
+  Ok(v) => print(v),
+  Err(e) => print("hidden"),
+}"#,
+            &["alice:adult:visible", "boss:senior:visible", "hidden"],
+        );
+    }
+
+    #[test]
     fn safebind_usecase_result_and_list_pipeline() {
         assert_output(
             r##"def parse_csv(text: String) -> Result<List<Int>> {
@@ -1587,7 +1736,10 @@ lift_and_expand = &singleton |=> &aliases
 words: List<String> = ["surtr", "vm"]
 print(to_string(words |>= aliases() |*> wrap_bracket()))
 print(to_string(lift_and_expand("bind") |*> wrap_bracket()))"#,
-            &["[[surtr], [surtr_alt], [vm], [vm_alt]]", "[[bind], [bind_alt]]"],
+            &[
+                "[[surtr], [surtr_alt], [vm], [vm_alt]]",
+                "[[bind], [bind_alt]]",
+            ],
         );
     }
 
