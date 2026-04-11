@@ -350,6 +350,13 @@ print(to_string(4 |> &add(1)))
 print(to_string(4 |> {|x| x + 1}))
 ```
 
+bare capture を値として観察したいときは `inspect(...)` を使います。
+
+```surtr
+print(inspect(&Boolean::xor))
+# => FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)
+```
+
 method path も同じです。
 
 ```surtr

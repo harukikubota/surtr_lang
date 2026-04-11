@@ -200,6 +200,9 @@ List::map([1, 2, 3], &to_string)
 - `|*>` の `List` 側意味と一致する
 - flatten はしない
 
+`inspect(&to_string)` や `inspect(&Boolean::xor)` のように bare callable を観察すると、
+利用者向けには `FnCapture(module: ..., name: ..., signature: ...)` 形式で表示される。
+
 ### `List::reduce` / `List::reduce_while`
 
 ```surtr

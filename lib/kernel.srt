@@ -80,6 +80,8 @@ defmod Kernel {
   @@doc """
   Produce a debug-oriented textual representation of a value.
   Prefer this when structure is more important than presentation polish.
+  Bare callable values are shown with module/name/signature metadata when it is
+  available at runtime.
   """
   @@builtin def inspect(a: $A) -> String
 

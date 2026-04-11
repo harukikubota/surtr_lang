@@ -264,6 +264,8 @@ value: Int =? parse_int("1")
 - `value |> normalize` は不許可
 - `pipeline = parse |=> validate` も不許可
 - 関数値として保持できるのは capture または closure
+- bare capture を `inspect` / `to_string` すると、metadata があれば
+  `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
 - `Result` と `List` を `|*>`, `|>=`, `|=>` で混在させない
 - `|>`, `|*>`, `|>=`, `|=>`, `=?` は同一優先度・左結合
 
