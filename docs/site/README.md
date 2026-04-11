@@ -30,6 +30,7 @@
   - パイプライン設計
   - 標準モジュールのロード契約
   - Source / AST / Typed / Bytecode の境界
+  - 末尾呼び出し最適化の現状と適用範囲
 - [クレート設計リファレンス](./crate-reference.md)
   - 各 crate の責務
   - 入出力の型境界

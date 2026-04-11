@@ -57,6 +57,7 @@ pub struct VmStats {
     pub function_calls: usize,
     pub closure_calls: usize,
     pub return_count: usize,
+    pub tail_calls_optimized: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -616,6 +617,29 @@ impl VM {
             observer.record_call_event(kind, line);
         }
     }
+
+    fn observe_tail_call_optimized(&mut self) {
+        if let Some(observer) = self.observer.as_mut() {
+            observer.stats.tail_calls_optimized += 1;
+        }
+    }
+
+    fn can_optimize_tail_call(&self, next_pc: usize) -> bool {
+        self.frames.len() > 1
+            && matches!(self.bytecode.opcodes.get(next_pc), Some(Opcode::Return))
+    }
+
+    fn reuse_current_frame_for_call(
+        &mut self,
+        locals: Vec<Value>,
+        call_site: Option<(u32, u32)>,
+    ) -> Result<(), RuntimeError> {
+        let frame = self.current_frame_mut()?;
+        frame.locals = locals;
+        frame.call_site = call_site;
+        Ok(())
+    }
+
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
         Self::verify_type_registry_entries(&bytecode.type_registry.entries, None)?;
         Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
@@ -1268,25 +1292,36 @@ impl VM {
                 }
 
                 let locals = Self::build_locals_for_call(&entry, args)?;
-                let return_pc = *pc;
-                let stack_base = self.stack.len();
+                let tail_call = self.can_optimize_tail_call(*pc);
+                let frame_depth = if tail_call {
+                    self.frames.len()
+                } else {
+                    self.frames.len() + 1
+                };
                 self.observe_call_event(
                     "Call",
                     format!(
                         "call pc={} kind=Call target=fun#{} arity={} stack_depth={} frame_depth={}",
-                        return_pc.saturating_sub(1),
+                        (*pc).saturating_sub(1),
                         fun_idx,
                         arity,
                         self.stack.len(),
-                        self.frames.len() + 1
+                        frame_depth
                     ),
                 );
-                self.frames.push(CallFrame {
-                    return_pc,
-                    stack_base,
-                    call_site: Some((span_start, span_end)),
-                    locals,
-                });
+                if tail_call {
+                    self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
+                    self.observe_tail_call_optimized();
+                } else {
+                    let return_pc = *pc;
+                    let stack_base = self.stack.len();
+                    self.frames.push(CallFrame {
+                        return_pc,
+                        stack_base,
+                        call_site: Some((span_start, span_end)),
+                        locals,
+                    });
+                }
                 *pc = entry.entry_pc as usize;
             }
 
@@ -1492,25 +1527,39 @@ impl VM {
                         }
 
                         let locals = Self::build_locals_for_call(&entry, full_args)?;
-                        let return_pc = *pc;
-                        let stack_base = self.stack.len();
+                        let tail_call = self.can_optimize_tail_call(*pc);
+                        let frame_depth = if tail_call {
+                            self.frames.len()
+                        } else {
+                            self.frames.len() + 1
+                        };
                         self.observe_call_event(
                             "CallClosure",
                             format!(
                                 "call pc={} kind=CallClosure target=function:fun#{} arity={} stack_depth={} frame_depth={}",
-                                return_pc.saturating_sub(1),
+                                (*pc).saturating_sub(1),
                                 fun_idx,
                                 entry.arity,
                                 self.stack.len(),
-                                self.frames.len() + 1
+                                frame_depth
                             ),
                         );
-                        self.frames.push(CallFrame {
-                            return_pc,
-                            stack_base,
-                            call_site: Some((span_start, span_end)),
-                            locals,
-                        });
+                        if tail_call {
+                            self.reuse_current_frame_for_call(
+                                locals,
+                                Some((span_start, span_end)),
+                            )?;
+                            self.observe_tail_call_optimized();
+                        } else {
+                            let return_pc = *pc;
+                            let stack_base = self.stack.len();
+                            self.frames.push(CallFrame {
+                                return_pc,
+                                stack_base,
+                                call_site: Some((span_start, span_end)),
+                                locals,
+                            });
+                        }
                         *pc = entry.entry_pc as usize;
                     }
                 }

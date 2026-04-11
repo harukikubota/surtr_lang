@@ -3,6 +3,8 @@ mod support;
 #[cfg(test)]
 mod e2e {
     use super::support;
+    use eldr::vm::{VmObservation, VmObservationOptions};
+    use eldr::VM;
 
     fn run_surtr(source: &str) -> Result<Vec<String>, String> {
         support::run_script("language_features.srt", source)
@@ -10,6 +12,15 @@ mod e2e {
 
     fn run_surtr_with_stderr(source: &str) -> Result<(Vec<String>, Vec<String>), String> {
         support::run_script_with_stderr("language_features.srt", source)
+    }
+
+    fn observe_surtr(source: &str) -> VmObservation {
+        let bytecode =
+            support::compile_script("language_features.srt", source).expect("compile should work");
+        let mut vm = VM::new(bytecode);
+        vm.enable_observation(VmObservationOptions::default());
+        vm.run().expect("run should succeed");
+        vm.observation().expect("observation should exist")
     }
 
     fn assert_output(source: &str, expected: &[&str]) {
@@ -28,6 +39,75 @@ mod e2e {
             ),
             Ok(output) => panic!("Expected compile error, got output: {:?}", output),
         }
+    }
+
+    #[test]
+    fn tail_recursive_function_reuses_single_non_top_level_frame() {
+        let observation = observe_surtr(
+            r#"def fib_tail(n: Int, a: Int, b: Int) -> Int {
+  if(n == 0, a, fib_tail(n - 1, b, a + b))
+}
+
+fib_tail(50, 0, 1)"#,
+        );
+
+        assert_eq!(observation.stats.max_frame_depth, 2);
+        assert_eq!(observation.stats.function_calls, 51);
+        assert_eq!(observation.stats.return_count, 1);
+        assert_eq!(observation.stats.tail_calls_optimized, 50);
+    }
+
+    #[test]
+    fn match_arm_tail_calls_are_optimized() {
+        let observation = observe_surtr(
+            r#"def sum_list(values: List<Int>, acc: Int) -> Int {
+  match values {
+    [] => acc,
+    [head, ..tail] => sum_list(tail, acc + head),
+  }
+}
+
+sum_list([1, 2, 3, 4, 5], 0)"#,
+        );
+
+        assert_eq!(observation.stats.max_frame_depth, 2);
+        assert_eq!(observation.stats.tail_calls_optimized, 5);
+    }
+
+    #[test]
+    fn mutual_tail_recursion_is_optimized() {
+        let observation = observe_surtr(
+            r#"def even(n: Int) -> Boolean {
+  if(n == 0, True, odd(n - 1))
+}
+
+def odd(n: Int) -> Boolean {
+  if(n == 0, False, even(n - 1))
+}
+
+even(100)"#,
+        );
+
+        assert_eq!(observation.stats.max_frame_depth, 2);
+        assert_eq!(observation.stats.function_calls, 101);
+        assert_eq!(observation.stats.return_count, 1);
+        assert_eq!(observation.stats.tail_calls_optimized, 100);
+    }
+
+    #[test]
+    fn non_tail_recursion_keeps_growing_frames() {
+        let observation = observe_surtr(
+            r#"def sum_non_tail(n: Int) -> Int {
+  if(n == 0, 0, 1 + sum_non_tail(n - 1))
+}
+
+sum_non_tail(200)"#,
+        );
+
+        assert!(observation.stats.max_frame_depth > 100);
+        assert_eq!(observation.stats.tail_calls_optimized, 0);
+        assert_eq!(observation.stats.function_calls, 201);
+        assert_eq!(observation.stats.return_count, 201);
     }
 
     // Bindings

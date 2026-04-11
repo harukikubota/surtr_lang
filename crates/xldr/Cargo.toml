@@ -15,3 +15,10 @@ sindr = { path = "../sindr" }
 rustyline = "13"
 ratatui = "0.29"
 crossterm = "0.28"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "tco"
+harness = false

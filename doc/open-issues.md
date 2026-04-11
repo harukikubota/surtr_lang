@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない将来課題を追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md` を正本とする。
 
-最終更新日: 2026-04-10
+最終更新日: 2026-04-11
 
 2026-04-09 整理メモ:
 
@@ -279,6 +279,31 @@
 - テスト方針:
   - `unit/sindr` で chunk 整合性と参照先の妥当性を固定する
   - `integration` で `surtr dump` 出力が viewer の期待するテーブルを欠かさないことを維持する
+
+### OI-013 Tail Call Optimization の適用範囲と観測導線
+
+- 策定コミット: `codex/tail-call-optimization`
+- 背景:
+  - 現在の TCO は user-function の tail-position call に対して、bytecode 上で「次 opcode が `Return`」と判定できる場合に current frame を再利用する v1 実装である。
+  - `fib_tail(50)` と `reduce` ワークロードでは frame depth と return count の削減を確認済みだが、CLI 観測・viewer・bytecode 表現にはまだ最小限しか反映していない。
+- 2026-04-11 時点の固定事項:
+  - top-level call は再利用しない
+  - builtin target の `CallClosure` は再利用しない
+  - tail-position 判定は `forge` の終端生成と VM の `next opcode == Return` 判定に依存する
+  - 観測値として `tail_calls_optimized` は追加済み
+- 未確定点:
+  - `surtr run` / `surtr dump` に `tail_calls_optimized` をどの形で露出するか
+  - bytecode / viewer に tail-position call を明示する marker を追加するか
+  - top-level trampoline や loop lowering まで進めるか
+  - 将来の追加最適化で span 診断と call trace をどう維持するか
+- 受け入れ条件:
+  - TCO の適用範囲が public docs と canonical docs の両方でぶれずに説明される。
+  - 観測導線から「最適化されたか」「されていないか」が利用者に分かる。
+  - 追加最適化を入れても既存の実行意味と診断位置が変わらない。
+- テスト方針:
+  - tail recursion / mutual recursion / non-tail recursion の観測テストを回帰基準にする。
+  - CLI や dump へ露出を足す場合は integration で stderr / JSON 形状を固定する。
+  - bytecode 表現を増やす場合は `unit/sindr` と viewer schema テストを更新する。
 
 ---
 

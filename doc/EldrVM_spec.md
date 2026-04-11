@@ -58,11 +58,14 @@ Eldr は次を担わない。
 - `Callable` は `lexical_captures` と `partial_args` を別々に保持する
 - 関数呼び出し時、`locals` には `lexical_captures` → `partial_args` → 実引数 の順で先頭から配置する
 - `Call` 実行後は、呼び出し先がフレーム完成状態で開始する
+- user function への tail-position call は、次 opcode が `Return` の場合に限り current `CallFrame` を再利用してよい
+- frame 再利用時も外部意味は変わらず、返り値 1 個・呼び出し元への復帰位置・operand stack 契約は維持する
 
 ### 3.3 返り値
 
 - 関数は 1 値を返す
 - 呼び出し元には返り値 1 つのみが push される
+- tail call が最適化された場合、途中フレームの `Return` は省略されうるが、観測上は最終返り値だけが呼び出し元へ渡る
 
 ### 3.4 関数テーブル不変条件
 

@@ -242,6 +242,24 @@ Surtr は stack-based VM を採用していますが、VM を賢くしすぎな�
 
 この設計にすると、VM は小さく保ちやすく、バグの責務点も追いやすくなります。
 
+### 末尾呼び出し最適化はあるか
+
+現時点の Surtr には、限定付きの末尾呼び出し最適化があります。
+
+- ある:
+  - user function への tail-position call
+  - `if` の branch 末尾
+  - `match` の arm 末尾
+  - 関数本体や closure 本体の最終式
+- まだ限定されている:
+  - top-level call は再利用しない
+  - builtin call は対象にしない
+  - 判定は「bytecode 上で call の次が `Return` か」に依存する
+
+このため、`fib_tail` のような tail-recursive な関数では call frame の増加を抑えられます。一方で、`1 + recurse(n - 1)` のような non-tail recursion は最適化されず、従来どおり frame depth が増えます。
+
+Surtr では「なんでも自動で速くする」よりも、「どの形が最適化対象か」を説明できることを優先しています。最適化の有無や適用範囲は、公開 docs と canonical spec の両方で追跡します。
+
 ## 10. テスト戦略
 
 Surtr のテストは、機能と責務の境界に合わせて分けています。

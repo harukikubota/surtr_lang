@@ -55,9 +55,13 @@
 - `function_calls`
 - `closure_calls`
 - `return_count`
+- `tail_calls_optimized`
 - `max_stack_depth`
 - `max_frame_depth`
 - opcode 別実行回数
+
+`tail_calls_optimized` は current frame を再利用した user-function tail call 回数を表す。
+TCO が効いた実行では `return_count` や `max_frame_depth` が非最適化時より小さくなりうる。
 
 ### 3.2 `--trace-call`
 

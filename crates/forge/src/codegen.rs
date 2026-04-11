@@ -699,9 +699,8 @@ impl Codegen {
         let total_arity = captures.len() + params.len();
         let prev_in_function = self.in_function;
         self.in_function = true;
-        self.emit_node(body)?;
+        self.emit_tail_node(body)?;
         self.in_function = prev_in_function;
-        self.emit(Opcode::Return);
 
         self.state.functions.push(FunctionEntry {
             fun_idx,
@@ -1004,6 +1003,11 @@ impl Codegen {
         self.ir.len()
     }
 
+    fn emit_unit_const(&mut self) {
+        let unit_idx = self.add_constant(Constant::Unit);
+        self.emit(Opcode::LoadConst(unit_idx));
+    }
+
     // ── Program ──
 
     fn emit_program(&mut self, stmts: Vec<TypedNode>) -> Result<(), CodegenError> {
@@ -1117,9 +1121,8 @@ impl Codegen {
         let entry_pc = self.current_pos() as u32;
         let prev_in_function = self.in_function;
         self.in_function = true;
-        self.emit_node(body)?;
+        self.emit_tail_node(body)?;
         self.in_function = prev_in_function;
-        self.emit(Opcode::Return);
 
         let num_locals = self.state.next_slot;
         self.state.functions.push(FunctionEntry {
@@ -2315,6 +2318,92 @@ impl Codegen {
                     message: "Non-function value in call position".into(),
                     span: func.span.clone(),
                 });
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_tail_node(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
+        match &node.node {
+            TypedInner::Block(stmts) => {
+                if let Some((last, prefix)) = stmts.split_last() {
+                    for stmt in prefix {
+                        self.emit_node(stmt)?;
+                        self.emit(Opcode::Pop);
+                    }
+                    self.emit_tail_node(last)?;
+                } else {
+                    self.emit_unit_const();
+                    self.emit(Opcode::Return);
+                }
+            }
+            TypedInner::If(cond, then, else_opt) => {
+                self.emit_node(cond)?;
+                match else_opt {
+                    Some(else_branch) => {
+                        let else_label = self.fresh_label();
+                        self.emit_jump_if_false(else_label);
+                        self.emit_tail_node(then)?;
+                        self.patch_label(else_label);
+                        self.emit_tail_node(else_branch)?;
+                    }
+                    None => {
+                        let end_label = self.fresh_label();
+                        self.emit_jump_if_false(end_label);
+                        self.emit_node(then)?;
+                        self.emit(Opcode::Pop);
+                        self.patch_label(end_label);
+                        self.emit_unit_const();
+                        self.emit(Opcode::Return);
+                    }
+                }
+            }
+            TypedInner::Match(scrutinee, arms) => {
+                if arms.is_empty() {
+                    self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
+                    return Ok(());
+                }
+
+                self.emit_node(scrutinee)?;
+
+                let scrut_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(scrut_slot));
+
+                let mismatch_label = self.fresh_label();
+                let mut arm_labels = Vec::with_capacity(arms.len());
+                for _ in arms {
+                    arm_labels.push(self.fresh_label());
+                }
+
+                for (i, (pat, body)) in arms.iter().enumerate() {
+                    let next_arm = if i + 1 < arms.len() {
+                        arm_labels[i + 1]
+                    } else {
+                        mismatch_label
+                    };
+
+                    self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
+                    self.emit_match_pattern_bind(pat, scrut_slot)?;
+                    self.emit_tail_node(body)?;
+
+                    if i + 1 < arms.len() {
+                        self.patch_label(arm_labels[i + 1]);
+                    }
+                }
+
+                self.patch_label(mismatch_label);
+                self.emit_pattern_mismatch_failure(scrutinee.span.clone())?;
+            }
+            TypedInner::Semi(inner) => {
+                self.emit_node(inner)?;
+                self.emit(Opcode::Pop);
+                self.emit_unit_const();
+                self.emit(Opcode::Return);
+            }
+            _ => {
+                self.emit_node(node)?;
+                self.emit(Opcode::Return);
             }
         }
         Ok(())
