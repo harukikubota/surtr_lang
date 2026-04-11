@@ -128,6 +128,72 @@ pub enum Opcode {
     Halt,
 }
 
+impl Opcode {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::LoadConst(..) => "LoadConst",
+            Self::LoadBuiltinRef(..) => "LoadBuiltinRef",
+            Self::LoadFunctionRef(..) => "LoadFunctionRef",
+            Self::LoadLocal(..) => "LoadLocal",
+            Self::StoreLocal(..) => "StoreLocal",
+            Self::AddInt => "AddInt",
+            Self::SubInt => "SubInt",
+            Self::MulInt => "MulInt",
+            Self::BitAndInt => "BitAndInt",
+            Self::BitOrInt => "BitOrInt",
+            Self::BitXorInt => "BitXorInt",
+            Self::AddFloat => "AddFloat",
+            Self::SubFloat => "SubFloat",
+            Self::MulFloat => "MulFloat",
+            Self::EqInt => "EqInt",
+            Self::NeqInt => "NeqInt",
+            Self::LtInt => "LtInt",
+            Self::GtInt => "GtInt",
+            Self::LteInt => "LteInt",
+            Self::GteInt => "GteInt",
+            Self::EqFloat => "EqFloat",
+            Self::NeqFloat => "NeqFloat",
+            Self::LtFloat => "LtFloat",
+            Self::GtFloat => "GtFloat",
+            Self::LteFloat => "LteFloat",
+            Self::GteFloat => "GteFloat",
+            Self::EqStr => "EqStr",
+            Self::NeqStr => "NeqStr",
+            Self::EqBool => "EqBool",
+            Self::NeqBool => "NeqBool",
+            Self::ConcatStr => "ConcatStr",
+            Self::NegInt => "NegInt",
+            Self::NegFloat => "NegFloat",
+            Self::NotBool => "NotBool",
+            Self::ListNew { .. } => "ListNew",
+            Self::ListEmpty => "ListEmpty",
+            Self::ListNil => "ListNil",
+            Self::ListCons => "ListCons",
+            Self::ListIsEmpty => "ListIsEmpty",
+            Self::ListHead => "ListHead",
+            Self::ListTail => "ListTail",
+            Self::ListFromItems { .. } => "ListFromItems",
+            Self::StructNew { .. } => "StructNew",
+            Self::GetField { .. } => "GetField",
+            Self::GetTag => "GetTag",
+            Self::EqTag => "EqTag",
+            Self::CallBuiltin { .. } => "CallBuiltin",
+            Self::Call { .. } => "Call",
+            Self::CaptureClosure(..) => "CaptureClosure",
+            Self::CapturePartial(..) => "CapturePartial",
+            Self::MakeError { .. } => "MakeError",
+            Self::MakeErrorLiteral { .. } => "MakeErrorLiteral",
+            Self::CallClosure { .. } => "CallClosure",
+            Self::Jump(..) => "Jump",
+            Self::JumpIfFalse(..) => "JumpIfFalse",
+            Self::JumpIfTrue(..) => "JumpIfTrue",
+            Self::Pop => "Pop",
+            Self::Return => "Return",
+            Self::Halt => "Halt",
+        }
+    }
+}
+
 /// Opcode index -> source span/line metadata.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceMap {
@@ -354,6 +420,7 @@ pub struct BytecodeChunk {
     pub error_template_base: u32,
     pub error_templates: Vec<ErrTemplate>,
     pub functions: Vec<FunctionEntry>,
+    pub docs: Vec<DocEntry>,
 }
 
 /// Function table entry.
@@ -364,6 +431,8 @@ pub struct FunctionEntry {
     pub num_locals: u32,
     pub arity: u8,
     pub qualified_name: Option<String>,
+    #[serde(default)]
+    pub signature: Option<String>,
     #[serde(default)]
     pub end_pc: u32,
     #[serde(default)]
@@ -1221,6 +1290,7 @@ mod tests {
                 num_locals: 0,
                 arity: 0,
                 qualified_name: Some("Main::entry".to_string()),
+                signature: Some("entry() -> Unit".to_string()),
                 end_pc: 2,
                 span_start: 0,
                 span_end: 4,

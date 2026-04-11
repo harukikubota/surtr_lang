@@ -41,13 +41,14 @@ surtr/
 | `doc/EldrVM_spec.md`         | VM仕様書 |
 | `doc/テスト方針.md`            | テストの分離方法・レイヤー |
 | `doc/float.md`               | `Float` の暫定仕様メモ |
+| `doc/Rune_observability.md`  | `Rune` / `Eldr` の観測系オプション設計 |
 
 ---
 
 ## Documentation Workflow
 
 - `doc/`: 正本仕様
-  - `要件定義v9.md`, `EldrVM_spec.md`, `Xldr_spec.md`, `テスト方針.md`, `open-issues.md`, `float.md`, `Enum.md`
+  - `要件定義v9.md`, `EldrVM_spec.md`, `Xldr_spec.md`, `テスト方針.md`, `open-issues.md`, `float.md`, `Rune_observability.md`, `Enum.md`
 - `docs/`: 補助資料・公開向けガイド
 - `lib/*.srt`: 標準モジュールの利用者向けドキュメント。`@@doc` を正本とする
 - `crates/**`: 実装者向け内部契約。公開境界は rustdoc で残す

@@ -1,11 +1,13 @@
+use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
-    line_column_for_offset, Bytecode, BytecodeChunk, Constant, FunctionEntry, Opcode, SourceMap,
+    line_column_for_offset, Bytecode, BytecodeChunk, Constant, DocEntry, FunctionEntry, Opcode,
+    SourceMap,
 };
 use sindr::primitives::SurtrInt;
 use sindr::runtime::{
     Callable, CallableTarget, ListHandle, Location, RichError, TypeRegistry, Value,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::builtin::call_builtin;
 use crate::error::{RuntimeError, RuntimeErrorContext};
@@ -32,8 +34,112 @@ struct VmCheckpoint {
     type_entry_len: usize,
     error_template_len: usize,
     function_len: usize,
+    doc_len: usize,
     source_map_len: Option<usize>,
     overwritten_functions: Vec<(usize, FunctionEntry)>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VmObservationOptions {
+    pub trace_opcodes: bool,
+    pub trace_calls: bool,
+    pub trace_limit: Option<usize>,
+    pub trace_filter: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VmStats {
+    pub executed_opcodes: usize,
+    pub per_opcode: BTreeMap<String, usize>,
+    pub max_stack_depth: usize,
+    pub max_frame_depth: usize,
+    pub builtin_calls: usize,
+    pub function_calls: usize,
+    pub closure_calls: usize,
+    pub return_count: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VmObservation {
+    pub stats: VmStats,
+    pub trace_lines: Vec<String>,
+    pub dropped_trace_events: usize,
+}
+
+#[derive(Debug, Clone)]
+struct VmObserver {
+    options: VmObservationOptions,
+    stats: VmStats,
+    trace_lines: Vec<String>,
+    dropped_trace_events: usize,
+}
+
+impl VmObserver {
+    fn new(options: VmObservationOptions) -> Self {
+        Self {
+            options,
+            stats: VmStats::default(),
+            trace_lines: Vec::new(),
+            dropped_trace_events: 0,
+        }
+    }
+
+    fn snapshot(&self) -> VmObservation {
+        VmObservation {
+            stats: self.stats.clone(),
+            trace_lines: self.trace_lines.clone(),
+            dropped_trace_events: self.dropped_trace_events,
+        }
+    }
+
+    fn record_depths(&mut self, stack_depth: usize, frame_depth: usize) {
+        self.stats.max_stack_depth = self.stats.max_stack_depth.max(stack_depth);
+        self.stats.max_frame_depth = self.stats.max_frame_depth.max(frame_depth);
+    }
+
+    fn trace_enabled_for(&self, kind: &str) -> bool {
+        if self.options.trace_filter.is_empty() {
+            return true;
+        }
+        self.options
+            .trace_filter
+            .contains(&kind.to_ascii_lowercase())
+    }
+
+    fn push_trace(&mut self, line: String) {
+        if let Some(limit) = self.options.trace_limit {
+            if self.trace_lines.len() >= limit {
+                self.dropped_trace_events += 1;
+                return;
+            }
+        }
+        self.trace_lines.push(line);
+    }
+
+    fn record_opcode_step(
+        &mut self,
+        pc: usize,
+        opcode: &Opcode,
+        stack_depth: usize,
+        frame_depth: usize,
+    ) {
+        let kind = opcode.kind_name();
+        self.stats.executed_opcodes += 1;
+        *self.stats.per_opcode.entry(kind.to_string()).or_default() += 1;
+        self.record_depths(stack_depth, frame_depth);
+        if self.options.trace_opcodes && self.trace_enabled_for(kind) {
+            self.push_trace(format!(
+                "op pc={} opcode={:?} stack_depth={} frame_depth={}",
+                pc, opcode, stack_depth, frame_depth
+            ));
+        }
+    }
+
+    fn record_call_event(&mut self, kind: &str, line: String) {
+        if self.options.trace_calls && self.trace_enabled_for(kind) {
+            self.push_trace(line);
+        }
+    }
 }
 
 /// The Surtr virtual machine — executes bytecode produced by Forge.
@@ -58,6 +164,8 @@ pub struct VM {
     exit_code: i32,
     /// Last value produced by full-program or chunk execution.
     last_result: Option<Value>,
+    /// Optional developer-facing execution observer.
+    observer: Option<VmObserver>,
 }
 
 impl VM {
@@ -79,6 +187,7 @@ impl VM {
             error_output: None,
             exit_code: 0,
             last_result: None,
+            observer: None,
         }
     }
 
@@ -236,6 +345,14 @@ impl VM {
         self.last_result.as_ref()
     }
 
+    pub fn enable_observation(&mut self, options: VmObservationOptions) {
+        self.observer = Some(VmObserver::new(options));
+    }
+
+    pub fn observation(&self) -> Option<VmObservation> {
+        self.observer.as_ref().map(VmObserver::snapshot)
+    }
+
     /// Read a local slot value (used by REPL display logic).
     pub fn get_local(&self, slot: u32) -> Option<Value> {
         self.frames
@@ -252,11 +369,13 @@ impl VM {
                 return Err(RuntimeError::new("PC out of bounds"));
             }
             let op = self.bytecode.opcodes[self.pc].clone();
+            self.observe_opcode_step(self.pc, &op);
             let mut next_pc = self.pc + 1;
             let halted = self
                 .execute_opcode(op.clone(), &mut next_pc)
                 .map_err(|err| self.enrich_runtime_error(err, self.pc, &op))?;
             self.pc = next_pc;
+            self.observe_current_depths();
 
             if halted {
                 self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
@@ -284,6 +403,7 @@ impl VM {
             error_template_base: chunk_error_template_base,
             error_templates,
             functions,
+            docs,
         } = chunk;
         let code_base = self.bytecode.opcodes.len();
         let const_base = self.bytecode.constants.len();
@@ -310,6 +430,7 @@ impl VM {
         self.bytecode.constants.extend(constants);
         self.bytecode.type_registry.entries.extend(type_entries);
         self.bytecode.error_templates.extend(error_templates);
+        self.extend_docs_unique(docs);
         self.bytecode.opcodes.extend(chunk_opcodes);
         self.relocate_and_extend_source_map(source_map, code_base)?;
         // Invariant: runtime uses O(1) lookup `functions[fun_idx as usize]`.
@@ -339,10 +460,12 @@ impl VM {
         while pc < self.bytecode.opcodes.len() {
             let current_pc = pc;
             let op = self.bytecode.opcodes[pc].clone();
+            self.observe_opcode_step(current_pc, &op);
             pc += 1;
             let halted = self
                 .execute_opcode(op.clone(), &mut pc)
                 .map_err(|err| self.enrich_runtime_error(err, current_pc, &op))?;
+            self.observe_current_depths();
             if halted {
                 break;
             }
@@ -401,6 +524,7 @@ impl VM {
             type_entry_len: self.bytecode.type_registry.entries.len(),
             error_template_len: self.bytecode.error_templates.len(),
             function_len: self.bytecode.functions.len(),
+            doc_len: self.bytecode.docs.len(),
             source_map_len: self
                 .bytecode
                 .source_map
@@ -434,6 +558,7 @@ impl VM {
             .error_templates
             .truncate(checkpoint.error_template_len);
         self.bytecode.functions.truncate(checkpoint.function_len);
+        self.bytecode.docs.truncate(checkpoint.doc_len);
         for (idx, entry) in checkpoint.overwritten_functions {
             if idx < self.bytecode.functions.len() {
                 self.bytecode.functions[idx] = entry;
@@ -452,6 +577,44 @@ impl VM {
 
     fn verify_loaded_bytecode(&self) -> Result<(), RuntimeError> {
         Self::verify_program(&self.bytecode)
+    }
+
+    fn extend_docs_unique(&mut self, docs: Vec<DocEntry>) {
+        for doc in docs {
+            let exists = self.bytecode.docs.iter().any(|existing| existing == &doc);
+            if !exists {
+                self.bytecode.docs.push(doc);
+            }
+        }
+    }
+
+    fn observe_opcode_step(&mut self, pc: usize, opcode: &Opcode) {
+        let stack_depth = self.stack.len();
+        let frame_depth = self.frames.len();
+        if let Some(observer) = self.observer.as_mut() {
+            observer.record_opcode_step(pc, opcode, stack_depth, frame_depth);
+        }
+    }
+
+    fn observe_current_depths(&mut self) {
+        let stack_depth = self.stack.len();
+        let frame_depth = self.frames.len();
+        if let Some(observer) = self.observer.as_mut() {
+            observer.record_depths(stack_depth, frame_depth);
+        }
+    }
+
+    fn observe_call_event(&mut self, kind: &str, line: String) {
+        if let Some(observer) = self.observer.as_mut() {
+            match kind {
+                "CallBuiltin" => observer.stats.builtin_calls += 1,
+                "Call" => observer.stats.function_calls += 1,
+                "CallClosure" => observer.stats.closure_calls += 1,
+                "Return" => observer.stats.return_count += 1,
+                _ => {}
+            }
+            observer.record_call_event(kind, line);
+        }
     }
 
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
@@ -1058,6 +1221,20 @@ impl VM {
                     args.push(self.pop_stack()?);
                 }
                 args.reverse();
+                let builtin_name = builtin_meta_by_id(builtin_id)
+                    .map(|meta| meta.name)
+                    .unwrap_or("<unknown>");
+                self.observe_call_event(
+                    "CallBuiltin",
+                    format!(
+                        "call pc={} kind=CallBuiltin target={} arity={} stack_depth={} frame_depth={}",
+                        (*pc).saturating_sub(1),
+                        builtin_name,
+                        arity,
+                        self.stack.len(),
+                        self.frames.len()
+                    ),
+                );
                 let result = self.with_call_site(Some((span_start, span_end)), |vm| {
                     call_builtin(vm, builtin_id, args)
                 })?;
@@ -1094,6 +1271,17 @@ impl VM {
                 let locals = Self::build_locals_for_call(&entry, args)?;
                 let return_pc = *pc;
                 let stack_base = self.stack.len();
+                self.observe_call_event(
+                    "Call",
+                    format!(
+                        "call pc={} kind=Call target=fun#{} arity={} stack_depth={} frame_depth={}",
+                        return_pc.saturating_sub(1),
+                        fun_idx,
+                        arity,
+                        self.stack.len(),
+                        self.frames.len() + 1
+                    ),
+                );
                 self.frames.push(CallFrame {
                     return_pc,
                     stack_base,
@@ -1268,6 +1456,20 @@ impl VM {
 
                 match callable.target {
                     CallableTarget::Builtin(builtin_id) => {
+                        let builtin_name = builtin_meta_by_id(builtin_id)
+                            .map(|meta| meta.name)
+                            .unwrap_or("<unknown>");
+                        self.observe_call_event(
+                            "CallClosure",
+                            format!(
+                                "call pc={} kind=CallClosure target=builtin:{} arity={} stack_depth={} frame_depth={}",
+                                (*pc).saturating_sub(1),
+                                builtin_name,
+                                full_args.len(),
+                                self.stack.len(),
+                                self.frames.len()
+                            ),
+                        );
                         let result = self.with_call_site(Some((span_start, span_end)), |vm| {
                             call_builtin(vm, builtin_id, full_args)
                         })?;
@@ -1293,6 +1495,17 @@ impl VM {
                         let locals = Self::build_locals_for_call(&entry, full_args)?;
                         let return_pc = *pc;
                         let stack_base = self.stack.len();
+                        self.observe_call_event(
+                            "CallClosure",
+                            format!(
+                                "call pc={} kind=CallClosure target=function:fun#{} arity={} stack_depth={} frame_depth={}",
+                                return_pc.saturating_sub(1),
+                                fun_idx,
+                                entry.arity,
+                                self.stack.len(),
+                                self.frames.len() + 1
+                            ),
+                        );
                         self.frames.push(CallFrame {
                             return_pc,
                             stack_base,
@@ -1347,6 +1560,15 @@ impl VM {
                 self.stack.truncate(frame.stack_base);
                 self.stack.push(ret);
                 *pc = frame.return_pc;
+                self.observe_call_event(
+                    "Return",
+                    format!(
+                        "return pc={} stack_depth={} frame_depth={}",
+                        *pc,
+                        self.stack.len(),
+                        self.frames.len()
+                    ),
+                );
             }
         }
 
@@ -1499,7 +1721,7 @@ impl VM {
 
 #[cfg(test)]
 mod tests {
-    use super::VM;
+    use super::{VmObservationOptions, VM};
     use sindr::ir::{
         Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
         SourceMap,
@@ -1528,6 +1750,7 @@ mod tests {
             num_locals,
             arity,
             qualified_name: qualified_name.map(str::to_string),
+            signature: None,
             end_pc: 0,
             span_start: 0,
             span_end: 0,
@@ -1658,6 +1881,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -1680,6 +1904,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -1724,6 +1949,7 @@ mod tests {
                 num_params: 1,
             }],
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -1768,6 +1994,7 @@ mod tests {
                     num_params: 1,
                 }],
                 functions: Vec::new(),
+                docs: Vec::new(),
             })
             .expect("push should succeed");
         match result {
@@ -1829,6 +2056,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1851,6 +2079,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1877,6 +2106,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: vec![function_entry(0, 2, 1, 0, Some("new"))],
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1913,6 +2143,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1936,6 +2167,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -1967,6 +2199,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         vm.push_atomic(chunk).expect("push should succeed");
@@ -2005,6 +2238,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -2124,6 +2358,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -2156,6 +2391,7 @@ mod tests {
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
+            docs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -2236,5 +2472,56 @@ mod tests {
         assert!(err
             .message
             .contains("CapturePartial expects a callable target"));
+    }
+
+    #[test]
+    fn observation_collects_opcode_stats() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::BitAndInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(6)), Constant::Int(int(3))];
+
+        let mut vm = VM::new(bytecode);
+        vm.enable_observation(VmObservationOptions::default());
+        vm.run().expect("run should succeed");
+
+        let observation = vm.observation().expect("observation should exist");
+        assert_eq!(observation.stats.executed_opcodes, 4);
+        assert_eq!(observation.stats.per_opcode.get("LoadConst"), Some(&2));
+        assert_eq!(observation.stats.per_opcode.get("BitAndInt"), Some(&1));
+        assert_eq!(observation.stats.per_opcode.get("Halt"), Some(&1));
+        assert_eq!(observation.stats.max_stack_depth, 2);
+        assert_eq!(observation.stats.max_frame_depth, 1);
+    }
+
+    #[test]
+    fn observation_collects_call_trace_and_builtin_counts() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::CallBuiltin {
+                builtin_id: 1,
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(42))];
+
+        let mut vm = VM::new(bytecode);
+        vm.enable_observation(VmObservationOptions {
+            trace_calls: true,
+            ..VmObservationOptions::default()
+        });
+        vm.run().expect("run should succeed");
+
+        let observation = vm.observation().expect("observation should exist");
+        assert_eq!(observation.stats.builtin_calls, 1);
+        assert_eq!(observation.trace_lines.len(), 1);
+        assert!(observation.trace_lines[0].contains("kind=CallBuiltin"));
+        assert!(observation.trace_lines[0].contains("target=to_string"));
     }
 }

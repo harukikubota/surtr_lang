@@ -233,6 +233,7 @@ impl ForgeSession {
                 error_template_base,
                 error_templates,
                 functions,
+                docs: Vec::new(),
             },
             meta,
         ))
@@ -503,6 +504,24 @@ fn ty_to_string(ty: &Ty) -> String {
     }
 }
 
+fn format_function_signature(name: &str, params: &[TypedFunParam], ret_ty: &Ty) -> String {
+    let params = params
+        .iter()
+        .map(|param| format!("{}: {}", param.id.name, ty_to_string(&param.ty)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name}({params}) -> {}", ty_to_string(ret_ty))
+}
+
+fn format_error_constructor_signature(name: &str, params: &[TypedFunParam]) -> String {
+    let params = params
+        .iter()
+        .map(|param| format!("{}: {}", param.id.name, ty_to_string(&param.ty)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{name}({params}) -> {name}")
+}
+
 // ── IR with labels (resolved to absolute addresses at the end) ──
 
 #[derive(Debug, Clone)]
@@ -690,6 +709,7 @@ impl Codegen {
             num_locals: self.state.next_slot,
             arity: total_arity as u8,
             qualified_name: None,
+            signature: None,
             end_pc: 0,
             span_start: body.span.start as u32,
             span_end: body.span.end as u32,
@@ -845,6 +865,7 @@ impl Codegen {
             num_locals: self.state.next_slot,
             arity: 3,
             qualified_name: None,
+            signature: None,
             end_pc: 0,
             span_start: span.start as u32,
             span_end: span.end as u32,
@@ -899,6 +920,7 @@ impl Codegen {
             num_locals: self.state.next_slot,
             arity: (extra_arg_count + 2) as u8,
             qualified_name: None,
+            signature: None,
             end_pc: 0,
             span_start: span.start as u32,
             span_end: span.end as u32,
@@ -1069,7 +1091,7 @@ impl Codegen {
     }
 
     fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        let (fun_idx, id, params, _ret_ty, body) = match &node.node {
+        let (fun_idx, id, params, ret_ty, body) = match &node.node {
             TypedInner::Def(fun_idx, id, params, ret_ty, body) => {
                 (fun_idx, id, params, ret_ty, body)
             }
@@ -1106,6 +1128,7 @@ impl Codegen {
             num_locals,
             arity: params.len() as u8,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
+            signature: Some(format_function_signature(&id.name, params, ret_ty)),
             end_pc: 0,
             span_start: node.span.start as u32,
             span_end: node.span.end as u32,
@@ -1177,6 +1200,7 @@ impl Codegen {
             num_locals,
             arity: params.len() as u8,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
+            signature: Some(format_error_constructor_signature(&id.name, params)),
             end_pc: 0,
             span_start: node.span.start as u32,
             span_end: node.span.end as u32,
@@ -2661,36 +2685,36 @@ impl Codegen {
             match ir_op {
                 IrOp::Op(op) => opcodes.push(op.clone()),
                 IrOp::JumpLabel(label) => {
-                    let pos = self
-                        .label_positions
-                        .get(label)
-                        .copied()
-                        .ok_or_else(|| CodegenError {
-                            message: format!("unresolved jump label {:?}", label),
-                            span: Span { start: 0, end: 0 },
-                        })? as u32;
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!("unresolved jump label {:?}", label),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
                     opcodes.push(Opcode::Jump(pos));
                 }
                 IrOp::JumpIfFalseLabel(label) => {
-                    let pos = self
-                        .label_positions
-                        .get(label)
-                        .copied()
-                        .ok_or_else(|| CodegenError {
-                            message: format!("unresolved jump-if-false label {:?}", label),
-                            span: Span { start: 0, end: 0 },
-                        })? as u32;
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!("unresolved jump-if-false label {:?}", label),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
                     opcodes.push(Opcode::JumpIfFalse(pos));
                 }
                 IrOp::JumpIfTrueLabel(label) => {
-                    let pos = self
-                        .label_positions
-                        .get(label)
-                        .copied()
-                        .ok_or_else(|| CodegenError {
-                            message: format!("unresolved jump-if-true label {:?}", label),
-                            span: Span { start: 0, end: 0 },
-                        })? as u32;
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!("unresolved jump-if-true label {:?}", label),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
                     opcodes.push(Opcode::JumpIfTrue(pos));
                 }
             }

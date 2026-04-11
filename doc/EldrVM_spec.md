@@ -13,6 +13,7 @@ Eldr は Surtr の Bytecode 実行エンジンであり、以下を担う。
 - スタック/ローカル/関数テーブルの管理
 - 組込み関数呼び出し
 - ランタイムエラーの検出と停止
+- 開発観測用の execution stats / trace 収集（有効時のみ）
 
 Eldr は次を担わない。
 
@@ -102,6 +103,12 @@ Eldr が扱う値の概念カテゴリ:
 - runtime 内部 tag 値: `Tag(u32)`（user-visible `Int` と分離）
 - 呼び出し可能値: `Callable`
 - 言語エラー値: `Error(RichError)`
+
+`inspect` / `to_string` における `Callable` 表示は、bare callable
+（`lexical_captures == 0 && partial_args == 0`）かつ runtime metadata から
+`module` / `name` / `signature` を復元できる場合、
+`FnCapture(module: M, name: f, signature: sig)` を返す。
+それ以外の callable は実装定義の fallback 表示を使う。
 
 ### 4.1 RichError（V9確定）
 
@@ -252,6 +259,11 @@ call opcode / error template / function span を使って source 対応を補完
 - `VM::step()` / `VMSnapshot`
 - Bytecode verifier
 - 値表現最適化（clone 削減、共有構造）
+
+補足:
+
+- 開発観測機能は実行意味を変更しない read-only 計測とする
+- stats / trace は CLI 等の上位層が opt-in で有効化する
 
 ---
 
