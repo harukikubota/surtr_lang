@@ -1,0 +1,28 @@
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def greeting(self) -> String {
+    "hello " ++ self.name
+  }
+}
+
+defenum Light {
+  Red,
+  Green,
+}
+
+impl Light {
+  def is_green(self: Self) -> Boolean {
+    match self {
+      Light::Green => True,
+      _ => False,
+    }
+  }
+}

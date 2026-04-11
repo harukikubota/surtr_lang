@@ -58,6 +58,7 @@ Xldr は対話セッション中に次を保持する。
 - 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/kernel.srt`, `lib/int.srt`, `lib/string.srt`, `lib/boolean.srt`, `lib/error.srt`, `lib/list.srt`, `lib/result.srt`, `lib/float.srt` を同一段として読み込む
 - loader は追加標準 module も `./lib/*.srt` から収集し、built-in 標準 module と重複するものはデフォルト入力から除外する
 - REPL user chunk は標準 module 読み込み後に `SourceKind::ReplChunk` として追加される
+- REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、型定義・`impl`・`defmod` は parse error とする
 - 初期補完候補には `Ok`, `Err` と builtin 名を含める
 - セッションは `.eldr` と live compile の両方から doc metadata を保持し、`:doc` 表示へ利用する
 - `.eldr` から初期化した場合、標準 library の compile-time context は source から復元する

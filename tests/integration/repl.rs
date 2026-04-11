@@ -267,6 +267,42 @@ fn repl_infers_closure_argument_type_from_add_constraint() {
 }
 
 #[test]
+fn repl_accepts_top_level_function_definition() {
+    let output = run_repl_session("def add(x: Int, y: Int) -> Int { x + y }\nadd(1, 2)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("3"),
+        "expected function call result in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_rejects_top_level_struct_definition() {
+    let output = run_repl_session("defstruct User { name: String }\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl should remain alive after parse error\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("This top-level declaration is not allowed in the current source policy"),
+        "expected declaration policy parse error, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
 fn repl_compile_error_does_not_break_session_state() {
     let output = run_repl_session("x = 1\nbad: Int = \"oops\"\nx\n:quit\n");
     assert!(
@@ -440,24 +476,20 @@ fn repl_save_command_writes_decodable_eldr_snapshot() {
 }
 
 #[test]
-fn repl_deferror_builder_survives_incremental_execution() {
-    let output = run_repl_session(
-        "deferror PageNotFound(html: String) {\n  \"Page Not Found. #{html}\"\n}\nerr_result: Result<Int> = Err(PageNotFound(\"404\"))\n:quit\n",
-    );
+fn repl_rejects_top_level_deferror_definition() {
+    let output = run_repl_session("deferror PageNotFound(html: String) { html }\n:quit\n");
     assert!(
         output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        "repl should remain alive after parse error\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(
-        stdout.contains(
-            "err_result: Result<Int, Error> = Err(PageNotFound(\"Page Not Found. 404\"))"
-        ),
-        "expected incremental err_result binding, got:\n{}",
-        stdout
+        stderr.contains("This top-level declaration is not allowed in the current source policy"),
+        "expected declaration policy parse error, got:\n{}",
+        stderr
     );
 }
 
@@ -698,7 +730,7 @@ fn repl_duplicate_function_name_is_rejected() {
 #[test]
 fn repl_eprint_reports_generation_site_line() {
     let output = run_repl_session(
-        "deferror PageNotFound(html: String) {\n  \"Page Not Found. #{html}\"\n}\nerr_result: Result<Int> = Err(PageNotFound(\"404\"))\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",
+        "err_result: Result<Int> = Err(NoneError)\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",
     );
     assert!(
         output.status.success(),

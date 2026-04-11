@@ -1,0 +1,2 @@
+phase: parse
+contains: This top-level declaration is not allowed in the current source policy

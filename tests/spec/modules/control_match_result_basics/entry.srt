@@ -1,0 +1,12 @@
+ok: Result<Int> = Ok(7)
+er: Result<Int> = Err(Boom)
+
+print(match ok {
+  Ok(v) => to_string(v),
+  Err(_) => "bad",
+})
+
+print(match er {
+  Ok(v) => to_string(v),
+  Err(_) => "handled",
+})

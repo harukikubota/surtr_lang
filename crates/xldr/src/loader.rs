@@ -358,6 +358,54 @@ pub struct ModuleSources {
     pub module_stages: Vec<Vec<StagedModule>>,
 }
 
+fn build_module_sources_from_stage_specs(
+    stage_specs: Vec<Vec<SourceDescriptor>>,
+) -> Result<ModuleSources, LoadError> {
+    let mut flattened_specs = Vec::new();
+    for stage in &stage_specs {
+        for spec in stage {
+            flattened_specs.push(spec.clone());
+        }
+    }
+
+    let collected = collect_sources(&flattened_specs)?;
+
+    let mut idx = 0;
+    let mut module_stages = Vec::with_capacity(stage_specs.len());
+    for stage in &stage_specs {
+        let mut stage_bindings = Vec::with_capacity(stage.len());
+        for _ in stage {
+            let binding = &collected.bindings[idx];
+            idx += 1;
+            stage_bindings.push(StagedModule {
+                source_id: binding.source_id,
+                module_path: binding.module_path.clone().unwrap_or_default(),
+                source_kind: binding.kind,
+            });
+        }
+        module_stages.push(stage_bindings);
+    }
+
+    let builtin = module_stages
+        .first()
+        .and_then(|stage| stage.first())
+        .ok_or_else(|| LoadError::ConflictingSource {
+            file_name: BUILTIN_PRELUDE_FILE.into(),
+        })?;
+    let module_source_ids = module_stages
+        .iter()
+        .flat_map(|stage| stage.iter().map(|entry| entry.source_id))
+        .collect();
+
+    Ok(ModuleSources {
+        sources: collected.sources,
+        builtin_source_id: builtin.source_id,
+        builtin_module_path: Some(builtin.module_path.clone()),
+        module_source_ids,
+        module_stages,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct CompileSources {
     pub sources: SourceRegistry,
@@ -432,50 +480,7 @@ pub fn collect_module_sources_with_module_stages(
         }
         stage_specs.push(specs);
     }
-
-    let mut flattened_specs = Vec::new();
-    for stage in &stage_specs {
-        for spec in stage {
-            flattened_specs.push(spec.clone());
-        }
-    }
-
-    let collected = collect_sources(&flattened_specs)?;
-
-    let mut idx = 0;
-    let mut module_stages = Vec::with_capacity(stage_specs.len());
-    for stage in &stage_specs {
-        let mut stage_bindings = Vec::with_capacity(stage.len());
-        for _ in stage {
-            let binding = &collected.bindings[idx];
-            idx += 1;
-            stage_bindings.push(StagedModule {
-                source_id: binding.source_id,
-                module_path: binding.module_path.clone().unwrap_or_default(),
-                source_kind: binding.kind,
-            });
-        }
-        module_stages.push(stage_bindings);
-    }
-
-    let builtin = module_stages
-        .first()
-        .and_then(|stage| stage.first())
-        .ok_or_else(|| LoadError::ConflictingSource {
-            file_name: BUILTIN_PRELUDE_FILE.into(),
-        })?;
-    let module_source_ids = module_stages
-        .iter()
-        .flat_map(|stage| stage.iter().map(|entry| entry.source_id))
-        .collect();
-
-    Ok(ModuleSources {
-        sources: collected.sources,
-        builtin_source_id: builtin.source_id,
-        builtin_module_path: Some(builtin.module_path.clone()),
-        module_source_ids,
-        module_stages,
-    })
+    build_module_sources_from_stage_specs(stage_specs)
 }
 
 pub fn collect_module_sources_with_std_module_stages(
@@ -513,50 +518,7 @@ pub fn collect_module_sources_with_std_module_stages(
         }
         stage_specs.push(specs);
     }
-
-    let mut flattened_specs = Vec::new();
-    for stage in &stage_specs {
-        for spec in stage {
-            flattened_specs.push(spec.clone());
-        }
-    }
-
-    let collected = collect_sources(&flattened_specs)?;
-
-    let mut idx = 0;
-    let mut module_stages = Vec::with_capacity(stage_specs.len());
-    for stage in &stage_specs {
-        let mut stage_bindings = Vec::with_capacity(stage.len());
-        for _ in stage {
-            let binding = &collected.bindings[idx];
-            idx += 1;
-            stage_bindings.push(StagedModule {
-                source_id: binding.source_id,
-                module_path: binding.module_path.clone().unwrap_or_default(),
-                source_kind: binding.kind,
-            });
-        }
-        module_stages.push(stage_bindings);
-    }
-
-    let builtin = module_stages
-        .first()
-        .and_then(|stage| stage.first())
-        .ok_or_else(|| LoadError::ConflictingSource {
-            file_name: BUILTIN_PRELUDE_FILE.into(),
-        })?;
-    let module_source_ids = module_stages
-        .iter()
-        .flat_map(|stage| stage.iter().map(|entry| entry.source_id))
-        .collect();
-
-    Ok(ModuleSources {
-        sources: collected.sources,
-        builtin_source_id: builtin.source_id,
-        builtin_module_path: Some(builtin.module_path.clone()),
-        module_source_ids,
-        module_stages,
-    })
+    build_module_sources_from_stage_specs(stage_specs)
 }
 
 pub fn compose_script_compile_sources(

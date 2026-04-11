@@ -1,0 +1,3 @@
+user = User("alice")
+next = User::shout(user)
+print(to_string(next.name))

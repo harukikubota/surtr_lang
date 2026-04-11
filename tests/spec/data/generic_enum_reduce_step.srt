@@ -1,7 +1,0 @@
-defenum StepSignal<$A> {
-  Resume($A),
-  Stop($A),
-}
-
-print(to_string(StepSignal::Resume(1)))
-print(to_string(StepSignal::Stop("done")))

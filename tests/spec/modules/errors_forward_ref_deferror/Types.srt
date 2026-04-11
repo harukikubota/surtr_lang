@@ -1,0 +1,3 @@
+deferror NotFound(path: String) {
+  "Not Found: #{path}"
+}

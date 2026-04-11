@@ -1,0 +1,3 @@
+def parse() -> Result<Int, String> {
+  Ok(1)
+}

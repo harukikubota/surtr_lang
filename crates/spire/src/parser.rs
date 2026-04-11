@@ -99,7 +99,10 @@ impl SourceRules {
     pub fn script() -> Self {
         Self {
             allow_top_level_expr: true,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::Import,
+            ]),
             set_exit_code_policy: SetExitCodePolicy::Anywhere,
             normalized_entrypoint: Some("main".to_string()),
         }
@@ -174,7 +177,10 @@ impl SourceRules {
     pub fn repl_chunk() -> Self {
         Self {
             allow_top_level_expr: true,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::Import,
+            ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
         }
@@ -3639,7 +3645,7 @@ def noop() {()}"#,
 
     #[test]
     fn test_impl_parses_and_keeps_methods() {
-        let ast = parse(
+        let ast = parse_with_context(
             r#"defstruct User {
   name: String,
   age: Int,
@@ -3654,6 +3660,7 @@ impl User {
     self
   }
 }"#,
+            ParserContext::module(1, None),
         )
         .expect("impl should parse");
 
@@ -3682,7 +3689,7 @@ impl User {
 
     #[test]
     fn test_impl_rejects_self_not_first_param() {
-        let err = parse(
+        let err = parse_with_context(
             r#"defstruct User {
   name: String,
 }
@@ -3692,6 +3699,7 @@ impl User {
     self
   }
 }"#,
+            ParserContext::module(1, None),
         )
         .expect_err("self after first parameter must fail");
         assert!(err
@@ -3701,7 +3709,7 @@ impl User {
 
     #[test]
     fn test_impl_allows_self_rebinding_syntax() {
-        let ast = parse(
+        let ast = parse_with_context(
             r#"defstruct User {
   name: String,
 }
@@ -3712,6 +3720,7 @@ impl User {
     self
   }
 }"#,
+            ParserContext::module(1, None),
         )
         .expect("self rebinding should be parsed");
         assert!(ast.iter().any(|node| matches!(node, Ast::ImplDef(_, _, _))));
@@ -3742,7 +3751,12 @@ impl User {
 
     #[test]
     fn test_builtin_decl() {
-        let ast = parse("@@builtin def to_string(a: $A) -> String").unwrap();
+        let ast = parse_with_context(
+            "@@builtin def to_string(a: $A) -> String",
+            ParserContext::module(1, Some("Bootstrap".into()))
+                .with_rules(SourceRules::std_module()),
+        )
+        .expect("std module should accept builtin declarations");
         match &ast[0] {
             Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
                 assert_eq!(name, "to_string");
@@ -3791,8 +3805,9 @@ impl User {
 
     #[test]
     fn test_doc_annotates_defmod() {
-        let ast = parse(
+        let ast = parse_with_context(
             "@@doc \"\"\"Kernel docs\"\"\"\ndefmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}",
+            ParserContext::module(1, None),
         )
         .expect("doc + defmod should parse");
 
@@ -3805,9 +3820,11 @@ impl User {
 
     #[test]
     fn test_doc_annotates_deferror() {
-        let ast =
-            parse("@@doc \"\"\"Missing value error\"\"\"\ndeferror NoneError { \"None Value.\" }")
-                .expect("doc + deferror should parse");
+        let ast = parse_with_context(
+            "@@doc \"\"\"Missing value error\"\"\"\ndeferror NoneError { \"None Value.\" }",
+            ParserContext::module(1, None),
+        )
+        .expect("doc + deferror should parse");
 
         assert!(matches!(
             ast.as_slice(),
@@ -4269,7 +4286,8 @@ Construct the error branch.
 
     #[test]
     fn test_pipe_rhs_call_stays_as_app() {
-        let ast = parse("out = user |> User::get_name()").expect("pipe with method call should parse");
+        let ast =
+            parse("out = user |> User::get_name()").expect("pipe with method call should parse");
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Pipe(_, _, right) => {
@@ -4283,13 +4301,10 @@ Construct the error branch.
 
     #[test]
     fn test_nested_generic_type_closes_without_confusing_compose() {
-        let ast = parse("value: Result<List<Int>> = Ok([])").expect("nested generic type should parse");
+        let ast =
+            parse("value: Result<List<Int>> = Ok([])").expect("nested generic type should parse");
         match &ast[0] {
-            Ast::Bind(
-                _,
-                AstPattern::Annotated(_, _, AstTy::Generic(_, name, outer_args)),
-                rhs,
-            ) => {
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, outer_args)), rhs) => {
                 assert_eq!(name, "Result");
                 assert_eq!(outer_args.len(), 1);
                 assert!(matches!(
@@ -4310,7 +4325,8 @@ Construct the error branch.
 
     #[test]
     fn test_qualified_partial_capture_parses() {
-        let ast = parse(r#"rename = &User::with_name("bob")"#).expect("qualified partial capture should parse");
+        let ast = parse(r#"rename = &User::with_name("bob")"#)
+            .expect("qualified partial capture should parse");
         match &ast[0] {
             Ast::Bind(_, _, rhs) => {
                 assert!(matches!(
@@ -4327,7 +4343,8 @@ Construct the error branch.
 
     #[test]
     fn test_compose_chain_is_left_associative_at_same_precedence() {
-        let ast = parse("pipeline = parse() |=> validate() >> render()").expect("compose chain should parse");
+        let ast = parse("pipeline = parse() |=> validate() >> render()")
+            .expect("compose chain should parse");
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Compose(_, left, right) => {
@@ -4623,8 +4640,12 @@ Construct the error branch.
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::App(_, func, args) => {
                     assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "if"));
-                    assert!(matches!(&args[0], RecordLitArg::Positional(Ast::Var(_, name)) if name == "a"));
-                    assert!(matches!(&args[1], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(1)));
+                    assert!(
+                        matches!(&args[0], RecordLitArg::Positional(Ast::Var(_, name)) if name == "a")
+                    );
+                    assert!(
+                        matches!(&args[1], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(1))
+                    );
                     assert!(matches!(
                         &args[2],
                         RecordLitArg::Positional(Ast::App(_, inner_func, inner_args))
@@ -4652,7 +4673,9 @@ Construct the error branch.
         match &ast[0] {
             Ast::Bind(_, _, rhs) => match rhs.as_ref() {
                 Ast::Block(_, stmts) => {
-                    assert!(matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Lit(_, Lit::Int(n))] if n == &int(1)));
+                    assert!(
+                        matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Lit(_, Lit::Int(n))] if n == &int(1))
+                    );
                 }
                 _ => panic!("Expected final True clause body to remain as block"),
             },
@@ -4773,10 +4796,11 @@ Construct the error branch.
 
     #[test]
     fn test_defmod_parses_module_body() {
-        let ast = parse(
+        let ast = parse_with_context(
             r#"defmod Kernel {
   def add(x: Int, y: Int) -> Int { x + y }
 }"#,
+            ParserContext::module(1, None),
         )
         .expect("defmod should parse");
 
@@ -4817,12 +4841,13 @@ import Kernel::{add, sub};"#,
 
     #[test]
     fn test_defenum_parses_variants_with_payload_and_discriminant() {
-        let ast = parse(
+        let ast = parse_with_context(
             r#"defenum Direction {
   Up = 1,
   Down,
   Arrow(Int, Int),
 }"#,
+            ParserContext::module(1, None),
         )
         .expect("defenum should parse");
 
@@ -4844,11 +4869,12 @@ import Kernel::{add, sub};"#,
 
     #[test]
     fn test_defenum_parses_generic_header() {
-        let ast = parse(
+        let ast = parse_with_context(
             r#"defenum ReduceStep<$A> {
   Resume($A),
   Stop($A),
 }"#,
+            ParserContext::module(1, None),
         )
         .expect("generic defenum should parse");
 
@@ -5011,6 +5037,41 @@ y = KeyInput::Arrow(Direction::Down)"#,
             matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Bootstrap"
             && matches!(body.as_slice(), [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name: builtin_name, .. }, _)] if builtin_name == "Int"))
         );
+    }
+
+    #[test]
+    fn test_script_compile_unit_accepts_top_level_def_and_import() {
+        let ast = parse_with_context(
+            "def add(x: Int, y: Int) -> Int { x + y }\nimport Kernel::add;",
+            ParserContext::script(1),
+        )
+        .expect("script compile unit should accept top-level def and import");
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Def(_, name, _, _, _, _), Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(import_name))]
+                if name == "add" && segments.as_slice() == ["Kernel"] && import_name == "add"
+        ));
+    }
+
+    #[test]
+    fn test_script_compile_unit_rejects_top_level_struct_def() {
+        let err = parse_with_context("defstruct User { name: String }", ParserContext::script(1))
+            .expect_err("script compile unit should reject top-level type declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
+    }
+
+    #[test]
+    fn test_repl_compile_unit_rejects_top_level_impl_block() {
+        let err = parse_with_context(
+            "impl User { def new(name: String) -> Self { User { name: name } } }",
+            ParserContext::repl(1),
+        )
+        .expect_err("repl chunk should reject top-level impl declarations");
+        assert!(err
+            .message()
+            .contains("This top-level declaration is not allowed in the current source policy"));
     }
 
     #[test]

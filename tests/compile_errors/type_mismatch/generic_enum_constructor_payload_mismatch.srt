@@ -1,6 +1,0 @@
-defenum StepSignal<$A> {
-  Resume($A),
-  Stop($A),
-}
-
-value: StepSignal<Int> = StepSignal::Resume("oops")

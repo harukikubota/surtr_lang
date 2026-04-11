@@ -1,0 +1,18 @@
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def get_name(self) -> String {
+    self.name
+  }
+
+  def rename_to(name: String, user: Self) -> Self {
+    User { name: name, age: user.age }
+  }
+}

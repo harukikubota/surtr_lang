@@ -1,0 +1,16 @@
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+}
+
+defrecord Pair(first: Int, second: String)
+
+deferror MyError {
+  "something went wrong"
+}

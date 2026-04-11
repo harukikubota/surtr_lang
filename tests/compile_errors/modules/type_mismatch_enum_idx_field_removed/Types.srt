@@ -1,0 +1,4 @@
+defenum Direction {
+  Up,
+  Down,
+}

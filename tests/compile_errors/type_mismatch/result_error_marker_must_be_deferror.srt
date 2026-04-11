@@ -1,5 +1,0 @@
-deferror ParseError { "parse" }
-
-def parse() -> Result<Int, String> {
-  Ok(1)
-}

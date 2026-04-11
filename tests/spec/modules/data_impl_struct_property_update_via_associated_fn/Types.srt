@@ -1,0 +1,18 @@
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name: name, age: age }
+  }
+
+  def with_age(self: Self, age: Int) -> Self {
+    User { name: self.name, age: age }
+  }
+
+  def with_name(self, name: String) -> Self {
+    User { name: name, age: self.age }
+  }
+}
