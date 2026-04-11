@@ -1,0 +1,13 @@
+deferror SomeError(detail: String) {
+  detail
+}
+
+deferror OtherError(detail: String) {
+  detail
+}
+
+def make_error() -> Error {
+  if(True, SomeError("left"), OtherError("right"))
+}
+
+guard = assert(False, make_error())

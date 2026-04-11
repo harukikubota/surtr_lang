@@ -1,0 +1,2 @@
+phase: typecheck
+contains: ensure predicate must return Boolean

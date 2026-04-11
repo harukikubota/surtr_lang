@@ -1,0 +1,7 @@
+Ok(())
+err
+Err(GuardError("boom"))
+value
+Ok(4)
+err
+Err(GuardError("boom"))

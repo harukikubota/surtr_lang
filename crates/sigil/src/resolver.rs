@@ -47,7 +47,7 @@ fn is_runtime_builtin_decl(name: &str) -> bool {
 }
 
 fn is_special_form_builtin_decl(name: &str) -> bool {
-    matches!(name, "if" | "if_then")
+    matches!(name, "if" | "if_then" | "assert" | "ensure")
 }
 
 /// Resolve all identifiers in the AST to unique references.
@@ -1439,13 +1439,19 @@ impl Resolver {
             }
 
             Ast::App(span, func, args) => {
-                // Check for `if` special form
+                // Check for special forms
                 if let Ast::Var(_, ref name) = *func {
                     if name == "if" {
                         return self.resolve_if(span, args, IfKind::If3);
                     }
                     if name == "if_then" {
                         return self.resolve_if(span, args, IfKind::IfThen2);
+                    }
+                    if name == "assert" {
+                        return self.resolve_assert(span, args);
+                    }
+                    if name == "ensure" {
+                        return self.resolve_ensure(span, args);
                     }
                 }
 
@@ -2018,6 +2024,66 @@ impl Resolver {
         ))
     }
 
+    fn resolve_assert(&mut self, span: Span, args: Vec<RecordLitArg>) -> Result<Resolved, ResolveError> {
+        if args.len() != 2 {
+            return Err(ResolveError {
+                message: format!("assert expects 2 arguments, got {}", args.len()),
+                span,
+            });
+        }
+
+        let mut positional = Vec::with_capacity(args.len());
+        for arg in args {
+            match arg {
+                RecordLitArg::Positional(expr) => positional.push(expr),
+                RecordLitArg::Named(name, _) => {
+                    return Err(ResolveError {
+                        message: format!("assert does not accept named argument '{}'", name),
+                        span,
+                    });
+                }
+            }
+        }
+
+        let mut iter = positional.into_iter();
+        let cond = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let err = self.resolve_node(iter.next().expect("checked arg length"))?;
+        Ok(Resolved::Assert(span, Box::new(cond), Box::new(err)))
+    }
+
+    fn resolve_ensure(&mut self, span: Span, args: Vec<RecordLitArg>) -> Result<Resolved, ResolveError> {
+        if args.len() != 3 {
+            return Err(ResolveError {
+                message: format!("ensure expects 3 arguments, got {}", args.len()),
+                span,
+            });
+        }
+
+        let mut positional = Vec::with_capacity(args.len());
+        for arg in args {
+            match arg {
+                RecordLitArg::Positional(expr) => positional.push(expr),
+                RecordLitArg::Named(name, _) => {
+                    return Err(ResolveError {
+                        message: format!("ensure does not accept named argument '{}'", name),
+                        span,
+                    });
+                }
+            }
+        }
+
+        let mut iter = positional.into_iter();
+        let value = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let pred = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let err = self.resolve_node(iter.next().expect("checked arg length"))?;
+        Ok(Resolved::Ensure(
+            span,
+            Box::new(value),
+            Box::new(pred),
+            Box::new(err),
+        ))
+    }
+
     fn resolve_pattern(&mut self, pat: AstPattern) -> Result<ResolvedPattern, ResolveError> {
         let mut seen = HashMap::<String, Span>::new();
         self.resolve_pattern_inner(pat, &mut seen)
@@ -2224,6 +2290,15 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             if let Some(else_branch) = else_opt {
                 collect_captures_inner(else_branch, bound, free);
             }
+        }
+        Resolved::Assert(_, cond, err) => {
+            collect_captures_inner(cond, bound, free);
+            collect_captures_inner(err, bound, free);
+        }
+        Resolved::Ensure(_, value, pred, err) => {
+            collect_captures_inner(value, bound, free);
+            collect_captures_inner(pred, bound, free);
+            collect_captures_inner(err, bound, free);
         }
         Resolved::Match(_, scrutinee, arms) => {
             collect_captures_inner(scrutinee, bound, free);
@@ -2777,6 +2852,37 @@ print(to_string(1))"#,
                 assert!(matches!(rhs.as_ref(), Resolved::If(_, _, _, None)));
             }
             _ => panic!("Expected Bind with If"),
+        }
+    }
+
+    #[test]
+    fn test_assert_conversion() {
+        let resolved = parse_and_resolve(
+            r#"deferror SomeError { "boom" }
+x = assert(True, SomeError)"#,
+        )
+        .unwrap();
+        match &resolved[1] {
+            Resolved::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Resolved::Assert(_, _, _)));
+            }
+            _ => panic!("Expected Bind with Assert"),
+        }
+    }
+
+    #[test]
+    fn test_ensure_conversion() {
+        let resolved = parse_and_resolve(
+            r#"def is_even(n: Int) -> Boolean { True }
+deferror SomeError { "boom" }
+x = ensure(1, &is_even, SomeError)"#,
+        )
+        .unwrap();
+        match &resolved[2] {
+            Resolved::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Resolved::Ensure(_, _, _, _)));
+            }
+            _ => panic!("Expected Bind with Ensure"),
         }
     }
 

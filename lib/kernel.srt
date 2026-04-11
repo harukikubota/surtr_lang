@@ -62,6 +62,36 @@ defmod Kernel {
   @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
 
   @@doc """
+  Guard a precondition and return `Result<Unit>`.
+
+  The declared type is:
+  `assert(Boolean, Error) -> Result<Unit>`
+
+  Like `if`, this is a special form. The error branch is evaluated only when
+  the condition is `False`, so success does not pay to build diagnostics.
+
+  Ordinary expression form stays available:
+  `assert(user.age >= 0, InvalidUserAge(user.age))`
+  """
+  @@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>
+
+  @@doc """
+  Validate a value and return it unchanged on success.
+
+  The declared type is:
+  `ensure($A, ($A -> Boolean), Error) -> Result<$A>`
+
+  The first argument is evaluated once, passed to the predicate, and returned
+  inside `Ok(...)` when the predicate succeeds.
+  The error branch is evaluated only when validation fails.
+
+  The predicate must be a unary callable value such as a capture or closure:
+  `ensure(num, &is_even, SomeError)` or `ensure(num, {|x| x > 0 }, SomeError)`.
+  Call expressions such as `ensure(num, is_even(), SomeError)` are rejected.
+  """
+  @@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>
+
+  @@doc """
   Print a string to stdout.
   Use `to_string(...)` first when the value is not already `String`.
   This builtin belongs under `Kernel` because printing is part of the shared

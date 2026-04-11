@@ -1050,6 +1050,8 @@ impl Checker {
             Resolved::InterpolatedStr(span, parts) => self.check_interpolated_str(span, parts),
 
             Resolved::If(span, cond, then, else_opt) => self.check_if(span, cond, then, else_opt),
+            Resolved::Assert(span, cond, err) => self.check_assert(span, cond, err),
+            Resolved::Ensure(span, value, pred, err) => self.check_ensure(span, value, pred, err),
 
             Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms),
 
@@ -1261,6 +1263,8 @@ impl Checker {
             | Resolved::ListLiteral(span, _)
             | Resolved::InterpolatedStr(span, _)
             | Resolved::If(span, _, _, _)
+            | Resolved::Assert(span, _, _)
+            | Resolved::Ensure(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::FieldAccess(span, _, _)
             | Resolved::StructLit(span, _, _)
@@ -2603,6 +2607,15 @@ impl Checker {
                 Box::new(self.resolve_typed_node(*then)),
                 else_opt.map(|node| Box::new(self.resolve_typed_node(*node))),
             ),
+            TypedInner::Assert(cond, err) => TypedInner::Assert(
+                Box::new(self.resolve_typed_node(*cond)),
+                Box::new(self.resolve_typed_node(*err)),
+            ),
+            TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
+                Box::new(self.resolve_typed_node(*value)),
+                Box::new(self.resolve_typed_node(*pred)),
+                Box::new(self.resolve_typed_node(*err)),
+            ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.resolve_typed_node(*scrutinee)),
                 arms.into_iter()
@@ -3838,6 +3851,82 @@ impl Checker {
         }
     }
 
+    fn check_assert(
+        &mut self,
+        span: &Span,
+        cond: &Resolved,
+        err: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_cond = self.check_node(cond)?;
+        if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "assert condition must be Boolean, got {}",
+                    self.ty_name(&typed_cond.ty)
+                ),
+                span: typed_cond.span.clone(),
+                hint: None,
+            });
+        }
+
+        let raw_err = self.check_node(err)?;
+        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        self.ensure_guard_error_value(&typed_err, "assert")?;
+
+        Ok(TypedNode {
+            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            span: span.clone(),
+            node: TypedInner::Assert(Box::new(typed_cond), Box::new(typed_err)),
+        })
+    }
+
+    fn check_ensure(
+        &mut self,
+        span: &Span,
+        value: &Resolved,
+        pred: &Resolved,
+        err: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_value = self.check_node(value)?;
+        let typed_pred = self.check_compose_callable(pred, "ensure")?;
+        let (pred_in, pred_out) = self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
+        if !self.types_compatible(&pred_in, &typed_value.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "ensure predicate type mismatch: expected {}, got {}",
+                    self.ty_name(&typed_value.ty),
+                    self.ty_name(&pred_in)
+                ),
+                span: typed_pred.span.clone(),
+                hint: None,
+            });
+        }
+        if !self.types_compatible(&Ty::Bool, &pred_out) {
+            return Err(TypeError {
+                message: format!(
+                    "ensure predicate must return Boolean, got {}",
+                    self.ty_name(&pred_out)
+                ),
+                span: typed_pred.span.clone(),
+                hint: None,
+            });
+        }
+
+        let raw_err = self.check_node(err)?;
+        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        self.ensure_guard_error_value(&typed_err, "ensure")?;
+
+        Ok(TypedNode {
+            ty: Ty::Result(Box::new(self.resolve_ty(&typed_value.ty)), Box::new(Ty::Error)),
+            span: span.clone(),
+            node: TypedInner::Ensure(
+                Box::new(typed_value),
+                Box::new(typed_pred),
+                Box::new(typed_err),
+            ),
+        })
+    }
+
     // ── match expression ──
 
     fn check_match(
@@ -4354,6 +4443,8 @@ impl Checker {
         let expected_qname = match id.name.as_str() {
             "if" => "Kernel::if",
             "if_then" => "Kernel::if_then",
+            "assert" => "Kernel::assert",
+            "ensure" => "Kernel::ensure",
             _ => unreachable!(),
         };
 
@@ -4384,6 +4475,23 @@ impl Checker {
                     && Self::is_zero_arg_func_to_unit(&params[1].ty)
                     && ret_ty.as_ref().is_some_and(Self::is_unit_type)
             }
+            "assert" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "Boolean")
+                    && Self::is_named_type(&params[1].ty, "Error")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_result_of_named(ty, "Unit"))
+            }
+            "ensure" => {
+                params.len() == 3
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_unary_func_from_named_to_named(&params[1].ty, "$A", "Boolean")
+                    && Self::is_named_type(&params[2].ty, "Error")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
+            }
             _ => false,
         };
 
@@ -4391,6 +4499,8 @@ impl Checker {
             let expected = match id.name.as_str() {
                 "if" => "@@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A",
                 "if_then" => "@@builtin def if_then(flag: Boolean, then_branch: (-> ())) -> ()",
+                "assert" => "@@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>",
+                "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>",
                 _ => unreachable!(),
             };
             return Err(TypeError {
@@ -4530,8 +4640,8 @@ impl Checker {
         }
 
         let shape_ok = match id.name.as_str() {
-            "Ok" => Self::is_named_type(param_ty, "$T") && Self::is_result_t_of_t(ret_ty),
-            "Err" => Self::is_named_type(param_ty, "Error") && Self::is_result_t_of_t(ret_ty),
+            "Ok" => Self::is_named_type(param_ty, "$T") && Self::is_result_of_named(ret_ty, "$T"),
+            "Err" => Self::is_named_type(param_ty, "Error") && Self::is_result_of_named(ret_ty, "$T"),
             _ => false,
         };
 
@@ -4579,17 +4689,31 @@ impl Checker {
         Self::is_zero_arg_func_to_named(ast_ty, "Unit")
     }
 
-    fn is_special_form_builtin_decl_name(name: &str) -> bool {
-        matches!(name, "if" | "if_then")
+    fn is_unary_func_from_named_to_named(
+        ast_ty: &AstTy,
+        expected_param_name: &str,
+        expected_ret_name: &str,
+    ) -> bool {
+        matches!(
+            ast_ty,
+            AstTy::Func(_, params, ret)
+                if params.len() == 1
+                    && matches!(&params[0], AstTy::Named(_, name) if name == expected_param_name)
+                    && matches!(ret.as_ref(), AstTy::Named(_, name) if name == expected_ret_name)
+        )
     }
 
-    fn is_result_t_of_t(ast_ty: &AstTy) -> bool {
+    fn is_special_form_builtin_decl_name(name: &str) -> bool {
+        matches!(name, "if" | "if_then" | "assert" | "ensure")
+    }
+
+    fn is_result_of_named(ast_ty: &AstTy, expected_name: &str) -> bool {
         matches!(
             ast_ty,
             AstTy::Generic(_, name, args)
                 if name == "Result"
                     && args.len() == 1
-                    && matches!(&args[0], AstTy::Named(_, param_name) if param_name == "$T")
+                    && matches!(&args[0], AstTy::Named(_, param_name) if param_name == expected_name)
         )
     }
 
@@ -5552,5 +5676,34 @@ impl Checker {
             },
             _ => false,
         }
+    }
+
+    fn ensure_guard_error_value(
+        &self,
+        node: &TypedNode,
+        form_name: &str,
+    ) -> Result<(), TypeError> {
+        if !matches!(node.ty, Ty::Error) {
+            return Err(TypeError {
+                message: format!(
+                    "{} error branch must evaluate to Error, got {}",
+                    form_name,
+                    self.ty_name(&node.ty)
+                ),
+                span: node.span.clone(),
+                hint: None,
+            });
+        }
+        if !self.is_concrete_error_value(node) {
+            return Err(TypeError {
+                message: format!(
+                    "{} error branch must be a concrete deferror value.",
+                    form_name
+                ),
+                span: node.span.clone(),
+                hint: Some("Use a deferror constructor or value, not a plain expression.".into()),
+            });
+        }
+        Ok(())
     }
 }

@@ -48,6 +48,8 @@ pub enum TypedInner {
     ListLiteral(Vec<TypedNode>),
     InterpolatedStr(Vec<TypedInterpolatedPart>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
+    Assert(Box<TypedNode>, Box<TypedNode>),
+    Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
     Match(Box<TypedNode>, Vec<(TypedMatchPattern, TypedNode)>),
 
     /// Field access — field name resolved to index by Scar

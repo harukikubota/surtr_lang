@@ -1,0 +1,5 @@
+def is_even() -> (Int -> Boolean) {
+  {|n| Int::is_even(n) }
+}
+
+guard = ensure(4, is_even(), NoneError)

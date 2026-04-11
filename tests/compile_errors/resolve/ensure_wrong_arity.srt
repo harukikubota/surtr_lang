@@ -1,0 +1,1 @@
+guard = ensure(4, &Int::is_even)

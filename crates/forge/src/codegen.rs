@@ -342,6 +342,95 @@ mod tests {
         assert_eq!(err.span, span(23, 31));
         assert!(err.message.contains("Unsupported binop"));
     }
+
+    #[test]
+    fn emit_assert_builds_result_without_new_opcode() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            span: span(1, 24),
+            node: TypedInner::Assert(
+                Box::new(lit_node(Ty::Bool, Lit::Bool(true), span(1, 5))),
+                Box::new(TypedNode {
+                    ty: Ty::Error,
+                    span: span(10, 19),
+                    node: TypedInner::Var(sigil::resolved::ResolvedId {
+                        name: "NoneError".into(),
+                        qualified_name: Some("NoneError".into()),
+                        unique_id: 99,
+                        span: span(10, 19),
+                    }),
+                }),
+            ),
+        };
+        gene.state.slot_map.insert(99, 0);
+        gene.state.next_slot = 1;
+
+        gene.emit_node(&node).expect("assert emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::JumpIfFalse(_))));
+        assert!(opcodes
+            .iter()
+            .filter(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 }))
+            .count()
+            >= 2);
+    }
+
+    #[test]
+    fn emit_ensure_stores_value_and_calls_predicate_once() {
+        let mut gene = Codegen::new();
+        let pred_id = sigil::resolved::ResolvedId {
+            name: "is_even".into(),
+            qualified_name: None,
+            unique_id: 7,
+            span: span(8, 16),
+        };
+        let err_id = sigil::resolved::ResolvedId {
+            name: "NoneError".into(),
+            qualified_name: Some("NoneError".into()),
+            unique_id: 8,
+            span: span(18, 27),
+        };
+        gene.state.slot_map.insert(8, 0);
+        gene.state.next_slot = 1;
+
+        let node = TypedNode {
+            ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            span: span(1, 27),
+            node: TypedInner::Ensure(
+                Box::new(lit_node(Ty::Int, Lit::Int(4.into()), span(1, 2))),
+                Box::new(TypedNode {
+                    ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Bool)),
+                    span: span(8, 16),
+                    node: TypedInner::Capture(
+                        Box::new(TypedNode {
+                            ty: Ty::UserFunc {
+                                fun_idx: 3,
+                                type_params: vec![],
+                                params: vec![Ty::Int],
+                                ret: Box::new(Ty::Bool),
+                            },
+                            span: span(8, 16),
+                            node: TypedInner::Var(pred_id),
+                        }),
+                        vec![],
+                    ),
+                }),
+                Box::new(TypedNode {
+                    ty: Ty::Error,
+                    span: span(18, 27),
+                    node: TypedInner::Var(err_id),
+                }),
+            ),
+        };
+
+        gene.emit_node(&node).expect("ensure emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::StoreLocal(_))));
+        assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
+    }
 }
 
 impl Default for ForgeSession {
@@ -1414,6 +1503,12 @@ impl Codegen {
             TypedInner::If(cond, then, else_opt) => {
                 self.emit_if(cond, then, else_opt)?;
             }
+            TypedInner::Assert(cond, err) => {
+                self.emit_assert(node, cond, err)?;
+            }
+            TypedInner::Ensure(value, pred, err) => {
+                self.emit_ensure(node, value, pred, err)?;
+            }
 
             TypedInner::Match(scrutinee, arms) => {
                 self.emit_match(scrutinee, arms)?;
@@ -2445,6 +2540,84 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
         }
+        Ok(())
+    }
+
+    fn emit_assert(
+        &mut self,
+        _node: &TypedNode,
+        cond: &TypedNode,
+        err: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(cond)?;
+        let fail_label = self.fresh_label();
+        let end_label = self.fresh_label();
+        self.emit_jump_if_false(fail_label);
+        self.emit_ok_unit_result()?;
+        self.emit_jump(end_label);
+
+        self.patch_label(fail_label);
+        self.emit_err_result_value(err)?;
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn emit_ensure(
+        &mut self,
+        node: &TypedNode,
+        value: &TypedNode,
+        pred: &TypedNode,
+        err: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(value)?;
+        let value_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(value_slot));
+
+        self.emit_callable_ref(pred)?;
+        self.emit(Opcode::LoadLocal(value_slot));
+        self.emit(Opcode::CallClosure {
+            arity: 1,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+        });
+
+        let fail_label = self.fresh_label();
+        let end_label = self.fresh_label();
+        self.emit_jump_if_false(fail_label);
+        self.emit_ok_result_local(value_slot)?;
+        self.emit_jump(end_label);
+
+        self.patch_label(fail_label);
+        self.emit_err_result_value(err)?;
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn emit_ok_unit_result(&mut self) -> Result<(), CodegenError> {
+        let ok_tag = self.add_constant(Constant::Tag(0));
+        let unit_idx = self.add_constant(Constant::Unit);
+        self.emit(Opcode::LoadConst(ok_tag));
+        self.emit(Opcode::LoadConst(unit_idx));
+        self.emit(Opcode::StructNew { field_count: 1 });
+        Ok(())
+    }
+
+    fn emit_ok_result_local(&mut self, slot: u32) -> Result<(), CodegenError> {
+        let ok_tag = self.add_constant(Constant::Tag(0));
+        self.emit(Opcode::LoadConst(ok_tag));
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::StructNew { field_count: 1 });
+        Ok(())
+    }
+
+    fn emit_err_result_value(&mut self, err: &TypedNode) -> Result<(), CodegenError> {
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit_node(err)?;
+        self.emit(Opcode::StructNew { field_count: 1 });
         Ok(())
     }
 

@@ -69,6 +69,12 @@ pub enum Resolved {
     /// `if(flag, then, else)` / `if_then(flag, then)` special form
     If(Span, Box<Resolved>, Box<Resolved>, Option<Box<Resolved>>),
 
+    /// `assert(flag, err)` special form
+    Assert(Span, Box<Resolved>, Box<Resolved>),
+
+    /// `ensure(value, pred, err)` special form
+    Ensure(Span, Box<Resolved>, Box<Resolved>, Box<Resolved>),
+
     /// Match expression
     Match(Span, Box<Resolved>, Vec<(ResolvedPattern, Resolved)>),
 

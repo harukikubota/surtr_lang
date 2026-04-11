@@ -394,6 +394,71 @@ deferror NotFound(code: String) {
     }
 
     #[test]
+    fn assert_special_form_typechecks_to_result_unit() {
+        let typed = typecheck_with_builtin_prelude("guard = assert(True, NoneError)");
+        let bind = typed.last().expect("binding should exist");
+        match &bind.node {
+            TypedInner::Bind(_, rhs) => {
+                assert!(matches!(rhs.node, TypedInner::Assert(_, _)));
+                assert!(matches!(
+                    rhs.ty,
+                    crate::types::Ty::Result(ref ok, ref err)
+                        if matches!(ok.as_ref(), crate::types::Ty::Unit)
+                            && matches!(err.as_ref(), crate::types::Ty::Error)
+                ));
+            }
+            other => panic!("expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ensure_special_form_typechecks_to_result_value() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"def is_even(n: Int) -> Boolean { Int::is_even(n) }
+guard = ensure(4, &is_even, NoneError)"#,
+        );
+        let bind = typed.last().expect("binding should exist");
+        match &bind.node {
+            TypedInner::Bind(_, rhs) => {
+                assert!(matches!(rhs.node, TypedInner::Ensure(_, _, _)));
+            }
+            other => panic!("expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ensure_rejects_call_expression_predicate() {
+        let err = typecheck_with_rules(
+            r#"def is_even() -> (Int -> Boolean) { {|n| Int::is_even(n) } }
+guard = ensure(4, is_even(), NoneError)"#,
+            SourceRules::script(),
+        )
+        .expect_err("call expression predicate must fail");
+        assert!(err
+            .message
+            .contains("ensure requires a closure or capture"));
+    }
+
+    #[test]
+    fn assert_rejects_non_concrete_error_expression() {
+        let err = typecheck_with_rules(
+            r#"deferror SomeError(detail: String) { detail }
+deferror OtherError(detail: String) { detail }
+
+def make_error(flag: Boolean) -> Error {
+  if(flag, SomeError("left"), OtherError("right"))
+}
+
+guard = assert(False, make_error(True))"#,
+            SourceRules::script(),
+        )
+        .expect_err("plain Error expression must fail");
+        assert!(err
+            .message
+            .contains("assert error branch must be a concrete deferror value"));
+    }
+
+    #[test]
     fn generic_annotation_list_int_is_accepted() {
         let typed = typecheck_with_builtin_prelude("nums: List<Int> = [1, 2, 3]");
         assert!(matches!(
