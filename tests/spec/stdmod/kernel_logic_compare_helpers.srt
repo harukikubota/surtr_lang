@@ -1,0 +1,16 @@
+def log_true(label: String) -> Boolean {
+  print(label)
+  True
+}
+
+def log_false(label: String) -> Boolean {
+  print(label)
+  False
+}
+
+print(to_string(and(True, log_false("and-rhs"))))
+print(to_string(and(False, log_true("and-skip"))))
+print(to_string(or(False, log_true("or-rhs"))))
+print(to_string(or(True, log_false("or-skip"))))
+print(to_string(eq(1, 1)))
+print(to_string(neq("a", "b")))

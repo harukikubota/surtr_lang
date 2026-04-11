@@ -319,6 +319,12 @@ value.field
 |---|---|
 | `if` | `(Boolean, (-> $A), (-> $A)) -> $A` |
 | `if_then` | `(Boolean, (-> Unit)) -> Unit` |
+| `assert` | `(Boolean, Error) -> Result<Unit>` |
+| `ensure` | `($A, ($A -> Boolean), Error) -> Result<$A>` |
+| `and` | `(Boolean, Boolean) -> Boolean` |
+| `or` | `(Boolean, Boolean) -> Boolean` |
+| `eq` | `($A, $A) -> Boolean` |
+| `neq` | `($A, $A) -> Boolean` |
 | `print` | `(String) -> Unit` |
 | `to_string` | `($A) -> String` |
 | `inspect` | `($A) -> String` |
@@ -331,6 +337,8 @@ value.field
 
 - `if` / `if_then` の branch が関数型で書かれているのは、選ばれた側だけを評価する special form であることを型で表しているため
 - 普段の source では block を明示せず `if(flag, "ok", err_reason)` や `if_then(flag, print("ok"))` のように書ける
+- `and` / `or` は宣言上は普通の 2 引数関数だが、コンパイラが short-circuit として解釈する
+- `eq` / `neq` は call-style helper で、`==` / `!=` と同じ比較制約に従う
 - `safe_div` / `safe_mod` は失敗時に `Err(ZeroDivisionError)` を返す
 - `set_exit_code` は処理系側で使用位置制約を持つ
 

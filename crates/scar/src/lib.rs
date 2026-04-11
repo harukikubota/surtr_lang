@@ -109,17 +109,35 @@ mod tests {
     }
 
     fn std_module_stages() -> Vec<Vec<sigil::StagedModuleAst>> {
+        std_module_stages_with_overrides(&[])
+    }
+
+    fn std_module_stages_with_overrides(
+        overrides: &[(&str, &str)],
+    ) -> Vec<Vec<sigil::StagedModuleAst>> {
         vec![
             parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
             [
-                ("Kernel", KERNEL_PRELUDE_SOURCE),
-                ("Int", INT_MODULE_SOURCE),
-                ("String", STRING_MODULE_SOURCE),
-                ("Boolean", BOOLEAN_MODULE_SOURCE),
-                ("Error", ERROR_MODULE_SOURCE),
-                ("List", LIST_MODULE_SOURCE),
-                ("Result", RESULT_MODULE_SOURCE),
-                ("Float", FLOAT_MODULE_SOURCE),
+                (
+                    "Kernel",
+                    pick_override("Kernel", KERNEL_PRELUDE_SOURCE, overrides),
+                ),
+                ("Int", pick_override("Int", INT_MODULE_SOURCE, overrides)),
+                (
+                    "String",
+                    pick_override("String", STRING_MODULE_SOURCE, overrides),
+                ),
+                (
+                    "Boolean",
+                    pick_override("Boolean", BOOLEAN_MODULE_SOURCE, overrides),
+                ),
+                ("Error", pick_override("Error", ERROR_MODULE_SOURCE, overrides)),
+                ("List", pick_override("List", LIST_MODULE_SOURCE, overrides)),
+                (
+                    "Result",
+                    pick_override("Result", RESULT_MODULE_SOURCE, overrides),
+                ),
+                ("Float", pick_override("Float", FLOAT_MODULE_SOURCE, overrides)),
             ]
             .into_iter()
             .flat_map(|(name, source)| parse_std_module_stage(source, name))
@@ -154,6 +172,32 @@ mod tests {
                 enforce_builtin_type_contracts: false,
             },
         )
+    }
+
+    fn typecheck_std_modules_with_overrides(
+        overrides: &[(&str, &str)],
+    ) -> Result<Vec<TypedNode>, crate::error::TypeError> {
+        let module_stages = std_module_stages_with_overrides(overrides);
+        let declaration_index = sigil::precollect_declaration_index(&module_stages)
+            .expect("std modules should precollect");
+        let resolved =
+            sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+                .expect("std modules should resolve");
+        typecheck_with_context(
+            resolved,
+            TypecheckContext {
+                source_rules: SourceRules::std_module(),
+                enforce_builtin_type_contracts: true,
+            },
+        )
+    }
+
+    fn pick_override<'a>(name: &str, default_source: &'a str, overrides: &[(&str, &'a str)]) -> &'a str {
+        overrides
+            .iter()
+            .find(|(override_name, _)| *override_name == name)
+            .map(|(_, source)| *source)
+            .unwrap_or(default_source)
     }
 
     #[test]
@@ -428,6 +472,32 @@ guard = ensure(4, &is_even, NoneError)"#,
     }
 
     #[test]
+    fn and_special_form_typechecks_to_boolean_if() {
+        let typed = typecheck_with_builtin_prelude("flag = and(True, False)");
+        let bind = typed.last().expect("binding should exist");
+        match &bind.node {
+            TypedInner::Bind(_, rhs) => {
+                assert!(matches!(rhs.node, TypedInner::If(_, _, Some(_))));
+                assert!(matches!(rhs.ty, crate::types::Ty::Bool));
+            }
+            other => panic!("expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn eq_special_form_typechecks_as_binop() {
+        let typed = typecheck_with_builtin_prelude("flag = eq(1, 1)");
+        let bind = typed.last().expect("binding should exist");
+        match &bind.node {
+            TypedInner::Bind(_, rhs) => {
+                assert!(matches!(rhs.node, TypedInner::BinOp(spire::ast::BinOp::Eq, _, _)));
+                assert!(matches!(rhs.ty, crate::types::Ty::Bool));
+            }
+            other => panic!("expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn ensure_rejects_call_expression_predicate() {
         let err = typecheck_with_rules(
             r#"def is_even() -> (Int -> Boolean) { {|n| Int::is_even(n) } }
@@ -457,6 +527,38 @@ guard = assert(False, make_error(True))"#,
         assert!(err
             .message
             .contains("assert error branch must be a concrete deferror value"));
+    }
+
+    #[test]
+    fn kernel_and_contract_rejects_lazy_signature() {
+        let err = typecheck_std_modules_with_overrides(&[(
+            "Kernel",
+            r#"@@builtin type Unit
+
+defmod Kernel {
+  @@builtin def and(left: Boolean, right: (-> Boolean)) -> Boolean
+}"#,
+        )])
+        .expect_err("lazy signature should violate canonical contract");
+        assert!(err.message.contains(
+            "@@builtin def and(left: Boolean, right: Boolean) -> Boolean"
+        ));
+    }
+
+    #[test]
+    fn special_form_builtin_decl_must_live_under_kernel() {
+        let err = typecheck_std_modules_with_overrides(&[(
+            "Boolean",
+            r#"@@builtin type Boolean
+
+defmod Boolean {
+  @@builtin def and(left: Boolean, right: Boolean) -> Boolean
+}"#,
+        )])
+        .expect_err("special-form declaration outside Kernel must fail");
+        assert!(err
+            .message
+            .contains("Special-form declaration `and` is only allowed in std module `Kernel`."));
     }
 
     #[test]

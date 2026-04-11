@@ -226,6 +226,44 @@ print(inspect(Err(MyError)))"#,
     }
 
     #[test]
+    fn kernel_and_or_short_circuit() {
+        assert_output(
+            r#"def log_true(label: String) -> Boolean {
+  print(label)
+  True
+}
+
+def log_false(label: String) -> Boolean {
+  print(label)
+  False
+}
+
+print(to_string(and(True, log_false("and-rhs"))))
+print(to_string(and(False, log_true("and-skip"))))
+print(to_string(or(False, log_true("or-rhs"))))
+print(to_string(or(True, log_false("or-skip"))))"#,
+            &["and-rhs", "False", "False", "or-rhs", "True", "True"],
+        );
+    }
+
+    #[test]
+    fn kernel_eq_neq_helpers_match_operator_behavior() {
+        assert_output(
+            r#"defenum Flag {
+  On,
+  Off,
+}
+
+print(to_string(eq(1, 1)))
+print(to_string(neq("a", "b")))
+print(to_string(eq(True, True)))
+print(to_string(eq(Flag::On, Flag::On)))
+print(to_string(neq(Flag::On, Flag::Off)))"#,
+            &["True", "True", "True", "True", "True"],
+        );
+    }
+
+    #[test]
     fn concat_strings() {
         assert_output(r#"print("hello" ++ " world")"#, &["hello world"]);
     }

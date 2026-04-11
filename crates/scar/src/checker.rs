@@ -4445,6 +4445,10 @@ impl Checker {
             "if_then" => "Kernel::if_then",
             "assert" => "Kernel::assert",
             "ensure" => "Kernel::ensure",
+            "and" => "Kernel::and",
+            "or" => "Kernel::or",
+            "eq" => "Kernel::eq",
+            "neq" => "Kernel::neq",
             _ => unreachable!(),
         };
 
@@ -4492,6 +4496,18 @@ impl Checker {
                         .as_ref()
                         .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
             }
+            "and" | "or" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "Boolean")
+                    && Self::is_named_type(&params[1].ty, "Boolean")
+                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
+            }
+            "eq" | "neq" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "$A")
+                    && ret_ty.as_ref().is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
+            }
             _ => false,
         };
 
@@ -4501,6 +4517,10 @@ impl Checker {
                 "if_then" => "@@builtin def if_then(flag: Boolean, then_branch: (-> ())) -> ()",
                 "assert" => "@@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>",
                 "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>",
+                "and" => "@@builtin def and(left: Boolean, right: Boolean) -> Boolean",
+                "or" => "@@builtin def or(left: Boolean, right: Boolean) -> Boolean",
+                "eq" => "@@builtin def eq(left: $A, right: $A) -> Boolean",
+                "neq" => "@@builtin def neq(left: $A, right: $A) -> Boolean",
                 _ => unreachable!(),
             };
             return Err(TypeError {
@@ -4704,7 +4724,10 @@ impl Checker {
     }
 
     fn is_special_form_builtin_decl_name(name: &str) -> bool {
-        matches!(name, "if" | "if_then" | "assert" | "ensure")
+        matches!(
+            name,
+            "if" | "if_then" | "assert" | "ensure" | "and" | "or" | "eq" | "neq"
+        )
     }
 
     fn is_result_of_named(ast_ty: &AstTy, expected_name: &str) -> bool {
