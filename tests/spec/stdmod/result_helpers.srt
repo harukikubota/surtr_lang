@@ -1,0 +1,4 @@
+print(to_string(Result::is_ok(Ok(1))))
+print(to_string(Result::is_ok(Err(NoneError))))
+print(to_string(Result::is_err(Ok(1))))
+print(to_string(Result::is_err(Err(NoneError))))

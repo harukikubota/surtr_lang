@@ -131,6 +131,18 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
     },
+    BuiltinMeta {
+        name: "codepoints",
+        builtin_id: 18,
+        arity: 2,
+        sig_str: "(String, StringEncoding) -> Result<List<Int>, InvalidStringEncoding>",
+    },
+    BuiltinMeta {
+        name: "from_codepoints",
+        builtin_id: 19,
+        arity: 2,
+        sig_str: "(List<Int>, StringEncoding) -> Result<String, InvalidStringEncoding>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

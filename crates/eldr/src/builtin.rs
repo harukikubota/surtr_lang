@@ -4,7 +4,7 @@ use crate::vm::VM;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
 use sindr::ir::DocKind;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
-use sindr::runtime::{Callable, CallableTarget, Location, RichError};
+use sindr::runtime::{Callable, CallableTarget, ListHandle, Location, RichError};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -64,6 +64,12 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         func: builtin_toggle_bit,
+    },
+    BuiltinImpl {
+        func: builtin_codepoints,
+    },
+    BuiltinImpl {
+        func: builtin_from_codepoints,
     },
 ];
 
@@ -324,6 +330,102 @@ fn builtin_toggle_bit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErr
     Ok(ok_result(Value::Int(value.clone() ^ mask)))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StringEncodingMode {
+    Utf8,
+    Ascii,
+}
+
+fn builtin_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(value) = &args[0] else {
+        return Err(RuntimeError::new("codepoints expects (String, StringEncoding)"));
+    };
+    let encoding = decode_string_encoding(vm, &args[1])?;
+    let items = match encoding {
+        StringEncodingMode::Utf8 => value
+            .as_bytes()
+            .iter()
+            .map(|byte| Value::Int(int(*byte)))
+            .collect::<Vec<_>>(),
+        StringEncodingMode::Ascii => {
+            let mut out = Vec::with_capacity(value.len());
+            for (idx, ch) in value.chars().enumerate() {
+                if ch.is_ascii() {
+                    out.push(Value::Int(int(ch as u32)));
+                } else {
+                    return Ok(err_result(
+                        vm,
+                        "InvalidStringEncoding",
+                        &format!(
+                            "ASCII encoding does not support character at index {}: {}",
+                            idx, ch
+                        ),
+                    ));
+                }
+            }
+            out
+        }
+    };
+    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+}
+
+fn builtin_from_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(values) = &args[0] else {
+        return Err(RuntimeError::new(
+            "from_codepoints expects (List<Int>, StringEncoding)",
+        ));
+    };
+    let encoding = decode_string_encoding(vm, &args[1])?;
+    let mut bytes = Vec::with_capacity(values.len);
+    for (idx, value) in values.iter().enumerate() {
+        let Value::Int(code) = value else {
+            return Err(RuntimeError::new("from_codepoints expects List<Int>"));
+        };
+        let Some(raw) = code.to_u32() else {
+            return Ok(err_result(
+                vm,
+                "InvalidStringEncoding",
+                &format!("negative code at index {}: {}", idx, code),
+            ));
+        };
+        let max = match encoding {
+            StringEncodingMode::Utf8 => 255,
+            StringEncodingMode::Ascii => 127,
+        };
+        if raw > max {
+            let label = match encoding {
+                StringEncodingMode::Utf8 => "UTF-8 byte",
+                StringEncodingMode::Ascii => "ASCII code",
+            };
+            return Ok(err_result(
+                vm,
+                "InvalidStringEncoding",
+                &format!("{} out of range at index {}: {}", label, idx, raw),
+            ));
+        }
+        bytes.push(raw as u8);
+    }
+
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(ok_result(Value::Str(text))),
+        Err(err) => {
+            let utf8_err = err.utf8_error();
+            let detail = match utf8_err.error_len() {
+                Some(len) => format!(
+                    "invalid UTF-8 byte sequence at index {} (len {})",
+                    utf8_err.valid_up_to(),
+                    len
+                ),
+                None => format!(
+                    "incomplete UTF-8 byte sequence at index {}",
+                    utf8_err.valid_up_to()
+                ),
+            };
+            Ok(err_result(vm, "InvalidStringEncoding", &detail))
+        }
+    }
+}
+
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     if let Value::Callable(callable) = value {
         if let Some(display) = inspect_callable(vm, callable) {
@@ -386,6 +488,28 @@ fn bit_mask(bit_index: usize) -> SurtrInt {
     int(1) << bit_index
 }
 
+fn decode_string_encoding(vm: &VM, value: &Value) -> Result<StringEncodingMode, RuntimeError> {
+    let Value::Tagged { tag, .. } = value else {
+        return Err(RuntimeError::new(
+            "expected StringEncoding enum value for encoding argument",
+        ));
+    };
+    let Some(entry) = vm.type_registry().lookup(*tag) else {
+        return Err(RuntimeError::new(format!(
+            "unknown StringEncoding tag: {}",
+            tag
+        )));
+    };
+    match entry.name.rsplit("::").next().unwrap_or(entry.name.as_str()) {
+        "Utf8" => Ok(StringEncodingMode::Utf8),
+        "Ascii" => Ok(StringEncodingMode::Ascii),
+        _other => Err(RuntimeError::new(format!(
+            "expected StringEncoding variant, got {}",
+            entry.name
+        ))),
+    }
+}
+
 fn bit_index_to_usize(vm: &VM, index: &SurtrInt) -> Result<Result<usize, Value>, RuntimeError> {
     if index < &int(0) {
         return Ok(Err(err_result(
@@ -435,11 +559,23 @@ mod tests {
     use sindr::builtin::{builtin_meta_by_name, BUILTIN_METAS};
     use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
     use sindr::primitives::int;
-    use sindr::runtime::{Callable, CallableTarget, TypeRegistry, Value};
+    use sindr::runtime::{Callable, CallableTarget, ListHandle, TypeEntry, TypeKind, TypeRegistry, Value};
 
     fn test_vm() -> VM {
         VM::new(Bytecode {
             type_registry: TypeRegistry::new(),
+            ..Bytecode::default()
+        })
+        .with_error_capture()
+    }
+
+    fn test_vm_with_types(entries: Vec<TypeEntry>) -> VM {
+        let mut registry = TypeRegistry::new();
+        for entry in entries {
+            registry.register(entry);
+        }
+        VM::new(Bytecode {
+            type_registry: registry,
             ..Bytecode::default()
         })
         .with_error_capture()
@@ -490,13 +626,14 @@ mod tests {
             include_str!("../../../lib/kernel.srt"),
             include_str!("../../../lib/int.srt"),
             include_str!("../../../lib/list.srt"),
+            include_str!("../../../lib/string.srt"),
         ];
 
         // Collect all lines across the std-module files that currently declare
         // builtin value surfaces. Bootstrap intentionally stays almost empty,
         // Kernel owns the cross-cutting builtins, Int currently carries both
-        // arithmetic-result builtins and bit-shift helpers, and List declares
-        // the O(1) length helper.
+        // arithmetic-result builtins and bit-shift helpers, List declares
+        // the O(1) length helper, and String carries encoding helpers.
         let all_lines: Vec<&str> = sources
             .iter()
             .flat_map(|s| s.lines())
@@ -709,6 +846,76 @@ mod tests {
                 assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(4)));
             }
             other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn codepoints_utf8_returns_bytes() {
+        let mut vm = test_vm_with_types(vec![TypeEntry {
+            tag: 200,
+            name: "StringEncoding::Utf8".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec![],
+        }]);
+        let value = call_builtin(
+            &mut vm,
+            18,
+            vec![
+                Value::Str("Aあ".into()),
+                Value::Tagged {
+                    tag: 200,
+                    fields: vec![Value::Int(int(0))],
+                },
+            ],
+        )
+        .expect("codepoints should return Result");
+        match value {
+            Value::Tagged { tag: 0, fields } => match fields.first() {
+                Some(Value::List(list)) => {
+                    let ints = list
+                        .iter()
+                        .map(|value| match value {
+                            Value::Int(n) => n.to_string(),
+                            other => panic!("expected int byte, got {:?}", other),
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(ints, vec!["65", "227", "129", "130"]);
+                }
+                other => panic!("expected Ok(List<Int>), got {:?}", other),
+            },
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn from_codepoints_ascii_rejects_out_of_range_values() {
+        let mut vm = test_vm_with_types(vec![TypeEntry {
+            tag: 201,
+            name: "StringEncoding::Ascii".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec![],
+        }]);
+        let value = call_builtin(
+            &mut vm,
+            19,
+            vec![
+                Value::List(ListHandle::from_items(vec![Value::Int(int(128))])),
+                Value::Tagged {
+                    tag: 201,
+                    fields: vec![Value::Int(int(1))],
+                },
+            ],
+        )
+        .expect("from_codepoints should return Result");
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "InvalidStringEncoding");
+                    assert_eq!(rich.message, "ASCII code out of range at index 0: 128");
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
         }
     }
 

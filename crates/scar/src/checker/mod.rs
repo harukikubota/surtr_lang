@@ -161,6 +161,22 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
         },
+        "codepoints" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Str, Ty::Enum("StringEncoding".into(), Vec::new())],
+            ret: Box::new(Ty::Result(
+                Box::new(Ty::List(Box::new(Ty::Int))),
+                Box::new(Ty::Error),
+            )),
+        },
+        "from_codepoints" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![
+                Ty::List(Box::new(Ty::Int)),
+                Ty::Enum("StringEncoding".into(), Vec::new()),
+            ],
+            ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
+        },
         "len" => {
             let a = env.fresh_tyvar();
             Ty::BuiltinFunc {
