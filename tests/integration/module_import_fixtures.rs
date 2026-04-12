@@ -193,14 +193,43 @@ fn run_multi_source_case(case_dir: &Path) -> Result<Vec<String>, String> {
     Ok(vm.output.unwrap_or_default())
 }
 
-#[test]
-fn module_spec_fixtures_match_expected_stdout_via_loader() {
+fn module_spec_cases() -> Vec<PathBuf> {
     let spec_root = repo_root().join("tests/spec/modules");
     let cases = case_dirs(&spec_root);
     assert!(
         !cases.is_empty(),
         "no module spec fixture directories found under {}",
         spec_root.display()
+    );
+    cases
+}
+
+fn module_compile_error_cases() -> Vec<PathBuf> {
+    let error_root = repo_root().join("tests/compile_errors/modules");
+    let cases = case_dirs(&error_root)
+        .into_iter()
+        .filter(|case_dir| case_dir.join("entry.error").exists())
+        .collect::<Vec<_>>();
+    assert!(
+        !cases.is_empty(),
+        "no module compile-error fixture directories found under {}",
+        error_root.display()
+    );
+    cases
+}
+
+fn run_module_spec_bucket(bucket: usize, bucket_count: usize) {
+    let cases = module_spec_cases()
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| index % bucket_count == bucket)
+        .map(|(_, path)| path)
+        .collect::<Vec<_>>();
+    assert!(
+        !cases.is_empty(),
+        "no module spec cases assigned to bucket {} of {}",
+        bucket,
+        bucket_count
     );
 
     for case_dir in cases {
@@ -225,17 +254,18 @@ fn module_spec_fixtures_match_expected_stdout_via_loader() {
     }
 }
 
-#[test]
-fn module_compile_error_fixtures_match_expectations_via_loader() {
-    let error_root = repo_root().join("tests/compile_errors/modules");
-    let cases = case_dirs(&error_root)
+fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
+    let cases = module_compile_error_cases()
         .into_iter()
-        .filter(|case_dir| case_dir.join("entry.error").exists())
+        .enumerate()
+        .filter(|(index, _)| index % bucket_count == bucket)
+        .map(|(_, path)| path)
         .collect::<Vec<_>>();
     assert!(
         !cases.is_empty(),
-        "no module compile-error fixture directories found under {}",
-        error_root.display()
+        "no module compile-error cases assigned to bucket {} of {}",
+        bucket,
+        bucket_count
     );
 
     for case_dir in cases {
@@ -269,6 +299,46 @@ fn module_compile_error_fixtures_match_expectations_via_loader() {
             }
         }
     }
+}
+
+#[test]
+fn module_spec_fixtures_bucket_0() {
+    run_module_spec_bucket(0, 4);
+}
+
+#[test]
+fn module_spec_fixtures_bucket_1() {
+    run_module_spec_bucket(1, 4);
+}
+
+#[test]
+fn module_spec_fixtures_bucket_2() {
+    run_module_spec_bucket(2, 4);
+}
+
+#[test]
+fn module_spec_fixtures_bucket_3() {
+    run_module_spec_bucket(3, 4);
+}
+
+#[test]
+fn module_compile_error_fixtures_bucket_0() {
+    run_module_compile_error_bucket(0, 4);
+}
+
+#[test]
+fn module_compile_error_fixtures_bucket_1() {
+    run_module_compile_error_bucket(1, 4);
+}
+
+#[test]
+fn module_compile_error_fixtures_bucket_2() {
+    run_module_compile_error_bucket(2, 4);
+}
+
+#[test]
+fn module_compile_error_fixtures_bucket_3() {
+    run_module_compile_error_bucket(3, 4);
 }
 
 #[test]
