@@ -191,6 +191,18 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 1,
         sig_str: "(String) -> Unit",
     },
+    BuiltinMeta {
+        name: "group_count",
+        builtin_id: 28,
+        arity: 1,
+        sig_str: "(List<$A>) -> List<($A, Int)>",
+    },
+    BuiltinMeta {
+        name: "zip",
+        builtin_id: 29,
+        arity: 2,
+        sig_str: "(List<$A>, List<$B>) -> List<($A, $B)>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

@@ -1,7 +1,7 @@
 # List module
 
 `List` は逐次処理を中心にした標準モジュールです。
-今回の拡張では、既存の fold/map 系に加えて append 系と位置アクセス系を追加します。
+今回の拡張では、既存の fold/map 系に加えて集約 helper と prefix/suffix helper を追加します。
 
 ## Exported functions
 
@@ -22,12 +22,25 @@
 - `List::find_map(values, f) -> Result<$B, NoneError>`
 - `List::any(values, pred) -> Boolean`
 - `List::all(values, pred) -> Boolean`
+- `List::count(values, pred) -> Int`
+- `List::sum(values: List<Int>) -> Int`
+- `List::take(values, count) -> List<$A>`
+- `List::drop(values, count) -> List<$A>`
+- `List::partition(values, pred) -> (List<$A>, List<$A>)`
+- `List::group_count(values: List<$A>) -> List<($A, Int)>` (`$A: Eq`)
+- `List::zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>`
 
 ## Error contract
 
 - `List::first([])` / `List::last([])` は `Err(NoneError)` を返します。
 - `List::at(values, index)` は負 index と範囲外 access で `Err(IndexOutOfBounds(...))` を返します。
 - `List::at` のメッセージは `index #{index} out of bounds for len #{List::len(values)}` に固定します。
+- `List::sum([])` は `0` を返します。
+- `List::take(values, count)` は `count <= 0` で `[]` を返します。
+- `List::drop(values, count)` は `count <= 0` で入力をそのまま返します。
+- `List::partition(values, pred)` は `(matched, rest)` を返し、両側とも元の順序を保ちます。
+- `List::group_count(values)` は最初の出現順を保ったまま `(value, count)` を並べます。
+- `List::zip(left, right)` は短い方の list 長で打ち切ります。
 
 ## Examples
 
@@ -37,12 +50,15 @@ print(to_string(List::concat([[1], [2, 3], []])))
 print(to_string(List::flat_map([1, 2], {|n| [n, n + 10]})))
 print(to_string(List::last([1, 2, 3])))
 print(to_string(List::at([10, 20, 30], 1)))
+print(to_string(List::partition([1, 2, 3, 4], {|n| Int::is_even(n) })))
+print(to_string(List::group_count(["a", "b", "a", "c", "b", "a"])))
+print(to_string(List::zip([1, 2, 3], ["x", "y"])))
 ```
 
 ## Notes
 
 - 推奨される構築スタイルは引き続き `List::cons + List::reverse` です。
-- `append` / `concat` / `at` を追加しても、`List` の中心用途は先頭からの逐次処理のままです。
+- `append` / `concat` / `at` / `partition` / `zip` を追加しても、`List` の中心用途は先頭からの逐次処理のままです。
 
 ## Next candidates
 
@@ -50,24 +66,17 @@ print(to_string(List::at([10, 20, 30], 1)))
 
 優先度が高い候補:
 
-- `List::sum(values: List<Int>) -> Int`
 - `List::max(values: List<Int>) -> Result<Int, NoneError>`
 - `List::min(values: List<Int>) -> Result<Int, NoneError>`
 - `List::max_by(values, cmp) -> Result<$A, NoneError>`
 - `List::min_by(values, cmp) -> Result<$A, NoneError>`
-- `List::take(values, count) -> List<$A>`
-- `List::drop(values, count) -> List<$A>`
-- `List::partition(values, pred) -> Pair<List<$A>, List<$A>>` 相当
-- `List::count(values, pred) -> Int`
-- `List::zip(left: List<$A>, right: List<$B>) -> List<Pair<$A, $B>>` 相当
+- `List::enumerate(values) -> List<(Int, $A)>`
+- `List::take_while(values, pred) -> List<$A>`
+- `List::drop_while(values, pred) -> List<$A>`
+- `List::span(values, pred) -> (List<$A>, List<$A>)`
 
 牌計算や parser 以外でも便利な候補:
 
-- `List::enumerate(values) -> List<Pair<Int, $A>>` 相当
-- `List::take_while(values, pred) -> List<$A>`
-- `List::drop_while(values, pred) -> List<$A>`
-- `List::span(values, pred) -> Pair<List<$A>, List<$A>>` 相当
-- `List::group_count(values) -> List<Pair<$A, Int>>` 相当
 - `List::dedup(values) -> List<$A>`
 - `List::sort(values) -> List<$A>`
 - `List::sort_by(values, cmp) -> List<$A>`
@@ -75,5 +84,5 @@ print(to_string(List::at([10, 20, 30], 1)))
 設計メモ:
 
 - `List::reduce` / `reduce_while` / `flat_map` がすでにあるため、多くの helper は pure Surtr で記述できます。
-- 一方で `sort`, `group_count`, `zip`, `partition` は userland で毎回書くと冗長になりやすく、標準 surface に置く価値があります。
-- `Pair` を標準 surface に置くかどうかは、tuple をローカル用途・REPL 用途に寄せた上で、公開 API では named contract を優先する方針と合わせて判断します。
+- `group_count` は `Eq` 制約付きの pure Surtr helper として実装でき、重複集計の最小 surface を提供します。
+- `zip` / `group_count` は VM builtin で tuple list を直接返し、userland では頻出 pair 集約だけを手短に使えるようにします。

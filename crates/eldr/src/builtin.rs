@@ -95,6 +95,12 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_test_fail_current,
     },
+    BuiltinImpl {
+        func: builtin_list_group_count,
+    },
+    BuiltinImpl {
+        func: builtin_list_zip,
+    },
 ];
 
 const _: () = {
@@ -537,6 +543,48 @@ fn builtin_test_fail_current(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     };
     vm.record_current_scope_fail(detail.clone());
     Ok(Value::Unit)
+}
+
+fn builtin_list_group_count(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(values) = &args[0] else {
+        return Err(RuntimeError::new("group_count expects List"));
+    };
+
+    let mut groups: Vec<(Value, usize)> = Vec::new();
+    for value in values.iter() {
+        if let Some((_, count)) = groups
+            .iter_mut()
+            .find(|(existing, _)| *existing == value)
+        {
+            *count += 1;
+        } else {
+            groups.push((value, 1));
+        }
+    }
+
+    let items = groups
+        .into_iter()
+        .map(|(value, count)| Value::Tuple(vec![value, Value::Int(int(count as u64))]))
+        .collect::<Vec<_>>();
+
+    Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_list_zip(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(left) = &args[0] else {
+        return Err(RuntimeError::new("zip expects List as first argument"));
+    };
+    let Value::List(right) = &args[1] else {
+        return Err(RuntimeError::new("zip expects List as second argument"));
+    };
+
+    let items = left
+        .iter()
+        .zip(right.iter())
+        .map(|(left_value, right_value)| Value::Tuple(vec![left_value, right_value]))
+        .collect::<Vec<_>>();
+
+    Ok(Value::List(ListHandle::from_items(items)))
 }
 
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
@@ -1178,6 +1226,81 @@ mod tests {
                 other => panic!("expected Err(Value::Error), got {:?}", other),
             },
             other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn group_count_returns_first_seen_counts_as_tuple_list() {
+        let mut vm = test_vm();
+        let value = call_builtin(
+            &mut vm,
+            28,
+            vec![Value::List(ListHandle::from_items(vec![
+                Value::Str("a".into()),
+                Value::Str("b".into()),
+                Value::Str("a".into()),
+                Value::Str("c".into()),
+                Value::Str("b".into()),
+                Value::Str("a".into()),
+            ]))],
+        )
+        .expect("group_count should return list");
+
+        match value {
+            Value::List(list) => {
+                let rendered = list
+                    .iter()
+                    .map(|value| match value {
+                        Value::Tuple(items) => items
+                            .iter()
+                            .map(|item| item.to_display_string(vm.type_registry()))
+                            .collect::<Vec<_>>()
+                            .join(":"),
+                        other => panic!("expected tuple entry, got {:?}", other),
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(rendered, vec!["a:3", "b:2", "c:1"]);
+            }
+            other => panic!("expected List result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn zip_returns_shortest_prefix_as_tuple_list() {
+        let mut vm = test_vm();
+        let value = call_builtin(
+            &mut vm,
+            29,
+            vec![
+                Value::List(ListHandle::from_items(vec![
+                    Value::Int(int(1)),
+                    Value::Int(int(2)),
+                    Value::Int(int(3)),
+                ])),
+                Value::List(ListHandle::from_items(vec![
+                    Value::Str("x".into()),
+                    Value::Str("y".into()),
+                ])),
+            ],
+        )
+        .expect("zip should return list");
+
+        match value {
+            Value::List(list) => {
+                let rendered = list
+                    .iter()
+                    .map(|value| match value {
+                        Value::Tuple(items) => items
+                            .iter()
+                            .map(|item| item.to_display_string(vm.type_registry()))
+                            .collect::<Vec<_>>()
+                            .join(":"),
+                        other => panic!("expected tuple entry, got {:?}", other),
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(rendered, vec!["1:x", "2:y"]);
+            }
+            other => panic!("expected List result, got {:?}", other),
         }
     }
 
