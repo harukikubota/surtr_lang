@@ -455,6 +455,20 @@ deferror NotFound {
     }
 
     #[test]
+    fn zero_arg_deferror_value_can_flow_into_error_parameter() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"wrapped = Result::cause(Err(NoneError), NotFound)
+deferror NotFound {
+  "not found"
+}"#,
+        );
+        let typed = typecheck(resolved).expect("zero-arg deferror should satisfy Error parameters");
+        assert!(typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::Bind(_, _))));
+    }
+
+    #[test]
     fn forward_reference_type_tags_are_deterministic_across_runs() {
         let source = r#"user: User = User("alice", 30)
 pair = Pair(first: 1, second: "two")

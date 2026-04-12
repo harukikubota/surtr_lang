@@ -204,6 +204,14 @@ impl Checker {
             (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
                 self.check_closure(span, params, captures, body, Some(expected_ty))
             }
+            (_, Some(expected_ty)) => {
+                let typed = self.check_node(node)?;
+                if matches!(expected_ty, Ty::Error) && self.is_concrete_error_value(&typed) {
+                    let call_span = typed.span.clone();
+                    return Ok(self.maybe_call_zero_arg_function(typed, call_span));
+                }
+                Ok(typed)
+            }
             _ => self.check_node(node),
         }
     }

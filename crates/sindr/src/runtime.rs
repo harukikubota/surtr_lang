@@ -155,12 +155,12 @@ impl Value {
                                 .unwrap_or_default()
                         ),
                         1 => format!(
-                            "Err({})",
+                            "{}",
                             fields
                                 .first()
                                 .map(|v| match v {
-                                    Value::Error(rich) => rich.to_display_string(),
-                                    _ => v.to_display_string(registry),
+                                    Value::Error(rich) => rich.to_result_display_string(),
+                                    _ => format!("Err({})", v.to_display_string(registry)),
                                 })
                                 .unwrap_or_default()
                         ),
@@ -260,11 +260,60 @@ pub struct RichError {
     pub kind: String,
     pub message: String,
     pub location: Location,
+    pub cause: Option<Box<RichError>>,
 }
 
 impl RichError {
     pub fn to_display_string(&self) -> String {
-        format!("{}({:?})", self.kind, self.message)
+        self.to_display_lines().join("\n")
+    }
+
+    pub fn to_result_display_string(&self) -> String {
+        let lines = self.to_display_lines();
+        let Some((head, tail)) = lines.split_first() else {
+            return "Err()".to_string();
+        };
+
+        let mut rendered = format!("Err({})", head);
+        for line in tail {
+            rendered.push('\n');
+            rendered.push_str(line);
+        }
+        rendered
+    }
+
+    pub fn to_eprint_lines(&self) -> Vec<String> {
+        let mut lines = vec![format!("Error: {}: {}", self.kind, self.message)];
+        let mut next = self.cause.as_deref();
+        while let Some(cause) = next {
+            lines.push(format!("Caused by: {}: {}", cause.kind, cause.message));
+            next = cause.cause.as_deref();
+        }
+        lines
+    }
+
+    pub fn append_cause_tail(&mut self, cause: RichError) {
+        match self.cause.as_mut() {
+            Some(existing) => existing.append_cause_tail(cause),
+            None => self.cause = Some(Box::new(cause)),
+        }
+    }
+
+    fn to_display_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        self.push_display_lines(&mut lines, "", "");
+        lines
+    }
+
+    fn push_display_lines(&self, lines: &mut Vec<String>, first_prefix: &str, child_prefix: &str) {
+        lines.push(format!("{}{}({:?})", first_prefix, self.kind, self.message));
+        if let Some(cause) = self.cause.as_deref() {
+            cause.push_display_lines(
+                lines,
+                &format!("{}|_ ", child_prefix),
+                &format!("{}   ", child_prefix),
+            );
+        }
     }
 }
 
@@ -348,8 +397,59 @@ mod tests {
                 span_start: 0,
                 span_end: 1,
             },
+            cause: None,
         }));
         assert_eq!(value.to_display_string(&registry), "TestError(\"boom\")");
+    }
+
+    #[test]
+    fn display_for_rich_error_renders_tree_when_causes_exist() {
+        let registry = TypeRegistry::new();
+        let mut value = RichError {
+            kind: "Outer".into(),
+            message: "outer".into(),
+            location: Location {
+                file: "<repl>".into(),
+                func: "f".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+        };
+        value.append_cause_tail(RichError {
+            kind: "Inner".into(),
+            message: "inner".into(),
+            location: Location {
+                file: "<repl>".into(),
+                func: "f".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+        });
+        value.append_cause_tail(RichError {
+            kind: "Leaf".into(),
+            message: "leaf".into(),
+            location: Location {
+                file: "<repl>".into(),
+                func: "f".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+        });
+
+        let rendered = Value::Error(Box::new(value));
+        assert_eq!(
+            rendered.to_display_string(&registry),
+            "Outer(\"outer\")\n|_ Inner(\"inner\")\n   |_ Leaf(\"leaf\")"
+        );
     }
 
     #[test]
@@ -406,11 +506,90 @@ mod tests {
                     span_start: 0,
                     span_end: 1,
                 },
+                cause: None,
             }))],
         };
         assert_eq!(
             value.to_display_string(&registry),
             "Err(NoneError(\"null\"))"
+        );
+    }
+
+    #[test]
+    fn display_result_err_with_rich_error_preserves_tree_shape() {
+        let registry = TypeRegistry::new();
+        let mut rich = RichError {
+            kind: "Higher".into(),
+            message: "higher".into(),
+            location: Location {
+                file: "<repl>".into(),
+                func: "f".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+        };
+        rich.append_cause_tail(RichError {
+            kind: "Lower".into(),
+            message: "lower".into(),
+            location: Location {
+                file: "<repl>".into(),
+                func: "f".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+        });
+
+        let value = Value::Tagged {
+            tag: 1,
+            fields: vec![Value::Error(Box::new(rich))],
+        };
+        assert_eq!(
+            value.to_display_string(&registry),
+            "Err(Higher(\"higher\"))\n|_ Lower(\"lower\")"
+        );
+    }
+
+    #[test]
+    fn rich_error_eprint_lines_follow_linear_chain_order() {
+        let mut rich = RichError {
+            kind: "Higher".into(),
+            message: "higher".into(),
+            location: Location {
+                file: "<repl>".into(),
+                func: "f".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+        };
+        rich.append_cause_tail(RichError {
+            kind: "Lower".into(),
+            message: "lower".into(),
+            location: Location {
+                file: "<repl>".into(),
+                func: "f".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+        });
+
+        assert_eq!(
+            rich.to_eprint_lines(),
+            vec![
+                "Error: Higher: higher".to_string(),
+                "Caused by: Lower: lower".to_string(),
+            ]
         );
     }
 }

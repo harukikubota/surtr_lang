@@ -1438,6 +1438,69 @@ match ok_val {
     }
 
     #[test]
+    fn result_helpers_render_multiline_cause_trees() {
+        assert_output(
+            r#"deferror Lower {
+  "lower"
+}
+
+deferror Higher {
+  "higher"
+}
+
+deferror Tail {
+  "tail"
+}
+
+print(inspect(Result::cause(Err(Lower), Higher)))
+print(inspect(Result::chain(Err(Lower), Result::cause(Err(Tail), Higher))))"#,
+            &[
+                "Err(Higher(\"higher\"))\n|_ Lower(\"lower\")",
+                "Err(Higher(\"higher\"))\n|_ Tail(\"tail\")\n   |_ Lower(\"lower\")",
+            ],
+        );
+    }
+
+    #[test]
+    fn eprint_renders_linear_cause_chain_lines() {
+        let (stdout, stderr) = run_surtr_with_stderr(
+            r#"deferror Lower {
+  "lower"
+}
+
+deferror Higher {
+  "higher"
+}
+
+deferror Tail {
+  "tail"
+}
+
+match Result::cause(Err(Lower), Higher) {
+  Ok(_) => (),
+  Err(e) => eprint(e),
+}
+
+match Result::chain(Err(Lower), Result::cause(Err(Tail), Higher)) {
+  Ok(_) => (),
+  Err(e) => eprint(e),
+}"#,
+        )
+        .expect("Pipeline failed");
+        assert_eq!(stdout, Vec::<String>::new());
+        assert_eq!(
+            stderr,
+            vec![
+                "Error: Higher: higher",
+                "Caused by: Lower: lower",
+                "Error: Higher: higher",
+                "Caused by: Tail: tail",
+                "Caused by: Lower: lower",
+            ]
+        );
+    }
+
+    #[test]
     fn pipe_accepts_capture_and_injected_call() {
         assert_output(
             r#"def add(x: Int, y: Int) -> Int {

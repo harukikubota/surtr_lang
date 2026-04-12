@@ -1390,6 +1390,7 @@ impl VM {
                     kind: template.kind.clone(),
                     message,
                     location,
+                    cause: None,
                 })));
             }
             Opcode::MakeErrorLiteral {
@@ -1444,6 +1445,7 @@ impl VM {
                         span_start: 0,
                         span_end: 0,
                     },
+                    cause: None,
                 })));
             }
 

@@ -71,6 +71,15 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_from_codepoints,
     },
+    BuiltinImpl {
+        func: builtin_result_map_err,
+    },
+    BuiltinImpl {
+        func: builtin_result_cause,
+    },
+    BuiltinImpl {
+        func: builtin_result_chain,
+    },
 ];
 
 const _: () = {
@@ -169,8 +178,7 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
     match &args[0] {
         Value::Error(rich) => {
             if let Some(buf) = vm.error_output.as_mut() {
-                let msg = format!("Error: {}: {}", rich.kind, rich.message);
-                buf.push(msg);
+                buf.extend(rich.to_eprint_lines());
             } else if let (Some(source), Some(file)) = (vm.source(), vm.source_file()) {
                 use ariadne::{Color, Label, Report, ReportKind, Source};
 
@@ -191,8 +199,13 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
                         err
                     )));
                 }
+                for line in rich.to_eprint_lines().into_iter().skip(1) {
+                    eprintln!("{}", line);
+                }
             } else {
-                eprintln!("Error: {}: {}", rich.kind, rich.message);
+                for line in rich.to_eprint_lines() {
+                    eprintln!("{}", line);
+                }
             }
         }
         other => {
@@ -338,7 +351,9 @@ enum StringEncodingMode {
 
 fn builtin_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Value::Str(value) = &args[0] else {
-        return Err(RuntimeError::new("codepoints expects (String, StringEncoding)"));
+        return Err(RuntimeError::new(
+            "codepoints expects (String, StringEncoding)",
+        ));
     };
     let encoding = decode_string_encoding(vm, &args[1])?;
     let items = match encoding {
@@ -426,6 +441,44 @@ fn builtin_from_codepoints(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runti
     }
 }
 
+fn builtin_result_map_err(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let result = decode_result_arg(&args[0], "map_err", "result")?;
+    let replacement = decode_error_arg(&args[1], "map_err", "err")?;
+
+    Ok(match result {
+        Ok(value) => ok_result(value),
+        Err(_) => err_result_from_rich_error(replacement),
+    })
+}
+
+fn builtin_result_cause(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let result = decode_result_arg(&args[0], "cause", "result")?;
+    let mut domain_err = decode_error_arg(&args[1], "cause", "err")?;
+
+    Ok(match result {
+        Ok(value) => ok_result(value),
+        Err(old) => {
+            domain_err.append_cause_tail(old);
+            err_result_from_rich_error(domain_err)
+        }
+    })
+}
+
+fn builtin_result_chain(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let head = decode_result_arg(&args[0], "chain", "head")?;
+    let tail = decode_unit_result_arg(&args[1], "chain", "tail")?;
+
+    Ok(match (head, tail) {
+        (Ok(value), Ok(())) => ok_result(value),
+        (Err(left), Ok(())) => err_result_from_rich_error(left),
+        (Ok(_), Err(right)) => err_result_from_rich_error(right),
+        (Err(left), Err(mut right)) => {
+            right.append_cause_tail(left);
+            err_result_from_rich_error(right)
+        }
+    })
+}
+
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     if let Value::Callable(callable) = value {
         if let Some(display) = inspect_callable(vm, callable) {
@@ -500,7 +553,12 @@ fn decode_string_encoding(vm: &VM, value: &Value) -> Result<StringEncodingMode, 
             tag
         )));
     };
-    match entry.name.rsplit("::").next().unwrap_or(entry.name.as_str()) {
+    match entry
+        .name
+        .rsplit("::")
+        .next()
+        .unwrap_or(entry.name.as_str())
+    {
         "Utf8" => Ok(StringEncodingMode::Utf8),
         "Ascii" => Ok(StringEncodingMode::Ascii),
         _other => Err(RuntimeError::new(format!(
@@ -532,6 +590,77 @@ fn ok_result(value: Value) -> Value {
     }
 }
 
+fn err_value(rich: RichError) -> Value {
+    Value::Error(Box::new(rich))
+}
+
+fn err_result_from_rich_error(rich: RichError) -> Value {
+    Value::Tagged {
+        tag: 1,
+        fields: vec![err_value(rich)],
+    }
+}
+
+fn decode_error_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<RichError, RuntimeError> {
+    match value {
+        Value::Error(rich) => Ok((**rich).clone()),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Error as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_result_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<Result<Value, RichError>, RuntimeError> {
+    match value {
+        Value::Tagged { tag: 0, fields } => match fields.as_slice() {
+            [inner] => Ok(Ok(inner.clone())),
+            other => Err(RuntimeError::new(format!(
+                "{builtin_name} expects Ok with exactly one field for {arg_name}, got {}",
+                other.len()
+            ))),
+        },
+        Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+            [Value::Error(rich)] => Ok(Err((**rich).clone())),
+            [other] => Err(RuntimeError::new(format!(
+                "{builtin_name} expects Err(Error) for {arg_name}, got Err({:?})",
+                other
+            ))),
+            other => Err(RuntimeError::new(format!(
+                "{builtin_name} expects Err with exactly one field for {arg_name}, got {}",
+                other.len()
+            ))),
+        },
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Result as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_unit_result_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<Result<(), RichError>, RuntimeError> {
+    match decode_result_arg(value, builtin_name, arg_name)? {
+        Ok(Value::Unit) => Ok(Ok(())),
+        Ok(other) => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Result<()> as {arg_name}, got Ok({:?})",
+            other
+        ))),
+        Err(err) => Ok(Err(err)),
+    }
+}
+
 fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
     let location = vm.runtime_error_location().unwrap_or_else(|| Location {
         file: vm.source_file().unwrap_or("<runtime>").to_string(),
@@ -542,24 +671,25 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
         span_end: 0,
     });
 
-    Value::Tagged {
-        tag: 1,
-        fields: vec![Value::Error(Box::new(RichError {
-            kind: kind.into(),
-            message: message.into(),
-            location,
-        }))],
-    }
+    err_result_from_rich_error(RichError {
+        kind: kind.into(),
+        message: message.into(),
+        location,
+        cause: None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{call_builtin, inspect_value};
+    use super::{call_builtin, err_result_from_rich_error, inspect_value};
     use crate::vm::VM;
     use sindr::builtin::{builtin_meta_by_name, BUILTIN_METAS};
     use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
     use sindr::primitives::int;
-    use sindr::runtime::{Callable, CallableTarget, ListHandle, TypeEntry, TypeKind, TypeRegistry, Value};
+    use sindr::runtime::{
+        Callable, CallableTarget, ListHandle, Location, RichError, TypeEntry, TypeKind,
+        TypeRegistry, Value,
+    };
 
     fn test_vm() -> VM {
         VM::new(Bytecode {
@@ -581,6 +711,26 @@ mod tests {
         .with_error_capture()
     }
 
+    fn sample_error(kind: &str, message: &str) -> RichError {
+        RichError {
+            kind: kind.into(),
+            message: message.into(),
+            location: Location {
+                file: "<test>".into(),
+                func: "<test>".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            cause: None,
+        }
+    }
+
+    fn sample_error_value(kind: &str, message: &str) -> Value {
+        Value::Error(Box::new(sample_error(kind, message)))
+    }
+
     /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
     fn parse_decl_name(def_rest: &str) -> &str {
         def_rest
@@ -594,9 +744,27 @@ mod tests {
         let (name, after_name) = def_rest
             .split_once('(')
             .expect("def declaration must include params");
-        let (params, after_params) = after_name
-            .split_once(')')
-            .expect("def declaration must close params");
+        let mut angle_depth = 0usize;
+        let mut paren_depth = 1usize;
+        let mut close_idx = None;
+        for (idx, ch) in after_name.char_indices() {
+            match ch {
+                '<' => angle_depth += 1,
+                '>' => angle_depth = angle_depth.saturating_sub(1),
+                '(' => paren_depth += 1,
+                ')' => {
+                    paren_depth -= 1;
+                    if paren_depth == 0 && angle_depth == 0 {
+                        close_idx = Some(idx);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let close_idx = close_idx.expect("def declaration must close params");
+        let params = &after_name[..close_idx];
+        let after_params = &after_name[close_idx + 1..];
         let ret_ty = after_params
             .trim()
             .strip_prefix("->")
@@ -605,8 +773,27 @@ mod tests {
         let param_tys: Vec<String> = if params.trim().is_empty() {
             Vec::new()
         } else {
-            params
-                .split(',')
+            let mut params_out = Vec::new();
+            let mut start = 0usize;
+            let mut angle_depth = 0usize;
+            let mut paren_depth = 0usize;
+            for (idx, ch) in params.char_indices() {
+                match ch {
+                    '<' => angle_depth += 1,
+                    '>' => angle_depth = angle_depth.saturating_sub(1),
+                    '(' => paren_depth += 1,
+                    ')' => paren_depth = paren_depth.saturating_sub(1),
+                    ',' if angle_depth == 0 && paren_depth == 0 => {
+                        params_out.push(params[start..idx].trim().to_string());
+                        start = idx + 1;
+                    }
+                    _ => {}
+                }
+            }
+            params_out.push(params[start..].trim().to_string());
+
+            params_out
+                .into_iter()
                 .map(|param| {
                     let (_, ty) = param
                         .split_once(':')
@@ -626,6 +813,7 @@ mod tests {
             include_str!("../../../lib/kernel.srt"),
             include_str!("../../../lib/int.srt"),
             include_str!("../../../lib/list.srt"),
+            include_str!("../../../lib/result.srt"),
             include_str!("../../../lib/string.srt"),
         ];
 
@@ -633,7 +821,8 @@ mod tests {
         // builtin value surfaces. Bootstrap intentionally stays almost empty,
         // Kernel owns the cross-cutting builtins, Int currently carries both
         // arithmetic-result builtins and bit-shift helpers, List declares
-        // the O(1) length helper, and String carries encoding helpers.
+        // the O(1) length helper, Result carries result/error helpers, and
+        // String carries encoding helpers.
         let all_lines: Vec<&str> = sources
             .iter()
             .flat_map(|s| s.lines())
@@ -920,6 +1109,97 @@ mod tests {
     }
 
     #[test]
+    fn map_err_replaces_error_without_preserving_previous_cause() {
+        let mut vm = test_vm();
+        let builtin_id = builtin_meta_by_name("map_err")
+            .expect("map_err metadata")
+            .builtin_id;
+        let value = call_builtin(
+            &mut vm,
+            builtin_id,
+            vec![
+                err_result_from_rich_error(sample_error("Lower", "lower")),
+                sample_error_value("Higher", "higher"),
+            ],
+        )
+        .expect("map_err should succeed");
+
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "Higher");
+                    assert_eq!(rich.message, "higher");
+                    assert!(rich.cause.is_none(), "map_err must replace cause chain");
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cause_wraps_existing_error_under_new_domain_error() {
+        let mut vm = test_vm();
+        let builtin_id = builtin_meta_by_name("cause")
+            .expect("cause metadata")
+            .builtin_id;
+        let value = call_builtin(
+            &mut vm,
+            builtin_id,
+            vec![
+                err_result_from_rich_error(sample_error("Lower", "lower")),
+                sample_error_value("Higher", "higher"),
+            ],
+        )
+        .expect("cause should succeed");
+
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "Higher");
+                    let cause = rich.cause.as_deref().expect("expected cause");
+                    assert_eq!(cause.kind, "Lower");
+                    assert_eq!(cause.message, "lower");
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn chain_appends_left_error_to_tail_of_right_error_chain() {
+        let mut vm = test_vm();
+        let builtin_id = builtin_meta_by_name("chain")
+            .expect("chain metadata")
+            .builtin_id;
+        let mut right = sample_error("Higher", "higher");
+        right.append_cause_tail(sample_error("Middle", "middle"));
+        let value = call_builtin(
+            &mut vm,
+            builtin_id,
+            vec![
+                err_result_from_rich_error(sample_error("Lower", "lower")),
+                err_result_from_rich_error(right),
+            ],
+        )
+        .expect("chain should succeed");
+
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(
+                        rich.to_display_string(),
+                        "Higher(\"higher\")\n|_ Middle(\"middle\")\n   |_ Lower(\"lower\")"
+                    );
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn set_exit_code_rejects_out_of_range_values() {
         let mut vm = test_vm();
         let huge = Value::Int(int(999999999999999999_i128));
@@ -941,12 +1221,30 @@ mod tests {
                 span_start: 0,
                 span_end: 4,
             },
+            cause: Some(Box::new(sindr::runtime::RichError {
+                kind: "Root".into(),
+                message: "root cause".into(),
+                location: sindr::runtime::Location {
+                    file: "main.srt".into(),
+                    func: "Boom".into(),
+                    line: 1,
+                    column: 1,
+                    span_start: 0,
+                    span_end: 4,
+                },
+                cause: None,
+            })),
         }));
         let result = call_builtin(&mut vm, 5, vec![value]).expect("eprint should succeed");
         assert_eq!(result, Value::Unit);
         assert_eq!(
             vm.error_output.as_deref(),
-            Some(&["Error: Boom: broken".to_string()][..])
+            Some(
+                &[
+                    "Error: Boom: broken".to_string(),
+                    "Caused by: Root: root cause".to_string(),
+                ][..]
+            )
         );
     }
 

@@ -143,6 +143,24 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "(List<Int>, StringEncoding) -> Result<String, InvalidStringEncoding>",
     },
+    BuiltinMeta {
+        name: "map_err",
+        builtin_id: 20,
+        arity: 2,
+        sig_str: "(Result<$T>, Error) -> Result<$T>",
+    },
+    BuiltinMeta {
+        name: "cause",
+        builtin_id: 21,
+        arity: 2,
+        sig_str: "(Result<$T>, Error) -> Result<$T>",
+    },
+    BuiltinMeta {
+        name: "chain",
+        builtin_id: 22,
+        arity: 2,
+        sig_str: "(Result<$T>, Result<()>) -> Result<$T>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

@@ -120,8 +120,22 @@ Eldr が扱う値の概念カテゴリ:
 - `kind`
 - `message`
 - `location`
+- `cause: Option<RichError>`
 
-`cause` チェーンは V9 範囲外とする。
+`cause` は runtime 管理の線形 chain とする。
+
+- parallel error は持たない
+- `Result::cause(result, err)` は `err` chain の末尾に既存 error chain を付ける
+- `Result::chain(head, tail)` は右 error chain の末尾に左 error chain を付ける
+- `Result::map_err(result, err)` は既存 error chain を捨てて `err` chain で置き換える
+
+表示契約は次で固定する。
+
+- `inspect(Error)` / `to_string(Error)` は head-first tree 表示を返す
+- 先頭行は `Kind("message")`
+- cause がある場合、次行以降を `|_ ...` でネスト表示する
+- `inspect(Result::Err(...))` も同じ tree を使うが、先頭行だけ `Err(...)` で包む
+- `eprint(Error)` は先頭行を `Error: Kind: message`、以降を `Caused by: Kind: message` で出力する
 
 ---
 
