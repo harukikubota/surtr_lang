@@ -25,6 +25,7 @@ Coverage runner:
   - Runner: `tests/integration/module_import_fixtures.rs` (`module_compile_error_fixtures_bucket_0..3`)
 - `tests/integration/*.rs`
   - CLI contract and pipeline integration tests
+  - `language_features.rs` is organized into topic modules under `tests/integration/language_features/`
 - `tests/unit/{spire,sigil,scar,forge,eldr}/`
   - Unit-test viewpoints and crate-local notes
 
