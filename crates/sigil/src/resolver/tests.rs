@@ -289,9 +289,7 @@ impl Numeric for Int {
         Some("__Script::fixture".to_string()),
     )
     .expect_err("duplicate trait impl pair must fail");
-    assert!(err
-        .message
-        .contains("Multiple trait impl blocks for `"));
+    assert!(err.message.contains("Multiple trait impl blocks for `"));
     assert!(err.message.contains("Numeric"));
     assert!(err.message.contains("Int"));
 }
@@ -448,11 +446,8 @@ fn test_trait_qualified_call_resolves_via_trait_namespace() {
         ),
     )]];
 
-    let resolved = resolve_user_with_modules(
-        r#"result = Numeric::safe_div(4, 2)"#,
-        &module_stages,
-    )
-    .expect("trait-qualified path should resolve");
+    let resolved = resolve_user_with_modules(r#"result = Numeric::safe_div(4, 2)"#, &module_stages)
+        .expect("trait-qualified path should resolve");
 
     match &resolved.last().expect("expected bind node") {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {

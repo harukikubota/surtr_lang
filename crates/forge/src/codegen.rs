@@ -1474,9 +1474,17 @@ impl Codegen {
                 TraitDispatch::Static(TraitDispatchTarget::BinOp(op)) => {
                     if args.len() != 2 {
                         return Err(CodegenError {
-                            message: format!("trait binop dispatch expects 2 args, got {}", args.len()),
+                            message: format!(
+                                "trait binop dispatch expects 2 args, got {}",
+                                args.len()
+                            ),
                             span: node.span.clone(),
                         });
+                    }
+                    if matches!(op, BinOp::Eq | BinOp::Neq) && matches!(receiver_ty, Ty::Enum(_, _))
+                    {
+                        self.emit_enum_eq(op, &args[0], &args[1])?;
+                        return Ok(());
                     }
                     self.emit_node(&args[0])?;
                     self.emit_node(&args[1])?;

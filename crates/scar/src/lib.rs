@@ -19,6 +19,10 @@ mod tests {
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
     const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/numeric.srt");
+    const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/show.srt");
+    const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/eq.srt");
+    const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/ord.srt");
+    const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/concat.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
@@ -126,6 +130,13 @@ mod tests {
                 (
                     "Numeric",
                     pick_override("Numeric", NUMERIC_MODULE_SOURCE, overrides),
+                ),
+                ("Show", pick_override("Show", SHOW_MODULE_SOURCE, overrides)),
+                ("Eq", pick_override("Eq", EQ_MODULE_SOURCE, overrides)),
+                ("Ord", pick_override("Ord", ORD_MODULE_SOURCE, overrides)),
+                (
+                    "Concat",
+                    pick_override("Concat", CONCAT_MODULE_SOURCE, overrides),
                 ),
                 ("Int", pick_override("Int", INT_MODULE_SOURCE, overrides)),
                 (
@@ -385,7 +396,13 @@ first = pair.0
 second = pair.1"#,
         );
         let typed = typecheck(resolved).expect("tuple access should typecheck");
-        assert!(typed.iter().filter(|node| matches!(node.node, TypedInner::Bind(_, _))).count() >= 3);
+        assert!(
+            typed
+                .iter()
+                .filter(|node| matches!(node.node, TypedInner::Bind(_, _)))
+                .count()
+                >= 3
+        );
     }
 
     #[test]
@@ -671,9 +688,7 @@ deferror NotFound(code: String) {
                 {
                     Some(format!("builtin {}", id.name))
                 }
-                sigil::resolved::Resolved::Def(_, id, _, _, _, _, _)
-                    if id.unique_id == use_uid =>
-                {
+                sigil::resolved::Resolved::Def(_, id, _, _, _, _, _) if id.unique_id == use_uid => {
                     Some(format!("def {}", id.name))
                 }
                 sigil::resolved::Resolved::ExtractorDef(_, id, _, _, _, _, _)
@@ -743,14 +758,14 @@ guard = ensure(4, &is_even, NoneError)"#,
     }
 
     #[test]
-    fn eq_special_form_typechecks_as_binop() {
+    fn eq_helper_typechecks_as_trait_call() {
         let typed = typecheck_with_builtin_prelude("flag = eq(1, 1)");
         let bind = typed.last().expect("binding should exist");
         match &bind.node {
             TypedInner::Bind(_, rhs) => {
                 assert!(matches!(
                     rhs.node,
-                    TypedInner::BinOp(spire::ast::BinOp::Eq, _, _)
+                    TypedInner::TraitCall { ref method_name, .. } if method_name == "eq"
                 ));
                 assert!(matches!(rhs.ty, crate::types::Ty::Bool));
             }
@@ -759,14 +774,14 @@ guard = ensure(4, &is_even, NoneError)"#,
     }
 
     #[test]
-    fn lt_special_form_typechecks_as_binop() {
+    fn lt_helper_typechecks_as_trait_call() {
         let typed = typecheck_with_builtin_prelude("flag = lt(1, 2)");
         let bind = typed.last().expect("binding should exist");
         match &bind.node {
             TypedInner::Bind(_, rhs) => {
                 assert!(matches!(
                     rhs.node,
-                    TypedInner::BinOp(spire::ast::BinOp::Lt, _, _)
+                    TypedInner::TraitCall { ref method_name, .. } if method_name == "lt"
                 ));
                 assert!(matches!(rhs.ty, crate::types::Ty::Bool));
             }
@@ -775,14 +790,30 @@ guard = ensure(4, &is_even, NoneError)"#,
     }
 
     #[test]
-    fn concat_special_form_typechecks_as_binop() {
+    fn concat_helper_typechecks_as_trait_call() {
         let typed = typecheck_with_builtin_prelude(r#"value = concat("a", "b")"#);
         let bind = typed.last().expect("binding should exist");
         match &bind.node {
             TypedInner::Bind(_, rhs) => {
                 assert!(matches!(
                     rhs.node,
-                    TypedInner::BinOp(spire::ast::BinOp::Concat, _, _)
+                    TypedInner::TraitCall { ref method_name, .. } if method_name == "concat"
+                ));
+                assert!(matches!(rhs.ty, crate::types::Ty::Str));
+            }
+            other => panic!("expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn to_string_helper_typechecks_as_trait_call() {
+        let typed = typecheck_with_builtin_prelude("text = to_string(42)");
+        let bind = typed.last().expect("binding should exist");
+        match &bind.node {
+            TypedInner::Bind(_, rhs) => {
+                assert!(matches!(
+                    rhs.node,
+                    TypedInner::TraitCall { ref method_name, .. } if method_name == "to_string"
                 ));
                 assert!(matches!(rhs.ty, crate::types::Ty::Str));
             }
@@ -843,6 +874,10 @@ defmod Kernel {
             r#"@@builtin type Boolean
 
 defmod Boolean {
+  def not(value: Boolean) -> Boolean {
+    if(value, False, True)
+  }
+
   @@builtin def and(left: Boolean, right: Boolean) -> Boolean
 }"#,
         )])
@@ -853,19 +888,21 @@ defmod Boolean {
     }
 
     #[test]
-    fn kernel_concat_contract_rejects_generic_signature() {
-        let err = typecheck_std_modules_with_overrides(&[(
+    fn kernel_does_not_allow_removed_concat_builtin() {
+        let module_stages = std_module_stages_with_overrides(&[(
             "Kernel",
             r#"@@builtin type Unit
 
 defmod Kernel {
   @@builtin def concat(left: $A, right: $A) -> String
 }"#,
-        )])
-        .expect_err("generic concat signature should violate canonical contract");
-        assert!(err
-            .message
-            .contains("@@builtin def concat(left: String, right: String) -> String"));
+        )]);
+        let declaration_index = sigil::precollect_declaration_index(&module_stages)
+            .expect("std modules should precollect");
+        let err =
+            sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+                .expect_err("concat is no longer a declared runtime builtin");
+        assert!(err.message.contains("Unknown builtin declaration: concat"));
     }
 
     #[test]
@@ -885,10 +922,11 @@ left: Int = id(1)
 right: String = id("ok")"#,
         );
         assert!(typed.len() >= 3);
-        assert!(typed.iter().rev().take(3).all(|node| matches!(
-            node.node,
-            TypedInner::Bind(_, _) | TypedInner::Def(..)
-        )));
+        assert!(typed
+            .iter()
+            .rev()
+            .take(3)
+            .all(|node| matches!(node.node, TypedInner::Bind(_, _) | TypedInner::Def(..))));
     }
 
     #[test]
@@ -1187,36 +1225,42 @@ largest = Numeric::max(1.5, 2.5)"#,
             })
             .collect::<Vec<_>>();
 
-        assert!(trait_calls.iter().any(|(trait_name, method_name, dispatch)| {
-            *trait_name == "Numeric"
-                && *method_name == "add"
-                && matches!(
-                    dispatch,
-                    crate::typed::TraitDispatch::Static(
-                        crate::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
+        assert!(trait_calls
+            .iter()
+            .any(|(trait_name, method_name, dispatch)| {
+                *trait_name == "Numeric"
+                    && *method_name == "add"
+                    && matches!(
+                        dispatch,
+                        crate::typed::TraitDispatch::Static(
+                            crate::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
+                        )
                     )
-                )
-        }));
-        assert!(trait_calls.iter().any(|(trait_name, method_name, dispatch)| {
-            *trait_name == "Numeric"
-                && *method_name == "safe_div"
-                && matches!(
-                    dispatch,
-                    crate::typed::TraitDispatch::Static(
-                        crate::typed::TraitDispatchTarget::Builtin(name)
-                    ) if name == "safe_div"
-                )
-        }));
-        assert!(trait_calls.iter().any(|(trait_name, method_name, dispatch)| {
-            *trait_name == "Numeric"
-                && *method_name == "max"
-                && matches!(
-                    dispatch,
-                    crate::typed::TraitDispatch::Static(
-                        crate::typed::TraitDispatchTarget::UserFunction { name, .. }
-                    ) if name == "Float::max"
-                )
-        }));
+            }));
+        assert!(trait_calls
+            .iter()
+            .any(|(trait_name, method_name, dispatch)| {
+                *trait_name == "Numeric"
+                    && *method_name == "safe_div"
+                    && matches!(
+                        dispatch,
+                        crate::typed::TraitDispatch::Static(
+                            crate::typed::TraitDispatchTarget::Builtin(name)
+                        ) if name == "safe_div"
+                    )
+            }));
+        assert!(trait_calls
+            .iter()
+            .any(|(trait_name, method_name, dispatch)| {
+                *trait_name == "Numeric"
+                    && *method_name == "max"
+                    && matches!(
+                        dispatch,
+                        crate::typed::TraitDispatch::Static(
+                            crate::typed::TraitDispatchTarget::UserFunction { name, .. }
+                        ) if name == "Float::max"
+                    )
+            }));
     }
 
     #[test]
@@ -1313,6 +1357,7 @@ b = double(1.5)"#,
         let std_resolved =
             sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
                 .expect("std modules should resolve");
+        let std_resolved_len = std_resolved.len();
 
         let mut session = ScarSession::new();
         session
@@ -1330,6 +1375,7 @@ b = double(1.5)"#,
         let user_resolved =
             sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
                 .expect("user chunk should resolve");
+        let user_resolved = user_resolved.into_iter().skip(std_resolved_len).collect();
         let typed = session
             .typecheck(user_resolved)
             .expect("trait registry should survive across chunks");

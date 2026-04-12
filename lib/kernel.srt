@@ -13,10 +13,10 @@ execution glue than a user-facing namespace with its own helper family.
 Kernel module.
 
 Provides the small auto-imported standard surface for cross-cutting builtins
-and lightweight helpers.
+and special forms.
 Use this layer for operations that are not owned by a single primitive module
-such as conditional special forms, printing, textual conversion, debug
-inspection, and process-oriented entrypoint control.
+such as conditional special forms, printing, debug inspection, sequence
+decomposition, and process-oriented entrypoint control.
 """
 defmod Kernel {
   @@doc """
@@ -88,83 +88,6 @@ defmod Kernel {
   @@builtin def or(left: Boolean, right: Boolean) -> Boolean
 
   @@doc """
-  Call-style equality comparison.
-
-  The declared type is:
-  `eq($A, $A) -> Boolean`
-
-  `eq(left, right)` lowers to `left == right` and therefore shares the same
-  phase-1 comparison support and restrictions as the operator form.
-  """
-  @@builtin def eq(left: $A, right: $A) -> Boolean
-
-  @@doc """
-  Call-style inequality comparison.
-
-  The declared type is:
-  `neq($A, $A) -> Boolean`
-
-  `neq(left, right)` lowers to `left != right` and therefore shares the same
-  phase-1 comparison support and restrictions as the operator form.
-  """
-  @@builtin def neq(left: $A, right: $A) -> Boolean
-
-  @@doc """
-  Call-style less-than comparison.
-
-  The declared type is:
-  `lt($A, $A) -> Boolean`
-
-  `lt(left, right)` lowers to `left < right` and therefore shares the same
-  comparison support and restrictions as the operator form.
-  """
-  @@builtin def lt(left: $A, right: $A) -> Boolean
-
-  @@doc """
-  Call-style less-than-or-equal comparison.
-
-  The declared type is:
-  `lte($A, $A) -> Boolean`
-
-  `lte(left, right)` lowers to `left <= right` and therefore shares the same
-  comparison support and restrictions as the operator form.
-  """
-  @@builtin def lte(left: $A, right: $A) -> Boolean
-
-  @@doc """
-  Call-style greater-than comparison.
-
-  The declared type is:
-  `gt($A, $A) -> Boolean`
-
-  `gt(left, right)` lowers to `left > right` and therefore shares the same
-  comparison support and restrictions as the operator form.
-  """
-  @@builtin def gt(left: $A, right: $A) -> Boolean
-
-  @@doc """
-  Call-style greater-than-or-equal comparison.
-
-  The declared type is:
-  `gte($A, $A) -> Boolean`
-
-  `gte(left, right)` lowers to `left >= right` and therefore shares the same
-  comparison support and restrictions as the operator form.
-  """
-  @@builtin def gte(left: $A, right: $A) -> Boolean
-
-  @@doc """
-  Call-style string concatenation.
-
-  The declared type is:
-  `concat(String, String) -> String`
-
-  `concat(left, right)` lowers to `left ++ right` and therefore shares the same
-  string-only restriction as the operator form.
-  """
-  @@builtin def concat(left: String, right: String) -> String
-
-  @@doc """
   Guard a precondition and return `Result<Unit>`.
 
   The declared type is:
@@ -218,14 +141,6 @@ defmod Kernel {
   execution surface rather than a helper owned by one primitive type.
   """
   @@builtin def print(a: String) -> Unit
-
-  @@doc """
-  Convert any displayable value into `String`.
-  This is the standard bridge from typed values to user-visible text.
-  Because the input is polymorphic, it belongs under `Kernel` instead of a
-  single primitive module.
-  """
-  @@builtin def to_string(a: $A) -> String
 
   @@doc """
   Produce a debug-oriented textual representation of a value.

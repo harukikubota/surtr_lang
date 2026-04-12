@@ -479,6 +479,22 @@ impl Checker {
             .map(|info| self.trait_key(&info.id))
     }
 
+    pub(super) fn trait_matches_short_name(&self, trait_name: &str, short_name: &str) -> bool {
+        self.trait_key_by_short_name(short_name)
+            .as_deref()
+            .is_some_and(|key| key == trait_name)
+    }
+
+    pub(super) fn tyvar_satisfies_compiler_trait(&self, var: u32, trait_name: &str) -> bool {
+        if self.trait_matches_short_name(trait_name, "Show") {
+            return self
+                .trait_key_by_short_name("Numeric")
+                .as_deref()
+                .is_some_and(|numeric_trait| self.tyvar_has_bound(var, numeric_trait));
+        }
+        false
+    }
+
     pub(super) fn trait_target_name(&self, ty: &Ty) -> Option<String> {
         match self.resolve_ty(ty) {
             Ty::Int => Some("Int".into()),
@@ -494,8 +510,13 @@ impl Checker {
     }
 
     pub(super) fn trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
-        self.trait_target_name(ty)
-            .is_some_and(|target_name| self.trait_impls.contains_key(&(trait_name.into(), target_name)))
+        if self.trait_target_name(ty).is_some_and(|target_name| {
+            self.trait_impls
+                .contains_key(&(trait_name.into(), target_name))
+        }) {
+            return true;
+        }
+        self.compiler_trait_impl_exists(trait_name, ty)
     }
 
     pub(super) fn trait_dispatch_override(
@@ -517,6 +538,66 @@ impl Checker {
             "safe_div" => Some(TraitDispatchTarget::Builtin("safe_div".into())),
             _ => None,
         }
+    }
+
+    fn compiler_trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
+        let ty = self.resolve_ty(ty);
+        if self.trait_matches_short_name(trait_name, "Show") {
+            return !matches!(ty, Ty::Var(_));
+        }
+        if self.trait_matches_short_name(trait_name, "Eq") {
+            return matches!(
+                ty,
+                Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Enum(_, _)
+            );
+        }
+        if self.trait_matches_short_name(trait_name, "Ord") {
+            return matches!(ty, Ty::Int | Ty::Float);
+        }
+        if self.trait_matches_short_name(trait_name, "Concat") {
+            return matches!(ty, Ty::Str);
+        }
+        false
+    }
+
+    pub(super) fn compiler_trait_dispatch_target(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        target_ty: &Ty,
+    ) -> Option<TraitDispatchTarget> {
+        let target_ty = self.resolve_ty(target_ty);
+        if self.trait_matches_short_name(trait_name, "Show") {
+            return (method_name == "to_string" && !matches!(target_ty, Ty::Var(_)))
+                .then(|| TraitDispatchTarget::Builtin("to_string".into()));
+        }
+        if self.trait_matches_short_name(trait_name, "Eq") {
+            return match (method_name, target_ty) {
+                ("eq", Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Enum(_, _)) => {
+                    Some(TraitDispatchTarget::BinOp(BinOp::Eq))
+                }
+                ("neq", Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Enum(_, _)) => {
+                    Some(TraitDispatchTarget::BinOp(BinOp::Neq))
+                }
+                _ => None,
+            };
+        }
+        if self.trait_matches_short_name(trait_name, "Ord") {
+            return match (method_name, target_ty) {
+                ("lt", Ty::Int | Ty::Float) => Some(TraitDispatchTarget::BinOp(BinOp::Lt)),
+                ("lte", Ty::Int | Ty::Float) => Some(TraitDispatchTarget::BinOp(BinOp::Lte)),
+                ("gt", Ty::Int | Ty::Float) => Some(TraitDispatchTarget::BinOp(BinOp::Gt)),
+                ("gte", Ty::Int | Ty::Float) => Some(TraitDispatchTarget::BinOp(BinOp::Gte)),
+                _ => None,
+            };
+        }
+        if self.trait_matches_short_name(trait_name, "Concat") {
+            return match (method_name, target_ty) {
+                ("concat", Ty::Str) => Some(TraitDispatchTarget::BinOp(BinOp::Concat)),
+                _ => None,
+            };
+        }
+        None
     }
 
     pub(super) fn resolve_trait_method_signature(
@@ -626,11 +707,15 @@ impl Checker {
             };
 
             let trait_key = self.trait_key(trait_id);
-            let trait_info = self.traits.get(&trait_key).cloned().ok_or_else(|| TypeError {
-                message: format!("Unknown trait: {}", trait_id.name),
-                span: span.clone(),
-                hint: None,
-            })?;
+            let trait_info = self
+                .traits
+                .get(&trait_key)
+                .cloned()
+                .ok_or_else(|| TypeError {
+                    message: format!("Unknown trait: {}", trait_id.name),
+                    span: span.clone(),
+                    hint: None,
+                })?;
             let target_ty =
                 self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
@@ -688,7 +773,10 @@ impl Checker {
             }
 
             for (method_name, impl_method) in &method_map {
-                let trait_method = trait_info.methods.get(method_name).expect("validated above");
+                let trait_method = trait_info
+                    .methods
+                    .get(method_name)
+                    .expect("validated above");
                 if trait_method.type_params.len() != impl_method.type_params.len() {
                     return Err(TypeError {
                         message: format!(
@@ -754,7 +842,6 @@ impl Checker {
                         hint: None,
                     });
                 }
-
             }
 
             self.trait_impls.insert(
@@ -943,37 +1030,39 @@ impl Checker {
 
         let mut trait_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
         trait_impls.sort_by(|left, right| {
-            let left_key = (
-                self.trait_key(&left.trait_id),
-                left.target_name.clone(),
-            );
-            let right_key = (
-                self.trait_key(&right.trait_id),
-                right.target_name.clone(),
-            );
+            let left_key = (self.trait_key(&left.trait_id), left.target_name.clone());
+            let right_key = (self.trait_key(&right.trait_id), right.target_name.clone());
             left_key.cmp(&right_key)
         });
 
         for trait_impl in trait_impls {
             let trait_key = self.trait_key(&trait_impl.trait_id);
-            let trait_info = self.traits.get(&trait_key).cloned().ok_or_else(|| TypeError {
-                message: format!("Unknown trait: {}", trait_impl.trait_id.name),
-                span: trait_impl.trait_id.span.clone(),
-                hint: None,
-            })?;
+            let trait_info = self
+                .traits
+                .get(&trait_key)
+                .cloned()
+                .ok_or_else(|| TypeError {
+                    message: format!("Unknown trait: {}", trait_impl.trait_id.name),
+                    span: trait_impl.trait_id.span.clone(),
+                    hint: None,
+                })?;
             let mut methods = trait_impl.methods.iter().collect::<Vec<_>>();
             methods.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
 
             for (method_name, method) in methods {
                 self.register_function_id(&method.function_id);
-                let trait_method = trait_info.methods.get(method_name).ok_or_else(|| TypeError {
-                    message: format!(
-                        "Unknown trait method: {}::{}",
-                        trait_impl.trait_id.name, method_name
-                    ),
-                    span: method.span.clone(),
-                    hint: None,
-                })?;
+                let trait_method =
+                    trait_info
+                        .methods
+                        .get(method_name)
+                        .ok_or_else(|| TypeError {
+                            message: format!(
+                                "Unknown trait method: {}::{}",
+                                trait_impl.trait_id.name, method_name
+                            ),
+                            span: method.span.clone(),
+                            hint: None,
+                        })?;
                 let (param_tys, ret, type_params) = self.resolve_trait_impl_method_signature(
                     method,
                     &trait_impl.target_ty,
@@ -996,8 +1085,10 @@ impl Checker {
                 self.user_func_params
                     .insert(method.function_id.unique_id, param_names);
                 if Self::split_impl_method_name(&method.function_id.name).is_some() {
-                    self.impl_method_uids
-                        .insert(method.function_id.name.clone(), method.function_id.unique_id);
+                    self.impl_method_uids.insert(
+                        method.function_id.name.clone(),
+                        method.function_id.unique_id,
+                    );
                 }
                 fun_idx += 1;
             }

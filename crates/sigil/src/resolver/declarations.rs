@@ -43,9 +43,7 @@ pub(super) fn is_module_visible_declaration(kind: &DeclarationKind) -> bool {
 pub(super) fn is_importable_declaration(kind: &DeclarationKind) -> bool {
     !matches!(
         kind,
-        DeclarationKind::BuiltinType
-            | DeclarationKind::ImplCtorNew
-            | DeclarationKind::Struct
+        DeclarationKind::BuiltinType | DeclarationKind::ImplCtorNew | DeclarationKind::Struct
     )
 }
 
@@ -328,19 +326,21 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             Box::new(rewrite_self_ast(*body, target)),
             attrs,
         ),
-        Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => Ast::ExtractorDef(
-            span,
-            name,
-            type_params,
-            ExtractorParam {
-                name: param.name,
-                ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
-                span: param.span,
-            },
-            rewrite_self_type(ret_ty, target),
-            Box::new(rewrite_self_ast(*body, target)),
-            attrs,
-        ),
+        Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
+            Ast::ExtractorDef(
+                span,
+                name,
+                type_params,
+                ExtractorParam {
+                    name: param.name,
+                    ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
+                    span: param.span,
+                },
+                rewrite_self_type(ret_ty, target),
+                Box::new(rewrite_self_ast(*body, target)),
+                attrs,
+            )
+        }
         Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
             span,
             name,
@@ -720,9 +720,9 @@ pub fn precollect_declaration_index(
                     Ast::BuiltinExtractorDecl(span, name, _, _, _) => {
                         (span, name.as_str(), DeclarationKind::Extractor)
                     }
-                    Ast::ImplDef(_, _, _) | Ast::TraitDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _) => {
-                        continue
-                    }
+                    Ast::ImplDef(_, _, _)
+                    | Ast::TraitDef(_, _, _, _)
+                    | Ast::TraitImplDef(_, _, _, _) => continue,
                     Ast::ResultCtorDecl(span, name, _, _, _) => {
                         (span, name.as_str(), DeclarationKind::ResultCtor)
                     }
@@ -792,7 +792,7 @@ impl Resolver {
         }
 
         let mut lowered = Vec::new();
-                let mut seen_impl_targets = HashSet::new();
+        let mut seen_impl_targets = HashSet::new();
 
         for stmt in stmts {
             match stmt {
@@ -837,8 +837,7 @@ impl Resolver {
                             ret_ty,
                             body,
                             attrs,
-                        ) =
-                            method
+                        ) = method
                         else {
                             return Err(ResolveError {
                                 message: "impl body may only contain `def` declarations"
@@ -994,7 +993,8 @@ impl Resolver {
                         .entry(name.clone())
                         .or_default()
                         .push_back(uid);
-                    self.declaration_uid_kinds.insert(uid, DeclarationKind::Trait);
+                    self.declaration_uid_kinds
+                        .insert(uid, DeclarationKind::Trait);
                     self.scope.define_with_id(name, uid);
 
                     for method in methods {

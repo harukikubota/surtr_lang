@@ -182,7 +182,10 @@ impl Checker {
                 span: span.clone(),
                 node: TypedInner::TraitDef(
                     self.trait_key(id),
-                    methods.iter().map(|method| method.id.name.clone()).collect(),
+                    methods
+                        .iter()
+                        .map(|method| method.id.name.clone())
+                        .collect(),
                 ),
             }),
             Resolved::TraitImplDef(span, trait_id, target_ty, methods) => {
@@ -523,36 +526,43 @@ impl Checker {
         let receiver_ty = self.resolve_ty(receiver_ty);
         match receiver_ty {
             Ty::Var(var) => {
-                if self.tyvar_has_bound(var, trait_name) {
+                if self.tyvar_has_bound(var, trait_name)
+                    || self.tyvar_satisfies_compiler_trait(var, trait_name)
+                {
                     Some(TraitDispatch::Pending)
                 } else {
                     None
                 }
             }
             concrete => {
-                let target_name = self.trait_target_name(&concrete)?;
-                let impl_info = self
-                    .trait_impls
-                    .get(&(trait_name.into(), target_name.clone()))?;
-                let method = impl_info.methods.get(method_name)?;
+                if let Some(target_name) = self.trait_target_name(&concrete) {
+                    if let Some(impl_info) = self
+                        .trait_impls
+                        .get(&(trait_name.into(), target_name.clone()))
+                    {
+                        let method = impl_info.methods.get(method_name)?;
 
-                if let Some(dispatch_override) = &method.dispatch_override {
-                    return Some(TraitDispatch::Static(dispatch_override.clone()));
+                        if let Some(dispatch_override) = &method.dispatch_override {
+                            return Some(TraitDispatch::Static(dispatch_override.clone()));
+                        }
+                        let function_key = method
+                            .function_id
+                            .qualified_name
+                            .as_ref()
+                            .unwrap_or(&method.function_id.name);
+                        let function_id = self.function_ids_by_name.get(function_key)?;
+                        let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                        let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                            return None;
+                        };
+                        return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                            name: method.function_id.name.clone(),
+                            fun_idx: *fun_idx,
+                        }));
+                    }
                 }
-                let function_key = method
-                    .function_id
-                    .qualified_name
-                    .as_ref()
-                    .unwrap_or(&method.function_id.name);
-                let function_id = self.function_ids_by_name.get(function_key)?;
-                let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                    return None;
-                };
-                Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                    name: method.function_id.name.clone(),
-                    fun_idx: *fun_idx,
-                }))
+                self.compiler_trait_dispatch_target(trait_name, method_name, &concrete)
+                    .map(TraitDispatch::Static)
             }
         }
     }
@@ -578,11 +588,15 @@ impl Checker {
             });
         }
 
-        let trait_info = self.traits.get(trait_name).cloned().ok_or_else(|| TypeError {
-            message: format!("Unknown trait: {}", trait_name),
-            span: span.clone(),
-            hint: None,
-        })?;
+        let trait_info = self
+            .traits
+            .get(trait_name)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown trait: {}", trait_name),
+                span: span.clone(),
+                hint: None,
+            })?;
         let method = trait_info
             .methods
             .get(method_name)
@@ -623,6 +637,29 @@ impl Checker {
 
         for (expected, arg) in param_tys.iter().zip(&typed_args) {
             if !self.types_compatible(expected, &arg.ty) {
+                if typed_args.len() == 2 {
+                    let left_ty = self.ty_name(&typed_args[0].ty);
+                    let right_ty = self.ty_name(&typed_args[1].ty);
+                    if self.trait_matches_short_name(trait_name, "Eq")
+                        || self.trait_matches_short_name(trait_name, "Ord")
+                    {
+                        return Err(TypeError {
+                            message: format!("Cannot compare {} and {}", left_ty, right_ty),
+                            span: arg.span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if self.trait_matches_short_name(trait_name, "Concat") {
+                        return Err(TypeError {
+                            message: format!(
+                                "++ requires (String, String), got ({}, {})",
+                                left_ty, right_ty
+                            ),
+                            span: arg.span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
                 return Err(TypeError {
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",
@@ -636,16 +673,16 @@ impl Checker {
         }
 
         let receiver_ty = self.resolve_ty(&self_ty);
-        let dispatch =
-            self.trait_dispatch_target(trait_name, method_name, &receiver_ty)
-                .ok_or_else(|| TypeError {
-                    message: format!(
-                        "{}::{} requires a receiver type implementing {}",
-                        trait_name, method_name, trait_name
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                })?;
+        let dispatch = self
+            .trait_dispatch_target(trait_name, method_name, &receiver_ty)
+            .ok_or_else(|| TypeError {
+                message: format!(
+                    "{}::{} requires a receiver type implementing {}",
+                    trait_name, method_name, trait_name
+                ),
+                span: span.clone(),
+                hint: None,
+            })?;
 
         Ok(TypedNode {
             ty: self.resolve_ty(&ret_ty),
@@ -1786,143 +1823,222 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
-            let method_name = match op {
-                BinOp::Add => "add",
-                BinOp::Sub => "sub",
-                BinOp::Mul => "mul",
-                _ => unreachable!("validated above"),
-            };
-            let typed_left = self.check_node(left)?;
-            let typed_right = self.check_node(right)?;
-            let lt = self.resolve_ty(&typed_left.ty);
-            let rt = self.resolve_ty(&typed_right.ty);
-            if !self.types_compatible(&lt, &rt) {
-                return Err(TypeError {
-                    message: format!(
-                        "Cannot apply {:?} to {} and {}",
-                        op,
-                        self.ty_name(&lt),
-                        self.ty_name(&rt)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                });
-            }
-            let receiver_ty = self.resolve_ty(&lt);
-            let numeric_trait = self
-                .trait_key_by_short_name("Numeric")
-                .ok_or_else(|| TypeError {
-                    message: "Unknown trait: Numeric".into(),
-                    span: span.clone(),
-                    hint: None,
-                })?;
-            let dispatch = self
-                .trait_dispatch_target(&numeric_trait, method_name, &receiver_ty)
-                .ok_or_else(|| TypeError {
-                    message: format!(
-                        "Operator {:?} requires both operands to implement Numeric",
-                        op
-                    ),
-                    span: span.clone(),
-                    hint: Some("Add a `Numeric` bound or use `Int` / `Float` values.".into()),
-                })?;
-            return Ok(TypedNode {
-                ty: self.resolve_ty(&receiver_ty),
+        let typed_left = self.check_node(left)?;
+        let typed_right = self.check_node(right)?;
+        let lt = self.resolve_ty(&typed_left.ty);
+        let rt = self.resolve_ty(&typed_right.ty);
+        let compatibility_checkpoint = self.substitutions.clone();
+        let compatible = self.types_compatible(&lt, &rt);
+
+        let make_trait_call = |trait_name: String,
+                               method_name: &str,
+                               receiver_ty: Ty,
+                               dispatch: TraitDispatch,
+                               result_ty: Ty,
+                               typed_left: TypedNode,
+                               typed_right: TypedNode| {
+            TypedNode {
+                ty: result_ty,
                 span: span.clone(),
                 node: TypedInner::TraitCall {
-                    trait_name: numeric_trait,
+                    trait_name,
                     method_name: method_name.into(),
                     receiver_ty,
                     dispatch,
                     args: vec![typed_left, typed_right],
                 },
-            });
+            }
+        };
+
+        match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul => {
+                let method_name = match op {
+                    BinOp::Add => "add",
+                    BinOp::Sub => "sub",
+                    BinOp::Mul => "mul",
+                    _ => unreachable!("validated above"),
+                };
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "Cannot apply {:?} to {} and {}",
+                            op,
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let numeric_trait =
+                    self.trait_key_by_short_name("Numeric")
+                        .ok_or_else(|| TypeError {
+                            message: "Unknown trait: Numeric".into(),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
+                let dispatch = self
+                    .trait_dispatch_target(&numeric_trait, method_name, &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "Operator {:?} requires both operands to implement Numeric",
+                            op
+                        ),
+                        span: span.clone(),
+                        hint: Some("Add a `Numeric` bound or use `Int` / `Float` values.".into()),
+                    })?;
+                Ok(make_trait_call(
+                    numeric_trait,
+                    method_name,
+                    receiver_ty.clone(),
+                    dispatch,
+                    receiver_ty,
+                    typed_left,
+                    typed_right,
+                ))
+            }
+            BinOp::Eq | BinOp::Neq => {
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "Cannot compare {} and {}",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let eq_trait = self
+                    .trait_key_by_short_name("Eq")
+                    .ok_or_else(|| TypeError {
+                        message: "Unknown trait: Eq".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let method_name = match op {
+                    BinOp::Eq => "eq",
+                    BinOp::Neq => "neq",
+                    _ => unreachable!("validated above"),
+                };
+                let dispatch = self
+                    .trait_dispatch_target(&eq_trait, method_name, &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "{} / {} not supported for {}",
+                            "==",
+                            "!=",
+                            self.ty_name(&receiver_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                Ok(make_trait_call(
+                    eq_trait,
+                    method_name,
+                    receiver_ty,
+                    dispatch,
+                    Ty::Bool,
+                    typed_left,
+                    typed_right,
+                ))
+            }
+            BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "Cannot compare {} and {}",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let ord_trait = self
+                    .trait_key_by_short_name("Ord")
+                    .ok_or_else(|| TypeError {
+                        message: "Unknown trait: Ord".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let method_name = match op {
+                    BinOp::Lt => "lt",
+                    BinOp::Gt => "gt",
+                    BinOp::Lte => "lte",
+                    BinOp::Gte => "gte",
+                    _ => unreachable!("validated above"),
+                };
+                let dispatch = self
+                    .trait_dispatch_target(&ord_trait, method_name, &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "Cannot compare {} and {}",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                Ok(make_trait_call(
+                    ord_trait,
+                    method_name,
+                    receiver_ty,
+                    dispatch,
+                    Ty::Bool,
+                    typed_left,
+                    typed_right,
+                ))
+            }
+            BinOp::Concat => {
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "++ requires (String, String), got ({}, {})",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let concat_trait =
+                    self.trait_key_by_short_name("Concat")
+                        .ok_or_else(|| TypeError {
+                            message: "Unknown trait: Concat".into(),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
+                let dispatch = self
+                    .trait_dispatch_target(&concat_trait, "concat", &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "++ requires values implementing Concat, got ({}, {})",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                Ok(make_trait_call(
+                    concat_trait,
+                    "concat",
+                    receiver_ty.clone(),
+                    dispatch,
+                    receiver_ty,
+                    typed_left,
+                    typed_right,
+                ))
+            }
         }
-
-        let typed_left = self.check_node(left)?;
-        let typed_right = self.check_node(right)?;
-        let lt = self.resolve_ty(&typed_left.ty);
-        let rt = self.resolve_ty(&typed_right.ty);
-
-        let result_ty = match op {
-            BinOp::Eq | BinOp::Neq => match (&lt, &rt) {
-                (Ty::Int, Ty::Int)
-                | (Ty::Str, Ty::Str)
-                | (Ty::Bool, Ty::Bool)
-                | (Ty::Enum(_, _), Ty::Enum(_, _)) => {
-                    if self.types_compatible(&lt, &rt) {
-                        Ok(Ty::Bool)
-                    } else {
-                        Err(TypeError {
-                            message: format!(
-                                "Cannot compare {} and {}",
-                                self.ty_name(&lt),
-                                self.ty_name(&rt)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        })
-                    }
-                }
-                _ => {
-                    let before = self.substitutions.clone();
-                    let comparable = self.types_compatible(&lt, &rt);
-                    self.substitutions = before;
-                    if !comparable {
-                        Err(TypeError {
-                            message: format!(
-                                "Cannot compare {} and {}",
-                                self.ty_name(&lt),
-                                self.ty_name(&rt)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        })
-                    } else {
-                        Err(TypeError {
-                            message: format!(
-                                "== / != not supported for {} in phase 1",
-                                self.ty_name(&lt)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        })
-                    }
-                }
-            },
-            BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => match (&lt, &rt) {
-                (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) => Ok(Ty::Bool),
-                _ => Err(TypeError {
-                    message: format!(
-                        "Cannot compare {} and {}",
-                        self.ty_name(&lt),
-                        self.ty_name(&rt)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
-            },
-            BinOp::Concat => match (&lt, &rt) {
-                (Ty::Str, Ty::Str) => Ok(Ty::Str),
-                _ => Err(TypeError {
-                    message: format!(
-                        "++ requires (String, String), got ({}, {})",
-                        self.ty_name(&lt),
-                        self.ty_name(&rt)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
-            },
-            BinOp::Add | BinOp::Sub | BinOp::Mul => unreachable!("handled above"),
-        }?;
-
-        Ok(TypedNode {
-            ty: result_ty,
-            span: span.clone(),
-            node: TypedInner::BinOp(op.clone(), Box::new(typed_left), Box::new(typed_right)),
-        })
     }
 
     pub(super) fn check_list_nil(&mut self, span: &Span) -> Result<TypedNode, TypeError> {

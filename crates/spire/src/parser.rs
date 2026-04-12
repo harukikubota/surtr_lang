@@ -547,7 +547,8 @@ impl Parser {
                             let looks_like_bind = matches!(
                                 self.tokens.get(save).map(|sp| &sp.token),
                                 Some(Token::LParen | Token::LBrack)
-                            ) && self.stmt_has_top_level_assignment_from(save);
+                            ) && self
+                                .stmt_has_top_level_assignment_from(save);
                             self.pos = save;
                             if looks_like_bind {
                                 return Err(err);
@@ -1080,7 +1081,9 @@ impl Parser {
                         return Err(ParseError::incomplete(")", self.peek_span()));
                     }
                     self.skip_newlines();
-                    params.push(self.parse_trait_method_param(params.is_empty(), self_context.clone())?);
+                    params.push(
+                        self.parse_trait_method_param(params.is_empty(), self_context.clone())?,
+                    );
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
                         self.advance();
@@ -4194,22 +4197,24 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*body, delta)),
             shift_decl_attrs(attrs),
         ),
-        Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => Ast::ExtractorDef(
-            shift_span(span, delta),
-            name,
-            type_params
-                .into_iter()
-                .map(|param| TypeParam {
-                    name: param.name,
-                    bound: param.bound,
-                    span: shift_span(param.span, delta),
-                })
-                .collect(),
-            shift_extractor_param(param, delta),
-            shift_ast_ty(ret_ty, delta),
-            Box::new(shift_ast_span(*body, delta)),
-            shift_decl_attrs(attrs),
-        ),
+        Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
+            Ast::ExtractorDef(
+                shift_span(span, delta),
+                name,
+                type_params
+                    .into_iter()
+                    .map(|param| TypeParam {
+                        name: param.name,
+                        bound: param.bound,
+                        span: shift_span(param.span, delta),
+                    })
+                    .collect(),
+                shift_extractor_param(param, delta),
+                shift_ast_ty(ret_ty, delta),
+                Box::new(shift_ast_span(*body, delta)),
+                shift_decl_attrs(attrs),
+            )
+        }
         Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
             shift_span(span, delta),
             name,
@@ -4625,7 +4630,9 @@ impl User {
                 assert_eq!(name, "abs");
                 assert!(type_params.is_empty());
                 assert_eq!(params.len(), 1);
-                assert!(matches!(params[0].ty, AstTy::ImplTrait(_, ref trait_name) if trait_name == "Numeric"));
+                assert!(
+                    matches!(params[0].ty, AstTy::ImplTrait(_, ref trait_name) if trait_name == "Numeric")
+                );
                 assert_eq!(ret_ty, "Int");
             }
             _ => panic!("Expected Def with impl Trait parameter"),

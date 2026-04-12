@@ -59,6 +59,8 @@ Xldr は対話セッション中に次を保持する。
 - loader は追加標準 module も `./lib/*.srt` から収集し、built-in 標準 module と重複するものはデフォルト入力から除外する
 - REPL user chunk は標準 module 読み込み後に `SourceKind::ReplChunk` として追加される
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、型定義・`impl`・`defmod` は parse error とする
+- REPL user chunk の top-level `def` は、セッション内の暗黙擬似モジュールに属する関数として扱う
+- したがって REPL は「module 外に関数がある」例外ではなく、明示 `defmod` を省略した module-like namespace 実行として扱う
 - 初期補完候補には `Ok`, `Err` と builtin 名を含める
 - セッションは `.eldr` と live compile の両方から doc metadata を保持し、`:doc` 表示へ利用する
 - `.eldr` から初期化した場合、標準 library の compile-time context は source から復元する

@@ -18,6 +18,14 @@ name =? expr
 def name(args...) -> Ty { expr }
 ```
 
+Surtr では、関数はすべて明示または暗黙の namespace に属します。
+
+- 通常の module 関数は `defmod Name { ... }` に置く
+- 型付属関数は `impl Type { ... }` に置く
+- trait 契約は `deftrait Name { ... }` に置く
+- trait 実装は `impl Trait for Type { ... }` に置く
+- script / REPL の top-level `def` は暗黙の擬似 module に属する
+
 ### データ定義
 
 ```surtr
@@ -84,6 +92,7 @@ match expr {
 ### `impl` / `Self` / `self`
 
 - `impl` 対象は `defstruct` / `defenum` のみ
+- `impl Type` は型専用の module-like namespace であり、`self` / `Self` が使える `defmod` 相当として読む
 - `Self` は `impl` 内の型位置でのみ使用可能
 - `self` は `impl` メソッド第一引数専用（再束縛不可）
 - メソッド呼び出しの正規形は `Type::method(...)`
@@ -390,6 +399,19 @@ deferror IndexOutOfBounds(detail: String) { detail }
 
 ## 9. モジュールと import
 
+### 関数の所属
+
+Surtr では「module の外に生の関数がぶら下がる」モデルを取りません。
+
+- `defmod Name` は通常 module を作る
+- `impl Type` は型専用の module-like namespace を作る
+- `deftrait Name` は trait method の契約 namespace を作る
+- `impl Trait for Type` は trait 実装 namespace を作る
+- script / REPL の top-level `def` は暗黙の擬似 module に入る
+
+一方で `defstruct` / `defrecord` / `deferror` / `defenum` / `@@builtin type` は
+関数 namespace の内側ではなく、top-level 宣言名として直接見えます。
+
 ### 標準モジュール
 
 現在の標準モジュール層は次の順序でロードされます。
@@ -403,6 +425,12 @@ Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float]
 - `Bootstrap` と `Kernel` は auto import 対象
 - `Bootstrap` / `Kernel` の明示 `import` は compile error
 - それ以外の標準モジュールは auto import しない
+
+### import の意味
+
+- `import Mod` は、その module の import 可能 member を現在 scope に unqualified で入れる
+- `import Mod::fun` は単一 member だけを入れる
+- `Struct` 名や `new` のように import 不可の宣言もある
 
 ### builtin type の置き場所
 

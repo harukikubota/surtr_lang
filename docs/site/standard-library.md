@@ -5,6 +5,13 @@
 標準モジュールは単なる補助ファイルではなく、language surface の一部です。  
 `lib/*.srt` に書かれた `@@doc` は source 上の説明であり、将来的には `.eldr` の `Docs` chunk からも参照できる前提で扱います。
 
+Surtr 全体では、関数は常に何らかの namespace に属します。標準ライブラリでもこの方針は同じです。
+
+- 通常の公開 API は `defmod Name { ... }` に置く
+- trait 契約は `deftrait Name { ... }` に置く
+- 型ごとの concrete 実装は `impl Trait for Type { ... }` に置く
+- builtin type や error / enum 宣言は file top-level に置く
+
 ## 1. ロード順
 
 標準モジュールの初期ロード順は次で固定されています。
@@ -62,6 +69,7 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 2. `defmod Name { ... }` の module API
 
 この分離により、「型そのものの compiler 契約」と「その型の helper / docs / 将来 API」を同じ file に置きつつ、役割は混ぜずに管理できます。
+`impl Type` や `impl Trait for Type` は、この module API とは別の型専用 namespace として並びます。
 
 `Numeric` だけは type module ではなく、トップレベル trait 宣言専用の標準 module です。
 

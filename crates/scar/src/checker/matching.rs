@@ -526,7 +526,9 @@ impl Checker {
         match pat {
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => true,
             TypedMatchPattern::As(inner, _) => self.is_match_catch_all(inner),
-            TypedMatchPattern::Tuple(items) => items.iter().all(|item| self.is_match_catch_all(item)),
+            TypedMatchPattern::Tuple(items) => {
+                items.iter().all(|item| self.is_match_catch_all(item))
+            }
             TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)

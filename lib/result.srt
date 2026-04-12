@@ -78,7 +78,7 @@ defmod Result {
   @@test is_err(Ok(1)) == False
   @@test is_err(Err(NoneError)) == True
   def is_err(result: Result<$T>) -> Boolean {
-    if(Result::is_ok(result), False, True)
+    Boolean::not(Result::is_ok(result))
   }
 
   @@doc """

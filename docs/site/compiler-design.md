@@ -170,6 +170,16 @@ Surtr では、「何を読むか」と「どういう実行単位か」を分�
 - REPL では top-level expression を許可したい
 - project build では `set_exit_code` を entrypoint のみに制限したい
 
+この設計の前提には、関数を常に namespace へ所属させる方針があります。
+
+- `defmod` は通常 module namespace
+- `impl Type` は型専用の module-like namespace
+- `deftrait` は method 契約 namespace
+- `impl Trait for Type` は concrete 実装 namespace
+- `Script` / `ReplChunk` の top-level `def` は暗黙の擬似 module に属する
+
+つまり script / REPL は「module なし特例」ではなく、`defmod` を省略した実行形です。
+
 この方針を `SourceRules` に閉じ込めることで、個別の crate に ad-hoc な分岐を書き散らさずに済みます。
 
 ## 6. builtin の設計

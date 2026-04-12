@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) const AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel", "Result"];
+pub(super) const AUTO_IMPORT_TRAITS: &[&str] = &["Show", "Eq", "Ord", "Concat"];
 
 fn initialize_base_scope() -> Scope {
     let mut scope = Scope::new();
@@ -41,19 +42,5 @@ pub(super) fn is_runtime_builtin_decl(name: &str) -> bool {
 }
 
 pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {
-    matches!(
-        name,
-        "if" | "if_then"
-            | "assert"
-            | "ensure"
-            | "and"
-            | "or"
-            | "eq"
-            | "neq"
-            | "lt"
-            | "lte"
-            | "gt"
-            | "gte"
-            | "concat"
-    )
+    matches!(name, "if" | "if_then" | "assert" | "ensure" | "and" | "or")
 }

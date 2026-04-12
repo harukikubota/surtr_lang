@@ -16,6 +16,14 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         include_str!("../../../lib/numeric.srt"),
         "Numeric",
     ),
+    ("show.srt", include_str!("../../../lib/show.srt"), "Show"),
+    ("eq.srt", include_str!("../../../lib/eq.srt"), "Eq"),
+    ("ord.srt", include_str!("../../../lib/ord.srt"), "Ord"),
+    (
+        "concat.srt",
+        include_str!("../../../lib/concat.srt"),
+        "Concat",
+    ),
     ("int.srt", include_str!("../../../lib/int.srt"), "Int"),
     (
         "string.srt",
@@ -485,47 +493,12 @@ pub fn collect_module_sources_with_module_stages(
     ];
 
     for stage in module_input_stages {
+        if stage.is_empty() {
+            continue;
+        }
         let mut specs = Vec::with_capacity(stage.len());
         for module in stage {
             specs.push(SourceDescriptor::module(
-                module.file_name.clone(),
-                module.source.clone(),
-                module.module_path.clone(),
-            ));
-        }
-        stage_specs.push(specs);
-    }
-    build_module_sources_from_stage_specs(stage_specs)
-}
-
-pub fn collect_module_sources_with_std_module_stages(
-    module_input_stages: &[Vec<ModuleInput>],
-) -> Result<ModuleSources, LoadError> {
-    let mut stage_specs = vec![
-        vec![SourceDescriptor::std_module(
-            BUILTIN_PRELUDE_FILE,
-            BUILTIN_PRELUDE_SOURCE,
-            BUILTIN_PRELUDE_MODULE_PATH,
-        )],
-        std::iter::once(SourceDescriptor::std_module(
-            KERNEL_PRELUDE_FILE,
-            KERNEL_PRELUDE_SOURCE,
-            KERNEL_PRELUDE_MODULE_PATH,
-        ))
-        .chain(
-            DEFAULT_STD_MODULES
-                .iter()
-                .map(|(file_name, source, module_path)| {
-                    SourceDescriptor::std_module(*file_name, *source, *module_path)
-                }),
-        )
-        .collect(),
-    ];
-
-    for stage in module_input_stages {
-        let mut specs = Vec::with_capacity(stage.len());
-        for module in stage {
-            specs.push(SourceDescriptor::std_module(
                 module.file_name.clone(),
                 module.source.clone(),
                 module.module_path.clone(),
@@ -609,14 +582,10 @@ pub(crate) struct ReplSources {
     pub(crate) repl_module_path: String,
 }
 
-pub(crate) fn collect_repl_sources_with_std_module_stages(
+pub(crate) fn collect_repl_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ReplSources, LoadError> {
-    let mut module_sources = if module_input_stages.is_empty() {
-        collect_module_sources_with_module_stages(&[])?
-    } else {
-        collect_module_sources_with_std_module_stages(module_input_stages)?
-    };
+    let mut module_sources = collect_module_sources_with_module_stages(module_input_stages)?;
     let repl_source_id = module_sources.sources.register(REPL_MODULE_NAME, "");
 
     Ok(ReplSources {
@@ -629,7 +598,7 @@ pub(crate) fn collect_repl_sources_with_std_module_stages(
 }
 
 pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
-    collect_repl_sources_with_std_module_stages(&[])
+    collect_repl_sources_with_module_stages(&[])
 }
 
 #[cfg(test)]
@@ -684,15 +653,22 @@ mod tests {
             loaded.builtin_module_path.as_deref(),
             Some(BUILTIN_PRELUDE_MODULE_PATH)
         );
-        assert_eq!(loaded.module_source_ids.len(), 2 + DEFAULT_STD_MODULES.len());
+        assert_eq!(
+            loaded.module_source_ids.len(),
+            2 + DEFAULT_STD_MODULES.len()
+        );
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
         assert_eq!(loaded.module_stages[1].len(), 1 + DEFAULT_STD_MODULES.len());
         assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
         assert_eq!(loaded.module_stages[1][1].module_path, "Numeric");
-        assert_eq!(loaded.module_stages[1][2].module_path, "Int");
-        assert_eq!(loaded.module_stages[1][3].module_path, "String");
+        assert_eq!(loaded.module_stages[1][2].module_path, "Show");
+        assert_eq!(loaded.module_stages[1][3].module_path, "Eq");
+        assert_eq!(loaded.module_stages[1][4].module_path, "Ord");
+        assert_eq!(loaded.module_stages[1][5].module_path, "Concat");
+        assert_eq!(loaded.module_stages[1][6].module_path, "Int");
+        assert_eq!(loaded.module_stages[1][7].module_path, "String");
     }
 
     #[test]
@@ -776,7 +752,11 @@ mod tests {
         assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
         assert_eq!(loaded.module_stages[1][1].module_path, "Numeric");
-        assert_eq!(loaded.module_stages[1][2].module_path, "Int");
+        assert_eq!(loaded.module_stages[1][2].module_path, "Show");
+        assert_eq!(loaded.module_stages[1][3].module_path, "Eq");
+        assert_eq!(loaded.module_stages[1][4].module_path, "Ord");
+        assert_eq!(loaded.module_stages[1][5].module_path, "Concat");
+        assert_eq!(loaded.module_stages[1][6].module_path, "Int");
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
         assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
         assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");

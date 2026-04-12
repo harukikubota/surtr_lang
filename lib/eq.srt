@@ -1,0 +1,9 @@
+@@doc """
+Standard `Eq` trait declaration.
+`Eq` models equality and inequality for values that support exact comparison.
+Operators and call-style helpers lower through this trait in V1.
+"""
+deftrait Eq {
+  def eq(self: Self, rhs: Self) -> Boolean
+  def neq(self: Self, rhs: Self) -> Boolean
+}

@@ -89,7 +89,42 @@ print(to_string(add(y: 2, x: 1)))
 - 関数本体は式として評価される
 - 前方参照は許可される。後で同じコンパイル単位に定義が現れればよい
 
-### 5.1 Trait System V1
+### 5.1 関数はどこに属するか
+
+Surtr では、関数は必ず何らかの namespace に属します。
+
+- 普通の module 関数は `defmod Name { ... }`
+- 構造体 / enum 付属関数は `impl Type { ... }`
+- trait の契約は `deftrait Name { ... }`
+- trait 実装は `impl Trait for Type { ... }`
+- script / REPL の top-level `def` も、暗黙の擬似 module に属する
+
+特に `impl Type` は「`self` / `Self` が使える `defmod` の型専用版」と捉えると理解しやすくなります。
+
+```surtr
+defmod Math {
+  def add(x: Int, y: Int) -> Int { x + y }
+}
+
+defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+
+  def normalize(self: Self) -> Self {
+    self
+  }
+}
+```
+
+`defstruct` / `defenum` のような型定義そのものは関数 namespace の中ではなく、
+top-level 宣言名として直接見えます。
+
+### 5.2 Trait System V1
 
 Surtr には V1 の trait system があります。最初の trait は `Numeric` です。
 

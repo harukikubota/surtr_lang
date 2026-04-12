@@ -4,6 +4,9 @@ Bootstrap module.
 Auto-imported root of the standard surface.
 This file gives the loader a stable first stage and carries the smallest set of
 universally available standard declarations.
+Surtr keeps every function inside an explicit or implicit module-like namespace,
+and `Bootstrap` is the first explicit example of that rule in the standard
+library.
 Cross-cutting builtin values live in `kernel.srt`, builtin type declarations
 live at the top level of their corresponding files, and the abstract `Error`
 type itself lives in `error.srt`.

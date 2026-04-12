@@ -87,11 +87,15 @@ impl Checker {
 
                 if let Ty::UserFunc { fun_idx, .. } = &func.ty {
                     if needs_specialization.contains(fun_idx) {
-                        let original_def = defs_by_fun_idx.get(fun_idx).ok_or_else(|| TypeError {
-                            message: format!("Missing generic definition for fun_idx {}", fun_idx),
-                            span: span.clone(),
-                            hint: None,
-                        })?;
+                        let original_def =
+                            defs_by_fun_idx.get(fun_idx).ok_or_else(|| TypeError {
+                                message: format!(
+                                    "Missing generic definition for fun_idx {}",
+                                    fun_idx
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            })?;
                         let bound_tyvars = bound_tyvars_by_fun_idx
                             .get(fun_idx)
                             .cloned()
@@ -99,9 +103,9 @@ impl Checker {
                         let mapping =
                             self.infer_specialization_mapping(original_def, &args, &bound_tyvars)?;
                         if mapping.len() == bound_tyvars.len()
-                            && bound_tyvars
-                                .iter()
-                                .all(|var| mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_))))
+                            && bound_tyvars.iter().all(|var| {
+                                mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
+                            })
                         {
                             let concrete_tys = bound_tyvars
                                 .iter()
@@ -644,16 +648,16 @@ impl Checker {
             TypedInner::TraitImplDef(trait_name, target_name) => {
                 TypedInner::TraitImplDef(trait_name, target_name)
             }
-            TypedInner::Semi(inner) => TypedInner::Semi(Box::new(
-                self.rewrite_specializations_in_node(
+            TypedInner::Semi(inner) => {
+                TypedInner::Semi(Box::new(self.rewrite_specializations_in_node(
                     *inner,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?,
-            )),
+                )?))
+            }
         };
 
         Ok(TypedNode { ty, span, node })
@@ -689,7 +693,10 @@ impl Checker {
             .get(&original_fun_idx)
             .cloned()
             .ok_or_else(|| TypeError {
-                message: format!("Missing generic definition for fun_idx {}", original_fun_idx),
+                message: format!(
+                    "Missing generic definition for fun_idx {}",
+                    original_fun_idx
+                ),
                 span: Span { start: 0, end: 0 },
                 hint: None,
             })?;
@@ -752,7 +759,11 @@ impl Checker {
                 });
             }
         };
-        Ok(TypedNode { ty, span: def.span, node })
+        Ok(TypedNode {
+            ty,
+            span: def.span,
+            node,
+        })
     }
 
     fn infer_specialization_mapping(
@@ -763,9 +774,10 @@ impl Checker {
     ) -> Result<HashMap<u32, Ty>, TypeError> {
         let mut mapping = HashMap::new();
         let param_tys = match &def.node {
-            TypedInner::Def(_, _, _, params, _, _) => {
-                params.iter().map(|param| param.ty.clone()).collect::<Vec<_>>()
-            }
+            TypedInner::Def(_, _, _, params, _, _) => params
+                .iter()
+                .map(|param| param.ty.clone())
+                .collect::<Vec<_>>(),
             TypedInner::ExtractorDef(_, _, _, param, _, _) => vec![param.ty.clone()],
             other => {
                 return Err(TypeError {
@@ -880,9 +892,9 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(stmt, ordered, seen);
                 }
             }
-            TypedInner::Bind(_, rhs)
-            | TypedInner::SafeBind(_, rhs)
-            | TypedInner::Semi(rhs) => self.collect_bound_tyvars_in_node(rhs, ordered, seen),
+            TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) | TypedInner::Semi(rhs) => {
+                self.collect_bound_tyvars_in_node(rhs, ordered, seen)
+            }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::ResultMap(left, right)
@@ -957,12 +969,7 @@ impl Checker {
         }
     }
 
-    fn collect_bound_tyvars_in_ty(
-        &self,
-        ty: &Ty,
-        ordered: &mut Vec<u32>,
-        seen: &mut HashSet<u32>,
-    ) {
+    fn collect_bound_tyvars_in_ty(&self, ty: &Ty, ordered: &mut Vec<u32>, seen: &mut HashSet<u32>) {
         match self.resolve_ty(ty) {
             Ty::Var(var) => {
                 if !self.tyvar_bound_names(var).is_empty() && seen.insert(var) {
@@ -1110,8 +1117,9 @@ impl Checker {
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
                 Box::new(self.substitute_typed_node_with_mapping(*cond, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*then_branch, mapping)),
-                else_branch
-                    .map(|branch| Box::new(self.substitute_typed_node_with_mapping(*branch, mapping))),
+                else_branch.map(|branch| {
+                    Box::new(self.substitute_typed_node_with_mapping(*branch, mapping))
+                }),
             ),
             TypedInner::Assert(cond, err) => TypedInner::Assert(
                 Box::new(self.substitute_typed_node_with_mapping(*cond, mapping)),
@@ -1480,9 +1488,9 @@ impl Checker {
                     || args.iter().any(Self::typed_node_has_pending_trait_call)
             }
             TypedInner::Block(stmts) => stmts.iter().any(Self::typed_node_has_pending_trait_call),
-            TypedInner::Bind(_, rhs)
-            | TypedInner::SafeBind(_, rhs)
-            | TypedInner::Semi(rhs) => Self::typed_node_has_pending_trait_call(rhs),
+            TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) | TypedInner::Semi(rhs) => {
+                Self::typed_node_has_pending_trait_call(rhs)
+            }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::ResultMap(left, right)
@@ -1528,7 +1536,9 @@ impl Checker {
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
                 fields.iter().any(Self::typed_node_has_pending_trait_call)
             }
-            TypedInner::DeferrorDef(_, _, _, _, show) => Self::typed_node_has_pending_trait_call(show),
+            TypedInner::DeferrorDef(_, _, _, _, show) => {
+                Self::typed_node_has_pending_trait_call(show)
+            }
             TypedInner::Def(_, _, _, _, _, body)
             | TypedInner::ExtractorDef(_, _, _, _, _, body)
             | TypedInner::Closure(_, _, body) => Self::typed_node_has_pending_trait_call(body),

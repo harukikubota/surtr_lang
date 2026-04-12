@@ -994,9 +994,7 @@ impl Checker {
                 None => Ty::Var(*var),
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
-            Ty::Tuple(items) => {
-                Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect())
-            }
+            Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect()),
             Ty::Func(params, ret) => Ty::Func(
                 params.iter().map(|param| self.resolve_ty(param)).collect(),
                 Box::new(self.resolve_ty(ret)),
@@ -1384,24 +1382,26 @@ impl Checker {
                 self.resolve_ty(&ret_ty),
                 Box::new(self.resolve_typed_node(*body)),
             ),
-            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body) => TypedInner::ExtractorDef(
-                fun_idx,
-                id,
-                type_params
-                    .into_iter()
-                    .map(|param| TypedTypeParam {
-                        name: param.name,
-                        ty_var: param.ty_var,
-                        bound: param.bound,
-                    })
-                    .collect(),
-                TypedFunParam {
-                    id: param.id,
-                    ty: self.resolve_ty(&param.ty),
-                },
-                self.resolve_ty(&ret_ty),
-                Box::new(self.resolve_typed_node(*body)),
-            ),
+            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body) => {
+                TypedInner::ExtractorDef(
+                    fun_idx,
+                    id,
+                    type_params
+                        .into_iter()
+                        .map(|param| TypedTypeParam {
+                            name: param.name,
+                            ty_var: param.ty_var,
+                            bound: param.bound,
+                        })
+                        .collect(),
+                    TypedFunParam {
+                        id: param.id,
+                        ty: self.resolve_ty(&param.ty),
+                    },
+                    self.resolve_ty(&ret_ty),
+                    Box::new(self.resolve_typed_node(*body)),
+                )
+            }
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
                 TypedInner::BuiltinExtractorDecl(
                     id,

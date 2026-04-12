@@ -1221,10 +1221,7 @@ impl VM {
                 match tuple {
                     Value::Tuple(items) => {
                         let field = items.get(field_index as usize).cloned().ok_or_else(|| {
-                            RuntimeError::new(format!(
-                                "Tuple index {} out of bounds",
-                                field_index
-                            ))
+                            RuntimeError::new(format!("Tuple index {} out of bounds", field_index))
                         })?;
                         self.stack.push(field);
                     }

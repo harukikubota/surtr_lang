@@ -125,11 +125,12 @@ impl Resolver {
                     message: format!("Undefined variable: {}", name),
                     span: span.clone(),
                 })?;
+                let qualified_name = self.declaration_fq_name_for_uid(uid);
                 Ok(Resolved::Var(
                     span.clone(),
                     ResolvedId {
                         name,
-                        qualified_name: None,
+                        qualified_name,
                         unique_id: uid,
                         span,
                     },
@@ -176,25 +177,25 @@ impl Resolver {
                     if name == "or" {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
                     }
-                    if name == "eq" {
+                    if name == "eq" && self.scope.lookup(name).is_none() {
                         return self.resolve_compare_call(span, args, CompareKind::Eq);
                     }
-                    if name == "neq" {
+                    if name == "neq" && self.scope.lookup(name).is_none() {
                         return self.resolve_compare_call(span, args, CompareKind::Neq);
                     }
-                    if name == "lt" {
+                    if name == "lt" && self.scope.lookup(name).is_none() {
                         return self.resolve_compare_call(span, args, CompareKind::Lt);
                     }
-                    if name == "lte" {
+                    if name == "lte" && self.scope.lookup(name).is_none() {
                         return self.resolve_compare_call(span, args, CompareKind::Lte);
                     }
-                    if name == "gt" {
+                    if name == "gt" && self.scope.lookup(name).is_none() {
                         return self.resolve_compare_call(span, args, CompareKind::Gt);
                     }
-                    if name == "gte" {
+                    if name == "gte" && self.scope.lookup(name).is_none() {
                         return self.resolve_compare_call(span, args, CompareKind::Gte);
                     }
-                    if name == "concat" {
+                    if name == "concat" && self.scope.lookup(name).is_none() {
                         return self.resolve_concat_call(span, args);
                     }
                 }
@@ -595,7 +596,8 @@ impl Resolver {
                         .into_iter()
                         .map(|param| method_resolver.resolve_fun_param(param))
                         .collect::<Result<Vec<_>, ResolveError>>()?;
-                    self.scope.advance_next_id_to(method_resolver.scope.next_id());
+                    self.scope
+                        .advance_next_id_to(method_resolver.scope.next_id());
                     resolved_methods.push(ResolvedTraitMethodSig {
                         id: ResolvedId {
                             name: method_name,
@@ -656,8 +658,15 @@ impl Resolver {
                 };
                 let mut resolved_methods = Vec::new();
                 for method in methods {
-                    let Ast::Def(method_span, method_name, type_params, params, ret_ty, body, attrs) =
-                        method
+                    let Ast::Def(
+                        method_span,
+                        method_name,
+                        type_params,
+                        params,
+                        ret_ty,
+                        body,
+                        attrs,
+                    ) = method
                     else {
                         return Err(ResolveError {
                             message: "trait impl body may only contain `def` declarations"
@@ -985,7 +994,10 @@ impl Resolver {
                 unique_id: uid,
                 span: param.span,
             },
-            ty: param.ty.map(|ty| self.resolve_type_annotation(ty)).transpose()?,
+            ty: param
+                .ty
+                .map(|ty| self.resolve_type_annotation(ty))
+                .transpose()?,
         })
     }
 
@@ -1105,10 +1117,7 @@ impl Resolver {
             let Resolved::TraitImplDef(span, trait_id, target_ty, _) = node else {
                 continue;
             };
-            let trait_name = trait_id
-                .qualified_name
-                .as_deref()
-                .unwrap_or(&trait_id.name);
+            let trait_name = trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name);
             let pair_key = format!("{} for {}", trait_name, Self::ast_ty_symbol_key(target_ty));
             if !seen_pairs.insert(pair_key.clone()) {
                 return Err(ResolveError {

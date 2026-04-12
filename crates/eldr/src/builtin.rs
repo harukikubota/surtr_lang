@@ -683,7 +683,7 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
 mod tests {
     use super::{call_builtin, err_result_from_rich_error, inspect_value};
     use crate::vm::VM;
-    use sindr::builtin::{builtin_meta_by_name, BUILTIN_METAS};
+    use sindr::builtin::builtin_meta_by_name;
     use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
     use sindr::primitives::int;
     use sindr::runtime::{
@@ -866,7 +866,16 @@ mod tests {
             i += 1;
         }
 
-        assert_eq!(entries.len(), BUILTIN_METAS.len());
+        // The stdlib declaration layer intentionally exposes only the
+        // user-surface builtins. Some runtime builtins (for example the
+        // trait-backed `to_string`) remain in `BUILTIN_METAS` without a
+        // matching `@@builtin def` surface declaration.
+        //
+        // So this test verifies:
+        // - every declared builtin surface matches `BUILTIN_METAS`
+        // - no declared builtin is duplicated
+        // - hidden/runtime-only builtins are allowed to exist only in the
+        //   metadata table
 
         // Source layout is allowed to group builtins by module ownership
         // rather than by builtin id order, so compare by builtin name instead
@@ -877,13 +886,17 @@ mod tests {
             assert!(prev.is_none(), "duplicate builtin declaration for {name}");
         }
 
-        for meta in BUILTIN_METAS.iter() {
-            let (arity, sig_str) = entry_map
-                .get(meta.name)
-                .unwrap_or_else(|| panic!("missing builtin declaration for {}", meta.name));
+        for (name, (arity, sig_str)) in &entry_map {
+            let meta = builtin_meta_by_name(name)
+                .unwrap_or_else(|| panic!("declared builtin {name} is missing from BUILTIN_METAS"));
             assert_eq!(*arity, meta.arity, "arity mismatch for {}", meta.name);
             assert_eq!(sig_str, &meta.sig_str, "sig mismatch for {}", meta.name);
         }
+
+        assert!(
+            !entry_map.contains_key("to_string"),
+            "to_string is trait-backed and should not be declared via @@builtin def"
+        );
     }
 
     #[test]
