@@ -1,43 +1,14 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod common;
 mod support;
-use common::{extract_phase_tag, normalize_text, parse_compile_error_expectation, repo_root};
-
-fn collect_files_with_extension(root: &Path, ext: &str) -> Vec<PathBuf> {
-    fn walk(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, ext, out);
-            } else if path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e == ext)
-            {
-                out.push(path);
-            }
-        }
-    }
-
-    let mut files = Vec::new();
-    walk(root, ext, &mut files);
-    files.sort();
-    files
-}
-
-fn is_multi_source_module_fixture(path: &Path) -> bool {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    normalized.contains("/tests/spec/modules/")
-        || normalized.contains("/tests/compile_errors/modules/")
-}
+use common::{
+    compile_error_fixtures, extract_phase_tag, normalize_text, parse_compile_error_expectation,
+    spec_fixtures,
+};
 
 fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
     support::compile_script("fixture.srt", source)
@@ -67,36 +38,6 @@ fn timing_breakdown_enabled() -> bool {
     )
 }
 
-fn compile_error_sources() -> Vec<PathBuf> {
-    let error_root = repo_root().join("tests/compile_errors");
-    let sources = collect_files_with_extension(&error_root, "srt")
-        .into_iter()
-        .filter(|source_path| !is_multi_source_module_fixture(source_path))
-        .filter(|source_path| source_path.with_extension("error").exists())
-        .collect::<Vec<_>>();
-    assert!(
-        !sources.is_empty(),
-        "no compile error fixtures found under {}",
-        error_root.display()
-    );
-    sources
-}
-
-fn spec_sources() -> Vec<PathBuf> {
-    let spec_root = repo_root().join("tests/spec");
-    let sources = collect_files_with_extension(&spec_root, "srt")
-        .into_iter()
-        .filter(|source_path| !is_multi_source_module_fixture(source_path))
-        .filter(|source_path| source_path.with_extension("expected").exists())
-        .collect::<Vec<_>>();
-    assert!(
-        !sources.is_empty(),
-        "no spec fixtures found under {}",
-        spec_root.display()
-    );
-    sources
-}
-
 fn print_timing_breakdown(
     total: Duration,
     phase_totals: &[PhaseTiming],
@@ -123,11 +64,11 @@ fn print_timing_breakdown(
 }
 
 fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
-    let sources = spec_sources()
+    let sources = spec_fixtures()
         .into_iter()
         .enumerate()
         .filter(|(index, _)| index % bucket_count == bucket)
-        .map(|(_, path)| path)
+        .map(|(_, fixture)| fixture)
         .collect::<Vec<_>>();
     assert!(
         !sources.is_empty(),
@@ -136,28 +77,21 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
         bucket_count
     );
 
-    for source_path in sources {
-        let expected_path = source_path.with_extension("expected");
-        assert!(
-            expected_path.exists(),
-            "missing .expected for {}",
-            source_path.display()
-        );
-
-        let source = fs::read_to_string(&source_path)
-            .unwrap_or_else(|e| panic!("failed to read {}: {}", source_path.display(), e));
-        let expected = fs::read_to_string(&expected_path)
-            .unwrap_or_else(|e| panic!("failed to read {}: {}", expected_path.display(), e));
-
-        let output = run_surtr(&source)
-            .unwrap_or_else(|e| panic!("pipeline failed for {}: {}", source_path.display(), e));
+    for fixture in sources {
+        let output = run_surtr(fixture.source).unwrap_or_else(|e| {
+            panic!(
+                "pipeline failed for {}: {}",
+                fixture.source_path.display(),
+                e
+            )
+        });
 
         let actual_stdout = output.join("\n");
         assert_eq!(
             normalize_text(&actual_stdout),
-            normalize_text(&expected),
+            normalize_text(fixture.expected),
             "stdout mismatch for {}",
-            source_path.display()
+            fixture.source_path.display()
         );
     }
 }
@@ -183,11 +117,11 @@ fn spec_fixtures_bucket_3() {
 }
 
 fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
-    let sources = compile_error_sources()
+    let sources = compile_error_fixtures()
         .into_iter()
         .enumerate()
         .filter(|(index, _)| index % bucket_count == bucket)
-        .map(|(_, path)| path)
+        .map(|(_, fixture)| fixture)
         .collect::<Vec<_>>();
     assert!(
         !sources.is_empty(),
@@ -201,32 +135,23 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
     let mut phase_totals = HashMap::<String, Duration>::new();
     let mut slowest = Vec::<(PathBuf, String, Duration)>::new();
 
-    for source_path in sources {
-        let error_path = source_path.with_extension("error");
-        assert!(
-            error_path.exists(),
-            "missing .error for {}",
-            source_path.display()
-        );
-
-        let source = fs::read_to_string(&source_path)
-            .unwrap_or_else(|e| panic!("failed to read {}: {}", source_path.display(), e));
-        let expected = parse_compile_error_expectation(&error_path);
+    for fixture in sources {
+        let expected = parse_compile_error_expectation(&fixture.error_path);
 
         let phase_name = expected.phase.as_deref().unwrap_or("unknown").to_string();
         let fixture_start = Instant::now();
-        let result = check_compile_phase(&source, expected.phase.as_deref());
+        let result = check_compile_phase(fixture.source, expected.phase.as_deref());
         let fixture_elapsed = fixture_start.elapsed();
 
         if timing_enabled {
             *phase_totals.entry(phase_name.clone()).or_default() += fixture_elapsed;
-            slowest.push((source_path.clone(), phase_name, fixture_elapsed));
+            slowest.push((fixture.source_path.clone(), phase_name, fixture_elapsed));
         }
 
         match result {
             Ok(_) => panic!(
                 "expected compile failure but succeeded: {}",
-                source_path.display()
+                fixture.source_path.display()
             ),
             Err(msg) => {
                 if let Some(expected_phase) = expected.phase.as_deref() {
@@ -235,7 +160,7 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
                         actual_phase,
                         expected_phase,
                         "phase mismatch for {}",
-                        source_path.display()
+                        fixture.source_path.display()
                     );
                 }
                 for needle in &expected.contains {
@@ -243,7 +168,7 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
                         msg.contains(needle),
                         "expected '{}' in error for {}\nactual: {}",
                         needle,
-                        source_path.display(),
+                        fixture.source_path.display(),
                         msg
                     );
                 }
