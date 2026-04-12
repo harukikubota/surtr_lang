@@ -229,6 +229,63 @@ impl User {
 }
 
 #[test]
+fn test_precollect_trait_methods_as_trait_namespace_members() {
+    let module_stages = vec![vec![staged_module(
+        "Numeric",
+        parse_module_ast(
+            r#"deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+  def safe_div(self: Self, rhs: Self) -> Result<Self, Error>
+}"#,
+            "Numeric",
+        ),
+    )]];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    let trait_entry = index.get("Numeric").expect("trait should be indexed");
+    assert_eq!(trait_entry.name, "Numeric");
+    assert_eq!(trait_entry.kind, DeclarationKind::Trait);
+
+    let add = index
+        .get("Numeric::add")
+        .expect("trait method should be indexed");
+    assert_eq!(add.module_path, "Numeric");
+    assert_eq!(add.name, "add");
+    assert_eq!(add.kind, DeclarationKind::TraitMethod);
+}
+
+#[test]
+fn test_precollect_rejects_multiple_trait_impl_blocks_for_same_pair() {
+    let module_stages = vec![vec![staged_module(
+        "Numeric",
+        parse_module_ast(
+            r#"deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+impl Numeric for Int {
+  def add(self: Self, rhs: Self) -> Self {
+    self + rhs
+  }
+}
+
+impl Numeric for Int {
+  def add(self: Self, rhs: Self) -> Self {
+    self
+  }
+}"#,
+            "Numeric",
+        ),
+    )]];
+
+    let err = precollect_declaration_index(&module_stages)
+        .expect_err("duplicate trait impl pair must fail");
+    assert!(err
+        .message
+        .contains("Multiple trait impl blocks for `Numeric for Int` are not allowed"));
+}
+
+#[test]
 fn test_precollect_rejects_impl_target_for_record() {
     let module_stages = vec![vec![staged_module(
         "",
@@ -336,6 +393,66 @@ impl User {
     });
 
     assert_eq!(constructor_name.as_deref(), Some("User::new"));
+}
+
+#[test]
+fn test_resolve_trait_def_and_impl_preserve_nodes() {
+    let ast = parse_module_ast(
+        r#"deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+impl Numeric for Int {
+  def add(self: Self, rhs: Self) -> Self {
+    self + rhs
+  }
+}"#,
+        "Numeric",
+    );
+
+    let resolved = resolve(ast).expect("trait nodes should resolve");
+    assert!(matches!(
+        &resolved[0],
+        Resolved::TraitDef(_, id, methods, _)
+            if id.name == "Numeric"
+                && methods.len() == 1
+                && methods[0].id.qualified_name.as_deref() == Some("Numeric::add")
+    ));
+    assert!(matches!(
+        &resolved[1],
+        Resolved::TraitImplDef(_, id, AstTy::Named(_, target), methods)
+            if id.name == "Numeric" && target == "Int" && methods.len() == 1
+    ));
+}
+
+#[test]
+fn test_trait_qualified_call_resolves_via_trait_namespace() {
+    let module_stages = vec![vec![staged_module(
+        "Numeric",
+        parse_module_ast(
+            r#"deftrait Numeric {
+  def safe_div(self: Self, rhs: Self) -> Result<Self, Error>
+}"#,
+            "Numeric",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"result = Numeric::safe_div(4, 2)"#,
+        &module_stages,
+    )
+    .expect("trait-qualified path should resolve");
+
+    match &resolved.last().expect("expected bind node") {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, _) => match func.as_ref() {
+                Resolved::Var(_, id) => assert_eq!(id.name, "Numeric::safe_div"),
+                _ => panic!("Expected resolved trait method path"),
+            },
+            _ => panic!("Expected app"),
+        },
+        _ => panic!("Expected bind"),
+    }
 }
 
 #[test]
@@ -495,8 +612,9 @@ print(to_string(1))"#,
     )
     .unwrap();
     match &resolved[0] {
-        Resolved::Def(_, id, params, ret_ty, body, attrs) => {
+        Resolved::Def(_, id, type_params, params, ret_ty, body, attrs) => {
             assert_eq!(id.name, "add");
+            assert!(type_params.is_empty());
             assert_eq!(params.len(), 2);
             assert_eq!(*attrs, ResolvedDeclAttrs::default());
             assert!(matches!(ret_ty, Some(spire::ast::AstTy::Named(_, ty)) if ty == "Int"));
@@ -716,7 +834,7 @@ def add(x: Int, y: Int) -> Int { x + y }"#,
     };
 
     let def_id = match &resolved[1] {
-        Resolved::Def(_, id, _, _, _, _) => id.unique_id,
+        Resolved::Def(_, id, _, _, _, _, _) => id.unique_id,
         _ => panic!("Expected Def"),
     };
 
@@ -829,7 +947,7 @@ deferror NotFound(code: String) {
                     }
                     _ => Vec::new(),
                 },
-                Resolved::Def(_, id, _, _, _, _)
+                Resolved::Def(_, id, _, _, _, _, _)
                 | Resolved::RecordDef(_, id, _)
                 | Resolved::StructDef(_, id, _)
                 | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
@@ -1256,7 +1374,7 @@ print(to_string(add(7, 3)))"#,
     let helper_add_uid = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, _)
+            Resolved::Def(_, id, _, _, _, _, _)
                 if id.qualified_name.as_deref() == Some("Helper::add") =>
             {
                 Some(id.unique_id)

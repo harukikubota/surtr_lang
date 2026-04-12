@@ -27,12 +27,39 @@ pub enum ComposeFlavor {
     ListBind { helper: ListHelperRef },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedTypeParam {
+    pub name: String,
+    pub ty_var: u32,
+    pub bound: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraitDispatch {
+    Pending,
+    Static(TraitDispatchTarget),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraitDispatchTarget {
+    BinOp(BinOp),
+    Builtin(String),
+    UserFunction { name: String, fun_idx: u32 },
+}
+
 /// Inner structure of a typed node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedInner {
     Lit(Lit),
     Var(ResolvedId),
     App(Box<TypedNode>, Vec<TypedNode>),
+    TraitCall {
+        trait_name: String,
+        method_name: String,
+        receiver_ty: Ty,
+        dispatch: TraitDispatch,
+        args: Vec<TypedNode>,
+    },
     /// Unary callable synthesized from `f(...)` for apply-style operators.
     InjectCall(Box<TypedNode>, Vec<TypedNode>),
     Block(Vec<TypedNode>),
@@ -69,10 +96,30 @@ pub enum TypedInner {
     EnumDef(String, Vec<TypedEnumVariantDef>),
 
     /// Function definition — tag + name + params + return type + body
-    Def(u32, ResolvedId, Vec<TypedFunParam>, Ty, Box<TypedNode>),
+    Def(
+        u32,
+        ResolvedId,
+        Vec<TypedTypeParam>,
+        Vec<TypedFunParam>,
+        Ty,
+        Box<TypedNode>,
+    ),
 
     /// Extractor definition — function-shaped runtime entry with MatchResult return type.
-    ExtractorDef(u32, ResolvedId, TypedFunParam, Ty, Box<TypedNode>),
+    ExtractorDef(
+        u32,
+        ResolvedId,
+        Vec<TypedTypeParam>,
+        TypedFunParam,
+        Ty,
+        Box<TypedNode>,
+    ),
+
+    /// Trait definition metadata.
+    TraitDef(String, Vec<String>),
+
+    /// Trait impl metadata.
+    TraitImplDef(String, String),
 
     /// Builtin extractor declaration.
     BuiltinExtractorDecl(ResolvedId, Ty, Ty),

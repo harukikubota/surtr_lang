@@ -433,6 +433,7 @@ impl Resolver {
                     .into_iter()
                     .map(|param| ResolvedTypeParam {
                         name: param.name,
+                        bound: param.bound,
                         span: param.span,
                     })
                     .collect::<Vec<_>>();
@@ -467,7 +468,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::Def(span, name, params, ret_ty, body, attrs) => {
+            Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => {
                 let fun_uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -477,6 +478,11 @@ impl Resolver {
                 // not to a newer same-name declaration predeclared later in the chunk.
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
+                body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                body_resolver.current_module_path = self.current_module_path.clone();
+                body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                let resolved_type_params = self.resolve_type_params(type_params);
                 let resolved_params = params
                     .into_iter()
                     .map(|param| body_resolver.resolve_fun_param(param))
@@ -496,13 +502,14 @@ impl Resolver {
                 Ok(Resolved::Def(
                     span,
                     rid,
+                    resolved_type_params,
                     resolved_params,
                     ret_ty,
                     Box::new(resolved_body),
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::ExtractorDef(span, name, param, ret_ty, body, attrs) => {
+            Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
                 let fun_uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -514,6 +521,7 @@ impl Resolver {
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                let resolved_type_params = self.resolve_type_params(type_params);
                 let resolved_param = body_resolver.resolve_extractor_param(param)?;
                 let resolved_body = body_resolver.resolve_node(*body)?;
 
@@ -530,10 +538,130 @@ impl Resolver {
                 Ok(Resolved::ExtractorDef(
                     span,
                     rid,
+                    resolved_type_params,
                     resolved_param,
                     ret_ty,
                     Box::new(resolved_body),
                     resolve_decl_attrs(&attrs),
+                ))
+            }
+            Ast::TraitDef(span, name, methods, attrs) => {
+                let trait_uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                self.scope.define_with_id(&name, trait_uid);
+                let rid = ResolvedId {
+                    name: name.clone(),
+                    qualified_name: Some(name.clone()),
+                    unique_id: trait_uid,
+                    span: span.clone(),
+                };
+                let mut resolved_methods = Vec::new();
+                for method in methods {
+                    let spire::ast::TraitMethodSig {
+                        name: method_name,
+                        type_params,
+                        params,
+                        ret_ty,
+                        span: method_span,
+                    } = method;
+                    let qualified_method = trait_method_qualified_name(&name, &method_name);
+                    let method_uid = self
+                        .take_predeclared_id(&qualified_method)
+                        .or_else(|| self.scope.lookup(&qualified_method))
+                        .unwrap_or_else(|| self.scope.reserve_id());
+                    self.scope.define_with_id(&qualified_method, method_uid);
+
+                    let mut method_resolver = Resolver::with_scope(self.scope.clone());
+                    method_resolver.declaration_uids = self.declaration_uids.clone();
+                    method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                    method_resolver.current_module_path = self.current_module_path.clone();
+                    method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                    let resolved_params = params
+                        .into_iter()
+                        .map(|param| method_resolver.resolve_fun_param(param))
+                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    self.scope.advance_next_id_to(method_resolver.scope.next_id());
+                    resolved_methods.push(ResolvedTraitMethodSig {
+                        id: ResolvedId {
+                            name: method_name,
+                            qualified_name: Some(qualified_method),
+                            unique_id: method_uid,
+                            span: method_span.clone(),
+                        },
+                        type_params: self.resolve_type_params(type_params),
+                        params: resolved_params,
+                        ret_ty,
+                        span: method_span,
+                    });
+                }
+                Ok(Resolved::TraitDef(
+                    span,
+                    rid,
+                    resolved_methods,
+                    resolve_decl_attrs(&attrs),
+                ))
+            }
+            Ast::TraitImplDef(span, trait_name, target_ty, methods) => {
+                let trait_uid = self.scope.lookup(&trait_name).ok_or_else(|| ResolveError {
+                    message: format!("Undefined trait: {}", trait_name),
+                    span: span.clone(),
+                })?;
+                let trait_id = ResolvedId {
+                    name: trait_name.clone(),
+                    qualified_name: Some(trait_name.clone()),
+                    unique_id: trait_uid,
+                    span: span.clone(),
+                };
+                let mut resolved_methods = Vec::new();
+                for method in methods {
+                    let Ast::Def(method_span, method_name, type_params, params, ret_ty, body, attrs) =
+                        method
+                    else {
+                        return Err(ResolveError {
+                            message: "trait impl body may only contain `def` declarations"
+                                .to_string(),
+                            span: span.clone(),
+                        });
+                    };
+
+                    let method_uid = self.scope.reserve_id();
+                    let mut body_scope = self.scope.clone();
+                    body_scope.define_with_id(&method_name, method_uid);
+                    let mut body_resolver = Resolver::with_scope(body_scope);
+                    body_resolver.declaration_uids = self.declaration_uids.clone();
+                    body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                    body_resolver.current_module_path = self.current_module_path.clone();
+                    body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                    let resolved_params = params
+                        .into_iter()
+                        .map(|param| body_resolver.resolve_fun_param(param))
+                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    let resolved_body = body_resolver.resolve_node(*body)?;
+                    self.scope.advance_next_id_to(body_resolver.scope.next_id());
+
+                    resolved_methods.push(ResolvedTraitImplMethod {
+                        id: ResolvedId {
+                            name: method_name,
+                            qualified_name: None,
+                            unique_id: method_uid,
+                            span: method_span.clone(),
+                        },
+                        type_params: self.resolve_type_params(type_params),
+                        params: resolved_params,
+                        ret_ty,
+                        body: Box::new(resolved_body),
+                        attrs: resolve_decl_attrs(&attrs),
+                        span: method_span,
+                    });
+                }
+
+                Ok(Resolved::TraitImplDef(
+                    span,
+                    trait_id,
+                    target_ty,
+                    resolved_methods,
                 ))
             }
 
@@ -776,6 +904,20 @@ impl Resolver {
             },
             ty: param.ty,
         })
+    }
+
+    pub(super) fn resolve_type_params(
+        &self,
+        type_params: Vec<spire::ast::TypeParam>,
+    ) -> Vec<ResolvedTypeParam> {
+        type_params
+            .into_iter()
+            .map(|param| ResolvedTypeParam {
+                name: param.name,
+                bound: param.bound,
+                span: param.span,
+            })
+            .collect()
     }
 
     pub(super) fn resolve_extractor_param(

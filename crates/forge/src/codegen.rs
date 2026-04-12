@@ -521,10 +521,10 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::Def(_, id, _, _, _) => {
+        TypedInner::Def(_, id, _, _, _, _) => {
             function_defs.push(id.name.clone());
         }
-        TypedInner::ExtractorDef(_, id, _, _, _) => {
+        TypedInner::ExtractorDef(_, id, _, _, _, _) => {
             function_defs.push(id.name.clone());
         }
         // `;` keeps Unit as expression result, but for REPL metadata we still
@@ -1151,8 +1151,8 @@ impl Codegen {
         let max_def_fun_idx = stmts
             .iter()
             .filter_map(|stmt| match &stmt.node {
-                TypedInner::Def(fun_idx, _, _, _, _) => Some(*fun_idx),
-                TypedInner::ExtractorDef(fun_idx, _, _, _, _) => Some(*fun_idx),
+                TypedInner::Def(fun_idx, _, _, _, _, _) => Some(*fun_idx),
+                TypedInner::ExtractorDef(fun_idx, _, _, _, _, _) => Some(*fun_idx),
                 TypedInner::DeferrorDef(_, fun_idx, _, _, _) => Some(*fun_idx),
                 _ => None,
             })
@@ -1187,8 +1187,8 @@ impl Codegen {
             }
         }
         defs.sort_by_key(|stmt| match &stmt.node {
-            TypedInner::Def(fun_idx, _, _, _, _) => *fun_idx,
-            TypedInner::ExtractorDef(fun_idx, _, _, _, _) => *fun_idx,
+            TypedInner::Def(fun_idx, _, _, _, _, _) => *fun_idx,
+            TypedInner::ExtractorDef(fun_idx, _, _, _, _, _) => *fun_idx,
             TypedInner::DeferrorDef(_, fun_idx, _, _, _) => *fun_idx,
             _ => u32::MAX,
         });
@@ -1219,7 +1219,7 @@ impl Codegen {
 
     fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
         let (fun_idx, id, params, ret_ty, body) = match &node.node {
-            TypedInner::Def(fun_idx, id, params, ret_ty, body) => {
+            TypedInner::Def(fun_idx, id, _type_params, params, ret_ty, body) => {
                 (fun_idx, id, params, ret_ty, body)
             }
             _ => {
@@ -1349,7 +1349,7 @@ impl Codegen {
 
     fn emit_extractor_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
         let (fun_idx, id, param, ret_ty, body) = match &node.node {
-            TypedInner::ExtractorDef(fun_idx, id, param, ret_ty, body) => {
+            TypedInner::ExtractorDef(fun_idx, id, _type_params, param, ret_ty, body) => {
                 (fun_idx, id, param, ret_ty, body)
             }
             _ => {
@@ -1458,6 +1458,62 @@ impl Codegen {
             TypedInner::App(func, args) => {
                 self.emit_app(node.span.clone(), func, args)?;
             }
+
+            TypedInner::TraitCall {
+                dispatch,
+                receiver_ty,
+                args,
+                ..
+            } => match dispatch {
+                TraitDispatch::Pending => {
+                    return Err(CodegenError {
+                        message: "bounded trait call must be specialized before codegen".into(),
+                        span: node.span.clone(),
+                    });
+                }
+                TraitDispatch::Static(TraitDispatchTarget::BinOp(op)) => {
+                    if args.len() != 2 {
+                        return Err(CodegenError {
+                            message: format!("trait binop dispatch expects 2 args, got {}", args.len()),
+                            span: node.span.clone(),
+                        });
+                    }
+                    self.emit_node(&args[0])?;
+                    self.emit_node(&args[1])?;
+                    let opcode = self.binop_to_opcode(op, receiver_ty, &node.span)?;
+                    self.emit(opcode);
+                }
+                TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => {
+                    for arg in args {
+                        self.emit_node(arg)?;
+                    }
+                    if let Some(opcode) = Self::direct_builtin_opcode(name, args.len()) {
+                        self.emit(opcode);
+                    } else {
+                        let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                            message: format!("Unknown builtin: {}", name),
+                            span: node.span.clone(),
+                        })?;
+                        self.emit(Opcode::CallBuiltin {
+                            builtin_id,
+                            arity: args.len() as u8,
+                            span_start: node.span.start as u32,
+                            span_end: node.span.end as u32,
+                        });
+                    }
+                }
+                TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
+                    for arg in args {
+                        self.emit_node(arg)?;
+                    }
+                    self.emit(Opcode::Call {
+                        fun_idx: *fun_idx,
+                        arity: args.len() as u8,
+                        span_start: node.span.start as u32,
+                        span_end: node.span.end as u32,
+                    });
+                }
+            },
 
             TypedInner::InjectCall(func, args) => {
                 let fun_idx = self.reserve_fun_idx();
@@ -1667,11 +1723,15 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::Def(_fun_idx, _id, _params, _ret_ty, _body) => {
+            TypedInner::Def(_fun_idx, _id, _type_params, _params, _ret_ty, _body) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
             TypedInner::ExtractorDef(..) | TypedInner::BuiltinExtractorDecl(..) => {
+                let unit_idx = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit_idx));
+            }
+            TypedInner::TraitDef(..) | TypedInner::TraitImplDef(..) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }

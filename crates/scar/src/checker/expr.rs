@@ -171,11 +171,22 @@ impl Checker {
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
             }
-            Resolved::Def(span, id, params, ret_ty, body, _) => {
-                self.check_def(span, id, params, ret_ty, body)
+            Resolved::Def(span, id, type_params, params, ret_ty, body, _) => {
+                self.check_def(span, id, type_params, params, ret_ty, body)
             }
-            Resolved::ExtractorDef(span, id, param, ret_ty, body, _) => {
-                self.check_extractor_def(span, id, param, ret_ty, body)
+            Resolved::ExtractorDef(span, id, type_params, param, ret_ty, body, _) => {
+                self.check_extractor_def(span, id, type_params, param, ret_ty, body)
+            }
+            Resolved::TraitDef(span, id, methods, _) => Ok(TypedNode {
+                ty: Ty::Unit,
+                span: span.clone(),
+                node: TypedInner::TraitDef(
+                    id.name.clone(),
+                    methods.iter().map(|method| method.id.name.clone()).collect(),
+                ),
+            }),
+            Resolved::TraitImplDef(span, trait_id, target_ty, methods) => {
+                self.check_trait_impl_def(span, trait_id, target_ty, methods)
             }
             Resolved::BuiltinDecl(span, id, params, ret_ty, _) => {
                 self.check_builtin_decl(span, id, params, ret_ty)
@@ -354,12 +365,14 @@ impl Checker {
             | Resolved::RecordDef(span, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
             | Resolved::EnumDef(span, _, _, _)
-            | Resolved::Def(span, _, _, _, _, _)
-            | Resolved::ExtractorDef(span, _, _, _, _, _)
+            | Resolved::Def(span, _, _, _, _, _, _)
+            | Resolved::ExtractorDef(span, _, _, _, _, _, _)
             | Resolved::BuiltinDecl(span, _, _, _, _)
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
             | Resolved::ResultCtorDecl(span, _, _, _, _)
+            | Resolved::TraitDef(span, _, _, _)
+            | Resolved::TraitImplDef(span, _, _, _)
             | Resolved::Closure(span, _, _, _)
             | Resolved::Capture(span, _, _)
             | Resolved::Semi(span, _) => span,
@@ -483,6 +496,191 @@ impl Checker {
             ty: self.resolve_ty(&ret),
             span: span.clone(),
             node: TypedInner::App(Box::new(func), args),
+        })
+    }
+
+    pub(super) fn trait_method_ref<'a>(
+        &self,
+        func: &'a Resolved,
+    ) -> Option<(&'a ResolvedId, String, String)> {
+        let Resolved::Var(_, id) = func else {
+            return None;
+        };
+        let qualified_name = id.qualified_name.as_ref()?;
+        let (trait_name, method_name) = self
+            .trait_methods_by_qualified_name
+            .get(qualified_name)?
+            .clone();
+        Some((id, trait_name, method_name))
+    }
+
+    pub(super) fn trait_dispatch_target(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+    ) -> Option<TraitDispatch> {
+        let receiver_ty = self.resolve_ty(receiver_ty);
+        match receiver_ty {
+            Ty::Var(var) => {
+                if self.tyvar_has_bound(var, trait_name) {
+                    Some(TraitDispatch::Pending)
+                } else {
+                    None
+                }
+            }
+            concrete => {
+                let target_name = self.trait_target_name(&concrete)?;
+                let has_impl = self.trait_impl_exists(trait_name, &concrete);
+                let allow_numeric_builtin_fallback =
+                    trait_name == "Numeric" && matches!(target_name.as_str(), "Int" | "Float");
+                if !has_impl && !allow_numeric_builtin_fallback {
+                    return None;
+                }
+                match (trait_name, method_name, self.trait_target_name(&concrete).as_deref()) {
+                    ("Numeric", "add", Some("Int")) | ("Numeric", "add", Some("Float")) => {
+                        Some(TraitDispatch::Static(TraitDispatchTarget::BinOp(
+                            BinOp::Add,
+                        )))
+                    }
+                    ("Numeric", "sub", Some("Int")) | ("Numeric", "sub", Some("Float")) => {
+                        Some(TraitDispatch::Static(TraitDispatchTarget::BinOp(
+                            BinOp::Sub,
+                        )))
+                    }
+                    ("Numeric", "mul", Some("Int")) | ("Numeric", "mul", Some("Float")) => {
+                        Some(TraitDispatch::Static(TraitDispatchTarget::BinOp(
+                            BinOp::Mul,
+                        )))
+                    }
+                    ("Numeric", "safe_div", Some("Int"))
+                    | ("Numeric", "safe_div", Some("Float")) => Some(TraitDispatch::Static(
+                        TraitDispatchTarget::Builtin("safe_div".into()),
+                    )),
+                    ("Numeric", "abs", Some("Int"))
+                    | ("Numeric", "min", Some("Int"))
+                    | ("Numeric", "max", Some("Int"))
+                    | ("Numeric", "abs", Some("Float"))
+                    | ("Numeric", "min", Some("Float"))
+                    | ("Numeric", "max", Some("Float")) => {
+                        let target_name = self.trait_target_name(&concrete)?;
+                        let function_name = format!("{}::{}", target_name, method_name);
+                        let function_id = self.function_ids_by_name.get(&function_name)?;
+                        let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                        let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                            return None;
+                        };
+                        Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                            name: function_name,
+                            fun_idx: *fun_idx,
+                        }))
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    pub(super) fn check_trait_method_call(
+        &mut self,
+        span: &Span,
+        trait_name: &str,
+        method_name: &str,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: format!(
+                    "{}::{} does not accept named arguments",
+                    trait_name, method_name
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let trait_info = self.traits.get(trait_name).cloned().ok_or_else(|| TypeError {
+            message: format!("Unknown trait: {}", trait_name),
+            span: span.clone(),
+            hint: None,
+        })?;
+        let method = trait_info
+            .methods
+            .get(method_name)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown trait method: {}::{}", trait_name, method_name),
+                span: span.clone(),
+                hint: None,
+            })?;
+
+        let self_ty = self.env.fresh_tyvar();
+        let (param_tys, ret_ty) = self.resolve_trait_method_signature(&method, &self_ty)?;
+
+        if args.len() != param_tys.len() {
+            return Err(TypeError {
+                message: format!(
+                    "{}::{} expects {} argument(s), got {}",
+                    trait_name,
+                    method_name,
+                    param_tys.len(),
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let typed_args = args
+            .iter()
+            .zip(param_tys.iter())
+            .map(|(arg, expected)| match arg {
+                ResolvedRecordLitArg::Positional(expr) => {
+                    self.check_node_with_expected(expr, Some(expected))
+                }
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for (expected, arg) in param_tys.iter().zip(&typed_args) {
+            if !self.types_compatible(expected, &arg.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "Argument type mismatch: expected {}, got {}",
+                        self.ty_name(expected),
+                        self.ty_name(&arg.ty)
+                    ),
+                    span: arg.span.clone(),
+                    hint: None,
+                });
+            }
+        }
+
+        let receiver_ty = self.resolve_ty(&self_ty);
+        let dispatch =
+            self.trait_dispatch_target(trait_name, method_name, &receiver_ty)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "{}::{} requires a receiver type implementing {}",
+                        trait_name, method_name, trait_name
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+
+        Ok(TypedNode {
+            ty: self.resolve_ty(&ret_ty),
+            span: span.clone(),
+            node: TypedInner::TraitCall {
+                trait_name: trait_name.into(),
+                method_name: method_name.into(),
+                receiver_ty,
+                dispatch,
+                args: typed_args,
+            },
         })
     }
 
@@ -1214,6 +1412,10 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
+        if let Some((_id, trait_name, method_name)) = self.trait_method_ref(func) {
+            return self.check_trait_method_call(span, &trait_name, &method_name, args);
+        }
+
         let typed_func = self.check_node(func)?;
         let func_ty = self.resolve_ty(&typed_func.ty);
 
@@ -1608,26 +1810,19 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_node(left)?;
-        let typed_right = self.check_node(right)?;
-        let lt = self.resolve_ty(&typed_left.ty);
-        let rt = self.resolve_ty(&typed_right.ty);
-
-        let result_ty = match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul => match (&lt, &rt) {
-                (Ty::Int, Ty::Int) => Ok(Ty::Int),
-                (Ty::Float, Ty::Float) => Ok(Ty::Float),
-                (Ty::Var(_), Ty::Int) | (Ty::Int, Ty::Var(_)) => {
-                    self.types_compatible(&lt, &Ty::Int);
-                    self.types_compatible(&rt, &Ty::Int);
-                    Ok(Ty::Int)
-                }
-                (Ty::Var(_), Ty::Float) | (Ty::Float, Ty::Var(_)) => {
-                    self.types_compatible(&lt, &Ty::Float);
-                    self.types_compatible(&rt, &Ty::Float);
-                    Ok(Ty::Float)
-                }
-                _ => Err(TypeError {
+        if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
+            let method_name = match op {
+                BinOp::Add => "add",
+                BinOp::Sub => "sub",
+                BinOp::Mul => "mul",
+                _ => unreachable!("validated above"),
+            };
+            let typed_left = self.check_node(left)?;
+            let typed_right = self.check_node(right)?;
+            let lt = self.resolve_ty(&typed_left.ty);
+            let rt = self.resolve_ty(&typed_right.ty);
+            if !self.types_compatible(&lt, &rt) {
+                return Err(TypeError {
                     message: format!(
                         "Cannot apply {:?} to {} and {}",
                         op,
@@ -1636,8 +1831,38 @@ impl Checker {
                     ),
                     span: span.clone(),
                     hint: None,
-                }),
-            },
+                });
+            }
+            let receiver_ty = self.resolve_ty(&lt);
+            let dispatch = self
+                .trait_dispatch_target("Numeric", method_name, &receiver_ty)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Operator {:?} requires both operands to implement Numeric",
+                        op
+                    ),
+                    span: span.clone(),
+                    hint: Some("Add a `Numeric` bound or use `Int` / `Float` values.".into()),
+                })?;
+            return Ok(TypedNode {
+                ty: self.resolve_ty(&receiver_ty),
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: "Numeric".into(),
+                    method_name: method_name.into(),
+                    receiver_ty,
+                    dispatch,
+                    args: vec![typed_left, typed_right],
+                },
+            });
+        }
+
+        let typed_left = self.check_node(left)?;
+        let typed_right = self.check_node(right)?;
+        let lt = self.resolve_ty(&typed_left.ty);
+        let rt = self.resolve_ty(&typed_right.ty);
+
+        let result_ty = match op {
             BinOp::Eq | BinOp::Neq => match (&lt, &rt) {
                 (Ty::Int, Ty::Int)
                 | (Ty::Str, Ty::Str)
@@ -1707,6 +1932,7 @@ impl Checker {
                     hint: None,
                 }),
             },
+            BinOp::Add | BinOp::Sub | BinOp::Mul => unreachable!("handled above"),
         }?;
 
         Ok(TypedNode {

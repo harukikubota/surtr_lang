@@ -436,7 +436,7 @@ impl Checker {
                 Resolved::StructDef(_, id, _) => {
                     struct_decl_spans.insert(id.name.clone(), id.span.clone());
                 }
-                Resolved::Def(_, id, _, _, _, _) => {
+                Resolved::Def(_, id, _, _, _, _, _) => {
                     if let Some((target, method)) = Self::split_impl_method_name(&id.name) {
                         if method == "new" {
                             structs_with_new.insert(target);
@@ -466,6 +466,261 @@ impl Checker {
     pub(super) fn register_function_id(&mut self, id: &ResolvedId) {
         let key = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
         self.function_ids_by_name.insert(key, id.clone());
+    }
+
+    pub(super) fn trait_target_name(&self, ty: &Ty) -> Option<String> {
+        match self.resolve_ty(ty) {
+            Ty::Int => Some("Int".into()),
+            Ty::Float => Some("Float".into()),
+            Ty::Str => Some("String".into()),
+            Ty::Bool => Some("Boolean".into()),
+            Ty::Unit => Some("Unit".into()),
+            Ty::Error => Some("Error".into()),
+            Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
+            Ty::Enum(name, args) if args.is_empty() => Some(name),
+            _ => None,
+        }
+    }
+
+    pub(super) fn trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
+        self.trait_target_name(ty)
+            .is_some_and(|target_name| self.trait_impls.contains_key(&(trait_name.into(), target_name)))
+    }
+
+    pub(super) fn resolve_trait_method_signature(
+        &mut self,
+        method: &TraitMethodInfo,
+        self_ty: &Ty,
+    ) -> Result<(Vec<Ty>, Ty), TypeError> {
+        let mut tyvars = HashMap::new();
+        self.seed_signature_type_params(&method.type_params, &mut tyvars);
+        let params = method
+            .params
+            .iter()
+            .map(|param| {
+                self.resolve_trait_signature_ast_ty_in_context(
+                    &param.ty,
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    &mut tyvars,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret = self.resolve_trait_signature_ast_ty_in_context(
+            &method.ret_ty,
+            TypeSyntaxContext::FunctionReturn,
+            self_ty,
+            &mut tyvars,
+        )?;
+        Ok((params, ret))
+    }
+
+    pub(super) fn resolve_trait_impl_method_signature(
+        &mut self,
+        method: &TraitImplMethodInfo,
+        self_ty: &Ty,
+        fallback_ret_ty: &AstTy,
+    ) -> Result<(Vec<Ty>, Ty), TypeError> {
+        let mut tyvars = HashMap::new();
+        self.seed_signature_type_params(&method.type_params, &mut tyvars);
+        let params = method
+            .params
+            .iter()
+            .map(|param| {
+                self.resolve_trait_signature_ast_ty_in_context(
+                    &param.ty,
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    &mut tyvars,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret_source = method.ret_ty.as_ref().unwrap_or(fallback_ret_ty);
+        let ret = self.resolve_trait_signature_ast_ty_in_context(
+            ret_source,
+            TypeSyntaxContext::FunctionReturn,
+            self_ty,
+            &mut tyvars,
+        )?;
+        Ok((params, ret))
+    }
+
+    pub(super) fn predeclare_traits(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
+        for stmt in stmts {
+            let Resolved::TraitDef(span, id, methods, _) = stmt else {
+                continue;
+            };
+            let mut method_map = HashMap::new();
+            for method in methods {
+                if let Some(qualified_name) = &method.id.qualified_name {
+                    self.trait_methods_by_qualified_name.insert(
+                        qualified_name.clone(),
+                        (id.name.clone(), method.id.name.clone()),
+                    );
+                }
+                method_map.insert(
+                    method.id.name.clone(),
+                    TraitMethodInfo {
+                        id: method.id.clone(),
+                        type_params: method.type_params.clone(),
+                        params: method.params.clone(),
+                        ret_ty: method.ret_ty.clone(),
+                        span: method.span.clone(),
+                    },
+                );
+            }
+            self.traits.insert(
+                id.name.clone(),
+                TraitInfo {
+                    id: id.clone(),
+                    methods: method_map,
+                },
+            );
+            let _ = span;
+        }
+
+        for stmt in stmts {
+            let Resolved::TraitImplDef(span, trait_id, target_ast_ty, methods) = stmt else {
+                continue;
+            };
+
+            let trait_info = self.traits.get(&trait_id.name).cloned().ok_or_else(|| TypeError {
+                message: format!("Unknown trait: {}", trait_id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
+            let target_ty =
+                self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+            let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
+                message: "trait impl target must be a concrete named type".into(),
+                span: Self::ast_ty_span(target_ast_ty).clone(),
+                hint: Some("Use `impl Trait for Int` / `impl Trait for Float` / `impl Trait for UserType`.".into()),
+            })?;
+
+            let mut method_map = HashMap::new();
+            for method in methods {
+                method_map.insert(
+                    method.id.name.clone(),
+                    TraitImplMethodInfo {
+                        id: method.id.clone(),
+                        type_params: method.type_params.clone(),
+                        params: method.params.clone(),
+                        ret_ty: method.ret_ty.clone(),
+                        body: method.body.clone(),
+                        attrs: method.attrs.clone(),
+                        span: method.span.clone(),
+                    },
+                );
+            }
+
+            for required_method in trait_info.methods.keys() {
+                if !method_map.contains_key(required_method) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl {} for {} is missing method `{}`",
+                            trait_id.name, target_name, required_method
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+
+            for method_name in method_map.keys() {
+                if !trait_info.methods.contains_key(method_name) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl {} for {} defines unknown method `{}`",
+                            trait_id.name, target_name, method_name
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+
+            for (method_name, impl_method) in &method_map {
+                let trait_method = trait_info.methods.get(method_name).expect("validated above");
+                if trait_method.type_params.len() != impl_method.type_params.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl method {}::{} has incompatible type parameter arity",
+                            trait_id.name, method_name
+                        ),
+                        span: impl_method.span.clone(),
+                        hint: None,
+                    });
+                }
+
+                let (trait_params, trait_ret) =
+                    self.resolve_trait_method_signature(trait_method, &target_ty)?;
+                let (impl_params, impl_ret) = self.resolve_trait_impl_method_signature(
+                    impl_method,
+                    &target_ty,
+                    &trait_method.ret_ty,
+                )?;
+
+                if trait_params.len() != impl_params.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl method {}::{} has incompatible arity",
+                            trait_id.name, method_name
+                        ),
+                        span: impl_method.span.clone(),
+                        hint: None,
+                    });
+                }
+
+                for (expected, got) in trait_params.iter().zip(&impl_params) {
+                    let before = self.substitutions.clone();
+                    let compatible = self.types_compatible(expected, got);
+                    self.substitutions = before;
+                    if !compatible {
+                        return Err(TypeError {
+                            message: format!(
+                                "Trait impl method {}::{} has incompatible parameter type: expected {}, got {}",
+                                trait_id.name,
+                                method_name,
+                                self.ty_name(expected),
+                                self.ty_name(got)
+                            ),
+                            span: impl_method.span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+
+                let before = self.substitutions.clone();
+                let ret_compatible = self.types_compatible(&trait_ret, &impl_ret);
+                self.substitutions = before;
+                if !ret_compatible {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl method {}::{} has incompatible return type: expected {}, got {}",
+                            trait_id.name,
+                            method_name,
+                            self.ty_name(&trait_ret),
+                            self.ty_name(&impl_ret)
+                        ),
+                        span: impl_method.span.clone(),
+                        hint: None,
+                    });
+                }
+
+            }
+
+            self.trait_impls.insert(
+                (trait_id.name.clone(), target_name.clone()),
+                TraitImplInfo {
+                    trait_id: trait_id.clone(),
+                    target_name,
+                    target_ty,
+                    methods: method_map,
+                },
+            );
+        }
+
+        Ok(())
     }
 
     pub(super) fn predeclare_functions(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
@@ -528,9 +783,10 @@ impl Checker {
                         },
                     );
                 }
-                Resolved::Def(_, id, params, ret_ty, _, _) => {
+                Resolved::Def(_, id, type_params, params, ret_ty, _, _) => {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
+                    self.seed_signature_type_params(type_params, &mut tyvars);
                     let param_tys = params
                         .iter()
                         .map(|param| {
@@ -575,9 +831,10 @@ impl Checker {
                     }
                     fun_idx += 1;
                 }
-                Resolved::ExtractorDef(_, id, param, ret_ty, _, _) => {
+                Resolved::ExtractorDef(_, id, type_params, param, ret_ty, _, _) => {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
+                    self.seed_signature_type_params(type_params, &mut tyvars);
                     let param_ty = match &param.ty {
                         Some(ty) => self.resolve_signature_ast_ty_in_context(
                             ty,

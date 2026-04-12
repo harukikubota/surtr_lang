@@ -30,6 +30,7 @@ pub struct LoweredModuleAst {
 fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
     match ty {
         spire::ast::AstTy::Named(_, name) => name.clone(),
+        spire::ast::AstTy::ImplTrait(_, name) => format!("impl {name}"),
         spire::ast::AstTy::Generic(_, name, args) => {
             let args = args
                 .iter()
@@ -61,19 +62,37 @@ fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
     }
 }
 
+fn format_type_params(type_params: &[spire::ast::TypeParam]) -> String {
+    if type_params.is_empty() {
+        String::new()
+    } else {
+        let params = type_params
+            .iter()
+            .map(|param| match &param.bound {
+                Some(bound) => format!("${}: {}", param.name, bound),
+                None => format!("${}", param.name),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("<{params}>")
+    }
+}
+
 fn format_fun_signature(
     name: &str,
+    type_params: &[spire::ast::TypeParam],
     params: &[spire::ast::FunParam],
     ret_ty: &Option<spire::ast::AstTy>,
 ) -> String {
+    let type_params = format_type_params(type_params);
     let params = params
         .iter()
         .map(|param| format!("{}: {}", param.name, format_ast_ty(&param.ty)))
         .collect::<Vec<_>>()
         .join(", ");
     match ret_ty {
-        Some(ret) => format!("{name}({params}) -> {}", format_ast_ty(ret)),
-        None => format!("{name}({params})"),
+        Some(ret) => format!("{name}{type_params}({params}) -> {}", format_ast_ty(ret)),
+        None => format!("{name}{type_params}({params})"),
     }
 }
 
@@ -149,13 +168,13 @@ fn collect_doc_entries_for_ast(
 ) {
     for stmt in ast {
         match stmt {
-            spire::ast::Ast::Def(_, name, params, ret_ty, _, attrs) => {
+            spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
                         module_path: module_path.to_string(),
-                        signature: Some(format_fun_signature(name, params, ret_ty)),
+                        signature: Some(format_fun_signature(name, type_params, params, ret_ty)),
                         doc: doc.clone(),
                     });
                 }
@@ -166,7 +185,34 @@ fn collect_doc_entries_for_ast(
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
                         module_path: module_path.to_string(),
-                        signature: Some(format_fun_signature(name, params, ret_ty)),
+                        signature: Some(format_fun_signature(name, &[], params, ret_ty)),
+                        doc: doc.clone(),
+                    });
+                }
+            }
+            spire::ast::Ast::TraitDef(_, name, methods, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, name),
+                        kind: DocKind::Type,
+                        module_path: module_path.to_string(),
+                        signature: Some(format!(
+                            "trait {} {{ {} }}",
+                            name,
+                            methods
+                                .iter()
+                                .map(|method| format!(
+                                    "{}",
+                                    format_fun_signature(
+                                        &method.name,
+                                        &method.type_params,
+                                        &method.params,
+                                        &Some(method.ret_ty.clone()),
+                                    )
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
                         doc: doc.clone(),
                     });
                 }
@@ -531,7 +577,7 @@ defmod Result {
             |stmt| matches!(stmt, spire::ast::Ast::ResultCtorDecl(_, name, _, _, _) if name == "Ok")
         ));
         assert!(lowered[0].ast.iter().any(
-            |stmt| matches!(stmt, spire::ast::Ast::Def(_, name, _, _, _, _) if name == "dummy")
+            |stmt| matches!(stmt, spire::ast::Ast::Def(_, name, _, _, _, _, _) if name == "dummy")
         ));
     }
 

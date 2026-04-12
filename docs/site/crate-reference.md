@@ -167,7 +167,7 @@ xldr: REPL / interactive runtime
 主な責務:
 
 - 標準モジュールと user source を compile 用に束ねる
-- `Bootstrap -> [Kernel + 他標準モジュール] -> ユーザ拡張` のロード順を守る
+- `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張` のロード順を守る
 - REPL セッションの増分 compile / 実行を管理する
 
 設計メモ:

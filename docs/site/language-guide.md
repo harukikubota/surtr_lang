@@ -89,6 +89,32 @@ print(to_string(add(y: 2, x: 1)))
 - 関数本体は式として評価される
 - 前方参照は許可される。後で同じコンパイル単位に定義が現れればよい
 
+### 5.1 Trait System V1
+
+Surtr には V1 の trait system があります。最初の trait は `Numeric` です。
+
+```surtr
+deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+def twice<$N: Numeric>(x: $N) -> $N {
+  x + x
+}
+
+def show_abs(x: impl Numeric) -> String {
+  inspect(Numeric::abs(x))
+}
+```
+
+押さえておくとよい点は次のとおりです。
+
+- `deftrait` は method 宣言だけを持つ
+- 実装は `impl Numeric for Int { ... }` の形で書く
+- `impl Trait` は parameter 位置だけで使える
+- 戻り値でも同じ型を使いたいときは `<$N: Numeric>` のように名前付き bound を使う
+- `-> impl Numeric` と `where ...` はまだ使えない
+
 ## 6. 条件分岐とパターンマッチ
 
 Surtr では `if` と `match` が重要です。
@@ -499,14 +525,15 @@ f = &`+`   # 未実装
 - `eprint(Error) -> Unit`
 - `set_exit_code(Int) -> Unit`
 
-`safe_div` と `safe_mod` は、失敗を例外ではなく `Result<_, ZeroDivisionError>` で返します。
+`safe_div` と `safe_mod` は、失敗を例外ではなく `Result<_, ZeroDivisionError>` で返します。  
+`+`, `-`, `*` は内部では `Numeric` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
 
 ## 12. 標準モジュールの前提
 
 現在の Surtr では、標準モジュールを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。
@@ -518,6 +545,9 @@ Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user 
   - auto import される最小の標準 API
   - `defmod Kernel` 配下に置かれる `print` のような cross-cutting builtin
   - 専用 file を持たない `Unit` の type 宣言
+- `Numeric`
+  - compile-time trait dispatch の基準になる trait 宣言
+  - `Int` / `Float` が共有する `add`, `sub`, `mul`, `safe_div`, `abs`, `min`, `max` の契約
 - 各 type module
   - `Int` や `String` のような型ごとの helper と説明
   - その型自身の `@@builtin type` 宣言
@@ -577,12 +607,12 @@ value: Result<Int> = Ok(42)
 - `defstruct`
 - `defrecord`
 - `deferror`
+- trait (`Numeric` first)
 - `Result`
 - `List`
 
 含まないもの:
 
-- trait
 - 型エイリアス / NewType
 - マクロシステム拡張
 - 並列コンパイル

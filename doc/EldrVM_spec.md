@@ -91,7 +91,7 @@ Eldr は次を担わない。
 ### 3.6 トップレベル名衝突ポリシー（コンパイラ契約）
 
 - 同一モジュール（REPL セッションを含む）で、トップレベル定義名の重複は禁止する
-- 対象: `def` / `defstruct` / `defrecord` / `deferror`（trait は将来仕様）
+- 対象: `def` / `defstruct` / `defrecord` / `deferror` / `deftrait`
 - 本規約はファイル実行と REPL で同一に適用する
 
 ---
@@ -194,7 +194,7 @@ Opcode は以下のカテゴリを持つ。
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `Float` の厳密契約は `doc/float.md` を参照する
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel + 他標準モジュール] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.1 TypeRegistry
 

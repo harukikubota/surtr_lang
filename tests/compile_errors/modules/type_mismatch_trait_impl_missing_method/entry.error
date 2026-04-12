@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Trait impl Summable for Int is missing method `sub`

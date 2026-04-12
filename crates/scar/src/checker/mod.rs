@@ -18,6 +18,7 @@ mod expr;
 mod matching;
 mod patterns;
 mod predeclare;
+mod specialize;
 mod types;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,44 @@ enum TypeSyntaxContext {
     General,
     FunctionReturn,
     ErrorMarker,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct TraitMethodInfo {
+    id: ResolvedId,
+    type_params: Vec<ResolvedTypeParam>,
+    params: Vec<ResolvedFunParam>,
+    ret_ty: AstTy,
+    span: Span,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct TraitInfo {
+    id: ResolvedId,
+    methods: HashMap<String, TraitMethodInfo>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct TraitImplMethodInfo {
+    id: ResolvedId,
+    type_params: Vec<ResolvedTypeParam>,
+    params: Vec<ResolvedFunParam>,
+    ret_ty: Option<AstTy>,
+    body: Box<Resolved>,
+    attrs: ResolvedDeclAttrs,
+    span: Span,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct TraitImplInfo {
+    trait_id: ResolvedId,
+    target_name: String,
+    target_ty: Ty,
+    methods: HashMap<String, TraitImplMethodInfo>,
 }
 
 /// Type-check the resolved AST, producing a fully typed tree.
@@ -207,6 +246,10 @@ pub struct ScarCheckpoint {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +258,10 @@ pub struct ScarSession {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
 }
 
 struct CheckerParts {
@@ -222,6 +269,10 @@ struct CheckerParts {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
 }
 
 impl ScarSession {
@@ -231,6 +282,10 @@ impl ScarSession {
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
+            traits: HashMap::new(),
+            trait_impls: HashMap::new(),
+            trait_methods_by_qualified_name: HashMap::new(),
+            tyvar_bounds: HashMap::new(),
         }
     }
 
@@ -256,11 +311,19 @@ impl ScarSession {
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
+            traits,
+            trait_impls,
+            trait_methods_by_qualified_name,
+            tyvar_bounds,
         } = checker.into_parts();
         self.env = env;
         self.user_func_params = user_func_params;
         self.impl_method_uids = impl_method_uids;
         self.function_ids_by_name = function_ids_by_name;
+        self.traits = traits;
+        self.trait_impls = trait_impls;
+        self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
+        self.tyvar_bounds = tyvar_bounds;
         Ok(typed)
     }
 
@@ -270,6 +333,10 @@ impl ScarSession {
             user_func_params: self.user_func_params.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
+            traits: self.traits.clone(),
+            trait_impls: self.trait_impls.clone(),
+            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
+            tyvar_bounds: self.tyvar_bounds.clone(),
         }
     }
 
@@ -278,6 +345,10 @@ impl ScarSession {
         self.user_func_params = checkpoint.user_func_params;
         self.impl_method_uids = checkpoint.impl_method_uids;
         self.function_ids_by_name = checkpoint.function_ids_by_name;
+        self.traits = checkpoint.traits;
+        self.trait_impls = checkpoint.trait_impls;
+        self.trait_methods_by_qualified_name = checkpoint.trait_methods_by_qualified_name;
+        self.tyvar_bounds = checkpoint.tyvar_bounds;
     }
 
     pub fn ensure_next_fun_idx_at_least(&mut self, next_fun_idx: u32) {
@@ -300,9 +371,13 @@ struct Checker {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     substitutions: HashMap<u32, Ty>,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
     source_rules: SourceRules,
     enforce_builtin_type_contracts: bool,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
 }
 
 impl Checker {
@@ -316,9 +391,13 @@ impl Checker {
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
             substitutions: HashMap::new(),
+            tyvar_bounds: HashMap::new(),
             source_rules: context.source_rules,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             seen_builtin_type_decls: HashMap::new(),
+            traits: HashMap::new(),
+            trait_impls: HashMap::new(),
+            trait_methods_by_qualified_name: HashMap::new(),
         }
     }
 
@@ -338,9 +417,13 @@ impl Checker {
             impl_method_uids,
             function_ids_by_name,
             substitutions: HashMap::new(),
+            tyvar_bounds: HashMap::new(),
             source_rules: context.source_rules,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             seen_builtin_type_decls: HashMap::new(),
+            traits: HashMap::new(),
+            trait_impls: HashMap::new(),
+            trait_methods_by_qualified_name: HashMap::new(),
         }
     }
 
@@ -361,16 +444,24 @@ impl Checker {
         checker.impl_method_uids = self.impl_method_uids.clone();
         checker.function_ids_by_name = self.function_ids_by_name.clone();
         checker.substitutions = self.substitutions.clone();
+        checker.tyvar_bounds = self.tyvar_bounds.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
+        checker.traits = self.traits.clone();
+        checker.trait_impls = self.trait_impls.clone();
+        checker.trait_methods_by_qualified_name = self.trait_methods_by_qualified_name.clone();
         checker
     }
 
     fn absorb_child_progress(&mut self, child: &Checker) {
         self.substitutions = child.substitutions.clone();
+        self.tyvar_bounds = child.tyvar_bounds.clone();
         self.env.next_tyvar = self.env.next_tyvar.max(child.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(child.env.next_tag);
         self.seen_builtin_type_decls = child.seen_builtin_type_decls.clone();
         self.impl_method_uids = child.impl_method_uids.clone();
+        self.traits = child.traits.clone();
+        self.trait_impls = child.trait_impls.clone();
+        self.trait_methods_by_qualified_name = child.trait_methods_by_qualified_name.clone();
     }
 
     fn into_parts(self) -> CheckerParts {
@@ -379,12 +470,17 @@ impl Checker {
             user_func_params: self.user_func_params,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
+            traits: self.traits,
+            trait_impls: self.trait_impls,
+            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
+            tyvar_bounds: self.tyvar_bounds,
         }
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
         self.predeclare_error_types(&stmts);
         self.predeclare_type_signatures(&stmts)?;
+        self.predeclare_traits(&stmts)?;
         self.predeclare_functions(&stmts)?;
         self.ensure_struct_impl_new_contract(&stmts)?;
         let mut typed = Vec::new();
@@ -393,6 +489,6 @@ impl Checker {
             typed.push(self.resolve_typed_node(node));
         }
         self.ensure_builtin_type_contracts()?;
-        Ok(typed)
+        self.specialize_program(typed)
     }
 }

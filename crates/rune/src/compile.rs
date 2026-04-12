@@ -196,8 +196,10 @@ fn is_direct_module_source(ast: &[Ast]) -> bool {
                 stmt,
                 Ast::Defmod(_, _, _, _)
                     | Ast::Import(_, _, _)
-                    | Ast::Def(_, _, _, _, _, _)
-                    | Ast::ExtractorDef(_, _, _, _, _, _)
+                    | Ast::Def(..)
+                    | Ast::ExtractorDef(..)
+                    | Ast::TraitDef(_, _, _, _)
+                    | Ast::TraitImplDef(_, _, _, _)
                     | Ast::StructDef(_, _, _)
                     | Ast::RecordDef(_, _, _)
                     | Ast::DeferrorDef(_, _, _, _, _)
@@ -439,7 +441,10 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
         .filter(|stmt| {
             matches!(
                 stmt,
-                Ast::Def(_, _, _, _, _, _)
+                Ast::Def(..)
+                    | Ast::ExtractorDef(..)
+                    | Ast::TraitDef(_, _, _, _)
+                    | Ast::TraitImplDef(_, _, _, _)
                     | Ast::BuiltinDecl(_, _, _, _, _)
                     | Ast::StructDef(_, _, _)
                     | Ast::RecordDef(_, _, _)

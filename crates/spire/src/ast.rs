@@ -57,6 +57,8 @@ pub enum BinOp {
 pub enum AstTy {
     /// `Int`, `String`, `Boolean`, `Unit`, `User`, ...
     Named(Span, Symbol),
+    /// `impl Numeric`
+    ImplTrait(Span, Symbol),
     /// `List<T>`, `Result<T, E>`, user-defined generic types, ...
     Generic(Span, Symbol, Vec<AstTy>),
     /// `(A, B, C)`
@@ -122,6 +124,7 @@ pub struct EnumVariant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeParam {
     pub name: Symbol,
+    pub bound: Option<Symbol>,
     pub span: Span,
 }
 
@@ -130,6 +133,15 @@ pub struct TypeParam {
 pub struct FunParam {
     pub name: Symbol,
     pub ty: AstTy,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitMethodSig {
+    pub name: Symbol,
+    pub type_params: Vec<TypeParam>,
+    pub params: Vec<FunParam>,
+    pub ret_ty: AstTy,
     pub span: Span,
 }
 
@@ -266,13 +278,22 @@ pub enum Ast {
     Def(
         Span,
         Symbol,
+        Vec<TypeParam>,
         Vec<FunParam>,
         Option<AstTy>,
         Box<Ast>,
         DeclAttrs,
     ),
 
-    ExtractorDef(Span, Symbol, ExtractorParam, AstTy, Box<Ast>, DeclAttrs),
+    ExtractorDef(
+        Span,
+        Symbol,
+        Vec<TypeParam>,
+        ExtractorParam,
+        AstTy,
+        Box<Ast>,
+        DeclAttrs,
+    ),
 
     /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
@@ -297,6 +318,12 @@ pub enum Ast {
 
     /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
     ImplDef(Span, Symbol, Vec<Ast>),
+
+    /// Trait definition: `deftrait Numeric { def add(self: Self, rhs: Self) -> Self }`
+    TraitDef(Span, Symbol, Vec<TraitMethodSig>, DeclAttrs),
+
+    /// Trait impl definition: `impl Numeric for Int { def add(self: Self, rhs: Self) -> Self { ... } }`
+    TraitImplDef(Span, Symbol, AstTy, Vec<Ast>),
 
     /// Import declaration
     Import(Span, AstPath, ImportSpec),

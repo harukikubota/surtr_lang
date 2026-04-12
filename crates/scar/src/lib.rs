@@ -18,6 +18,7 @@ mod tests {
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/numeric.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
@@ -121,6 +122,10 @@ mod tests {
                 (
                     "Kernel",
                     pick_override("Kernel", KERNEL_PRELUDE_SOURCE, overrides),
+                ),
+                (
+                    "Numeric",
+                    pick_override("Numeric", NUMERIC_MODULE_SOURCE, overrides),
                 ),
                 ("Int", pick_override("Int", INT_MODULE_SOURCE, overrides)),
                 (
@@ -593,7 +598,7 @@ deferror NotFound(code: String) {
         .expect("entrypoint body should allow set_exit_code");
         assert!(ok
             .iter()
-            .find(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _)))
+            .find(|node| matches!(node.node, TypedInner::Def(..)))
             .is_some());
 
         let err = typecheck_with_rules(
@@ -666,10 +671,12 @@ deferror NotFound(code: String) {
                 {
                     Some(format!("builtin {}", id.name))
                 }
-                sigil::resolved::Resolved::Def(_, id, _, _, _, _) if id.unique_id == use_uid => {
+                sigil::resolved::Resolved::Def(_, id, _, _, _, _, _)
+                    if id.unique_id == use_uid =>
+                {
                     Some(format!("def {}", id.name))
                 }
-                sigil::resolved::Resolved::ExtractorDef(_, id, _, _, _, _)
+                sigil::resolved::Resolved::ExtractorDef(_, id, _, _, _, _, _)
                     if id.unique_id == use_uid =>
                 {
                     Some(format!("extractor {}", id.name))
@@ -880,7 +887,7 @@ right: String = id("ok")"#,
         assert!(typed.len() >= 3);
         assert!(typed.iter().rev().take(3).all(|node| matches!(
             node.node,
-            TypedInner::Bind(_, _) | TypedInner::Def(_, _, _, _, _)
+            TypedInner::Bind(_, _) | TypedInner::Def(..)
         )));
     }
 
@@ -1154,5 +1161,147 @@ impl User {
             .message
             .contains("deferror show block must return String"));
         assert_eq!(err.span.start, literal_start);
+    }
+
+    #[test]
+    fn numeric_trait_calls_typecheck_with_static_dispatch() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"sum = 1 + 2
+quot = Numeric::safe_div(8, 2)
+largest = Numeric::max(1.5, 2.5)"#,
+        );
+
+        let trait_calls = typed
+            .iter()
+            .filter_map(|node| match &node.node {
+                TypedInner::Bind(_, rhs) => match &rhs.node {
+                    TypedInner::TraitCall {
+                        trait_name,
+                        method_name,
+                        dispatch,
+                        ..
+                    } => Some((trait_name.as_str(), method_name.as_str(), dispatch)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(trait_calls.iter().any(|(trait_name, method_name, dispatch)| {
+            *trait_name == "Numeric"
+                && *method_name == "add"
+                && matches!(
+                    dispatch,
+                    crate::typed::TraitDispatch::Static(
+                        crate::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
+                    )
+                )
+        }));
+        assert!(trait_calls.iter().any(|(trait_name, method_name, dispatch)| {
+            *trait_name == "Numeric"
+                && *method_name == "safe_div"
+                && matches!(
+                    dispatch,
+                    crate::typed::TraitDispatch::Static(
+                        crate::typed::TraitDispatchTarget::Builtin(name)
+                    ) if name == "safe_div"
+                )
+        }));
+        assert!(trait_calls.iter().any(|(trait_name, method_name, dispatch)| {
+            *trait_name == "Numeric"
+                && *method_name == "max"
+                && matches!(
+                    dispatch,
+                    crate::typed::TraitDispatch::Static(
+                        crate::typed::TraitDispatchTarget::UserFunction { name, .. }
+                    ) if name == "Float::max"
+                )
+        }));
+    }
+
+    #[test]
+    fn bounded_numeric_generics_specialize_without_pending_trait_calls() {
+        fn has_pending_trait_call(node: &TypedNode) -> bool {
+            match &node.node {
+                TypedInner::TraitCall { dispatch, args, .. } => {
+                    matches!(dispatch, crate::typed::TraitDispatch::Pending)
+                        || args.iter().any(has_pending_trait_call)
+                }
+                TypedInner::App(func, args)
+                | TypedInner::InjectCall(func, args)
+                | TypedInner::Capture(func, args) => {
+                    has_pending_trait_call(func) || args.iter().any(has_pending_trait_call)
+                }
+                TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
+                TypedInner::Bind(_, rhs)
+                | TypedInner::SafeBind(_, rhs)
+                | TypedInner::Semi(rhs)
+                | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+                TypedInner::BinOp(_, left, right)
+                | TypedInner::Pipe(left, right)
+                | TypedInner::ResultMap(left, right)
+                | TypedInner::ResultBind(left, right)
+                | TypedInner::Compose(_, left, right)
+                | TypedInner::ListCons(left, right) => {
+                    has_pending_trait_call(left) || has_pending_trait_call(right)
+                }
+                TypedInner::TupleLiteral(items)
+                | TypedInner::ListLiteral(items)
+                | TypedInner::ConstructorCall(_, items)
+                | TypedInner::StructLit(_, items) => items.iter().any(has_pending_trait_call),
+                TypedInner::If(cond, then_branch, else_branch) => {
+                    has_pending_trait_call(cond)
+                        || has_pending_trait_call(then_branch)
+                        || else_branch.as_deref().is_some_and(has_pending_trait_call)
+                }
+                TypedInner::Assert(cond, err) => {
+                    has_pending_trait_call(cond) || has_pending_trait_call(err)
+                }
+                TypedInner::Ensure(value, pred, err) => {
+                    has_pending_trait_call(value)
+                        || has_pending_trait_call(pred)
+                        || has_pending_trait_call(err)
+                }
+                TypedInner::Match(scrutinee, arms) => {
+                    has_pending_trait_call(scrutinee)
+                        || arms.iter().any(|(_, arm)| has_pending_trait_call(arm))
+                }
+                TypedInner::InterpolatedStr(parts) => parts.iter().any(|part| match part {
+                    crate::typed::TypedInterpolatedPart::Text(_) => false,
+                    crate::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
+                }),
+                TypedInner::Def(_, _, _, _, _, body)
+                | TypedInner::ExtractorDef(_, _, _, _, _, body)
+                | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
+                TypedInner::Lit(_)
+                | TypedInner::Var(_)
+                | TypedInner::ListNil
+                | TypedInner::DeferrorDef(..)
+                | TypedInner::EnumDef(..)
+                | TypedInner::TraitDef(..)
+                | TypedInner::TraitImplDef(..)
+                | TypedInner::BuiltinExtractorDecl(..)
+                | TypedInner::StructDef(..)
+                | TypedInner::RecordDef(..) => false,
+            }
+        }
+
+        let typed = typecheck_with_builtin_prelude(
+            r#"def double<$N: Numeric>(x: $N) -> $N { x + x }
+a = double(21)
+b = double(1.5)"#,
+        );
+
+        let double_defs = typed
+            .iter()
+            .filter_map(|node| match &node.node {
+                TypedInner::Def(fun_idx, id, ..) if id.name == "double" => Some(*fun_idx),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(double_defs.len(), 2);
+        assert_ne!(double_defs[0], double_defs[1]);
+        assert!(!typed.iter().any(has_pending_trait_call));
     }
 }

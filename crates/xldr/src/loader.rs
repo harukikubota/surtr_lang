@@ -10,7 +10,12 @@ const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
 const KERNEL_PRELUDE_FILE: &str = "kernel.srt";
 const KERNEL_PRELUDE_MODULE_PATH: &str = "Kernel";
 const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
-const TYPE_STD_MODULES: &[(&str, &str, &str)] = &[
+const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
+    (
+        "numeric.srt",
+        include_str!("../../../lib/numeric.srt"),
+        "Numeric",
+    ),
     ("int.srt", include_str!("../../../lib/int.srt"), "Int"),
     (
         "string.srt",
@@ -439,7 +444,7 @@ pub fn collect_module_sources_with_modules(
 pub fn is_default_std_module_path(module_path: &str) -> bool {
     module_path == BUILTIN_PRELUDE_MODULE_PATH
         || module_path == KERNEL_PRELUDE_MODULE_PATH
-        || TYPE_STD_MODULES
+        || DEFAULT_STD_MODULES
             .iter()
             .any(|(_, _, builtin_module_path)| *builtin_module_path == module_path)
 }
@@ -447,7 +452,7 @@ pub fn is_default_std_module_path(module_path: &str) -> bool {
 pub fn is_default_std_module_file_name(file_name: &str) -> bool {
     file_name == BUILTIN_PRELUDE_FILE
         || file_name == KERNEL_PRELUDE_FILE
-        || TYPE_STD_MODULES
+        || DEFAULT_STD_MODULES
             .iter()
             .any(|(builtin_file_name, _, _)| *builtin_file_name == file_name)
 }
@@ -470,7 +475,7 @@ pub fn collect_module_sources_with_module_stages(
             KERNEL_PRELUDE_MODULE_PATH,
         ))
         .chain(
-            TYPE_STD_MODULES
+            DEFAULT_STD_MODULES
                 .iter()
                 .map(|(file_name, source, module_path)| {
                     SourceDescriptor::std_module(*file_name, *source, *module_path)
@@ -508,7 +513,7 @@ pub fn collect_module_sources_with_std_module_stages(
             KERNEL_PRELUDE_MODULE_PATH,
         ))
         .chain(
-            TYPE_STD_MODULES
+            DEFAULT_STD_MODULES
                 .iter()
                 .map(|(file_name, source, module_path)| {
                     SourceDescriptor::std_module(*file_name, *source, *module_path)
@@ -679,14 +684,15 @@ mod tests {
             loaded.builtin_module_path.as_deref(),
             Some(BUILTIN_PRELUDE_MODULE_PATH)
         );
-        assert_eq!(loaded.module_source_ids.len(), 2 + TYPE_STD_MODULES.len());
+        assert_eq!(loaded.module_source_ids.len(), 2 + DEFAULT_STD_MODULES.len());
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
-        assert_eq!(loaded.module_stages[1].len(), 1 + TYPE_STD_MODULES.len());
+        assert_eq!(loaded.module_stages[1].len(), 1 + DEFAULT_STD_MODULES.len());
         assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
-        assert_eq!(loaded.module_stages[1][1].module_path, "Int");
-        assert_eq!(loaded.module_stages[1][2].module_path, "String");
+        assert_eq!(loaded.module_stages[1][1].module_path, "Numeric");
+        assert_eq!(loaded.module_stages[1][2].module_path, "Int");
+        assert_eq!(loaded.module_stages[1][3].module_path, "String");
     }
 
     #[test]
@@ -746,7 +752,7 @@ mod tests {
 
         assert_eq!(loaded.module_stages.len(), 4);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap
-        assert_eq!(loaded.module_stages[1].len(), 1 + TYPE_STD_MODULES.len()); // kernel + other std modules
+        assert_eq!(loaded.module_stages[1].len(), 1 + DEFAULT_STD_MODULES.len()); // kernel + other std modules
         assert_eq!(loaded.module_stages[2].len(), 1);
         assert_eq!(loaded.module_stages[3].len(), 2);
         assert_eq!(
@@ -769,7 +775,8 @@ mod tests {
         assert_eq!(loaded.module_stages[3][0].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
-        assert_eq!(loaded.module_stages[1][1].module_path, "Int");
+        assert_eq!(loaded.module_stages[1][1].module_path, "Numeric");
+        assert_eq!(loaded.module_stages[1][2].module_path, "Int");
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
         assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
         assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");

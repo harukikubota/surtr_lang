@@ -64,6 +64,8 @@ pub enum TopLevelDeclKind {
     ExtractorDef,
     Defmod,
     ImplDef,
+    TraitDef,
+    TraitImplDef,
     Import,
     StructDef,
     RecordDef,
@@ -124,6 +126,8 @@ impl SourceRules {
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
                 TopLevelDeclKind::ImplDef,
+                TopLevelDeclKind::TraitDef,
+                TopLevelDeclKind::TraitImplDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
@@ -141,6 +145,8 @@ impl SourceRules {
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
                 TopLevelDeclKind::ImplDef,
+                TopLevelDeclKind::TraitDef,
+                TopLevelDeclKind::TraitImplDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
@@ -160,6 +166,8 @@ impl SourceRules {
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::ExtractorDef,
+                TopLevelDeclKind::TraitDef,
+                TopLevelDeclKind::TraitImplDef,
             ]),
             set_exit_code_policy: SetExitCodePolicy::Forbidden,
             normalized_entrypoint: None,
@@ -172,6 +180,8 @@ impl SourceRules {
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::ExtractorDef,
+                TopLevelDeclKind::TraitDef,
+                TopLevelDeclKind::TraitImplDef,
                 TopLevelDeclKind::BuiltinDecl,
                 TopLevelDeclKind::BuiltinExtractorDecl,
                 TopLevelDeclKind::BuiltinTypeDecl,
@@ -200,6 +210,8 @@ impl SourceRules {
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::Defmod,
                 TopLevelDeclKind::ImplDef,
+                TopLevelDeclKind::TraitDef,
+                TopLevelDeclKind::TraitImplDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::StructDef,
                 TopLevelDeclKind::RecordDef,
@@ -484,6 +496,7 @@ impl Parser {
                 Token::Annotator(_)
                     | Token::Def
                     | Token::Defmod
+                    | Token::Deftrait
                     | Token::Impl
                     | Token::Import
                     | Token::Defstruct
@@ -504,6 +517,7 @@ impl Parser {
             Token::Annotator(_) => self.parse_annotated_decl()?,
             Token::Def => self.parse_def()?,
             Token::Defmod => self.parse_defmod()?,
+            Token::Deftrait => self.parse_trait_def()?,
             Token::Impl => self.parse_impl_def()?,
             Token::Import => self.parse_import()?,
             Token::Defstruct => self.parse_struct_def()?,
@@ -589,10 +603,12 @@ impl Parser {
 
     fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         match ast {
-            Ast::Def(_, _, _, _, _, _) => Some(TopLevelDeclKind::Def),
-            Ast::ExtractorDef(_, _, _, _, _, _) => Some(TopLevelDeclKind::ExtractorDef),
+            Ast::Def(_, _, _, _, _, _, _) => Some(TopLevelDeclKind::Def),
+            Ast::ExtractorDef(_, _, _, _, _, _, _) => Some(TopLevelDeclKind::ExtractorDef),
             Ast::Defmod(_, _, _, _) => Some(TopLevelDeclKind::Defmod),
             Ast::ImplDef(_, _, _) => Some(TopLevelDeclKind::ImplDef),
+            Ast::TraitDef(_, _, _, _) => Some(TopLevelDeclKind::TraitDef),
+            Ast::TraitImplDef(_, _, _, _) => Some(TopLevelDeclKind::TraitImplDef),
             Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
             Ast::StructDef(_, _, _) => Some(TopLevelDeclKind::StructDef),
             Ast::RecordDef(_, _, _) => Some(TopLevelDeclKind::RecordDef),
@@ -758,11 +774,56 @@ impl Parser {
         self.parse_defmod_with_attrs(DeclAttrs::default(), None)
     }
 
+    fn parse_trait_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_trait_def_with_attrs(DeclAttrs::default(), None)
+    }
+
     fn parse_impl_def(&mut self) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Impl)?;
-        let (target, _) = self.expect_ident()?;
+        let (head, _) = self.expect_ident()?;
         self.skip_newlines();
+
+        if matches!(self.peek(), Token::For) {
+            self.advance();
+            self.skip_newlines();
+            let target_ty = self.parse_type_in_impl_context(None)?;
+            let self_target = self.trait_impl_self_target_name(&target_ty)?;
+            self.skip_newlines();
+            self.expect(&Token::LBrace)?;
+            self.skip_newlines();
+
+            let mut methods = Vec::new();
+            while !matches!(self.peek(), Token::RBrace) {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete("}", self.peek_span()));
+                }
+                if !matches!(self.peek(), Token::Def) {
+                    return Err(ParseError::syntax(
+                        "trait impl body may only contain `def` declarations",
+                        self.peek_span(),
+                    ));
+                }
+                let method = self.parse_impl_method(&self_target)?;
+                self.ensure_stmt_boundary(&method, true)?;
+                methods.push(method);
+                while matches!(self.peek(), Token::Newline) {
+                    self.advance();
+                }
+            }
+
+            let end = self.expect(&Token::RBrace)?;
+            return Ok(Ast::TraitImplDef(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                head,
+                target_ty,
+                methods,
+            ));
+        }
+
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 
@@ -777,7 +838,7 @@ impl Parser {
                     self.peek_span(),
                 ));
             }
-            let method = self.parse_impl_method(&target)?;
+            let method = self.parse_impl_method(&head)?;
             self.ensure_stmt_boundary(&method, true)?;
             methods.push(method);
             while matches!(self.peek(), Token::Newline) {
@@ -791,7 +852,7 @@ impl Parser {
                 start: sp.start,
                 end: end.end,
             },
-            target,
+            head,
             methods,
         ))
     }
@@ -899,11 +960,32 @@ impl Parser {
                 end: end.end,
             },
             name,
+            Vec::new(),
             params,
             ret_ty,
             Box::new(body),
             DeclAttrs::default(),
         ))
+    }
+
+    fn trait_impl_self_target_name(&self, ty: &AstTy) -> Result<String, ParseError> {
+        match ty {
+            AstTy::Named(_, name) => Ok(name.clone()),
+            AstTy::Generic(_, name, args) => {
+                if args.is_empty() {
+                    Ok(name.clone())
+                } else {
+                    Err(ParseError::syntax(
+                        "trait impl target must be a concrete named type in V1",
+                        ast_ty_span(ty).clone(),
+                    ))
+                }
+            }
+            _ => Err(ParseError::syntax(
+                "trait impl target must be a concrete named type in V1",
+                ast_ty_span(ty).clone(),
+            )),
+        }
     }
 
     fn parse_defmod_with_attrs(
@@ -934,6 +1016,168 @@ impl Parser {
             body,
             attrs,
         ))
+    }
+
+    fn parse_trait_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Deftrait)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut methods = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            if !matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    "trait body may only contain `def` signatures",
+                    self.peek_span(),
+                ));
+            }
+            let method = self.parse_trait_method_sig()?;
+            methods.push(method);
+            while matches!(self.peek(), Token::Newline) {
+                self.advance();
+            }
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::TraitDef(
+            Span {
+                start: annotator_start.unwrap_or(sp.start),
+                end: end.end,
+            },
+            name,
+            methods,
+            attrs,
+        ))
+    }
+
+    fn parse_trait_method_sig(&mut self) -> Result<TraitMethodSig, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Def)?;
+        let (name, _) = self.expect_ident()?;
+        let type_params = self.parse_decl_type_params()?;
+        let mut params = Vec::new();
+        let self_context = Some("Self".to_string());
+
+        if matches!(self.peek(), Token::Unit) {
+            self.advance();
+        } else {
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+
+            if !matches!(self.peek(), Token::RParen) {
+                loop {
+                    if matches!(self.peek(), Token::Eof) {
+                        return Err(ParseError::incomplete(")", self.peek_span()));
+                    }
+                    self.skip_newlines();
+                    params.push(self.parse_trait_method_param(params.is_empty(), self_context.clone())?);
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect(&Token::RParen)?;
+        }
+
+        self.skip_newlines();
+        self.expect(&Token::Arrow)?;
+        self.skip_newlines();
+        let ret_ty = self.parse_type_in_impl_context(self_context)?;
+        if matches!(ret_ty, AstTy::ImplTrait(_, _)) {
+            return Err(ParseError::syntax(
+                "return-position `impl Trait` is not supported; name the type parameter explicitly",
+                ast_ty_span(&ret_ty).clone(),
+            ));
+        }
+        self.reject_where_clause()?;
+
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::Newline)
+        ) {
+            lookahead += 1;
+        }
+
+        if matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::LBrace)
+        ) {
+            return Err(ParseError::syntax(
+                "trait method declarations must not have a body",
+                self.tokens[lookahead].span.clone(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            sp.end
+        };
+
+        Ok(TraitMethodSig {
+            name,
+            type_params,
+            params,
+            ret_ty,
+            span: Span {
+                start: sp.start,
+                end,
+            },
+        })
+    }
+
+    fn parse_trait_method_param(
+        &mut self,
+        is_first_param: bool,
+        self_context: Option<String>,
+    ) -> Result<FunParam, ParseError> {
+        let (name, span) = self.expect_ident()?;
+        if name == "self" {
+            if !is_first_param {
+                return Err(ParseError::syntax(
+                    "`self` is only allowed as the first parameter of trait methods",
+                    span,
+                ));
+            }
+
+            let ty = if matches!(self.peek(), Token::Colon) {
+                self.advance();
+                self.skip_newlines();
+                let ty = self.parse_type_in_impl_context(self_context)?;
+                if !Self::is_self_type(&ty) {
+                    return Err(ParseError::syntax(
+                        "`self` receiver type must be `Self`",
+                        ast_ty_span(&ty).clone(),
+                    ));
+                }
+                ty
+            } else {
+                AstTy::Named(span.clone(), "Self".to_string())
+            };
+            return Ok(FunParam { name, ty, span });
+        }
+
+        self.expect(&Token::Colon)?;
+        let ty = self.parse_type_in_impl_context(self_context)?;
+        Ok(FunParam { name, ty, span })
     }
 
     fn parse_block_stmts(&mut self) -> Result<Vec<Ast>, ParseError> {
@@ -2160,6 +2404,19 @@ impl Parser {
             ));
         }
 
+        if matches!(self.peek(), Token::Impl) {
+            self.advance();
+            self.skip_newlines();
+            let (trait_name, trait_span) = self.expect_ident()?;
+            return Ok(AstTy::ImplTrait(
+                Span {
+                    start: sp.start,
+                    end: trait_span.end,
+                },
+                trait_name,
+            ));
+        }
+
         // Named type, possibly with type args: Result<Int>, List<Int>, Option<Int>, ...
         let (name, _) = self.expect_ident()?;
         if name == "Self" {
@@ -2451,7 +2708,7 @@ impl Parser {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defenum)?;
-        let (name, name_span) = self.expect_ident()?;
+        let (name, _name_span) = self.expect_ident()?;
         let type_params = self.parse_decl_type_params()?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -2536,9 +2793,10 @@ impl Parser {
             name,
             type_params
                 .into_iter()
-                .map(|name| TypeParam {
-                    name,
-                    span: name_span.clone(),
+                .map(|param| TypeParam {
+                    name: param.name,
+                    bound: param.bound,
+                    span: param.span,
                 })
                 .collect(),
             variants,
@@ -2546,7 +2804,7 @@ impl Parser {
         ))
     }
 
-    fn parse_decl_type_params(&mut self) -> Result<Vec<Symbol>, ParseError> {
+    fn parse_decl_type_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {
         if !matches!(self.peek(), Token::Lt) {
             return Ok(Vec::new());
         }
@@ -2556,9 +2814,22 @@ impl Parser {
 
         let mut params = Vec::new();
         loop {
+            let param_span = self.peek_span();
             self.expect(&Token::Dollar)?;
             let (param_name, _) = self.expect_ident()?;
-            params.push(format!("${}", param_name));
+            let bound = if matches!(self.peek(), Token::Colon) {
+                self.advance();
+                self.skip_newlines();
+                let (bound_name, _) = self.expect_ident()?;
+                Some(bound_name)
+            } else {
+                None
+            };
+            params.push(TypeParam {
+                name: format!("${}", param_name),
+                bound,
+                span: param_span,
+            });
             self.skip_newlines();
 
             if matches!(self.peek(), Token::Comma) {
@@ -2682,14 +2953,14 @@ impl Parser {
 
     fn parse_def_signature(
         &mut self,
-    ) -> Result<(Span, Symbol, Vec<FunParam>, Option<AstTy>), ParseError> {
+    ) -> Result<(Span, Symbol, Vec<TypeParam>, Vec<FunParam>, Option<AstTy>), ParseError> {
         self.parse_def_signature_with_name_mode(false)
     }
 
     fn parse_def_signature_with_name_mode(
         &mut self,
         allow_builtin_keyword_name: bool,
-    ) -> Result<(Span, Symbol, Vec<FunParam>, Option<AstTy>), ParseError> {
+    ) -> Result<(Span, Symbol, Vec<TypeParam>, Vec<FunParam>, Option<AstTy>), ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Def)?;
         let (name, _) = if allow_builtin_keyword_name {
@@ -2697,6 +2968,7 @@ impl Parser {
         } else {
             self.expect_ident()?
         };
+        let type_params = self.parse_decl_type_params()?;
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
             self.advance();
@@ -2729,24 +3001,33 @@ impl Parser {
         let ret_ty = if matches!(self.peek(), Token::Arrow) {
             self.advance();
             self.skip_newlines();
-            Some(self.parse_type()?)
+            let ret_ty = self.parse_type()?;
+            if matches!(ret_ty, AstTy::ImplTrait(_, _)) {
+                return Err(ParseError::syntax(
+                    "return-position `impl Trait` is not supported; name the type parameter explicitly",
+                    ast_ty_span(&ret_ty).clone(),
+                ));
+            }
+            Some(ret_ty)
         } else {
             None
         };
 
-        Ok((sp, name, params, ret_ty))
+        self.reject_where_clause()?;
+
+        Ok((sp, name, type_params, params, ret_ty))
     }
 
     fn parse_extractor_signature(
         &mut self,
-    ) -> Result<(Span, Symbol, ExtractorParam, AstTy), ParseError> {
+    ) -> Result<(Span, Symbol, Vec<TypeParam>, ExtractorParam, AstTy), ParseError> {
         self.parse_extractor_signature_with_name_mode(false)
     }
 
     fn parse_extractor_signature_with_name_mode(
         &mut self,
         allow_builtin_keyword_name: bool,
-    ) -> Result<(Span, Symbol, ExtractorParam, AstTy), ParseError> {
+    ) -> Result<(Span, Symbol, Vec<TypeParam>, ExtractorParam, AstTy), ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defextractor)?;
         let (name, name_span) = if allow_builtin_keyword_name {
@@ -2754,6 +3035,7 @@ impl Parser {
         } else {
             self.expect_ident()?
         };
+        let type_params = self.parse_decl_type_params()?;
         if Self::is_constructor_style_name(&name) {
             return Err(ParseError::syntax(
                 format!(
@@ -2781,9 +3063,17 @@ impl Parser {
         self.expect(&Token::Arrow)?;
         self.skip_newlines();
         let ret_ty = self.parse_type()?;
+        if matches!(ret_ty, AstTy::ImplTrait(_, _)) {
+            return Err(ParseError::syntax(
+                "return-position `impl Trait` is not supported; name the type parameter explicitly",
+                ast_ty_span(&ret_ty).clone(),
+            ));
+        }
+        self.reject_where_clause()?;
         Ok((
             sp,
             name,
+            type_params,
             ExtractorParam {
                 name: param_name,
                 ty: param_ty,
@@ -2791,6 +3081,16 @@ impl Parser {
             },
             ret_ty,
         ))
+    }
+
+    fn reject_where_clause(&self) -> Result<(), ParseError> {
+        if matches!(self.peek(), Token::Where) {
+            return Err(ParseError::syntax(
+                "`where` clauses are staged and not implemented yet",
+                self.peek_span(),
+            ));
+        }
+        Ok(())
     }
 
     fn is_constructor_style_name(name: &str) -> bool {
@@ -2871,12 +3171,13 @@ impl Parser {
             match self.peek() {
                 Token::Def => self.parse_def_with_attrs(attrs, Some(start)),
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
+                Token::Deftrait => self.parse_trait_def_with_attrs(attrs, Some(start)),
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
                 Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
-                    "@@doc must annotate `def`, `defmod`, `deferror`, `defenum`, `defextractor`, or `@@builtin type/def/defextractor`",
+                    "@@doc must annotate `def`, `defmod`, `deftrait`, `deferror`, `defenum`, `defextractor`, or `@@builtin type/def/defextractor`",
                     self.peek_span(),
                 )),
             }
@@ -2884,7 +3185,8 @@ impl Parser {
     }
 
     fn parse_builtin_decl(&mut self, start: usize, attrs: DeclAttrs) -> Result<Ast, ParseError> {
-        let (_def_span, name, params, ret_ty) = self.parse_def_signature_with_name_mode(true)?;
+        let (_def_span, name, _type_params, params, ret_ty) =
+            self.parse_def_signature_with_name_mode(true)?;
 
         let mut lookahead = self.pos;
         while matches!(
@@ -2924,7 +3226,8 @@ impl Parser {
         start: usize,
         attrs: DeclAttrs,
     ) -> Result<Ast, ParseError> {
-        let (_sp, name, param, ret_ty) = self.parse_extractor_signature_with_name_mode(true)?;
+        let (_sp, name, _type_params, param, ret_ty) =
+            self.parse_extractor_signature_with_name_mode(true)?;
 
         let mut lookahead = self.pos;
         while matches!(
@@ -3093,7 +3396,7 @@ impl Parser {
             return self.parse_result_ctor_decl_with_attrs(attrs, annotator_start);
         }
 
-        let (sp, name, params, ret_ty) = self.parse_def_signature()?;
+        let (sp, name, type_params, params, ret_ty) = self.parse_def_signature()?;
 
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -3119,6 +3422,7 @@ impl Parser {
                 end: end.end,
             },
             name,
+            type_params,
             params,
             ret_ty,
             Box::new(body),
@@ -3131,7 +3435,7 @@ impl Parser {
         attrs: DeclAttrs,
         annotator_start: Option<usize>,
     ) -> Result<Ast, ParseError> {
-        let (sp, name, param, ret_ty) = self.parse_extractor_signature()?;
+        let (sp, name, type_params, param, ret_ty) = self.parse_extractor_signature()?;
 
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -3157,6 +3461,7 @@ impl Parser {
                 end: end.end,
             },
             name,
+            type_params,
             param,
             ret_ty,
             Box::new(body),
@@ -3533,6 +3838,7 @@ fn shift_span(span: Span, delta: usize) -> Span {
 fn ast_ty_span(ty: &AstTy) -> &Span {
     match ty {
         AstTy::Named(span, _)
+        | AstTy::ImplTrait(span, _)
         | AstTy::Generic(span, _, _)
         | AstTy::Tuple(span, _)
         | AstTy::Func(span, _, _) => span,
@@ -3569,6 +3875,7 @@ fn fixed_bind_list_pattern(start: usize, end: usize, items: Vec<AstPattern>) -> 
 fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
     match ty {
         AstTy::Named(span, name) => AstTy::Named(shift_span(span, delta), name),
+        AstTy::ImplTrait(span, name) => AstTy::ImplTrait(shift_span(span, delta), name),
         AstTy::Generic(span, name, args) => AstTy::Generic(
             shift_span(span, delta),
             name,
@@ -3849,6 +4156,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .into_iter()
                 .map(|param| TypeParam {
                     name: param.name,
+                    bound: param.bound,
                     span: shift_span(param.span, delta),
                 })
                 .collect(),
@@ -3867,9 +4175,17 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::Def(span, name, params, ret_ty, body, attrs) => Ast::Def(
+        Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => Ast::Def(
             shift_span(span, delta),
             name,
+            type_params
+                .into_iter()
+                .map(|param| TypeParam {
+                    name: param.name,
+                    bound: param.bound,
+                    span: shift_span(param.span, delta),
+                })
+                .collect(),
             params
                 .into_iter()
                 .map(|p| shift_fun_param(p, delta))
@@ -3878,9 +4194,17 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*body, delta)),
             shift_decl_attrs(attrs),
         ),
-        Ast::ExtractorDef(span, name, param, ret_ty, body, attrs) => Ast::ExtractorDef(
+        Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => Ast::ExtractorDef(
             shift_span(span, delta),
             name,
+            type_params
+                .into_iter()
+                .map(|param| TypeParam {
+                    name: param.name,
+                    bound: param.bound,
+                    span: shift_span(param.span, delta),
+                })
+                .collect(),
             shift_extractor_param(param, delta),
             shift_ast_ty(ret_ty, delta),
             Box::new(shift_ast_span(*body, delta)),
@@ -3924,6 +4248,42 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::ImplDef(span, target, methods) => Ast::ImplDef(
             shift_span(span, delta),
             target,
+            methods
+                .into_iter()
+                .map(|method| shift_ast_span(method, delta))
+                .collect(),
+        ),
+        Ast::TraitDef(span, name, methods, attrs) => Ast::TraitDef(
+            shift_span(span, delta),
+            name,
+            methods
+                .into_iter()
+                .map(|method| TraitMethodSig {
+                    name: method.name,
+                    type_params: method
+                        .type_params
+                        .into_iter()
+                        .map(|param| TypeParam {
+                            name: param.name,
+                            bound: param.bound,
+                            span: shift_span(param.span, delta),
+                        })
+                        .collect(),
+                    params: method
+                        .params
+                        .into_iter()
+                        .map(|param| shift_fun_param(param, delta))
+                        .collect(),
+                    ret_ty: shift_ast_ty(method.ret_ty, delta),
+                    span: shift_span(method.span, delta),
+                })
+                .collect(),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::TraitImplDef(span, trait_name, target, methods) => Ast::TraitImplDef(
+            shift_span(span, delta),
+            trait_name,
+            shift_ast_ty(target, delta),
             methods
                 .into_iter()
                 .map(|method| shift_ast_span(method, delta))
@@ -3987,14 +4347,16 @@ impl Ast {
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _, _)
             | Ast::EnumDef(s, _, _, _, _)
-            | Ast::Def(s, _, _, _, _, _)
-            | Ast::ExtractorDef(s, _, _, _, _, _)
+            | Ast::Def(s, _, _, _, _, _, _)
+            | Ast::ExtractorDef(s, _, _, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _, _)
             | Ast::BuiltinExtractorDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)
             | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)
             | Ast::ImplDef(s, _, _)
+            | Ast::TraitDef(s, _, _, _)
+            | Ast::TraitImplDef(s, _, _, _)
             | Ast::Import(s, _, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
@@ -4101,7 +4463,7 @@ def noop() {()}"#,
         )
         .unwrap();
         match &ast[0] {
-            Ast::Def(_, name, params, ret_ty, body, attrs) => {
+            Ast::Def(_, name, _, params, ret_ty, body, attrs) => {
                 assert_eq!(name, "add");
                 assert_eq!(params.len(), 2);
                 assert_eq!(attrs, &DeclAttrs::default());
@@ -4113,7 +4475,7 @@ def noop() {()}"#,
             _ => panic!("Expected Def"),
         }
         match &ast[1] {
-            Ast::Def(_, name, params, ret_ty, body, attrs) => {
+            Ast::Def(_, name, _, params, ret_ty, body, attrs) => {
                 assert_eq!(name, "noop");
                 assert_eq!(params.len(), 0);
                 assert_eq!(attrs, &DeclAttrs::default());
@@ -4157,17 +4519,135 @@ impl User {
                 assert_eq!(methods.len(), 2);
                 assert!(matches!(
                     &methods[0],
-                    Ast::Def(_, name, _, Some(AstTy::Named(_, ret)), _, _)
+                    Ast::Def(_, name, _, _, Some(AstTy::Named(_, ret)), _, _)
                         if name == "new" && ret == "Self"
                 ));
                 assert!(matches!(
                     &methods[1],
-                    Ast::Def(_, name, _, Some(AstTy::Named(_, ret)), _, _)
+                    Ast::Def(_, name, _, _, Some(AstTy::Named(_, ret)), _, _)
                         if name == "normalize" && ret == "Self"
                 ));
             }
             _ => panic!("Expected ImplDef"),
         }
+    }
+
+    #[test]
+    fn test_trait_def_parses_method_signatures() {
+        let ast = parse_with_context(
+            r#"deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+  def abs(self: Self) -> Self
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("trait should parse");
+
+        match ast.as_slice() {
+            [Ast::TraitDef(_, name, methods, attrs)] => {
+                assert_eq!(name, "Numeric");
+                assert_eq!(attrs, &DeclAttrs::default());
+                assert_eq!(methods.len(), 2);
+                assert_eq!(methods[0].name, "add");
+                assert_eq!(methods[0].params.len(), 2);
+                assert!(methods[0].type_params.is_empty());
+                assert!(matches!(methods[0].params[0].ty, AstTy::Named(_, ref ty) if ty == "Self"));
+                assert!(matches!(methods[0].params[1].ty, AstTy::Named(_, ref ty) if ty == "Self"));
+                assert!(matches!(methods[0].ret_ty, AstTy::Named(_, ref ty) if ty == "Self"));
+                assert_eq!(methods[1].name, "abs");
+                assert_eq!(methods[1].params.len(), 1);
+            }
+            _ => panic!("Expected TraitDef"),
+        }
+    }
+
+    #[test]
+    fn test_trait_impl_parses_and_keeps_methods() {
+        let ast = parse_with_context(
+            r#"impl Numeric for Int {
+  def add(self: Self, rhs: Self) -> Self {
+    self + rhs
+  }
+
+  def abs(self: Self) -> Self {
+    self
+  }
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("trait impl should parse");
+
+        match ast.as_slice() {
+            [Ast::TraitImplDef(_, trait_name, AstTy::Named(_, target), methods)] => {
+                assert_eq!(trait_name, "Numeric");
+                assert_eq!(target, "Int");
+                assert_eq!(methods.len(), 2);
+                assert!(matches!(
+                    &methods[0],
+                    Ast::Def(_, name, _, _, Some(AstTy::Named(_, ret)), _, _)
+                        if name == "add" && ret == "Self"
+                ));
+                assert!(matches!(
+                    &methods[1],
+                    Ast::Def(_, name, _, _, Some(AstTy::Named(_, ret)), _, _)
+                        if name == "abs" && ret == "Self"
+                ));
+            }
+            _ => panic!("Expected TraitImplDef"),
+        }
+    }
+
+    #[test]
+    fn test_function_def_parses_bounded_type_params() {
+        let ast = parse("def add<$N: Numeric>(x: $N, y: $N) -> $N { x }").unwrap();
+
+        match ast.as_slice() {
+            [Ast::Def(_, name, type_params, params, Some(AstTy::Named(_, ret_ty)), _, _)] => {
+                assert_eq!(name, "add");
+                assert_eq!(type_params.len(), 1);
+                assert_eq!(type_params[0].name, "$N");
+                assert_eq!(type_params[0].bound.as_deref(), Some("Numeric"));
+                assert_eq!(params.len(), 2);
+                assert!(matches!(params[0].ty, AstTy::Named(_, ref ty) if ty == "$N"));
+                assert!(matches!(params[1].ty, AstTy::Named(_, ref ty) if ty == "$N"));
+                assert_eq!(ret_ty, "$N");
+            }
+            _ => panic!("Expected Def with bounded type parameters"),
+        }
+    }
+
+    #[test]
+    fn test_function_def_parses_parameter_position_impl_trait() {
+        let ast = parse("def abs(x: impl Numeric) -> Int { 0 }").unwrap();
+
+        match ast.as_slice() {
+            [Ast::Def(_, name, type_params, params, Some(AstTy::Named(_, ret_ty)), _, _)] => {
+                assert_eq!(name, "abs");
+                assert!(type_params.is_empty());
+                assert_eq!(params.len(), 1);
+                assert!(matches!(params[0].ty, AstTy::ImplTrait(_, ref trait_name) if trait_name == "Numeric"));
+                assert_eq!(ret_ty, "Int");
+            }
+            _ => panic!("Expected Def with impl Trait parameter"),
+        }
+    }
+
+    #[test]
+    fn test_return_position_impl_trait_is_rejected() {
+        let err = parse("def bad(x: Int) -> impl Numeric { x }")
+            .expect_err("return-position impl Trait should be rejected");
+        assert!(err
+            .message()
+            .contains("return-position `impl Trait` is not supported"));
+    }
+
+    #[test]
+    fn test_where_clause_is_rejected() {
+        let err = parse("def add(x: Int) -> Int where Int: Numeric { x }")
+            .expect_err("where clauses should be rejected");
+        assert!(err
+            .message()
+            .contains("`where` clauses are staged and not implemented yet"));
     }
 
     #[test]
@@ -4749,7 +5229,7 @@ Construct the error branch.
     fn test_result_unit_type_annotation_uses_unit_token() {
         let ast = parse("def main() -> Result<()> { Ok(()) }").unwrap();
         match &ast[0] {
-            Ast::Def(_, _, _, Some(AstTy::Generic(_, name, args)), _, _) => {
+            Ast::Def(_, _, _, _, Some(AstTy::Generic(_, name, args)), _, _) => {
                 assert_eq!(name, "Result");
                 assert!(matches!(args.as_slice(), [AstTy::Named(_, n)] if n == "Unit"));
             }
@@ -4978,7 +5458,7 @@ Construct the error branch.
     fn test_function_body_trailing_semicolon_is_explicit_unit() {
         let ast = parse("def fun() -> Unit { print(\"x\"); }").unwrap();
         match &ast[0] {
-            Ast::Def(_, _, _, _, body, _) => {
+            Ast::Def(_, _, _, _, _, body, _) => {
                 assert!(matches!(
                     body.as_ref(),
                     Ast::Block(_, stmts) if matches!(stmts.as_slice(), [Ast::Semi(_, inner)] if matches!(inner.as_ref(), Ast::App(_, _, _)))
@@ -5482,7 +5962,7 @@ Construct the error branch.
         match ast.as_slice() {
             [Ast::Defmod(_, name, body, _)] => {
                 assert_eq!(name, "Kernel");
-                assert!(matches!(body.as_slice(), [Ast::Def(_, _, _, _, _, _)]));
+                assert!(matches!(body.as_slice(), [Ast::Def(..)]));
             }
             _ => panic!("Expected single defmod declaration"),
         }
@@ -5670,7 +6150,7 @@ y = KeyInput::Arrow(Direction::Down)"#,
             ast.as_slice(),
             [Ast::Defmod(_, name, body, _)]
                 if name == "Matchers"
-                    && matches!(body.as_slice(), [Ast::ExtractorDef(_, extractor_name, _, _, _, _)] if extractor_name == "never")
+                    && matches!(body.as_slice(), [Ast::ExtractorDef(_, extractor_name, _, _, _, _, _)] if extractor_name == "never")
         ));
     }
 
@@ -5754,7 +6234,7 @@ y = KeyInput::Arrow(Direction::Down)"#,
         .expect("script compile unit should accept top-level def and import");
         assert!(matches!(
             ast.as_slice(),
-            [Ast::Def(_, name, _, _, _, _), Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(import_name))]
+            [Ast::Def(_, name, _, _, _, _, _), Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(import_name))]
                 if name == "add" && segments.as_slice() == ["Kernel"] && import_name == "add"
         ));
     }

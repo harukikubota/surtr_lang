@@ -72,6 +72,7 @@ pub enum Token {
     // ── Keywords ──
     Def,
     Defmod,
+    Deftrait,
     Import,
     /// Generic annotator token: `@@builtin`, `@@foo`, ...
     Annotator(String),
@@ -81,9 +82,11 @@ pub enum Token {
     Defenum,
     Defextractor,
     Impl,
+    For,
     Match,
     Cond,
     Type,
+    Where,
 
     // ── End of file ──
     Eof,

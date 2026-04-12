@@ -1,0 +1,1 @@
+def echo(x: impl Numeric) -> impl Numeric { x }

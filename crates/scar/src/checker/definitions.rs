@@ -466,6 +466,7 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
+        type_params: &[ResolvedTypeParam],
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
         body: &Resolved,
@@ -473,6 +474,7 @@ impl Checker {
         let mut fun_env = self.env.clone();
         let mut typed_params = Vec::new();
         let mut tyvars = HashMap::new();
+        self.seed_signature_type_params(type_params, &mut tyvars);
 
         for param in params {
             let param_ty = self.resolve_signature_ast_ty_in_context(
@@ -589,12 +591,24 @@ impl Checker {
                 });
             }
         };
+        let typed_type_params = type_params
+            .iter()
+            .filter_map(|param| match tyvars.get(&param.name) {
+                Some(Ty::Var(var)) => Some(TypedTypeParam {
+                    name: param.name.clone(),
+                    ty_var: *var,
+                    bound: param.bound.clone(),
+                }),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
             node: TypedInner::Def(
                 fun_idx,
                 id.clone(),
+                typed_type_params,
                 typed_params,
                 expected_ret,
                 Box::new(typed_body),
@@ -606,12 +620,14 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
+        type_params: &[ResolvedTypeParam],
         param: &ResolvedExtractorParam,
         ret_ty: &AstTy,
         body: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let mut fun_env = self.env.clone();
         let mut tyvars = HashMap::new();
+        self.seed_signature_type_params(type_params, &mut tyvars);
 
         let param_ty = match &param.ty {
             Some(ty) => self.resolve_signature_ast_ty_in_context(
@@ -680,6 +696,17 @@ impl Checker {
             node: TypedInner::ExtractorDef(
                 fun_idx,
                 id.clone(),
+                type_params
+                    .iter()
+                    .filter_map(|param| match tyvars.get(&param.name) {
+                        Some(Ty::Var(var)) => Some(TypedTypeParam {
+                            name: param.name.clone(),
+                            ty_var: *var,
+                            bound: param.bound.clone(),
+                        }),
+                        _ => None,
+                    })
+                    .collect(),
                 TypedFunParam {
                     id: typed_param.id,
                     ty: self.resolve_ty(&typed_param.ty),
@@ -687,6 +714,110 @@ impl Checker {
                 self.resolve_ty(&expected_ret),
                 Box::new(typed_body),
             ),
+        })
+    }
+
+    pub(super) fn check_trait_impl_def(
+        &mut self,
+        span: &Span,
+        trait_id: &ResolvedId,
+        target_ast_ty: &AstTy,
+        methods: &[ResolvedTraitImplMethod],
+    ) -> Result<TypedNode, TypeError> {
+        let target_ty =
+            self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+        let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
+            message: "trait impl target must be a concrete named type".into(),
+            span: Self::ast_ty_span(target_ast_ty).clone(),
+            hint: None,
+        })?;
+        let trait_info = self.traits.get(&trait_id.name).cloned().ok_or_else(|| TypeError {
+            message: format!("Unknown trait: {}", trait_id.name),
+            span: span.clone(),
+            hint: None,
+        })?;
+
+        for method in methods {
+            let trait_method =
+                trait_info
+                    .methods
+                    .get(&method.id.name)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "Trait impl {} for {} defines unknown method `{}`",
+                            trait_id.name, target_name, method.id.name
+                        ),
+                        span: method.span.clone(),
+                        hint: None,
+                    })?;
+
+            let inline_method = TraitImplMethodInfo {
+                id: method.id.clone(),
+                type_params: method.type_params.clone(),
+                params: method.params.clone(),
+                ret_ty: method.ret_ty.clone(),
+                body: method.body.clone(),
+                attrs: method.attrs.clone(),
+                span: method.span.clone(),
+            };
+            let (param_tys, expected_ret) = self.resolve_trait_impl_method_signature(
+                &inline_method,
+                &target_ty,
+                &trait_method.ret_ty,
+            )?;
+
+            let mut fun_env = self.env.clone();
+            let mut typed_params = Vec::new();
+            for (param, param_ty) in method.params.iter().zip(param_tys.iter()) {
+                fun_env.bind_var(param.id.unique_id, param_ty.clone());
+                typed_params.push(TypedFunParam {
+                    id: param.id.clone(),
+                    ty: param_ty.clone(),
+                });
+            }
+
+            let mut body_checker = self.spawn_child_checker(fun_env);
+            if self
+                .env
+                .lookup_type_def(&target_name)
+                .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
+            {
+                body_checker.current_impl_struct_target = Some(target_name.clone());
+            }
+            body_checker.function_return_ty = Some(expected_ret.clone());
+            body_checker.current_function_symbol = Some(format!(
+                "{}::{} for {}",
+                trait_id.name, method.id.name, target_name
+            ));
+            let typed_body = body_checker.check_node(&method.body)?;
+            let typed_body = body_checker.resolve_typed_node(typed_body);
+            self.absorb_child_progress(&body_checker);
+
+            if !self.types_compatible(&expected_ret, &typed_body.ty) {
+                let hint = if matches!(typed_body.ty, Ty::Unit) {
+                    body_checker.describe_unit_return_hint(&typed_body)
+                } else {
+                    None
+                };
+                return Err(TypeError {
+                    message: format!(
+                        "expected {}, got {}",
+                        self.ty_name(&expected_ret),
+                        self.ty_name(&typed_body.ty)
+                    ),
+                    span: body_checker.return_mismatch_span(&typed_body),
+                    hint,
+                });
+            }
+
+            let _ = typed_params;
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::TraitImplDef(trait_id.name.clone(), target_name),
         })
     }
 

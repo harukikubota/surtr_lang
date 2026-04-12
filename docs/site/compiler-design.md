@@ -95,7 +95,7 @@ Surtr では、標準モジュールも source として扱います。
 ロード順は固定です。
 
 ```text
-Bootstrap -> [Kernel, 他標準モジュール] -> ユーザ拡張
+Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張
 ```
 
 ### `Bootstrap`
@@ -111,7 +111,7 @@ Bootstrap -> [Kernel, 他標準モジュール] -> ユーザ拡張
 - loader と auto import の起点を固定する
 - universally useful な concrete error を最初の標準ステージから使えるようにする
 
-### stage 2: `Kernel` + type modules
+### stage 2: `Kernel` + trait / type modules
 
 責務:
 
@@ -119,6 +119,8 @@ Bootstrap -> [Kernel, 他標準モジュール] -> ユーザ拡張
   - auto import される小さな標準 API
   - `defmod Kernel` の中にある `print` のような cross-cutting builtin
   - 専用 file を持たない `Unit` の type 宣言
+- `Numeric`
+  - compile-time trait dispatch 用の trait 宣言
 - type modules
   - `Int`, `String`, `Boolean`, `Error`, `List`, `Result`, `Float`
   - 各 file top-level の canonical builtin type head
@@ -208,6 +210,8 @@ Scar では、式の型だけでなく「言語としての整合性」を見ま
 - `match` が網羅的か
 - field access がどの index を参照するか
 - builtin シグネチャと実際の呼び出しが合うか
+- trait bound と concrete impl が一致するか
+- trait call をどの concrete dispatch target へ落とすか
 
 この時点で field 名を index に解決しておくことで、Forge と Eldr を単純化できます。
 
@@ -228,6 +232,9 @@ Surtr の `|>`, `|*>`, `|>=`, `>>`, `|=>`, `=?` は見た目が近くても責�
 - `Result` と `List` の文脈違いは Scar の型規則で分岐する
 
 こうしておくと、Forge は「どの外部契約が確定済みか」を前提に lower できます。
+
+`Numeric` のような trait も同じで、Scar が `TraitCall` と specialization を確定し、
+Forge は opcode / builtin / user function のどれへ落とすかだけを担当します。
 
 ## 9. Bytecode VM を後段へ押し込む設計
 

@@ -31,8 +31,16 @@ deferror Name(field: Ty, ...) { "message" }
 
 defenum Name { Variant, Variant(Ty), Variant = Int, ... }
 
+deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}
+
 impl Type {
   def method(...) -> ... { ... }
+}
+
+impl Numeric for Int {
+  def add(self: Self, rhs: Self) -> Self { self + rhs }
 }
 ```
 
@@ -79,6 +87,16 @@ match expr {
 - `Self` は `impl` 内の型位置でのみ使用可能
 - `self` は `impl` メソッド第一引数専用（再束縛不可）
 - メソッド呼び出しの正規形は `Type::method(...)`
+
+### trait (V1)
+
+- trait 宣言は `deftrait Name { ... }`
+- trait 実装は `impl Trait for Type { ... }`
+- trait は method のみを持つ
+- `impl Trait` は parameter 位置のみで使える
+- `-> impl Trait` は未対応
+- `where` clause は未対応
+- `+`, `-`, `*` は `Numeric::{add, sub, mul}` へ resolve される
 
 ### `Result<T>`
 
@@ -377,7 +395,7 @@ deferror IndexOutOfBounds(detail: String) { detail }
 現在の標準モジュール層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張
+Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張
 ```
 
 ### auto import
@@ -405,6 +423,7 @@ Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> ユ�
 ```
 
 `unit.srt` は意図的に作らず、`Unit` だけは `kernel.srt` に置きます。
+`Numeric` trait 宣言は `numeric.srt` のトップレベルに置きます。
 
 ### import の重複
 
@@ -451,7 +470,12 @@ import Kernel::print;
 
 このリファレンスでは扱わないもの:
 
-- trait
+- associated types / associated consts
+- default method body
+- trait inheritance
+- multi-trait bounds
+- return-position `impl Trait`
+- `where` clauses
 - 型エイリアス / NewType
 - マクロシステム拡張
 - 並列コンパイル

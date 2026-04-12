@@ -111,6 +111,7 @@ pub enum Resolved {
     Def(
         Span,
         ResolvedId,
+        Vec<ResolvedTypeParam>,
         Vec<ResolvedFunParam>,
         Option<AstTy>,
         Box<Resolved>,
@@ -120,11 +121,23 @@ pub enum Resolved {
     ExtractorDef(
         Span,
         ResolvedId,
+        Vec<ResolvedTypeParam>,
         ResolvedExtractorParam,
         AstTy,
         Box<Resolved>,
         ResolvedDeclAttrs,
     ),
+
+    /// Trait definition
+    TraitDef(
+        Span,
+        ResolvedId,
+        Vec<ResolvedTraitMethodSig>,
+        ResolvedDeclAttrs,
+    ),
+
+    /// Trait impl definition
+    TraitImplDef(Span, ResolvedId, AstTy, Vec<ResolvedTraitImplMethod>),
 
     /// Builtin declaration
     BuiltinDecl(
@@ -238,7 +251,28 @@ pub struct ResolvedEnumVariant {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTraitMethodSig {
+    pub id: ResolvedId,
+    pub type_params: Vec<ResolvedTypeParam>,
+    pub params: Vec<ResolvedFunParam>,
+    pub ret_ty: AstTy,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTraitImplMethod {
+    pub id: ResolvedId,
+    pub type_params: Vec<ResolvedTypeParam>,
+    pub params: Vec<ResolvedFunParam>,
+    pub ret_ty: Option<AstTy>,
+    pub body: Box<Resolved>,
+    pub attrs: ResolvedDeclAttrs,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTypeParam {
     pub name: Symbol,
+    pub bound: Option<Symbol>,
     pub span: Span,
 }

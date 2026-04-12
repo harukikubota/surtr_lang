@@ -249,6 +249,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "False" => Token::False,
                 "def" => Token::Def,
                 "defmod" => Token::Defmod,
+                "deftrait" => Token::Deftrait,
                 "import" => Token::Import,
                 "defstruct" => Token::Defstruct,
                 "defrecord" => Token::Defrecord,
@@ -256,9 +257,11 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "defenum" => Token::Defenum,
                 "defextractor" => Token::Defextractor,
                 "impl" => Token::Impl,
+                "for" => Token::For,
                 "match" => Token::Match,
                 "cond" => Token::Cond,
                 "type" => Token::Type,
+                "where" => Token::Where,
                 _ => Token::Ident(text),
             };
             tokens.push(Spanned {

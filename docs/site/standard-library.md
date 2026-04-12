@@ -10,7 +10,7 @@
 標準モジュールの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap` と `Kernel` だけです。  
@@ -47,6 +47,7 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 
 現時点では次の module が用意されています。
 
+- `Numeric`
 - `Int`
 - `String`
 - `Boolean`
@@ -61,6 +62,13 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 2. `defmod Name { ... }` の module API
 
 この分離により、「型そのものの compiler 契約」と「その型の helper / docs / 将来 API」を同じ file に置きつつ、役割は混ぜずに管理できます。
+
+`Numeric` だけは type module ではなく、トップレベル trait 宣言専用の標準 module です。
+
+- `numeric.srt` に `deftrait Numeric` を置く
+- `int.srt` のトップレベルに `impl Numeric for Int` を置く
+- `float.srt` のトップレベルに `impl Numeric for Float` を置く
+- `+`, `-`, `*` は `Numeric` dispatch を通るが、runtime には trait object を導入しない
 
 ## 3. `@@builtin type` の契約
 
@@ -153,6 +161,9 @@ defmod String {
 - `Kernel`
   - cross-cutting builtin と `Unit`
   - `if` / `if_then` の language-level contract
+- `Numeric`
+  - compile-time only trait dispatch の最初の公開契約
+  - `Int` / `Float` が共有する算術 surface
 - `Int`
   - arbitrary-precision integer surface
 - `String`
@@ -172,6 +183,7 @@ defmod String {
 ## 7. 更新するときのルール
 
 - cross-cutting runtime builtin value を足すときは `kernel.srt` の `defmod Kernel` と shared builtin metadata の両方を更新する
+- `Numeric` surface を増やすときは `numeric.srt` の trait 宣言、各 concrete impl、Scar の trait dispatch、Forge の lowering を同時に更新する
 - `if` / `assert` / `and` / `eq` のような compiler-handled helper を足すときは `kernel.srt` と resolver/checker の canonical contract を同時に更新する
 - builtin type を変えるときは、対応する `lib/*.srt` の `@@builtin type` と compiler 側の canonical contract を同時に更新する
 - `Result` constructor contract を変えるときは `result.srt` の `Ok` / `Err` 宣言と checker 側の canonical rule を同時に更新する

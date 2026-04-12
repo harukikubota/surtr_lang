@@ -33,7 +33,7 @@
 - `.eldr` viewer 向け chunk 基盤
   - `Code`, `Cnst`, `Func`, `Type`, `ErrT`, `CInf`, `LblT`, `ImpT`, `ExpT`, `LitT`, `Line`, `SpnT`, `SrcP`, `PcSp`
 - 標準モジュールの type 単位分割
-  - `Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user`
+  - `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> user`
   - cross-cutting builtin は `kernel.srt` へ置く
   - builtin type 宣言は各対応 `lib/*.srt` のトップレベルへ置く
 - `List` 最小 surface の固定
@@ -74,7 +74,7 @@
 補足:
 
 - `Bootstrap` / `Kernel` 分離
-- `Bootstrap -> [Kernel + 他標準モジュール] -> ユーザ拡張` のロード順
+- `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張` のロード順
 - `Bootstrap` / `Kernel` の auto import と明示 import 禁止
 - `@@builtin` は `SourceKind::StdModule` のみ許可
 
@@ -106,7 +106,7 @@
   - 解決順は「宣言・依存型収集 -> macro slot(no-op) -> 関数/本体チェック」を基本線とする
 - 未確定点:
   - macro 導入後に queue 優先度をどう調整するか
-  - `impl Trait` や enum 導入後の依存ノード分割粒度
+  - trait specialization や enum 導入後の依存ノード分割粒度
 - 受け入れ条件:
   - 依存が解決したノードのみを再評価できる。
   - 無関係ノードの再評価を抑制し、総コンパイルコストが悪化しない。
@@ -137,7 +137,7 @@
   - 前方参照は許可したが、循環依存（関数循環、型循環、混合循環）の許容範囲は未確定。
 - 2026-04-09 時点の固定事項:
   - 現 phase の struct / record / error / type 相当の型循環は一律禁止
-  - enum による条件付き循環や `impl Trait` が入る段階で再度 reopen する
+  - enum による条件付き循環や trait specialization が複雑化した段階で再度 reopen する
 - 未確定点:
   - 関数循環や将来 enum 導入後の許可境界
   - エラー時の責務点（cycle の最小閉路表示）

@@ -18,6 +18,7 @@ mod tests {
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/numeric.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
@@ -113,6 +114,7 @@ mod tests {
             parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
             [
                 ("Kernel", KERNEL_PRELUDE_SOURCE),
+                ("Numeric", NUMERIC_MODULE_SOURCE),
                 ("Int", INT_MODULE_SOURCE),
                 ("String", STRING_MODULE_SOURCE),
                 ("Boolean", BOOLEAN_MODULE_SOURCE),
@@ -310,5 +312,62 @@ toggled = Int::toggle_bit(5, 0)"#,
                 )
             }));
         }
+    }
+
+    #[test]
+    fn numeric_trait_calls_lower_to_existing_targets() {
+        let bytecode = codegen_source(
+            r#"sum = 1 + 2
+quot = Numeric::safe_div(8, 2)
+largest = Numeric::max(1.5, 2.5)"#,
+        );
+
+        let safe_div_id = builtin_meta_by_name("safe_div")
+            .expect("safe_div builtin metadata must exist")
+            .builtin_id;
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::AddInt)));
+        assert!(bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 2,
+                    ..
+                } if *builtin_id == safe_div_id
+            )
+        }));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::Call { arity: 2, .. })));
+    }
+
+    #[test]
+    fn bounded_numeric_generic_helpers_emit_specialized_functions() {
+        let bytecode = codegen_source(
+            r#"def double<$N: Numeric>(x: $N) -> $N { x + x }
+a = double(21)
+b = double(1.5)"#,
+        );
+
+        let double_entries = bytecode
+            .functions
+            .iter()
+            .filter(|entry| entry.qualified_name.as_deref() == Some("double"))
+            .count();
+
+        assert_eq!(double_entries, 2);
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::AddInt)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::AddFloat)));
     }
 }

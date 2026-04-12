@@ -1,0 +1,1 @@
+def double<$N>(x: $N) -> $N where $N: Numeric { x + x }

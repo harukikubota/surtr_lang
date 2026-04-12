@@ -1,0 +1,3 @@
+def double<$A>(x: $A) -> $A {
+  x + x
+}

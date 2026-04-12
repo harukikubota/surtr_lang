@@ -51,11 +51,11 @@ Xldr は対話セッション中に次を保持する。
 
 ### 3.2 初期化
 
-- セッション開始時に標準 module source を `Bootstrap -> [Kernel + 他標準モジュール]` の順で読み込む
+- セッション開始時に標準 module source を `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float]` の順で読み込む
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin と、トップレベルの `Unit` type 宣言を登録する
 - 各 type file の top-level では対応する canonical builtin type head を登録する
-- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/kernel.srt`, `lib/int.srt`, `lib/string.srt`, `lib/boolean.srt`, `lib/error.srt`, `lib/list.srt`, `lib/result.srt`, `lib/float.srt` を同一段として読み込む
+- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/kernel.srt`, `lib/numeric.srt`, `lib/int.srt`, `lib/string.srt`, `lib/boolean.srt`, `lib/error.srt`, `lib/list.srt`, `lib/result.srt`, `lib/float.srt` を同一段として読み込む
 - loader は追加標準 module も `./lib/*.srt` から収集し、built-in 標準 module と重複するものはデフォルト入力から除外する
 - REPL user chunk は標準 module 読み込み後に `SourceKind::ReplChunk` として追加される
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、型定義・`impl`・`defmod` は parse error とする

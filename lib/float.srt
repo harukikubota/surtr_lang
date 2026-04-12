@@ -36,3 +36,33 @@ defmod Float {
     if(a >= b, a, b)
   }
 }
+
+impl Numeric for Float {
+  def add(self: Self, rhs: Self) -> Self {
+    self + rhs
+  }
+
+  def sub(self: Self, rhs: Self) -> Self {
+    self - rhs
+  }
+
+  def mul(self: Self, rhs: Self) -> Self {
+    self * rhs
+  }
+
+  def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
+    Int::safe_div(self, rhs)
+  }
+
+  def abs(self: Self) -> Self {
+    Float::abs(self)
+  }
+
+  def min(self: Self, rhs: Self) -> Self {
+    Float::min(self, rhs)
+  }
+
+  def max(self: Self, rhs: Self) -> Self {
+    Float::max(self, rhs)
+  }
+}
