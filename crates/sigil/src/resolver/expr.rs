@@ -2,7 +2,7 @@ use super::captures::collect_captures;
 use super::scope_init::{
     initialize_scope, is_runtime_builtin_decl, is_special_form_builtin_decl, resolve_decl_attrs,
 };
-use super::special_forms::{CompareKind, IfKind, LogicKind};
+use super::special_forms::{IfKind, LogicKind};
 use super::*;
 
 impl Resolver {
@@ -176,27 +176,6 @@ impl Resolver {
                     }
                     if name == "or" {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
-                    }
-                    if name == "eq" && self.scope.lookup(name).is_none() {
-                        return self.resolve_compare_call(span, args, CompareKind::Eq);
-                    }
-                    if name == "neq" && self.scope.lookup(name).is_none() {
-                        return self.resolve_compare_call(span, args, CompareKind::Neq);
-                    }
-                    if name == "lt" && self.scope.lookup(name).is_none() {
-                        return self.resolve_compare_call(span, args, CompareKind::Lt);
-                    }
-                    if name == "lte" && self.scope.lookup(name).is_none() {
-                        return self.resolve_compare_call(span, args, CompareKind::Lte);
-                    }
-                    if name == "gt" && self.scope.lookup(name).is_none() {
-                        return self.resolve_compare_call(span, args, CompareKind::Gt);
-                    }
-                    if name == "gte" && self.scope.lookup(name).is_none() {
-                        return self.resolve_compare_call(span, args, CompareKind::Gte);
-                    }
-                    if name == "concat" && self.scope.lookup(name).is_none() {
-                        return self.resolve_concat_call(span, args);
                     }
                 }
 

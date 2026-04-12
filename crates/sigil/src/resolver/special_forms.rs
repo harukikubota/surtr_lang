@@ -11,15 +11,6 @@ pub(super) enum LogicKind {
     Or,
 }
 
-pub(super) enum CompareKind {
-    Eq,
-    Neq,
-    Lt,
-    Lte,
-    Gt,
-    Gte,
-}
-
 impl Resolver {
     pub(super) fn resolve_if(
         &mut self,
@@ -170,54 +161,6 @@ impl Resolver {
             Box::new(left),
             Box::new(then_branch),
             Some(Box::new(else_branch)),
-        ))
-    }
-
-    pub(super) fn resolve_compare_call(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-        kind: CompareKind,
-    ) -> Result<Resolved, ResolveError> {
-        let callee_name = match kind {
-            CompareKind::Eq => "eq",
-            CompareKind::Neq => "neq",
-            CompareKind::Lt => "lt",
-            CompareKind::Lte => "lte",
-            CompareKind::Gt => "gt",
-            CompareKind::Gte => "gte",
-        };
-        let positional = collect_positional_args(span.clone(), args, callee_name, 2)?;
-        let mut iter = positional.into_iter();
-        let left = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let right = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let op = match kind {
-            CompareKind::Eq => BinOp::Eq,
-            CompareKind::Neq => BinOp::Neq,
-            CompareKind::Lt => BinOp::Lt,
-            CompareKind::Lte => BinOp::Lte,
-            CompareKind::Gt => BinOp::Gt,
-            CompareKind::Gte => BinOp::Gte,
-        };
-
-        Ok(Resolved::BinOp(span, op, Box::new(left), Box::new(right)))
-    }
-
-    pub(super) fn resolve_concat_call(
-        &mut self,
-        span: Span,
-        args: Vec<RecordLitArg>,
-    ) -> Result<Resolved, ResolveError> {
-        let positional = collect_positional_args(span.clone(), args, "concat", 2)?;
-        let mut iter = positional.into_iter();
-        let left = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let right = self.resolve_node(iter.next().expect("checked arg length"))?;
-
-        Ok(Resolved::BinOp(
-            span,
-            BinOp::Concat,
-            Box::new(left),
-            Box::new(right),
         ))
     }
 }

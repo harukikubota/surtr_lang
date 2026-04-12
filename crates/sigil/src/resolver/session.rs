@@ -18,6 +18,35 @@ pub struct SigilSession {
 }
 
 impl SigilSession {
+    fn qualify_current_name(&self, name: &str) -> String {
+        match &self.current_module_path {
+            Some(module_path) => format!("{}::{}", module_path, name),
+            None => name.to_string(),
+        }
+    }
+
+    fn reject_duplicate_current_module_defs(&self, ast: &[Ast]) -> Result<(), ResolveError> {
+        for stmt in ast {
+            match stmt {
+                Ast::Def(span, name, _, _, _, _, _)
+                | Ast::ExtractorDef(span, name, _, _, _, _, _) => {
+                    let qualified_name = self.qualify_current_name(name);
+                    if matches!(
+                        (self.scope.lookup(name), self.declaration_uids.get(&qualified_name)),
+                        (Some(existing_uid), Some(current_uid)) if existing_uid == *current_uid
+                    ) {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self {
             scope: initialize_scope(),
@@ -43,10 +72,12 @@ impl SigilSession {
     }
 
     pub fn resolve(&mut self, ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
+        self.reject_duplicate_current_module_defs(&ast)?;
         let mut resolver = Resolver::with_scope(self.scope.clone());
         resolver.declaration_uids = self.declaration_uids.clone();
         resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         resolver.current_module_path = self.current_module_path.clone();
+        resolver.allow_top_level_shadowing = true;
         let resolved = resolver.resolve_program(ast)?;
         self.declaration_uids = resolver.declaration_uids.clone();
         self.declaration_uid_kinds = resolver.declaration_uid_kinds.clone();

@@ -755,49 +755,155 @@ x = or(True, rhs())"#,
 }
 
 #[test]
-fn test_eq_conversion() {
-    let resolved = parse_and_resolve("x = eq(1, 2)").unwrap();
-    match &resolved[0] {
-        Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Eq, _, _)));
-        }
-        _ => panic!("Expected Bind with Eq binop"),
+fn test_eq_helper_resolves_via_autoimport_trait() {
+    let module_stages = vec![vec![staged_module(
+        "Eq",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait Eq {
+  def eq(self: Self, rhs: Self) -> Boolean
+  def neq(self: Self, rhs: Self) -> Boolean
+}"#,
+            "Eq",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules("x = eq(1, 2)", &module_stages)
+        .expect("eq helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert_eq!(args.len(), 2);
+                match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "eq");
+                        assert_eq!(id.qualified_name.as_deref(), Some("Eq::Eq::eq"));
+                    }
+                    other => panic!("expected helper var, got {:?}", other),
+                }
+            }
+            other => panic!("expected app, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
     }
 }
 
 #[test]
-fn test_neq_conversion() {
-    let resolved = parse_and_resolve("x = neq(1, 2)").unwrap();
-    match &resolved[0] {
-        Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Neq, _, _)));
-        }
-        _ => panic!("Expected Bind with Neq binop"),
+fn test_neq_helper_resolves_via_autoimport_trait() {
+    let module_stages = vec![vec![staged_module(
+        "Eq",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait Eq {
+  def eq(self: Self, rhs: Self) -> Boolean
+  def neq(self: Self, rhs: Self) -> Boolean
+}"#,
+            "Eq",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules("x = neq(1, 2)", &module_stages)
+        .expect("neq helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert_eq!(args.len(), 2);
+                match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "neq");
+                        assert_eq!(id.qualified_name.as_deref(), Some("Eq::Eq::neq"));
+                    }
+                    other => panic!("expected helper var, got {:?}", other),
+                }
+            }
+            other => panic!("expected app, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
     }
 }
 
 #[test]
-fn test_lt_conversion() {
-    let resolved = parse_and_resolve("x = lt(1, 2)").unwrap();
-    match &resolved[0] {
-        Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Resolved::BinOp(_, BinOp::Lt, _, _)));
-        }
-        _ => panic!("Expected Bind with Lt binop"),
+fn test_lt_helper_resolves_via_autoimport_trait() {
+    let module_stages = vec![vec![staged_module(
+        "Ord",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait Ord {
+  def lt(self: Self, rhs: Self) -> Boolean
+  def lte(self: Self, rhs: Self) -> Boolean
+  def gt(self: Self, rhs: Self) -> Boolean
+  def gte(self: Self, rhs: Self) -> Boolean
+}"#,
+            "Ord",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules("x = lt(1, 2)", &module_stages)
+        .expect("lt helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert_eq!(args.len(), 2);
+                match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "lt");
+                        assert_eq!(id.qualified_name.as_deref(), Some("Ord::Ord::lt"));
+                    }
+                    other => panic!("expected helper var, got {:?}", other),
+                }
+            }
+            other => panic!("expected app, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
     }
 }
 
 #[test]
-fn test_concat_conversion() {
-    let resolved = parse_and_resolve(r#"x = concat("a", "b")"#).unwrap();
-    match &resolved[0] {
-        Resolved::Bind(_, _, rhs) => {
-            assert!(matches!(
-                rhs.as_ref(),
-                Resolved::BinOp(_, BinOp::Concat, _, _)
-            ));
-        }
-        _ => panic!("Expected Bind with Concat binop"),
+fn test_concat_helper_resolves_via_autoimport_trait() {
+    let module_stages = vec![vec![staged_module(
+        "Concat",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait Concat {
+  def concat(self: Self, rhs: Self) -> Self
+}"#,
+            "Concat",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(r#"x = concat("a", "b")"#, &module_stages)
+        .expect("concat helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert_eq!(args.len(), 2);
+                match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "concat");
+                        assert_eq!(id.qualified_name.as_deref(), Some("Concat::Concat::concat"));
+                    }
+                    other => panic!("expected helper var, got {:?}", other),
+                }
+            }
+            other => panic!("expected app, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
     }
 }
 
@@ -809,18 +915,66 @@ fn test_and_named_arg_is_error() {
 }
 
 #[test]
-fn test_eq_wrong_arity_is_error() {
-    let err = parse_and_resolve("x = eq(1)").expect_err("wrong arity must fail");
-    assert!(err.message.contains("eq expects 2 arguments, got 1"));
+fn test_eq_wrong_arity_resolves_as_regular_app() {
+    let module_stages = vec![vec![staged_module(
+        "Eq",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait Eq {
+  def eq(self: Self, rhs: Self) -> Boolean
+}"#,
+            "Eq",
+        ),
+    )]];
+
+    let resolved =
+        resolve_user_with_modules("x = eq(1)", &module_stages).expect("eq call should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, _, args) => assert_eq!(args.len(), 1),
+            other => panic!("expected app, got {:?}", other),
+        },
+        other => panic!("expected bind, got {:?}", other),
+    }
 }
 
 #[test]
-fn test_concat_named_arg_is_error() {
-    let err = parse_and_resolve(r#"x = concat(left: "a", right: "b")"#)
-        .expect_err("named args must fail");
-    assert!(err
-        .message
-        .contains("concat does not accept named argument"));
+fn test_concat_named_arg_resolves_as_regular_app() {
+    let module_stages = vec![vec![staged_module(
+        "Concat",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait Concat {
+  def concat(self: Self, rhs: Self) -> Self
+}"#,
+            "Concat",
+        ),
+    )]];
+
+    let resolved =
+        resolve_user_with_modules(r#"x = concat(left: "a", right: "b")"#, &module_stages)
+            .expect("concat call should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, _, args) => assert!(matches!(
+                args.as_slice(),
+                [
+                    ResolvedRecordLitArg::Named(_, _),
+                    ResolvedRecordLitArg::Named(_, _)
+                ]
+            )),
+            other => panic!("expected app, got {:?}", other),
+        },
+        other => panic!("expected bind, got {:?}", other),
+    }
 }
 
 #[test]
@@ -1696,6 +1850,23 @@ fn test_sigil_session_failed_resolve_does_not_pollute_scope() {
         session.lookup_uid("y").is_none(),
         "y must not be in scope after a failed resolve"
     );
+}
+
+#[test]
+fn test_sigil_session_allows_top_level_shadowing_of_imported_name() {
+    let mut session = SigilSession::new();
+    session.define_with_id("add", 99);
+
+    let ast = spire::parse("def add(x: Int, y: Int) -> Int { x + y }").expect("parse failed");
+    let resolved = session.resolve(ast).expect("resolve failed");
+
+    let def_id = match &resolved[0] {
+        Resolved::Def(_, id, _, _, _, _, _) => id.unique_id,
+        other => panic!("Expected Def, got {:?}", other),
+    };
+
+    assert_eq!(session.lookup_uid("add"), Some(def_id));
+    assert_ne!(def_id, 99);
 }
 
 // --- Expression resolution tests ---

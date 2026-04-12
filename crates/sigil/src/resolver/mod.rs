@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{
-    Ast, AstPattern, AstTy, BinOp, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit,
-    RecordLitArg, Span,
+    Ast, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit, RecordLitArg,
+    Span,
 };
 
 use crate::error::ResolveError;

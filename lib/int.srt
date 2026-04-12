@@ -468,3 +468,37 @@ impl Numeric for Int {
     Int::max(self, rhs)
   }
 }
+
+impl Show for Int {
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl Eq for Int {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self == rhs
+  }
+
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self != rhs
+  }
+}
+
+impl Ord for Int {
+  def lt(self: Self, rhs: Self) -> Boolean {
+    self < rhs
+  }
+
+  def lte(self: Self, rhs: Self) -> Boolean {
+    self <= rhs
+  }
+
+  def gt(self: Self, rhs: Self) -> Boolean {
+    self > rhs
+  }
+
+  def gte(self: Self, rhs: Self) -> Boolean {
+    self >= rhs
+  }
+}

@@ -66,3 +66,37 @@ impl Numeric for Float {
     Float::max(self, rhs)
   }
 }
+
+impl Show for Float {
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl Eq for Float {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self == rhs
+  }
+
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self != rhs
+  }
+}
+
+impl Ord for Float {
+  def lt(self: Self, rhs: Self) -> Boolean {
+    self < rhs
+  }
+
+  def lte(self: Self, rhs: Self) -> Boolean {
+    self <= rhs
+  }
+
+  def gt(self: Self, rhs: Self) -> Boolean {
+    self > rhs
+  }
+
+  def gte(self: Self, rhs: Self) -> Boolean {
+    self >= rhs
+  }
+}

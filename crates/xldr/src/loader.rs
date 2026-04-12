@@ -12,16 +12,28 @@ const KERNEL_PRELUDE_MODULE_PATH: &str = "Kernel";
 const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
 const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
     (
-        "numeric.srt",
-        include_str!("../../../lib/numeric.srt"),
+        "trait/numeric.srt",
+        include_str!("../../../lib/trait/numeric.srt"),
         "Numeric",
     ),
-    ("show.srt", include_str!("../../../lib/show.srt"), "Show"),
-    ("eq.srt", include_str!("../../../lib/eq.srt"), "Eq"),
-    ("ord.srt", include_str!("../../../lib/ord.srt"), "Ord"),
     (
-        "concat.srt",
-        include_str!("../../../lib/concat.srt"),
+        "trait/show.srt",
+        include_str!("../../../lib/trait/show.srt"),
+        "Show",
+    ),
+    (
+        "trait/eq.srt",
+        include_str!("../../../lib/trait/eq.srt"),
+        "Eq",
+    ),
+    (
+        "trait/ord.srt",
+        include_str!("../../../lib/trait/ord.srt"),
+        "Ord",
+    ),
+    (
+        "trait/concat.srt",
+        include_str!("../../../lib/trait/concat.srt"),
         "Concat",
     ),
     ("int.srt", include_str!("../../../lib/int.srt"), "Int"),

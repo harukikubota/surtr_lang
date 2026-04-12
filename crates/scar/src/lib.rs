@@ -18,11 +18,11 @@ mod tests {
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
-    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/numeric.srt");
-    const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/show.srt");
-    const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/eq.srt");
-    const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/ord.srt");
-    const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/concat.srt");
+    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
+    const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
+    const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
+    const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
+    const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");

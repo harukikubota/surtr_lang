@@ -334,3 +334,25 @@ defmod String {
     String::trim_end(String::trim_start(value))
   }
 }
+
+impl Show for String {
+  def to_string(self: Self) -> String {
+    self
+  }
+}
+
+impl Eq for String {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self == rhs
+  }
+
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self != rhs
+  }
+}
+
+impl Concat for String {
+  def concat(self: Self, rhs: Self) -> Self {
+    self ++ rhs
+  }
+}

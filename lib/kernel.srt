@@ -165,3 +165,9 @@ defmod Kernel {
   """
   @@builtin def set_exit_code(code: Int) -> Unit
 }
+
+impl Show for Unit {
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}

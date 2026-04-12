@@ -1,0 +1,14 @@
+@@doc """
+Standard `Ord` trait declaration.
+`Ord` models ordering comparisons for values that can be ordered.
+The unqualified helpers `lt(...)`, `lte(...)`, `gt(...)`, and `gte(...)` come
+from this auto-imported trait surface rather than from a compiler-only builtin
+shim.
+"""
+@@autoimport
+deftrait Ord {
+  def lt(self: Self, rhs: Self) -> Boolean
+  def lte(self: Self, rhs: Self) -> Boolean
+  def gt(self: Self, rhs: Self) -> Boolean
+  def gte(self: Self, rhs: Self) -> Boolean
+}

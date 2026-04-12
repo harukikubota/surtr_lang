@@ -584,37 +584,62 @@ impl Checker {
         method_name: &str,
         target_name: &str,
     ) -> Option<TraitDispatchTarget> {
-        let Some(numeric_trait) = self.trait_key_by_short_name("Numeric") else {
-            return None;
-        };
-        if trait_name != numeric_trait || !matches!(target_name, "Int" | "Float") {
-            return None;
+        if self.trait_matches_short_name(trait_name, "Numeric")
+            && matches!(target_name, "Int" | "Float")
+        {
+            return match method_name {
+                "add" => Some(TraitDispatchTarget::BinOp(BinOp::Add)),
+                "sub" => Some(TraitDispatchTarget::BinOp(BinOp::Sub)),
+                "mul" => Some(TraitDispatchTarget::BinOp(BinOp::Mul)),
+                "safe_div" => Some(TraitDispatchTarget::Builtin("safe_div".into())),
+                _ => None,
+            };
         }
-        match method_name {
-            "add" => Some(TraitDispatchTarget::BinOp(BinOp::Add)),
-            "sub" => Some(TraitDispatchTarget::BinOp(BinOp::Sub)),
-            "mul" => Some(TraitDispatchTarget::BinOp(BinOp::Mul)),
-            "safe_div" => Some(TraitDispatchTarget::Builtin("safe_div".into())),
-            _ => None,
+        if self.trait_matches_short_name(trait_name, "Show")
+            && matches!(
+                target_name,
+                "Int" | "Float" | "String" | "Boolean" | "Unit" | "Error"
+            )
+        {
+            return (method_name == "to_string")
+                .then(|| TraitDispatchTarget::Builtin("to_string".into()));
         }
+        if self.trait_matches_short_name(trait_name, "Eq")
+            && matches!(target_name, "Int" | "Float" | "String" | "Boolean")
+        {
+            return match method_name {
+                "eq" => Some(TraitDispatchTarget::BinOp(BinOp::Eq)),
+                "neq" => Some(TraitDispatchTarget::BinOp(BinOp::Neq)),
+                _ => None,
+            };
+        }
+        if self.trait_matches_short_name(trait_name, "Ord")
+            && matches!(target_name, "Int" | "Float")
+        {
+            return match method_name {
+                "lt" => Some(TraitDispatchTarget::BinOp(BinOp::Lt)),
+                "lte" => Some(TraitDispatchTarget::BinOp(BinOp::Lte)),
+                "gt" => Some(TraitDispatchTarget::BinOp(BinOp::Gt)),
+                "gte" => Some(TraitDispatchTarget::BinOp(BinOp::Gte)),
+                _ => None,
+            };
+        }
+        if self.trait_matches_short_name(trait_name, "Concat") && target_name == "String" {
+            return (method_name == "concat").then(|| TraitDispatchTarget::BinOp(BinOp::Concat));
+        }
+        None
     }
 
     fn compiler_trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
         let ty = self.resolve_ty(ty);
         if self.trait_matches_short_name(trait_name, "Show") {
-            return !matches!(ty, Ty::Var(_));
-        }
-        if self.trait_matches_short_name(trait_name, "Eq") {
-            return matches!(
+            return !matches!(
                 ty,
-                Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Enum(_, _)
+                Ty::Var(_) | Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error
             );
         }
-        if self.trait_matches_short_name(trait_name, "Ord") {
-            return matches!(ty, Ty::Int | Ty::Float);
-        }
-        if self.trait_matches_short_name(trait_name, "Concat") {
-            return matches!(ty, Ty::Str);
+        if self.trait_matches_short_name(trait_name, "Eq") {
+            return matches!(ty, Ty::Enum(_, _));
         }
         false
     }
@@ -627,32 +652,17 @@ impl Checker {
     ) -> Option<TraitDispatchTarget> {
         let target_ty = self.resolve_ty(target_ty);
         if self.trait_matches_short_name(trait_name, "Show") {
-            return (method_name == "to_string" && !matches!(target_ty, Ty::Var(_)))
-                .then(|| TraitDispatchTarget::Builtin("to_string".into()));
+            return (method_name == "to_string"
+                && !matches!(
+                    target_ty,
+                    Ty::Var(_) | Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error
+                ))
+            .then(|| TraitDispatchTarget::Builtin("to_string".into()));
         }
         if self.trait_matches_short_name(trait_name, "Eq") {
             return match (method_name, target_ty) {
-                ("eq", Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Enum(_, _)) => {
-                    Some(TraitDispatchTarget::BinOp(BinOp::Eq))
-                }
-                ("neq", Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Enum(_, _)) => {
-                    Some(TraitDispatchTarget::BinOp(BinOp::Neq))
-                }
-                _ => None,
-            };
-        }
-        if self.trait_matches_short_name(trait_name, "Ord") {
-            return match (method_name, target_ty) {
-                ("lt", Ty::Int | Ty::Float) => Some(TraitDispatchTarget::BinOp(BinOp::Lt)),
-                ("lte", Ty::Int | Ty::Float) => Some(TraitDispatchTarget::BinOp(BinOp::Lte)),
-                ("gt", Ty::Int | Ty::Float) => Some(TraitDispatchTarget::BinOp(BinOp::Gt)),
-                ("gte", Ty::Int | Ty::Float) => Some(TraitDispatchTarget::BinOp(BinOp::Gte)),
-                _ => None,
-            };
-        }
-        if self.trait_matches_short_name(trait_name, "Concat") {
-            return match (method_name, target_ty) {
-                ("concat", Ty::Str) => Some(TraitDispatchTarget::BinOp(BinOp::Concat)),
+                ("eq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Eq)),
+                ("neq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Neq)),
                 _ => None,
             };
         }
