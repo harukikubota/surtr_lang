@@ -13,7 +13,10 @@ impl Checker {
 
     pub(super) fn ast_ty_span(ast_ty: &AstTy) -> &Span {
         match ast_ty {
-            AstTy::Named(span, _) | AstTy::Generic(span, _, _) | AstTy::Func(span, _, _) => span,
+            AstTy::Named(span, _)
+            | AstTy::Generic(span, _, _)
+            | AstTy::Tuple(span, _)
+            | AstTy::Func(span, _, _) => span,
         }
     }
 
@@ -27,6 +30,11 @@ impl Checker {
             AstTy::Generic(_, _, args) => {
                 for arg in args {
                     Self::collect_type_ref_names(arg, out);
+                }
+            }
+            AstTy::Tuple(_, items) => {
+                for item in items {
+                    Self::collect_type_ref_names(item, out);
                 }
             }
             AstTy::Func(_, params, ret) => {
@@ -91,20 +99,6 @@ impl Checker {
                 }
             },
             AstTy::Generic(span, name, args) => match name.as_str() {
-                "Seq" => {
-                    if args.is_empty() {
-                        return Err(TypeError {
-                            message: "Seq<T1, ...> requires at least 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let items = args
-                        .iter()
-                        .map(|arg| self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(Ty::Seq(items))
-                }
                 "MatchResult" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -202,6 +196,20 @@ impl Checker {
                     }
                 }
             },
+            AstTy::Tuple(span, items) => {
+                if items.len() < 2 {
+                    return Err(TypeError {
+                        message: "Tuple types require at least 2 item types".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let items = items
+                    .iter()
+                    .map(|item| self.resolve_ast_ty_in_context(item, TypeSyntaxContext::General))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Tuple(items))
+            }
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
@@ -259,26 +267,6 @@ impl Checker {
                     tyvars,
                 )?;
                 Ok(Ty::List(Box::new(inner)))
-            }
-            AstTy::Generic(span, name, args) if name == "Seq" => {
-                if args.is_empty() {
-                    return Err(TypeError {
-                        message: "Seq<T1, ...> requires at least 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let items = args
-                    .iter()
-                    .map(|arg| {
-                        self.resolve_signature_ast_ty_in_context(
-                            arg,
-                            TypeSyntaxContext::General,
-                            tyvars,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Ty::Seq(items))
             }
             AstTy::Generic(span, name, args) if name == "MatchResult" => {
                 if args.is_empty() || args.len() > 2 {
@@ -342,6 +330,26 @@ impl Checker {
                     Ty::Error
                 };
                 Ok(Ty::Result(Box::new(ok), Box::new(err)))
+            }
+            AstTy::Tuple(span, items) => {
+                if items.len() < 2 {
+                    return Err(TypeError {
+                        message: "Tuple types require at least 2 item types".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let items = items
+                    .iter()
+                    .map(|item| {
+                        self.resolve_signature_ast_ty_in_context(
+                            item,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Tuple(items))
             }
             AstTy::Generic(span, name, args) => {
                 let def = self
@@ -431,26 +439,6 @@ impl Checker {
                 Ok(fresh)
             }
             AstTy::Generic(span, name, args) => match name.as_str() {
-                "Seq" => {
-                    if args.is_empty() {
-                        return Err(TypeError {
-                            message: "Seq<T1, ...> requires at least 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let items = args
-                        .iter()
-                        .map(|arg| {
-                            self.resolve_builtin_ast_ty_in_context(
-                                arg,
-                                TypeSyntaxContext::General,
-                                tyvars,
-                            )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(Ty::Seq(items))
-                }
                 "MatchResult" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -531,6 +519,26 @@ impl Checker {
                 }
                 _ => self.resolve_ast_ty_in_context(ast_ty, context),
             },
+            AstTy::Tuple(span, items) => {
+                if items.len() < 2 {
+                    return Err(TypeError {
+                        message: "Tuple types require at least 2 item types".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let items = items
+                    .iter()
+                    .map(|item| {
+                        self.resolve_builtin_ast_ty_in_context(
+                            item,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Tuple(items))
+            }
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
@@ -606,7 +614,7 @@ impl Checker {
             | (Ty::Unit, Ty::Unit)
             | (Ty::Error, Ty::Error) => true,
             (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-            (Ty::Seq(a), Ty::Seq(b)) => {
+            (Ty::Tuple(a), Ty::Tuple(b)) => {
                 a.len() == b.len()
                     && a.iter()
                         .zip(b.iter())
@@ -653,7 +661,7 @@ impl Checker {
         match self.resolve_ty(ty) {
             Ty::Var(var) => var == needle,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
-            Ty::Seq(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
+            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
             Ty::Func(params, ret) => {
                 params
                     .iter()
@@ -684,7 +692,9 @@ impl Checker {
                 None => Ty::Var(*var),
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
-            Ty::Seq(items) => Ty::Seq(items.iter().map(|item| self.resolve_ty(item)).collect()),
+            Ty::Tuple(items) => {
+                Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect())
+            }
             Ty::Func(params, ret) => Ty::Func(
                 params.iter().map(|param| self.resolve_ty(param)).collect(),
                 Box::new(self.resolve_ty(ret)),
@@ -742,7 +752,7 @@ impl Checker {
                 .or_insert_with(|| self.env.fresh_tyvar())
                 .clone(),
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
-            Ty::Seq(items) => Ty::Seq(
+            Ty::Tuple(items) => Ty::Tuple(
                 items
                     .iter()
                     .map(|item| self.instantiate_ty_with_fresh(item, fresh))
@@ -849,8 +859,8 @@ impl Checker {
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
-            Ty::Seq(items) => format!(
-                "Seq<{}>",
+            Ty::Tuple(items) => format!(
+                "({})",
                 items
                     .iter()
                     .map(|item| self.ty_name(item))
@@ -951,6 +961,12 @@ impl Checker {
                 Box::new(self.resolve_typed_node(*tail)),
             ),
             TypedInner::ListLiteral(elems) => TypedInner::ListLiteral(
+                elems
+                    .into_iter()
+                    .map(|elem| self.resolve_typed_node(elem))
+                    .collect(),
+            ),
+            TypedInner::TupleLiteral(elems) => TypedInner::TupleLiteral(
                 elems
                     .into_iter()
                     .map(|elem| self.resolve_typed_node(elem))
@@ -1100,6 +1116,13 @@ impl Checker {
             TypedPattern::IntLit(ty, n) => TypedPattern::IntLit(self.resolve_ty(&ty), n),
             TypedPattern::StrLit(ty, s) => TypedPattern::StrLit(self.resolve_ty(&ty), s),
             TypedPattern::BoolLit(ty, b) => TypedPattern::BoolLit(self.resolve_ty(&ty), b),
+            TypedPattern::Tuple(ty, items) => TypedPattern::Tuple(
+                self.resolve_ty(&ty),
+                items
+                    .into_iter()
+                    .map(|item| self.resolve_typed_pattern(item))
+                    .collect(),
+            ),
             TypedPattern::ResultOk(ty, inner) => TypedPattern::ResultOk(
                 self.resolve_ty(&ty),
                 Box::new(self.resolve_typed_pattern(*inner)),
@@ -1142,6 +1165,12 @@ impl Checker {
             TypedMatchPattern::BoolLit(value) => TypedMatchPattern::BoolLit(value),
             TypedMatchPattern::IntLit(value) => TypedMatchPattern::IntLit(value),
             TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
+            TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.resolve_typed_match_pattern(item))
+                    .collect(),
+            ),
             TypedMatchPattern::Constructor {
                 tag,
                 fields,

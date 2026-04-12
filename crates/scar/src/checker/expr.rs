@@ -121,6 +121,7 @@ impl Checker {
             Resolved::ListNil(span) => self.check_list_nil(span),
             Resolved::ListCons(span, head, tail) => self.check_list_cons(span, head, tail),
             Resolved::ListLiteral(span, elems) => self.check_list_literal(span, elems),
+            Resolved::TupleLiteral(span, elems) => self.check_tuple_literal(span, elems),
 
             Resolved::InterpolatedStr(span, parts) => self.check_interpolated_str(span, parts),
 
@@ -340,6 +341,7 @@ impl Checker {
             | Resolved::ListNil(span)
             | Resolved::ListCons(span, _, _)
             | Resolved::ListLiteral(span, _)
+            | Resolved::TupleLiteral(span, _)
             | Resolved::InterpolatedStr(span, _)
             | Resolved::If(span, _, _, _)
             | Resolved::Assert(span, _, _)
@@ -1068,20 +1070,12 @@ impl Checker {
     ) -> Result<Vec<Ty>, TypeError> {
         match self.resolve_ty(ty) {
             Ty::Enum(name, args) if name == "MatchResult" && args.len() == 1 => match &args[0] {
-                Ty::Seq(items) => Ok(items.clone()),
-                other => Err(TypeError {
-                    message: format!(
-                        "{} must return MatchResult<Seq<...>>, got MatchResult<{}>",
-                        context,
-                        self.ty_name(other)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
+                Ty::Tuple(items) => Ok(items.clone()),
+                other => Ok(vec![other.clone()]),
             },
             other => Err(TypeError {
                 message: format!(
-                    "{} must return MatchResult<Seq<...>>, got {}",
+                    "{} must return MatchResult<T> or MatchResult<(...)>, got {}",
                     context,
                     self.ty_name(&other)
                 ),
@@ -1806,6 +1800,32 @@ impl Checker {
         })
     }
 
+    pub(super) fn check_tuple_literal(
+        &mut self,
+        span: &Span,
+        elems: &[Resolved],
+    ) -> Result<TypedNode, TypeError> {
+        if elems.len() < 2 {
+            return Err(TypeError {
+                message: "Tuple literals require at least 2 values".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let typed_elems = elems
+            .iter()
+            .map(|elem| self.check_node(elem))
+            .collect::<Result<Vec<_>, _>>()?;
+        let item_tys = typed_elems.iter().map(|elem| elem.ty.clone()).collect();
+
+        Ok(TypedNode {
+            ty: Ty::Tuple(item_tys),
+            span: span.clone(),
+            node: TypedInner::TupleLiteral(typed_elems),
+        })
+    }
+
     pub(super) fn check_interpolated_str(
         &mut self,
         span: &Span,
@@ -1984,6 +2004,23 @@ impl Checker {
         let typed_expr = self.check_node(expr)?;
 
         let (idx, field_ty) = match &typed_expr.ty {
+            Ty::Tuple(items) => {
+                let index = field.parse::<usize>().map_err(|_| TypeError {
+                    message: "Tuple elements are accessed with .0, .1, ...".into(),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+                let field_ty = items.get(index).cloned().ok_or_else(|| TypeError {
+                    message: format!(
+                        "Tuple index .{} is out of bounds for {}",
+                        index,
+                        self.ty_name(&typed_expr.ty)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+                (index as u32, field_ty)
+            }
             Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
                 .iter()
                 .enumerate()
@@ -1995,8 +2032,17 @@ impl Checker {
                     hint: None,
                 })?,
             _ => {
+                let message = if field.chars().all(|ch| ch.is_ascii_digit()) {
+                    format!(
+                        "Tuple-style access .{} is only available on tuples, got {}",
+                        field,
+                        self.ty_name(&typed_expr.ty)
+                    )
+                } else {
+                    format!("Cannot access field on {}", self.ty_name(&typed_expr.ty))
+                };
                 return Err(TypeError {
-                    message: format!("Cannot access field on {}", self.ty_name(&typed_expr.ty)),
+                    message,
                     span: span.clone(),
                     hint: None,
                 });

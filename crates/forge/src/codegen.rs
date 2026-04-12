@@ -566,6 +566,11 @@ fn collect_pattern_binding_infos(
         | TypedPattern::IntLit(_, _)
         | TypedPattern::StrLit(_, _)
         | TypedPattern::BoolLit(_, _) => {}
+        TypedPattern::Tuple(_, items) => {
+            for item in items {
+                collect_pattern_binding_infos(item, slot_map, out);
+            }
+        }
         TypedPattern::ListCons(_, head, tail) => {
             collect_pattern_binding_infos(head, slot_map, out);
             collect_pattern_binding_infos(tail, slot_map, out);
@@ -589,8 +594,8 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
-        Ty::Seq(items) => format!(
-            "Seq<{}>",
+        Ty::Tuple(items) => format!(
+            "({})",
             items
                 .iter()
                 .map(ty_to_string)
@@ -1582,6 +1587,14 @@ impl Codegen {
                     len: elems.len() as u32,
                 });
             }
+            TypedInner::TupleLiteral(elems) => {
+                for elem in elems {
+                    self.emit_node(elem)?;
+                }
+                self.emit(Opcode::TupleNew {
+                    len: elems.len() as u32,
+                });
+            }
 
             TypedInner::InterpolatedStr(parts) => {
                 self.emit_interpolated_str(parts)?;
@@ -1603,7 +1616,10 @@ impl Codegen {
 
             TypedInner::FieldAccess(expr, idx) => {
                 self.emit_node(expr)?;
-                self.emit(Opcode::GetField { field_index: *idx });
+                match &expr.ty {
+                    Ty::Tuple(_) => self.emit(Opcode::GetTupleField { field_index: *idx }),
+                    _ => self.emit(Opcode::GetField { field_index: *idx }),
+                }
             }
 
             TypedInner::StructLit(tag, fields) => {
@@ -2278,6 +2294,28 @@ impl Codegen {
                 self.emit(Opcode::EqInt);
                 self.emit_jump_if_false(fail_label);
             }
+            TypedPattern::Tuple(_, items) => {
+                let mut item_slots = Vec::with_capacity(items.len());
+                for (index, item) in items.iter().enumerate() {
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    item_slots.push((item, item_slot));
+                }
+                for (item, item_slot) in item_slots {
+                    self.emit_pattern_test_from_local_with_mode(
+                        item,
+                        item_slot,
+                        fail_label,
+                        err_span,
+                        propagate_result_error,
+                    )?;
+                }
+            }
             TypedPattern::StrLit(_, s) => {
                 self.emit(Opcode::LoadLocal(slot));
                 let s_const = self.add_constant(Constant::Str(s.clone()));
@@ -2417,6 +2455,18 @@ impl Codegen {
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
             | TypedPattern::BoolLit(_, _) => {}
+            TypedPattern::Tuple(_, items) => {
+                for (index, item) in items.iter().enumerate() {
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    self.emit_pattern_bind_from_local(item, item_slot)?;
+                }
+            }
             TypedPattern::ListCons(_, head, tail) => {
                 let head_slot = self.state.next_slot;
                 self.state.next_slot += 1;
@@ -2538,53 +2588,23 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_extractor_contract_failure(&mut self, span: Span) -> Result<(), CodegenError> {
-        self.emit_pattern_failure(
-            "ExtractorContractViolation",
-            "Extractor returned malformed Seq.",
-            span,
-        )
-    }
-
     fn emit_unpack_seq_payload_from_local(
         &mut self,
-        seq_slot: u32,
+        tuple_slot: u32,
         arity: usize,
-        span: &Span,
+        _span: &Span,
     ) -> Result<Vec<u32>, CodegenError> {
-        let mut current_slot = seq_slot;
         let mut item_slots = Vec::with_capacity(arity);
 
         for index in 0..arity {
-            let non_empty = self.fresh_label();
-            self.emit(Opcode::LoadLocal(current_slot));
-            self.emit(Opcode::ListIsEmpty);
-            self.emit_jump_if_false(non_empty);
-            self.emit_extractor_contract_failure(span.clone())?;
-            self.patch_label(non_empty);
-
             let item_slot = self.state.next_slot;
             self.state.next_slot += 1;
-            self.emit(Opcode::LoadLocal(current_slot));
-            self.emit(Opcode::ListHead);
+            self.emit(Opcode::LoadLocal(tuple_slot));
+            self.emit(Opcode::GetTupleField {
+                field_index: index as u32,
+            });
             self.emit(Opcode::StoreLocal(item_slot));
             item_slots.push(item_slot);
-
-            let tail_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::LoadLocal(current_slot));
-            self.emit(Opcode::ListTail);
-            self.emit(Opcode::StoreLocal(tail_slot));
-            current_slot = tail_slot;
-
-            if index + 1 == arity {
-                let exact_len = self.fresh_label();
-                self.emit(Opcode::LoadLocal(current_slot));
-                self.emit(Opcode::ListIsEmpty);
-                self.emit_jump_if_true(exact_len);
-                self.emit_extractor_contract_failure(span.clone())?;
-                self.patch_label(exact_len);
-            }
         }
 
         Ok(item_slots)
@@ -3243,6 +3263,22 @@ impl Codegen {
                 self.emit(Opcode::EqStr);
                 self.emit_jump_if_false(fail_label);
             }
+            TypedMatchPattern::Tuple(items) => {
+                let mut item_slots = Vec::with_capacity(items.len());
+                for (index, item) in items.iter().enumerate() {
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    item_slots.push((item, item_slot));
+                }
+                for (item, item_slot) in item_slots {
+                    self.emit_match_pattern_test(item, item_slot, fail_label)?;
+                }
+            }
             TypedMatchPattern::Constructor {
                 tag,
                 fields,
@@ -3342,6 +3378,18 @@ impl Codegen {
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::ListNil => {}
+            TypedMatchPattern::Tuple(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    self.emit_match_pattern_bind(item, item_slot)?;
+                }
+            }
             TypedMatchPattern::Constructor {
                 fields,
                 field_offset,

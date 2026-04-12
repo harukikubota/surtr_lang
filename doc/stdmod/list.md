@@ -76,4 +76,4 @@ print(to_string(List::at([10, 20, 30], 1)))
 
 - `List::reduce` / `reduce_while` / `flat_map` がすでにあるため、多くの helper は pure Surtr で記述できます。
 - 一方で `sort`, `group_count`, `zip`, `partition` は userland で毎回書くと冗長になりやすく、標準 surface に置く価値があります。
-- `Pair` や tuple を一般機能として導入しない方針なら、`Seq` を流用せず、専用 record / enum か複数戻り値相当の別設計を用意した方が境界が明確です。
+- `Pair` を標準 surface に置くかどうかは、tuple をローカル用途・REPL 用途に寄せた上で、公開 API では named contract を優先する方針と合わせて判断します。

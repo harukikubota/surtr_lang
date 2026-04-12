@@ -514,21 +514,32 @@ impl Parser {
             _ => {
                 if self.is_pattern_bind_stmt_start() {
                     let save = self.pos;
-                    if let Ok(stmt) = self.parse_pattern_bind_stmt() {
-                        if matches!(self.peek(), Token::Semicolon) {
-                            let semi = self.advance().span.clone();
-                            let span = Span {
-                                start: stmt.span().start,
-                                end: semi.end,
-                            };
-                            let wrapped = Ast::Semi(span, Box::new(stmt));
-                            self.validate_stmt_by_context(&wrapped)?;
-                            return Ok(wrapped);
+                    match self.parse_pattern_bind_stmt() {
+                        Ok(stmt) => {
+                            if matches!(self.peek(), Token::Semicolon) {
+                                let semi = self.advance().span.clone();
+                                let span = Span {
+                                    start: stmt.span().start,
+                                    end: semi.end,
+                                };
+                                let wrapped = Ast::Semi(span, Box::new(stmt));
+                                self.validate_stmt_by_context(&wrapped)?;
+                                return Ok(wrapped);
+                            }
+                            self.validate_stmt_by_context(&stmt)?;
+                            return Ok(stmt);
                         }
-                        self.validate_stmt_by_context(&stmt)?;
-                        return Ok(stmt);
+                        Err(err) => {
+                            let looks_like_bind = matches!(
+                                self.tokens.get(save).map(|sp| &sp.token),
+                                Some(Token::LParen | Token::LBrack)
+                            ) && self.stmt_has_top_level_assignment_from(save);
+                            self.pos = save;
+                            if looks_like_bind {
+                                return Err(err);
+                            }
+                        }
                     }
-                    self.pos = save;
                 }
 
                 let expr = self.parse_expr()?;
@@ -1012,6 +1023,7 @@ impl Parser {
         matches!(
             self.peek(),
             Token::LBrack
+                | Token::LParen
                 | Token::Ident(_)
                 | Token::Int(_)
                 | Token::Str(_)
@@ -1019,6 +1031,41 @@ impl Parser {
                 | Token::False
                 | Token::Minus
         )
+    }
+
+    fn stmt_has_top_level_assignment_from(&self, start: usize) -> bool {
+        let mut paren_depth = 0usize;
+        let mut bracket_depth = 0usize;
+        let mut brace_depth = 0usize;
+
+        for token in self.tokens.iter().skip(start).map(|sp| &sp.token) {
+            match token {
+                Token::LParen => paren_depth += 1,
+                Token::RParen => paren_depth = paren_depth.saturating_sub(1),
+                Token::LBrack => bracket_depth += 1,
+                Token::RBrack => bracket_depth = bracket_depth.saturating_sub(1),
+                Token::LBrace => brace_depth += 1,
+                Token::RBrace => {
+                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                        break;
+                    }
+                    brace_depth = brace_depth.saturating_sub(1);
+                }
+                Token::Newline | Token::Semicolon | Token::Eof
+                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
+                {
+                    break;
+                }
+                Token::Bind | Token::SafeBind
+                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+
+        false
     }
 
     // ── Infix operators grouped by OpKind ──
@@ -1157,7 +1204,22 @@ impl Parser {
 
         while matches!(self.peek(), Token::Dot) {
             self.advance(); // consume .
-            let (field, fspan) = self.expect_ident()?;
+            let (field, fspan) = match self.peek().clone() {
+                Token::Ident(field) => {
+                    let span = self.advance().span.clone();
+                    (field, span)
+                }
+                Token::Int(index) => {
+                    let span = self.advance().span.clone();
+                    (index.to_string(), span)
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        "Expected field name or tuple index after '.'",
+                        self.peek_span(),
+                    ));
+                }
+            };
             let span = Span {
                 start: expr.span().start,
                 end: fspan.end,
@@ -1258,9 +1320,44 @@ impl Parser {
             // Parenthesized expression
             Token::LParen => {
                 self.advance();
-                let inner = self.parse_expr()?;
-                self.expect(&Token::RParen)?;
-                Ok(inner)
+                self.skip_newlines();
+                let first = self.parse_expr()?;
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::RParen) {
+                        return Err(ParseError::syntax(
+                            "1-tuple literals are not supported",
+                            Span {
+                                start: sp.start,
+                                end: self.peek_span().end,
+                            },
+                        ));
+                    }
+                    let mut items = vec![first, self.parse_expr()?];
+                    self.skip_newlines();
+                    while matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                        items.push(self.parse_expr()?);
+                        self.skip_newlines();
+                    }
+                    let end = self.expect(&Token::RParen)?;
+                    Ok(Ast::TupleLiteral(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        items,
+                    ))
+                } else {
+                    self.expect(&Token::RParen)?;
+                    Ok(first)
+                }
             }
 
             // Block expression: { stmt; stmt; expr }
@@ -1909,6 +2006,47 @@ impl Parser {
                 Ok(AstPattern::Var(sp, name))
             }
             Token::LBrack => self.parse_list_bind_pattern(),
+            Token::LParen => {
+                self.advance();
+                self.skip_newlines();
+                let first = self.parse_bind_pattern()?;
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::RParen) {
+                        return Err(ParseError::syntax(
+                            "1-tuple patterns are not supported",
+                            Span {
+                                start: sp.start,
+                                end: self.peek_span().end,
+                            },
+                        ));
+                    }
+                    let mut items = vec![first, self.parse_bind_pattern()?];
+                    self.skip_newlines();
+                    while matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                        items.push(self.parse_bind_pattern()?);
+                        self.skip_newlines();
+                    }
+                    let end = self.expect(&Token::RParen)?;
+                    Ok(AstPattern::Tuple(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        items,
+                    ))
+                } else {
+                    self.expect(&Token::RParen)?;
+                    Ok(first)
+                }
+            }
             Token::Eof => Err(ParseError::incomplete("list pattern", sp)),
             _ => Err(ParseError::syntax(
                 "Pattern supports identifiers, literals, `_`, list patterns, nested `Ok(...)` patterns, and `pattern @ alias`",
@@ -1954,21 +2092,45 @@ impl Parser {
             while matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
+                if matches!(self.peek(), Token::RParen) {
+                    return Err(ParseError::syntax(
+                        "1-tuple types are not supported",
+                        Span {
+                            start: sp.start,
+                            end: self.peek_span().end,
+                        },
+                    ));
+                }
                 params.push(self.parse_type_in_impl_context(impl_target.clone())?);
                 self.skip_newlines();
             }
-            self.expect(&Token::Arrow)?;
-            let ret = self.parse_type_in_impl_context(impl_target.clone())?;
-            self.skip_newlines();
+            if matches!(self.peek(), Token::Arrow) {
+                self.advance();
+                let ret = self.parse_type_in_impl_context(impl_target.clone())?;
+                self.skip_newlines();
+                let end = self.expect(&Token::RParen)?;
+                return Ok(AstTy::Func(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    params,
+                    Box::new(ret),
+                ));
+            }
+
             let end = self.expect(&Token::RParen)?;
-            return Ok(AstTy::Func(
-                Span {
-                    start: sp.start,
-                    end: end.end,
-                },
-                params,
-                Box::new(ret),
-            ));
+            return if params.len() == 1 {
+                Ok(params.into_iter().next().expect("single grouped type"))
+            } else {
+                Ok(AstTy::Tuple(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    params,
+                ))
+            };
         }
 
         if matches!(self.peek(), Token::Dollar) {
@@ -3370,7 +3532,10 @@ fn shift_span(span: Span, delta: usize) -> Span {
 
 fn ast_ty_span(ty: &AstTy) -> &Span {
     match ty {
-        AstTy::Named(span, _) | AstTy::Generic(span, _, _) | AstTy::Func(span, _, _) => span,
+        AstTy::Named(span, _)
+        | AstTy::Generic(span, _, _)
+        | AstTy::Tuple(span, _)
+        | AstTy::Func(span, _, _) => span,
     }
 }
 
@@ -3386,6 +3551,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::BoolLit(span, _)
         | AstPattern::Constructor(span, _, _)
         | AstPattern::Call(span, _, _)
+        | AstPattern::Tuple(span, _)
         | AstPattern::As(span, _, _, _) => span,
     }
 }
@@ -3408,6 +3574,13 @@ fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
             name,
             args.into_iter()
                 .map(|arg| shift_ast_ty(arg, delta))
+                .collect(),
+        ),
+        AstTy::Tuple(span, items) => AstTy::Tuple(
+            shift_span(span, delta),
+            items
+                .into_iter()
+                .map(|item| shift_ast_ty(item, delta))
                 .collect(),
         ),
         AstTy::Func(span, params, ret) => AstTy::Func(
@@ -3448,6 +3621,13 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
             inners
                 .into_iter()
                 .map(|inner| shift_pattern(inner, delta))
+                .collect(),
+        ),
+        AstPattern::Tuple(span, items) => AstPattern::Tuple(
+            shift_span(span, delta),
+            items
+                .into_iter()
+                .map(|item| shift_pattern(item, delta))
                 .collect(),
         ),
         AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
@@ -3572,6 +3752,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*tail, delta)),
         ),
         Ast::ListLiteral(span, elems) => Ast::ListLiteral(
+            shift_span(span, delta),
+            elems
+                .into_iter()
+                .map(|e| shift_ast_span(e, delta))
+                .collect(),
+        ),
+        Ast::TupleLiteral(span, elems) => Ast::TupleLiteral(
             shift_span(span, delta),
             elems
                 .into_iter()
@@ -3790,6 +3977,7 @@ impl Ast {
             | Ast::ListNil(s)
             | Ast::ListCons(s, _, _)
             | Ast::ListLiteral(s, _)
+            | Ast::TupleLiteral(s, _)
             | Ast::InterpolatedStr(s, _)
             | Ast::Match(s, _, _)
             | Ast::FieldAccess(s, _, _)
@@ -4930,9 +5118,112 @@ Construct the error branch.
     }
 
     #[test]
+    fn test_tuple_literal() {
+        let ast = parse("pair = (1, 2)").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::TupleLiteral(_, elems) => {
+                    assert_eq!(elems.len(), 2);
+                    assert!(matches!(elems[0], Ast::Lit(_, Lit::Int(ref n)) if n == &int(1)));
+                    assert!(matches!(elems[1], Ast::Lit(_, Lit::Int(ref n)) if n == &int(2)));
+                }
+                other => panic!("Expected TupleLiteral, got {:?}", other),
+            },
+            other => panic!("Expected Bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parenthesized_expression_is_not_tuple_literal() {
+        let ast = parse("value = (1)").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1)));
+            }
+            other => panic!("Expected Bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_tuple_pattern_bind() {
+        let ast = parse("(left, right) = pair").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, pattern, rhs) => {
+                assert!(matches!(
+                    pattern,
+                    AstPattern::Tuple(_, items)
+                        if matches!(items.as_slice(),
+                            [AstPattern::Var(_, left), AstPattern::Var(_, right)]
+                                if left == "left" && right == "right")
+                ));
+                assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "pair"));
+            }
+            other => panic!("Expected Bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_tuple_type_annotation() {
+        let ast = parse("pair: (Int, String) = value").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Tuple(_, items)), rhs) => {
+                assert_eq!(items.len(), 2);
+                assert!(matches!(&items[0], AstTy::Named(_, name) if name == "Int"));
+                assert!(matches!(&items[1], AstTy::Named(_, name) if name == "String"));
+                assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+            }
+            other => panic!("Expected annotated tuple bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_function_type_annotation_is_not_tuple_type() {
+        let ast = parse("fun: (Int, String -> Unit) = {|x, y| ()}").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Func(_, params, ret)), rhs) => {
+                assert_eq!(params.len(), 2);
+                assert!(matches!(&params[0], AstTy::Named(_, name) if name == "Int"));
+                assert!(matches!(&params[1], AstTy::Named(_, name) if name == "String"));
+                assert!(matches!(ret.as_ref(), AstTy::Named(_, name) if name == "Unit"));
+                assert!(matches!(rhs.as_ref(), Ast::Closure(_, params, _) if params.len() == 2));
+            }
+            other => panic!("Expected function type bind, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_field_access() {
         let ast = parse("user.name").unwrap();
         assert!(matches!(&ast[0], Ast::FieldAccess(_, _, ref f) if f == "name"));
+    }
+
+    #[test]
+    fn test_tuple_index_field_access() {
+        let ast = parse("first = pair.0").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => {
+                assert!(matches!(rhs.as_ref(), Ast::FieldAccess(_, _, field) if field == "0"));
+            }
+            other => panic!("Expected Bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_one_tuple_literal_is_rejected() {
+        let err = parse("pair = (1,)").expect_err("Expected parse error");
+        assert!(err.message().contains("1-tuple literals are not supported"));
+    }
+
+    #[test]
+    fn test_one_tuple_pattern_is_rejected() {
+        let err = parse("(x,) = pair").expect_err("Expected parse error");
+        assert!(err.message().contains("1-tuple patterns are not supported"));
+    }
+
+    #[test]
+    fn test_one_tuple_type_is_rejected() {
+        let err = parse("pair: (Int,) = value").expect_err("Expected parse error");
+        assert!(err.message().contains("1-tuple types are not supported"));
     }
 
     #[test]
@@ -5345,7 +5636,7 @@ y = KeyInput::Arrow(Direction::Down)"#,
     #[test]
     fn test_module_compile_unit_rejects_top_level_defextractor() {
         let err = parse_with_context(
-            "defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> { MatchResult::NoMatch }",
+            "defextractor never(self: Int) -> MatchResult<Int, Error> { MatchResult::NoMatch }",
             ParserContext::module(1, None),
         )
         .expect_err("module compile unit should require defmod wrappers for extractors");
@@ -5368,7 +5659,7 @@ y = KeyInput::Arrow(Direction::Down)"#,
     fn test_defmod_body_accepts_defextractor() {
         let ast = parse_with_context(
             r#"defmod Matchers {
-  defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> {
+  defextractor never(self: Int) -> MatchResult<Int, Error> {
     MatchResult::NoMatch
   }
 }"#,
@@ -5507,7 +5798,7 @@ y = KeyInput::Arrow(Direction::Down)"#,
     #[test]
     fn test_project_compile_unit_rejects_top_level_defextractor() {
         let err = parse_with_context(
-            "defextractor never(self: Int) -> MatchResult<Seq<Int>, Error> { MatchResult::NoMatch }",
+            "defextractor never(self: Int) -> MatchResult<Int, Error> { MatchResult::NoMatch }",
             ParserContext::project(1),
         )
         .expect_err("project compile unit should reject top-level extractor declarations");

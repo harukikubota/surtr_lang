@@ -103,6 +103,11 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(elem, bound, free);
             }
         }
+        Resolved::TupleLiteral(_, elems) => {
+            for elem in elems {
+                collect_captures_inner(elem, bound, free);
+            }
+        }
         Resolved::InterpolatedStr(_, parts) => {
             for part in parts {
                 if let ResolvedInterpolatedPart::Expr(expr) = part {
@@ -206,6 +211,11 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
         ResolvedPattern::Extractor(_, inners) => {
             for inner in inners {
                 collect_bind_pattern_bindings(inner, bound);
+            }
+        }
+        ResolvedPattern::Tuple(items) => {
+            for item in items {
+                collect_bind_pattern_bindings(item, bound);
             }
         }
         ResolvedPattern::As(inner, id, _) => {

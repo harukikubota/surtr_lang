@@ -280,6 +280,14 @@ impl Resolver {
                 Ok(Resolved::ListLiteral(span, resolved))
             }
 
+            Ast::TupleLiteral(span, elems) => {
+                let resolved = elems
+                    .into_iter()
+                    .map(|e| self.resolve_node(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Resolved::TupleLiteral(span, resolved))
+            }
+
             Ast::InterpolatedStr(span, parts) => {
                 let mut resolved_parts = Vec::new();
                 for part in parts {

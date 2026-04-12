@@ -209,7 +209,7 @@ defmod Kernel {
 
   Empty input returns `NoMatch`.
   """
-  @@builtin defextractor uncons(term) -> MatchResult<Seq<$Head, $Tail>, Error>
+  @@builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>
 
   @@doc """
   Print a string to stdout.

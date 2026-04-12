@@ -73,6 +73,13 @@ fn rewrite_self_type(ty: AstTy, target: &str) -> AstTy {
                 .map(|arg| rewrite_self_type(arg, target))
                 .collect(),
         ),
+        AstTy::Tuple(span, items) => AstTy::Tuple(
+            span,
+            items
+                .into_iter()
+                .map(|item| rewrite_self_type(item, target))
+                .collect(),
+        ),
         AstTy::Func(span, params, ret) => AstTy::Func(
             span,
             params
@@ -108,6 +115,13 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
             inners
                 .into_iter()
                 .map(|inner| rewrite_self_pattern(inner, target))
+                .collect(),
+        ),
+        AstPattern::Tuple(span, items) => AstPattern::Tuple(
+            span,
+            items
+                .into_iter()
+                .map(|item| rewrite_self_pattern(item, target))
                 .collect(),
         ),
         AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
@@ -151,6 +165,13 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             Box::new(rewrite_self_ast(*tail, target)),
         ),
         Ast::ListLiteral(span, elems) => Ast::ListLiteral(
+            span,
+            elems
+                .into_iter()
+                .map(|elem| rewrite_self_ast(elem, target))
+                .collect(),
+        ),
+        Ast::TupleLiteral(span, elems) => Ast::TupleLiteral(
             span,
             elems
                 .into_iter()
