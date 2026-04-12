@@ -597,10 +597,6 @@ pub(crate) fn collect_repl_sources_with_module_stages(
     })
 }
 
-pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
-    collect_repl_sources_with_module_stages(&[])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

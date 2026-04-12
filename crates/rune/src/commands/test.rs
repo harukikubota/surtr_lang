@@ -417,12 +417,10 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
             ),
         )
     })?;
-    let module_sources = if module_inputs.is_empty() {
-        xldr::collect_module_sources_with_module_stages(&[])
-    } else {
-        xldr::collect_module_sources_with_std_module_stages(&[module_inputs])
-    }
-    .map_err(|e| RuneError::message(1, format!("test: failed to collect module sources: {}", e)))?;
+    let module_sources = xldr::collect_module_sources_with_module_stages(&[module_inputs])
+        .map_err(|e| {
+            RuneError::message(1, format!("test: failed to collect module sources: {}", e))
+        })?;
 
     let mut passed = 0usize;
     let mut failed = 0usize;

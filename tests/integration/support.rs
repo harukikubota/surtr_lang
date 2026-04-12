@@ -12,12 +12,8 @@ enum TestCompileMode {
 pub fn collect_default_module_sources() -> Result<ModuleSources, String> {
     let module_inputs = xldr::collect_additional_default_std_module_inputs()
         .map_err(|e| format!("phase=load; message={}", e))?;
-    if module_inputs.is_empty() {
-        xldr::collect_module_sources_with_module_stages(&[])
-    } else {
-        xldr::collect_module_sources_with_std_module_stages(&[module_inputs])
-    }
-    .map_err(|e| format!("phase=load; message={}", e))
+    xldr::collect_module_sources_with_module_stages(&[module_inputs])
+        .map_err(|e| format!("phase=load; message={}", e))
 }
 
 #[allow(dead_code)]

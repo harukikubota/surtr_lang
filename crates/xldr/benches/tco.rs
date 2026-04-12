@@ -63,12 +63,8 @@ fn collect_script_compile_sources(
 ) -> Result<xldr::CompileSources, String> {
     let module_inputs = xldr::collect_additional_default_std_module_inputs()
         .map_err(|e| format!("phase=load; message={}", e))?;
-    let module_sources = if module_inputs.is_empty() {
-        xldr::collect_module_sources_with_module_stages(&[])
-    } else {
-        xldr::collect_module_sources_with_std_module_stages(&[module_inputs])
-    }
-    .map_err(|e| format!("phase=load; message={}", e))?;
+    let module_sources = xldr::collect_module_sources_with_module_stages(&[module_inputs])
+        .map_err(|e| format!("phase=load; message={}", e))?;
     Ok(xldr::compose_script_compile_sources(
         file_name,
         source,

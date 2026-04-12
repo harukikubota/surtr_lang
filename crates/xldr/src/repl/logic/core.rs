@@ -68,11 +68,7 @@ pub struct ReplEngine {
 impl ReplEngine {
     pub(crate) fn new() -> Result<Self, LoadError> {
         let std_module_inputs = collect_additional_default_std_module_inputs()?;
-        let repl_sources = if std_module_inputs.is_empty() {
-            loader::collect_repl_sources()?
-        } else {
-            loader::collect_repl_sources_with_std_module_stages(&[std_module_inputs])?
-        };
+        let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])?;
         let forge_session = forge::ForgeSession::new();
         let vm = eldr::VM::new_interactive(forge_session.type_registry());
         let mut engine = Self {
@@ -120,12 +116,8 @@ impl ReplEngine {
 
         let std_module_inputs =
             collect_additional_default_std_module_inputs().map_err(EldrLoadError::Load)?;
-        let repl_sources = if std_module_inputs.is_empty() {
-            loader::collect_repl_sources()
-        } else {
-            loader::collect_repl_sources_with_std_module_stages(&[std_module_inputs])
-        }
-        .map_err(EldrLoadError::Load)?;
+        let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])
+            .map_err(EldrLoadError::Load)?;
 
         let docs = bytecode.docs.clone();
         let forge_session = forge::ForgeSession::from_bytecode(&bytecode);
@@ -1169,12 +1161,12 @@ mod tests {
 
     fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
         let repl_sources =
-            loader::collect_repl_sources_with_std_module_stages(&[vec![crate::ModuleInput {
+            loader::collect_repl_sources_with_module_stages(&[vec![crate::ModuleInput {
                 file_name: "lib/bad.srt".into(),
                 source: source.into(),
                 module_path: module_path.into(),
             }]])
-            .expect("test stdlib stage should load");
+            .expect("test module stage should load");
         let forge_session = forge::ForgeSession::new();
         let vm = eldr::VM::new_interactive(forge_session.type_registry());
 

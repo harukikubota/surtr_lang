@@ -128,7 +128,9 @@ fn test_command_allows_annotations_and_blank_lines_between_test_and_def() {
         r#"defmod Math {
   @@test add(1, 2) == 3
 
-  @@builtin def to_string(a: $A) -> String
+  @@doc """
+  add docs
+  """
 
   @@test add(2, 3) == 5
 
