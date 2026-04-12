@@ -21,6 +21,7 @@ mod tests {
     const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
+    const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/compare.srt");
     const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
@@ -28,6 +29,7 @@ mod tests {
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
+    const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/ordering.srt");
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
@@ -126,6 +128,8 @@ mod tests {
                 ("Numeric", NUMERIC_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),
                 ("Eq", EQ_MODULE_SOURCE),
+                ("Ordering", ORDERING_MODULE_SOURCE),
+                ("Compare", COMPARE_MODULE_SOURCE),
                 ("Ord", ORD_MODULE_SOURCE),
                 ("Concat", CONCAT_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),

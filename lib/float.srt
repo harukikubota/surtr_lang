@@ -95,20 +95,46 @@ impl Eq for Float {
   }
 }
 
+impl Compare for Float {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    if(
+      self < rhs,
+      Ordering::Less,
+      if(self > rhs, Ordering::Greater, Ordering::Equal),
+    )
+  }
+}
+
 impl Ord for Float {
   def lt(self: Self, rhs: Self) -> Boolean {
-    self < rhs
+    match Compare::compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal => False,
+      Ordering::Greater => False,
+    }
   }
 
   def lte(self: Self, rhs: Self) -> Boolean {
-    self <= rhs
+    match Compare::compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal => True,
+      Ordering::Greater => False,
+    }
   }
 
   def gt(self: Self, rhs: Self) -> Boolean {
-    self > rhs
+    match Compare::compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal => False,
+      Ordering::Greater => True,
+    }
   }
 
   def gte(self: Self, rhs: Self) -> Boolean {
-    self >= rhs
+    match Compare::compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal => True,
+      Ordering::Greater => True,
+    }
   }
 }

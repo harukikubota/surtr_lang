@@ -1,0 +1,27 @@
+@@doc """
+Standard `Ordering` enum.
+Represents the three-way result of an ordering comparison.
+This is the shared result type used by the `Compare` trait, while boolean
+ordering helpers remain available through `Ord`.
+"""
+defenum Ordering {
+  Less,
+  Equal,
+  Greater,
+}
+
+impl Show for Ordering {
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl Eq for Ordering {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self == rhs
+  }
+
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self != rhs
+  }
+}

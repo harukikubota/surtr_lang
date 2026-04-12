@@ -21,6 +21,7 @@ mod tests {
     const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
+    const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/compare.srt");
     const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
@@ -28,6 +29,7 @@ mod tests {
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
+    const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/ordering.srt");
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
@@ -138,6 +140,14 @@ mod tests {
                 ),
                 ("Show", pick_override("Show", SHOW_MODULE_SOURCE, overrides)),
                 ("Eq", pick_override("Eq", EQ_MODULE_SOURCE, overrides)),
+                (
+                    "Ordering",
+                    pick_override("Ordering", ORDERING_MODULE_SOURCE, overrides),
+                ),
+                (
+                    "Compare",
+                    pick_override("Compare", COMPARE_MODULE_SOURCE, overrides),
+                ),
                 ("Ord", pick_override("Ord", ORD_MODULE_SOURCE, overrides)),
                 (
                     "Concat",

@@ -831,6 +831,56 @@ deftrait Eq {
 }
 
 #[test]
+fn test_compare_helper_resolves_via_autoimport_trait() {
+    let module_stages = vec![vec![
+        staged_module(
+            "Ordering",
+            parse_module_ast(
+                r#"defenum Ordering {
+  Less,
+  Equal,
+  Greater,
+}"#,
+                "Ordering",
+            ),
+        ),
+        staged_module(
+            "Compare",
+            parse_module_ast(
+                r#"@@autoimport
+deftrait Compare {
+  def compare(self: Self, rhs: Self) -> Ordering
+}"#,
+                "Compare",
+            ),
+        ),
+    ]];
+
+    let resolved = resolve_user_with_modules("x = compare(1, 2)", &module_stages)
+        .expect("compare helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert_eq!(args.len(), 2);
+                match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "compare");
+                        assert_eq!(id.qualified_name.as_deref(), Some("Compare::Compare::compare"));
+                    }
+                    other => panic!("expected helper var, got {:?}", other),
+                }
+            }
+            other => panic!("expected app, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
 fn test_lt_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
         "Ord",

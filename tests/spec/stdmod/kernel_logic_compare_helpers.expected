@@ -6,11 +6,13 @@ True
 True
 True
 True
+Ordering::Less
 True
 True
 True
 True
 hi there
+Ordering::Equal
 True
 True
 xy

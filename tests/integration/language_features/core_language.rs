@@ -148,13 +148,24 @@ print(to_string(neq(Flag::On, Flag::Off)))"#,
 #[test]
 fn kernel_ordering_and_concat_helpers_match_operator_behavior() {
     assert_output(
-        r#"print(to_string(lt(1, 2)))
+        r#"print(to_string(compare(1, 2)))
+print(to_string(Compare::compare(1, 1)))
+print(to_string(lt(1, 2)))
 print(to_string(lte(2, 2)))
 print(to_string(gt(3, 2)))
 print(to_string(gte(3, 3)))
 print(concat("hello", " world"))
 print(to_string(lt(1.5, 2.0)))"#,
-        &["True", "True", "True", "True", "hello world", "True"],
+        &[
+            "Ordering::Less",
+            "Ordering::Equal",
+            "True",
+            "True",
+            "True",
+            "True",
+            "hello world",
+            "True",
+        ],
     );
 }
 
