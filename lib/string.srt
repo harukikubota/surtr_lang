@@ -54,6 +54,20 @@ deferror InvalidStringEncoding(detail: String) {
 }
 
 @@doc """
+Concrete string-module error for decimal integer parsing used by `TryFrom<Int>`.
+"""
+deferror InvalidIntegerLiteral(input: String) {
+  "invalid integer literal: #{input}"
+}
+
+@@doc """
+Concrete string-module error for boolean parsing used by `TryFrom<Boolean>`.
+"""
+deferror InvalidBooleanLiteral(input: String) {
+  "invalid boolean literal: #{input}"
+}
+
+@@doc """
 String module.
 Groups string-oriented helpers.
 This module is loaded with the standard library and documented from source so
@@ -113,6 +127,52 @@ defmod String {
       Err(_) => match value {
         "" => Err(NoneError),
         [head, ..tail] => String::_split_once_go(tail, separator, [head, ..prefix_rev]),
+      },
+    }
+  }
+
+  def _decimal_digit_value(ch: String, input: String) -> Result<Int, InvalidIntegerLiteral> {
+    if(
+      ch == "0",
+      Ok(0),
+      if(
+        ch == "1",
+        Ok(1),
+        if(
+          ch == "2",
+          Ok(2),
+          if(
+            ch == "3",
+            Ok(3),
+            if(
+              ch == "4",
+              Ok(4),
+              if(
+                ch == "5",
+                Ok(5),
+                if(
+                  ch == "6",
+                  Ok(6),
+                  if(
+                    ch == "7",
+                    Ok(7),
+                    if(ch == "8", Ok(8), if(ch == "9", Ok(9), Err(InvalidIntegerLiteral(input)))),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+  }
+
+  def _parse_decimal_go(chars: List<String>, acc: Int, input: String) -> Result<Int, InvalidIntegerLiteral> {
+    match chars {
+      [] => Ok(acc),
+      [head, ..tail] => {
+        digit =? String::_decimal_digit_value(head, input)
+        String::_parse_decimal_go(tail, acc * 10 + digit, input)
       },
     }
   }
@@ -333,11 +393,68 @@ defmod String {
   def trim(value: String) -> String {
     String::trim_end(String::trim_start(value))
   }
+
+  @@doc """
+  Parse `value` as a base-10 `Int`.
+  Accepts an optional leading `+` or `-`.
+  """
+  def try_to_int(value: String) -> Result<Int, InvalidIntegerLiteral> {
+    chars = String::chars(value)
+    match chars {
+      [] => Err(InvalidIntegerLiteral(value)),
+      ["-", ..tail] => if(
+        List::len(tail) == 0,
+        Err(InvalidIntegerLiteral(value)),
+        {
+          num =? String::_parse_decimal_go(tail, 0, value)
+          Ok(0 - num)
+        },
+      ),
+      ["+", ..tail] => if(
+        List::len(tail) == 0,
+        Err(InvalidIntegerLiteral(value)),
+        String::_parse_decimal_go(tail, 0, value),
+      ),
+      _ => String::_parse_decimal_go(chars, 0, value),
+    }
+  }
+
+  @@doc """
+  Parse `value` as a `Boolean`.
+  Accepts `True`, `False`, `true`, and `false`.
+  """
+  def try_to_boolean(value: String) -> Result<Boolean, InvalidBooleanLiteral> {
+    match value {
+      "True" => Ok(True),
+      "False" => Ok(False),
+      "true" => Ok(True),
+      "false" => Ok(False),
+      _ => Err(InvalidBooleanLiteral(value)),
+    }
+  }
 }
 
 impl Show for String {
   def to_string(self: Self) -> String {
     self
+  }
+}
+
+impl From<String> for String {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    self
+  }
+}
+
+impl TryFrom<Int> for String {
+  def try_from(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
+    String::try_to_int(self)
+  }
+}
+
+impl TryFrom<Boolean> for String {
+  def try_from(self: Self, to: TypeRef<Boolean>) -> Result<Boolean, Error> {
+    String::try_to_boolean(self)
   }
 }
 

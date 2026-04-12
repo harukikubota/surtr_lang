@@ -23,6 +23,8 @@ mod tests {
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
     const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
+    const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
+    const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/try_from.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
@@ -140,6 +142,11 @@ mod tests {
                 (
                     "Concat",
                     pick_override("Concat", CONCAT_MODULE_SOURCE, overrides),
+                ),
+                ("From", pick_override("From", FROM_MODULE_SOURCE, overrides)),
+                (
+                    "TryFrom",
+                    pick_override("TryFrom", TRY_FROM_MODULE_SOURCE, overrides),
                 ),
                 ("Int", pick_override("Int", INT_MODULE_SOURCE, overrides)),
                 (
@@ -1423,5 +1430,135 @@ b = double(1.5)"#,
         assert!(err
             .message
             .contains("Numeric is implemented for: Float, Int"));
+    }
+
+    #[test]
+    fn from_helper_typechecks_as_generic_trait_call() {
+        let typed = typecheck_with_builtin_prelude(r#"value = from(42, String)"#);
+        let rhs = typed
+            .iter()
+            .find_map(|node| match &node.node {
+                TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+                _ => None,
+            })
+            .expect("bind rhs should exist");
+        match &rhs.node {
+            TypedInner::TraitCall {
+                trait_name,
+                method_name,
+                receiver_ty,
+                dispatch:
+                    crate::typed::TraitDispatch::Static(
+                        crate::typed::TraitDispatchTarget::UserFunction { name, .. },
+                    ),
+                args,
+            } => {
+                assert_eq!(trait_name, "From<String>");
+                assert_eq!(method_name, "from");
+                assert_eq!(name, "From<String>::Int::from");
+                assert_eq!(receiver_ty, &crate::types::Ty::Int);
+                assert!(matches!(args[1].ty, crate::types::Ty::TypeRef(_)));
+                assert_eq!(rhs.ty, crate::types::Ty::Str);
+            }
+            other => panic!("expected trait call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn try_from_helper_typechecks_as_generic_trait_call() {
+        let typed = typecheck_with_builtin_prelude(r#"value = try_from("42", Int)"#);
+        let rhs = typed
+            .iter()
+            .find_map(|node| match &node.node {
+                TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+                _ => None,
+            })
+            .expect("bind rhs should exist");
+        match &rhs.node {
+            TypedInner::TraitCall {
+                trait_name,
+                method_name,
+                receiver_ty,
+                dispatch:
+                    crate::typed::TraitDispatch::Static(
+                        crate::typed::TraitDispatchTarget::UserFunction { name, .. },
+                    ),
+                args,
+            } => {
+                assert_eq!(trait_name, "TryFrom<Int>");
+                assert_eq!(method_name, "try_from");
+                assert_eq!(name, "TryFrom<Int>::String::try_from");
+                assert_eq!(receiver_ty, &crate::types::Ty::Str);
+                assert!(matches!(args[1].ty, crate::types::Ty::TypeRef(_)));
+                assert!(matches!(rhs.ty, crate::types::Ty::Result(_, _)));
+            }
+            other => panic!("expected trait call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
+        let resolved = resolve_with_builtin_prelude(r#"value = from("42", Int)"#);
+        let err = typecheck(resolved).expect_err("from on fallible conversion must fail");
+        assert!(err.message.contains("String -> Int implements TryFrom, not From"));
+        assert!(err.message.contains("Use try_from(value, Int)."));
+    }
+
+    #[test]
+    fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
+        let resolved = resolve_with_builtin_prelude(r#"value = try_from(42, String)"#);
+        let err = typecheck(resolved).expect_err("try_from on infallible conversion must fail");
+        assert!(err.message.contains("Int -> String implements From, not TryFrom"));
+        assert!(err.message.contains("Use from(value, String)."));
+    }
+
+    #[test]
+    fn from_and_try_from_impls_are_mutually_exclusive() {
+        let overrides = [(
+            "String",
+            r#"@@builtin type String
+
+defmod String {}
+
+impl Show for String {
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<String> for String {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    self
+  }
+}
+
+impl TryFrom<Int> for String {
+  def try_from(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
+    Ok(0)
+  }
+}
+
+impl From<Int> for String {
+  def from(self: Self, to: TypeRef<Int>) -> Int {
+    0
+  }
+}
+
+impl Eq for String {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self == rhs
+  }
+
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self != rhs
+  }
+}"#,
+        )];
+
+        let err = typecheck_std_modules_with_overrides(&overrides)
+            .expect_err("conflicting From/TryFrom impls must fail");
+        assert!(err
+            .message
+            .contains("From and TryFrom cannot both be implemented for String -> Int"));
     }
 }

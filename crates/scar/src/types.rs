@@ -18,6 +18,10 @@ pub enum Ty {
     /// Generic function type: `(params) -> ret`
     Func(Vec<Ty>, Box<Ty>),
 
+    /// Compiler-reserved target-type witness used only in restricted trait
+    /// method parameter positions such as `From<$To>::from(_, TypeRef<$To>)`.
+    TypeRef(Box<Ty>),
+
     /// Built-in function with a known name (for codegen dispatch)
     BuiltinFunc {
         name: String,

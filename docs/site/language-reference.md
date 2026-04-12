@@ -100,12 +100,24 @@ match expr {
 ### trait (V1)
 
 - trait 宣言は `deftrait Name { ... }`
+- trait 宣言は `deftrait Name<$T, ...> { ... }` のように型引数を取ってよい
 - trait 実装は `impl Trait for Type { ... }`
+- trait 実装は `impl Trait<Concrete, ...> for Type { ... }` の形も取れる
 - trait は method のみを持つ
 - `impl Trait` は parameter 位置のみで使える
 - `-> impl Trait` は未対応
 - `where` clause は未対応
 - `+`, `-`, `*` は `Numeric::{add, sub, mul}` へ resolve される
+- `TypeRef<$T>` は compiler-reserved な target type witness
+- `TypeRef<$T>` は trait head で宣言された型引数に対応するときだけ、trait method parameter 型として使える
+- `TypeRef<$T>` は通常関数の引数型、戻り値型、field、local binding には使えない
+
+### `from` / `try_from`
+
+- source 上の呼び出しは `from(value, TargetTy)` / `try_from(value, TargetTy)`
+- 第2引数 `TargetTy` は ordinary expression ではなく型指定スロット
+- 内部的には `TypeRef<TargetTy>` witness として扱う
+- `From<$To>` / `TryFrom<$To>` trait が impl coherence を担う
 
 ### `Result<T>`
 

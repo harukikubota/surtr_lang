@@ -472,17 +472,61 @@ impl Checker {
         id.qualified_name.clone().unwrap_or_else(|| id.name.clone())
     }
 
+    pub(super) fn ast_ty_key(ast_ty: &AstTy) -> String {
+        match ast_ty {
+            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                name,
+                args.iter().map(Self::ast_ty_key).collect::<Vec<_>>().join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items.iter().map(Self::ast_ty_key).collect::<Vec<_>>().join(", ")
+            ),
+            AstTy::Func(_, params, ret) => format!(
+                "({} -> {})",
+                params
+                    .iter()
+                    .map(Self::ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Self::ast_ty_key(ret)
+            ),
+        }
+    }
+
+    pub(super) fn trait_instance_key(&self, trait_id: &ResolvedId, trait_args: &[AstTy]) -> String {
+        let base = self.trait_key(trait_id);
+        if trait_args.is_empty() {
+            base
+        } else {
+            format!(
+                "{}<{}>",
+                base,
+                trait_args
+                    .iter()
+                    .map(Self::ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    }
+
     pub(super) fn trait_display_name(&self, trait_name: &str) -> String {
-        self.traits
-            .get(trait_name)
+        let (base, suffix) = trait_name
+            .split_once('<')
+            .map(|(base, suffix)| (base, Some(suffix)))
+            .unwrap_or((trait_name, None));
+        let display = self
+            .traits
+            .get(base)
             .map(|info| info.id.name.clone())
-            .unwrap_or_else(|| {
-                trait_name
-                    .rsplit("::")
-                    .next()
-                    .unwrap_or(trait_name)
-                    .to_string()
-            })
+            .unwrap_or_else(|| base.rsplit("::").next().unwrap_or(base).to_string());
+        match suffix {
+            Some(suffix) => format!("{}<{}", display, suffix),
+            None => display,
+        }
     }
 
     pub(super) fn trait_key_by_short_name(&self, short_name: &str) -> Option<String> {
@@ -493,9 +537,26 @@ impl Checker {
     }
 
     pub(super) fn trait_matches_short_name(&self, trait_name: &str, short_name: &str) -> bool {
+        let base = trait_name.split_once('<').map(|(base, _)| base).unwrap_or(trait_name);
         self.trait_key_by_short_name(short_name)
             .as_deref()
-            .is_some_and(|key| key == trait_name)
+            .is_some_and(|key| key == base)
+    }
+
+    pub(super) fn trait_instance_key_from_tys(&self, trait_name: &str, trait_args: &[Ty]) -> String {
+        if trait_args.is_empty() {
+            trait_name.to_string()
+        } else {
+            format!(
+                "{}<{}>",
+                trait_name,
+                trait_args
+                    .iter()
+                    .map(|ty| self.ty_name(&self.resolve_ty(ty)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
     }
 
     fn compiler_trait_target_names(&self, trait_name: &str) -> &'static [&'static str] {
@@ -671,21 +732,42 @@ impl Checker {
 
     pub(super) fn resolve_trait_method_signature(
         &mut self,
+        trait_info: &TraitInfo,
         method: &TraitMethodInfo,
         self_ty: &Ty,
-    ) -> Result<(Vec<Ty>, Ty), TypeError> {
-        let mut tyvars = HashMap::new();
+    ) -> Result<(Vec<Ty>, Ty, Vec<Ty>), TypeError> {
+        let mut trait_head_bindings = HashMap::new();
+        for param in &trait_info.type_params {
+            let fresh = self.env.fresh_tyvar();
+            if let Ty::Var(var) = fresh {
+                if let Some(bound) = &param.bound {
+                    self.register_tyvar_bound(var, bound);
+                }
+            }
+            trait_head_bindings.insert(param.name.clone(), fresh);
+        }
+        let mut tyvars = trait_head_bindings.clone();
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
         let params = method
             .params
             .iter()
             .map(|param| {
-                self.resolve_trait_signature_ast_ty_in_context(
+                if let Some(ty) = self.resolve_trait_type_ref_param_ty(
                     &param.ty,
-                    TypeSyntaxContext::General,
+                    &trait_head_bindings,
+                    false,
                     self_ty,
                     &mut tyvars,
-                )
+                )? {
+                    Ok(ty)
+                } else {
+                    self.resolve_trait_signature_ast_ty_in_context(
+                        &param.ty,
+                        TypeSyntaxContext::General,
+                        self_ty,
+                        &mut tyvars,
+                    )
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret = self.resolve_trait_signature_ast_ty_in_context(
@@ -694,27 +776,63 @@ impl Checker {
             self_ty,
             &mut tyvars,
         )?;
-        Ok((params, ret))
+        let trait_args = trait_info
+            .type_params
+            .iter()
+            .filter_map(|param| trait_head_bindings.get(&param.name).cloned())
+            .collect::<Vec<_>>();
+        Ok((params, ret, trait_args))
     }
 
     pub(super) fn resolve_trait_impl_method_signature(
         &mut self,
+        trait_info: &TraitInfo,
+        trait_args: &[AstTy],
         method: &TraitImplMethodInfo,
         self_ty: &Ty,
         fallback_ret_ty: &AstTy,
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
-        let mut tyvars = HashMap::new();
+        if trait_info.type_params.len() != trait_args.len() {
+            return Err(TypeError {
+                message: format!(
+                    "Trait {} requires {} type argument(s), got {}",
+                    trait_info.id.name,
+                    trait_info.type_params.len(),
+                    trait_args.len()
+                ),
+                span: method.span.clone(),
+                hint: None,
+            });
+        }
+
+        let mut trait_head_bindings = HashMap::new();
+        for (param, arg) in trait_info.type_params.iter().zip(trait_args.iter()) {
+            let resolved = self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?;
+            trait_head_bindings.insert(param.name.clone(), resolved);
+        }
+
+        let mut tyvars = trait_head_bindings.clone();
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
         let params = method
             .params
             .iter()
             .map(|param| {
-                self.resolve_trait_signature_ast_ty_in_context(
+                if let Some(ty) = self.resolve_trait_type_ref_param_ty(
                     &param.ty,
-                    TypeSyntaxContext::General,
+                    &trait_head_bindings,
+                    true,
                     self_ty,
                     &mut tyvars,
-                )
+                )? {
+                    Ok(ty)
+                } else {
+                    self.resolve_trait_signature_ast_ty_in_context(
+                        &param.ty,
+                        TypeSyntaxContext::General,
+                        self_ty,
+                        &mut tyvars,
+                    )
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret_source = method.ret_ty.as_ref().unwrap_or(fallback_ret_ty);
@@ -737,7 +855,7 @@ impl Checker {
 
     pub(super) fn predeclare_traits(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
         for stmt in stmts {
-            let Resolved::TraitDef(span, id, methods, _) = stmt else {
+            let Resolved::TraitDef(span, id, type_params, methods, _) = stmt else {
                 continue;
             };
             let trait_key = self.trait_key(id);
@@ -764,6 +882,7 @@ impl Checker {
                 trait_key,
                 TraitInfo {
                     id: id.clone(),
+                    type_params: type_params.clone(),
                     methods: method_map,
                 },
             );
@@ -771,7 +890,7 @@ impl Checker {
         }
 
         for stmt in stmts {
-            let Resolved::TraitImplDef(span, trait_id, target_ast_ty, methods) = stmt else {
+            let Resolved::TraitImplDef(span, trait_id, trait_args, target_ast_ty, methods) = stmt else {
                 continue;
             };
 
@@ -782,9 +901,22 @@ impl Checker {
                 .cloned()
                 .ok_or_else(|| TypeError {
                     message: format!("Unknown trait: {}", trait_id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
+            if trait_info.type_params.len() != trait_args.len() {
+                return Err(TypeError {
+                    message: format!(
+                        "Trait {} requires {} type argument(s), got {}",
+                        trait_id.name,
+                        trait_info.type_params.len(),
+                        trait_args.len()
+                    ),
                     span: span.clone(),
                     hint: None,
-                })?;
+                });
+            }
+            let trait_instance_key = self.trait_instance_key(trait_id, trait_args);
             let target_ty =
                 self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
@@ -807,7 +939,7 @@ impl Checker {
                         attrs: method.attrs.clone(),
                         span: method.span.clone(),
                         dispatch_override: self.trait_dispatch_override(
-                            &trait_key,
+                            &trait_instance_key,
                             &method.method_name,
                             &target_name,
                         ),
@@ -857,9 +989,11 @@ impl Checker {
                     });
                 }
 
-                let (trait_params, trait_ret) =
-                    self.resolve_trait_method_signature(trait_method, &target_ty)?;
+                let (trait_params, trait_ret, _) =
+                    self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
                 let (impl_params, impl_ret, _) = self.resolve_trait_impl_method_signature(
+                    &trait_info,
+                    trait_args,
                     impl_method,
                     &target_ty,
                     &trait_method.ret_ty,
@@ -913,10 +1047,54 @@ impl Checker {
                 }
             }
 
+            let exclusive_peer = if self.trait_matches_short_name(&trait_key, "From") {
+                self.trait_key_by_short_name("TryFrom")
+            } else if self.trait_matches_short_name(&trait_key, "TryFrom") {
+                self.trait_key_by_short_name("From")
+            } else {
+                None
+            };
+            if let Some(peer_trait_key) = exclusive_peer {
+                let peer_instance_key = if trait_args.is_empty() {
+                    peer_trait_key.clone()
+                } else {
+                    format!(
+                        "{}<{}>",
+                        peer_trait_key,
+                        trait_args
+                            .iter()
+                            .map(Self::ast_ty_key)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                if self
+                    .trait_impls
+                    .contains_key(&(peer_instance_key.clone(), target_name.clone()))
+                {
+                    return Err(TypeError {
+                        message: format!(
+                            "{} and {} cannot both be implemented for {} -> {}",
+                            trait_id.name,
+                            peer_trait_key.rsplit("::").next().unwrap_or(&peer_trait_key),
+                            target_name,
+                            trait_args
+                                .iter()
+                                .map(Self::ast_ty_key)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+
             self.trait_impls.insert(
-                (trait_key, target_name.clone()),
+                (trait_instance_key.clone(), target_name.clone()),
                 TraitImplInfo {
                     trait_id: trait_id.clone(),
+                    trait_args: trait_args.clone(),
                     target_name,
                     target_ty,
                     methods: method_map,
@@ -1099,8 +1277,14 @@ impl Checker {
 
         let mut trait_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
         trait_impls.sort_by(|left, right| {
-            let left_key = (self.trait_key(&left.trait_id), left.target_name.clone());
-            let right_key = (self.trait_key(&right.trait_id), right.target_name.clone());
+            let left_key = (
+                self.trait_instance_key(&left.trait_id, &left.trait_args),
+                left.target_name.clone(),
+            );
+            let right_key = (
+                self.trait_instance_key(&right.trait_id, &right.trait_args),
+                right.target_name.clone(),
+            );
             left_key.cmp(&right_key)
         });
 
@@ -1133,6 +1317,8 @@ impl Checker {
                             hint: None,
                         })?;
                 let (param_tys, ret, type_params) = self.resolve_trait_impl_method_signature(
+                    &trait_info,
+                    &trait_impl.trait_args,
                     method,
                     &trait_impl.target_ty,
                     &trait_method.ret_ty,

@@ -65,6 +65,22 @@ pub(super) fn trait_method_qualified_name(trait_name: &str, method_name: &str) -
     format!("{}::{}", trait_name, method_name)
 }
 
+pub(super) fn trait_instance_key(trait_name: &str, trait_args: &[AstTy]) -> String {
+    if trait_args.is_empty() {
+        trait_name.to_string()
+    } else {
+        format!(
+            "{}<{}>",
+            trait_name,
+            trait_args
+                .iter()
+                .map(ast_ty_key)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
 fn ast_ty_key(ty: &AstTy) -> String {
     match ty {
         AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
@@ -88,6 +104,7 @@ fn ast_ty_key(ty: &AstTy) -> String {
 pub(super) fn trait_impl_method_qualified_name(
     module_path: Option<&str>,
     trait_name: &str,
+    trait_args: &[AstTy],
     target: &AstTy,
     method_name: &str,
     span_start: usize,
@@ -99,7 +116,7 @@ pub(super) fn trait_impl_method_qualified_name(
     format!(
         "{}::{}::{}::{}::{}",
         private_module,
-        trait_name,
+        trait_instance_key(trait_name, trait_args),
         ast_ty_key(target),
         method_name,
         span_start
@@ -553,7 +570,7 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitDef(span, name, methods, attrs) = stmt {
+                if let Ast::TraitDef(span, name, _type_params, methods, attrs) = stmt {
                     let fq_name = if module.module_path.is_empty() {
                         name.clone()
                     } else {
@@ -613,7 +630,7 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitImplDef(span, _trait_name, _target_ty, methods) = stmt {
+                if let Ast::TraitImplDef(span, _trait_name, _trait_args, _target_ty, methods) = stmt {
                     for method in methods {
                         let Ast::Def(method_span, method_name, _, _, _, _, _) = method else {
                             return Err(ResolveError {
@@ -625,6 +642,7 @@ pub fn precollect_declaration_index(
                         let internal_name = trait_impl_method_qualified_name(
                             Some(module.module_path.as_str()),
                             _trait_name,
+                            _trait_args,
                             _target_ty,
                             method_name,
                             method_span.start,
@@ -729,8 +747,8 @@ pub fn precollect_declaration_index(
                         (span, name.as_str(), DeclarationKind::Extractor)
                     }
                     Ast::ImplDef(_, _, _)
-                    | Ast::TraitDef(_, _, _, _)
-                    | Ast::TraitImplDef(_, _, _, _) => continue,
+                    | Ast::TraitDef(_, _, _, _, _)
+                    | Ast::TraitImplDef(_, _, _, _, _) => continue,
                     Ast::ResultCtorDecl(span, name, _, _, _) => {
                         (span, name.as_str(), DeclarationKind::ResultCtor)
                     }
@@ -976,7 +994,7 @@ impl Resolver {
                         .insert(uid, DeclarationKind::Extractor);
                     self.scope.define_with_id(name, uid);
                 }
-                Ast::TraitDef(span, name, methods, _) => {
+                Ast::TraitDef(span, name, _type_params, methods, _) => {
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
@@ -1248,7 +1266,7 @@ impl Resolver {
                         self.scope.define_with_id(&qualified_ctor, ctor_uid);
                     }
                 }
-                Ast::TraitImplDef(_, _, _, _) => {}
+                Ast::TraitImplDef(_, _, _, _, _) => {}
                 _ => {}
             }
         }

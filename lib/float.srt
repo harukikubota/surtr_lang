@@ -73,6 +73,18 @@ impl Show for Float {
   }
 }
 
+impl From<Float> for Float {
+  def from(self: Self, to: TypeRef<Float>) -> Float {
+    self
+  }
+}
+
+impl From<String> for Float {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}
+
 impl Eq for Float {
   def eq(self: Self, rhs: Self) -> Boolean {
     self == rhs

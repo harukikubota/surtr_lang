@@ -145,10 +145,75 @@ def show_abs(x: impl Numeric) -> String {
 押さえておくとよい点は次のとおりです。
 
 - `deftrait` は method 宣言だけを持つ
+- trait は `deftrait Name<$T, ...> { ... }` のように型引数を取れる
 - 実装は `impl Numeric for Int { ... }` の形で書く
+- trait 側の型引数を使う実装は `impl Trait<Concrete> for Type { ... }` の形で書く
 - `impl Trait` は parameter 位置だけで使える
 - 戻り値でも同じ型を使いたいときは `<$N: Numeric>` のように名前付き bound を使う
 - `-> impl Numeric` と `where ...` はまだ使えない
+
+target type を明示する trait では、compiler-reserved な witness type
+`TypeRef<$T>` を method parameter にだけ置けます。
+これは ordinary value ではなく、「どの型へ変換するか」を表すための特別な型です。
+
+```surtr
+@@builtin type TypeRef<$T>
+
+deftrait From<$To> {
+  def from(self: Self, to: TypeRef<$To>) -> $To
+}
+
+deftrait TryFrom<$To> {
+  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}
+```
+
+`TypeRef<$T>` のルールはかなり限定的です。
+
+- trait head で宣言した型引数に対応するときだけ使える
+- trait method parameter と、それに対応する impl method parameter にだけ書ける
+- 通常の `def` の引数や戻り値には書けない
+- local 変数の型注釈や field type にも書けない
+- 値として生成したり返したり束縛したりすることはできない
+
+この制約により、`TypeRef` は first-class value ではなく
+"target type witness" としてだけ振る舞います。
+
+### 5.3 `from` / `try_from`
+
+`From` / `TryFrom` 系は、trait と call surface を少し分けて考えると分かりやすいです。
+
+- impl coherence は `From<$To>` / `TryFrom<$To>` trait で管理する
+- source 上の呼び出しは `from(value, TargetTy)` / `try_from(value, TargetTy)` で書く
+- 第2引数の `TargetTy` は ordinary expression ではなく、型指定スロットとして扱う
+
+```surtr
+text = from(42, String)
+value = try_from("42", Int)
+```
+
+この `String` / `Int` は value ではありません。
+`from` / `try_from` の第2引数位置に限って、bare な型名が
+内部的に `TypeRef<String>` / `TypeRef<Int>` の witness として解釈されます。
+
+pipeline でも同じ方向で読めます。
+
+```surtr
+text = 42 |> from(String)
+value = "42" |> try_from(Int)
+```
+
+target type を取る trait は `From` / `TryFrom` だけに限りません。
+たとえば decoder 系でも同じパターンを使えます。
+
+```surtr
+deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}
+```
+
+このときも `TypeRef<$To>` は ordinary value にはならず、
+trait method parameter の中だけで target type witness として使われます。
 
 ## 6. 条件分岐とパターンマッチ
 

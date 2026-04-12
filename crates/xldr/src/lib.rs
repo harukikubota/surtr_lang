@@ -191,7 +191,7 @@ fn collect_doc_entries_for_ast(
                     });
                 }
             }
-            spire::ast::Ast::TraitDef(_, name, methods, attrs) => {
+            spire::ast::Ast::TraitDef(_, name, _type_params, methods, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),

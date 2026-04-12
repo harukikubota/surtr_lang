@@ -171,3 +171,15 @@ impl Show for Unit {
     inspect(self)
   }
 }
+
+impl From<Unit> for Unit {
+  def from(self: Self, to: TypeRef<Unit>) -> Unit {
+    self
+  }
+}
+
+impl From<String> for Unit {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}

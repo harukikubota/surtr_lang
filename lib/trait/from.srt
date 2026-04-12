@@ -1,0 +1,17 @@
+@@doc """
+Compiler-reserved target-type witness.
+`TypeRef<$T>` is not an ordinary first-class value type. It exists only to
+describe trait method parameters that need an explicit target type witness.
+"""
+@@builtin type TypeRef<$T>
+
+@@doc """
+Standard `From` trait declaration.
+`From<$To>` models infallible conversion from `Self` into `$To`.
+The `to: TypeRef<$To>` parameter is a signature-level witness slot and is not
+meant to be observed at runtime.
+"""
+@@autoimport
+deftrait From<$To> {
+  def from(self: Self, to: TypeRef<$To>) -> $To
+}

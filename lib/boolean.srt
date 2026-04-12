@@ -46,6 +46,18 @@ impl Show for Boolean {
   }
 }
 
+impl From<Boolean> for Boolean {
+  def from(self: Self, to: TypeRef<Boolean>) -> Boolean {
+    self
+  }
+}
+
+impl From<String> for Boolean {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}
+
 impl Eq for Boolean {
   def eq(self: Self, rhs: Self) -> Boolean {
     self == rhs

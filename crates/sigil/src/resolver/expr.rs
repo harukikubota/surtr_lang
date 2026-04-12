@@ -1,4 +1,5 @@
 use super::captures::collect_captures;
+use super::declarations::trait_instance_key;
 use super::scope_init::{
     initialize_scope, is_runtime_builtin_decl, is_special_form_builtin_decl, resolve_decl_attrs,
 };
@@ -6,6 +7,68 @@ use super::special_forms::{IfKind, LogicKind};
 use super::*;
 
 impl Resolver {
+    fn conversion_call_head(func: &Ast) -> Option<&'static str> {
+        match func {
+            Ast::Var(_, name) if name == "from" => Some("from"),
+            Ast::Var(_, name) if name == "try_from" => Some("try_from"),
+            Ast::Path(_, path) if path.segments.len() >= 2 => {
+                let method = path.segments.last()?;
+                let owner = path.segments.get(path.segments.len() - 2)?;
+                match (owner.as_str(), method.as_str()) {
+                    ("From", "from") => Some("from"),
+                    ("TryFrom", "try_from") => Some("try_from"),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn type_witness_from_expr(expr: Ast) -> Result<AstTy, ResolveError> {
+        match expr {
+            Ast::ConstructorCall(span, name, args) => {
+                if args.is_empty() {
+                    return Ok(AstTy::Named(span, name));
+                }
+                let inner = args
+                    .into_iter()
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(expr) => Self::type_witness_from_expr(expr),
+                        RecordLitArg::Named(_, expr) => Err(ResolveError {
+                            message: "type witness arguments do not accept named type parameters"
+                                .into(),
+                            span: expr.span().clone(),
+                        }),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(AstTy::Generic(span, name, inner))
+            }
+            Ast::Path(span, path) => Ok(AstTy::Named(span, path.segments.join("::"))),
+            Ast::Var(span, name) if name == "Unit" => Ok(AstTy::Named(span, name)),
+            Ast::Var(span, name)
+                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) =>
+            {
+                Ok(AstTy::Named(span, name))
+            }
+            other => Err(ResolveError {
+                message:
+                    "conversion target must be a bare type name such as String or Result<Int>"
+                        .into(),
+                span: other.span().clone(),
+            }),
+        }
+    }
+
+    fn type_witness_span(ast_ty: &AstTy) -> &Span {
+        match ast_ty {
+            AstTy::Named(span, _)
+            | AstTy::Generic(span, _, _)
+            | AstTy::Tuple(span, _)
+            | AstTy::Func(span, _, _)
+            | AstTy::ImplTrait(span, _) => span,
+        }
+    }
+
     pub(super) fn new() -> Self {
         Self {
             scope: initialize_scope(),
@@ -177,6 +240,41 @@ impl Resolver {
                     if name == "or" {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
                     }
+                }
+
+                if Self::conversion_call_head(&func).is_some() {
+                    let resolved_func = self.resolve_node(*func)?;
+                    if args.len() != 2 {
+                        return Err(ResolveError {
+                            message: "from/try_from expects exactly 2 positional arguments"
+                                .into(),
+                            span,
+                        });
+                    }
+                    let mut resolved_args = Vec::with_capacity(2);
+                    for (idx, arg) in args.into_iter().enumerate() {
+                        match arg {
+                            RecordLitArg::Positional(expr) if idx == 1 => {
+                                let witness_ty = Self::type_witness_from_expr(expr)?;
+                                resolved_args.push(ResolvedRecordLitArg::Positional(
+                                    Resolved::TypeRefWitness(
+                                        Self::type_witness_span(&witness_ty).clone(),
+                                        witness_ty,
+                                    ),
+                                ));
+                            }
+                            RecordLitArg::Positional(expr) => resolved_args
+                                .push(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?)),
+                            RecordLitArg::Named(_, expr) => {
+                                return Err(ResolveError {
+                                    message:
+                                        "from/try_from does not accept named arguments".into(),
+                                    span: expr.span().clone(),
+                                });
+                            }
+                        }
+                    }
+                    return Ok(Resolved::App(span, Box::new(resolved_func), resolved_args));
                 }
 
                 let resolved_func = self.resolve_node(*func)?;
@@ -535,7 +633,7 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::TraitDef(span, name, methods, attrs) => {
+            Ast::TraitDef(span, name, type_params, methods, attrs) => {
                 let qualified_trait_name = self.qualify_current_declaration_name(&name);
                 let trait_uid = self
                     .take_predeclared_id(&name)
@@ -548,6 +646,7 @@ impl Resolver {
                     unique_id: trait_uid,
                     span: span.clone(),
                 };
+                let resolved_type_params = self.resolve_type_params(type_params)?;
                 let mut resolved_methods = Vec::new();
                 for method in methods {
                     let spire::ast::TraitMethodSig {
@@ -593,11 +692,12 @@ impl Resolver {
                 Ok(Resolved::TraitDef(
                     span,
                     rid,
+                    resolved_type_params,
                     resolved_methods,
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::TraitImplDef(span, trait_name, target_ty, methods) => {
+            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods) => {
                 let (trait_uid, qualified_trait_name) =
                     self.resolve_trait_reference(&trait_name, &span)?;
                 let trait_id = ResolvedId {
@@ -657,6 +757,7 @@ impl Resolver {
                     let qualified_function_name = trait_impl_method_qualified_name(
                         self.current_module_path.as_deref(),
                         &trait_name,
+                        &trait_args,
                         &resolved_target_ty,
                         &method_name,
                         method_span.start,
@@ -679,7 +780,16 @@ impl Resolver {
                         .collect::<Result<Vec<_>, ResolveError>>()?;
                     let resolved_body = body_resolver.resolve_node(*body)?;
                     self.scope.advance_next_id_to(body_resolver.scope.next_id());
-                    let local_function_name = format!("{}::{}", target_key, method_name);
+                    let local_function_name = if trait_args.is_empty() {
+                        format!("{}::{}", target_key, method_name)
+                    } else {
+                        format!(
+                            "{}::{}::{}",
+                            trait_instance_key(&qualified_trait_name, &trait_args),
+                            target_key,
+                            method_name
+                        )
+                    };
 
                     resolved_methods.push(ResolvedTraitImplMethod {
                         method_name: method_name.clone(),
@@ -703,6 +813,10 @@ impl Resolver {
                 Ok(Resolved::TraitImplDef(
                     span,
                     trait_id,
+                    trait_args
+                        .into_iter()
+                        .map(|arg| self.resolve_type_annotation(arg))
+                        .collect::<Result<Vec<_>, _>>()?,
                     resolved_target_ty,
                     resolved_methods,
                 ))
@@ -1093,10 +1207,13 @@ impl Resolver {
     fn validate_trait_impl_pairs(&self, resolved: &[Resolved]) -> Result<(), ResolveError> {
         let mut seen_pairs = HashSet::new();
         for node in resolved {
-            let Resolved::TraitImplDef(span, trait_id, target_ty, _) = node else {
+            let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _) = node else {
                 continue;
             };
-            let trait_name = trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name);
+            let trait_name = trait_instance_key(
+                trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
+                trait_args,
+            );
             let pair_key = format!("{} for {}", trait_name, Self::ast_ty_symbol_key(target_ty));
             if !seen_pairs.insert(pair_key.clone()) {
                 return Err(ResolveError {

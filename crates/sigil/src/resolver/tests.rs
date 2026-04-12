@@ -432,14 +432,14 @@ impl Numeric for Int {
     let resolved = resolve(ast).expect("trait nodes should resolve");
     assert!(matches!(
         &resolved[0],
-        Resolved::TraitDef(_, id, methods, _)
+        Resolved::TraitDef(_, id, _, methods, _)
             if id.name == "Numeric"
                 && methods.len() == 1
                 && methods[0].id.qualified_name.as_deref() == Some("Numeric::add")
     ));
     assert!(matches!(
         &resolved[1],
-        Resolved::TraitImplDef(_, id, AstTy::Named(_, target), methods)
+        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
             if id.name == "Numeric" && target == "Int" && methods.len() == 1
     ));
 }
@@ -905,6 +905,70 @@ deftrait Concat {
         },
         _ => panic!("Expected Bind"),
     }
+}
+
+#[test]
+fn test_from_helper_lowers_second_arg_to_type_ref_witness() {
+    let module_stages = vec![vec![staged_module(
+        "From",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait From<$To> {
+  def from(self: Self, to: TypeRef<$To>) -> $To
+}"#,
+            "From",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(r#"x = from(1, String)"#, &module_stages)
+        .expect("from helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert_eq!(args.len(), 2);
+                match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "from");
+                        assert_eq!(id.qualified_name.as_deref(), Some("From::From::from"));
+                    }
+                    other => panic!("expected helper var, got {:?}", other),
+                }
+                match &args[1] {
+                    ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
+                        assert!(matches!(ty, AstTy::Named(_, name) if name == "String"));
+                    }
+                    other => panic!("expected type witness, got {:?}", other),
+                }
+            }
+            other => panic!("expected app, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_try_from_helper_named_args_are_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "TryFrom",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait TryFrom<$To> {
+  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+            "TryFrom",
+        ),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"x = try_from(value: "42", to: Int)"#,
+        &module_stages,
+    )
+    .expect_err("named args must fail");
+    assert!(err.message.contains("from/try_from does not accept named arguments"));
 }
 
 #[test]

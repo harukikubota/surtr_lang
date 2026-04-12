@@ -1,6 +1,83 @@
 use super::*;
 
 impl Checker {
+    fn type_ref_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message:
+                "TypeRef<$T> is only allowed as a trait method parameter tied to a trait head type parameter."
+                    .into(),
+            span: span.clone(),
+            hint: Some(
+                "Use TypeRef<$T> only in deftrait / impl Trait method parameters, not in ordinary signatures or return types."
+                    .into(),
+            ),
+        }
+    }
+
+    pub(super) fn resolve_trait_type_ref_param_ty(
+        &mut self,
+        ast_ty: &AstTy,
+        trait_head_bindings: &HashMap<String, Ty>,
+        allow_concrete_inner: bool,
+        self_ty: &Ty,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Option<Ty>, TypeError> {
+        let AstTy::Generic(span, name, args) = ast_ty else {
+            return Ok(None);
+        };
+        if name != "TypeRef" {
+            return Ok(None);
+        }
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: "TypeRef<T> requires exactly 1 type argument".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let inner = match &args[0] {
+            AstTy::Named(_, name) if name.starts_with('$') => {
+                trait_head_bindings
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "TypeRef<{}> must refer to a type parameter declared on the surrounding trait head",
+                            name
+                        ),
+                        span: Self::ast_ty_span(&args[0]).clone(),
+                        hint: None,
+                    })?
+            }
+            other if allow_concrete_inner => self.resolve_trait_signature_ast_ty_in_context(
+                other,
+                TypeSyntaxContext::General,
+                self_ty,
+                tyvars,
+            )?,
+            _ => {
+                return Err(TypeError {
+                    message:
+                        "TypeRef<$T> in trait declarations must point at a trait head type parameter."
+                            .into(),
+                    span: Self::ast_ty_span(&args[0]).clone(),
+                    hint: None,
+                });
+            }
+        };
+
+        if matches!(inner, Ty::TypeRef(_)) {
+            return Err(TypeError {
+                message: "Nested TypeRef is not supported".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        Ok(Some(Ty::TypeRef(Box::new(inner))))
+    }
+
     pub(super) fn register_tyvar_bound(&mut self, var: u32, trait_name: &str) {
         let bounds = self.tyvar_bounds.entry(var).or_default();
         if !bounds.iter().any(|bound| bound == trait_name) {
@@ -124,6 +201,9 @@ impl Checker {
                     }
                 }
             },
+            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+                Err(self.type_ref_not_allowed_error(span))
+            }
             AstTy::Generic(span, name, args) => match name.as_str() {
                 "MatchResult" => {
                     if args.is_empty() || args.len() > 2 {
@@ -302,6 +382,9 @@ impl Checker {
                     self.register_tyvar_bound(var, trait_name);
                 }
                 Ok(fresh)
+            }
+            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+                return Err(self.type_ref_not_allowed_error(span));
             }
             AstTy::Generic(span, name, args) if name == "List" => {
                 if args.len() != 1 {
@@ -514,6 +597,9 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             }),
+            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+                return Err(self.type_ref_not_allowed_error(span));
+            }
             AstTy::Generic(span, name, args) if name == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
@@ -708,6 +794,9 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
+            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+                Err(self.type_ref_not_allowed_error(span))
+            }
             AstTy::Generic(span, name, args) => match name.as_str() {
                 "MatchResult" => {
                     if args.is_empty() || args.len() > 2 {
@@ -842,6 +931,10 @@ impl Checker {
             });
         };
 
+        if name == "Error" {
+            return Ok(Ty::Error);
+        }
+
         let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
             message: "The error marker E in Result<T, E> must be a deferror-defined type.".into(),
             span: span.clone(),
@@ -884,6 +977,7 @@ impl Checker {
             | (Ty::Unit, Ty::Unit)
             | (Ty::Error, Ty::Error) => true,
             (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
+            (Ty::TypeRef(a), Ty::TypeRef(b)) => self.types_compatible(a, b),
             (Ty::Tuple(a), Ty::Tuple(b)) => {
                 a.len() == b.len()
                     && a.iter()
@@ -963,6 +1057,7 @@ impl Checker {
         match self.resolve_ty(ty) {
             Ty::Var(var) => var == needle,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
+            Ty::TypeRef(inner) => self.ty_contains_var(&inner, needle),
             Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
             Ty::Func(params, ret) => {
                 params
@@ -994,6 +1089,7 @@ impl Checker {
                 None => Ty::Var(*var),
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
+            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect()),
             Ty::Func(params, ret) => Ty::Func(
                 params.iter().map(|param| self.resolve_ty(param)).collect(),
@@ -1059,6 +1155,9 @@ impl Checker {
                 })
                 .clone(),
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
+            Ty::TypeRef(inner) => {
+                Ty::TypeRef(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
+            }
             Ty::Tuple(items) => Ty::Tuple(
                 items
                     .iter()
@@ -1166,6 +1265,7 @@ impl Checker {
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
+            Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
             Ty::Tuple(items) => format!(
                 "({})",
                 items

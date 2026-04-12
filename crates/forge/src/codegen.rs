@@ -594,6 +594,7 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
+        Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
         Ty::Tuple(items) => format!(
             "({})",
             items

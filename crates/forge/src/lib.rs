@@ -23,6 +23,8 @@ mod tests {
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
     const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
+    const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
+    const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/try_from.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
@@ -47,7 +49,7 @@ mod tests {
             &strip_test_annotations(source),
             spire::ParserContext::module(0, None).with_rules(spire::SourceRules::std_module()),
         )
-        .expect("std module should parse");
+        .unwrap_or_else(|err| panic!("std module {fallback_module_path} should parse: {err:?}"));
 
         let shared_imports = ast
             .iter()
@@ -126,6 +128,8 @@ mod tests {
                 ("Eq", EQ_MODULE_SOURCE),
                 ("Ord", ORD_MODULE_SOURCE),
                 ("Concat", CONCAT_MODULE_SOURCE),
+                ("From", FROM_MODULE_SOURCE),
+                ("TryFrom", TRY_FROM_MODULE_SOURCE),
                 ("Int", INT_MODULE_SOURCE),
                 ("String", STRING_MODULE_SOURCE),
                 ("Boolean", BOOLEAN_MODULE_SOURCE),

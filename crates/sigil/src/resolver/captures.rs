@@ -140,6 +140,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             }
         }
         Resolved::FieldAccess(_, expr, _) => collect_captures_inner(expr, bound, free),
+        Resolved::TypeRefWitness(_, _) => {}
         Resolved::StructLit(_, _, fields) => {
             for (_, expr) in fields {
                 collect_captures_inner(expr, bound, free);
@@ -161,8 +162,8 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::RecordDef(_, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
         | Resolved::EnumDef(_, _, _, _)
-        | Resolved::TraitDef(_, _, _, _)
-        | Resolved::TraitImplDef(_, _, _, _)
+        | Resolved::TraitDef(_, _, _, _, _)
+        | Resolved::TraitImplDef(_, _, _, _, _)
         | Resolved::BuiltinDecl(_, _, _, _, _)
         | Resolved::BuiltinExtractorDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)

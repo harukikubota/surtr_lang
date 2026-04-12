@@ -683,6 +683,7 @@ impl Checker {
         &mut self,
         span: &Span,
         trait_id: &ResolvedId,
+        trait_args: &[AstTy],
         target_ast_ty: &AstTy,
         methods: &[ResolvedTraitImplMethod],
     ) -> Result<Vec<TypedNode>, TypeError> {
@@ -708,7 +709,10 @@ impl Checker {
         let mut typed_nodes = vec![TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::TraitImplDef(trait_key.clone(), target_name.clone()),
+            node: TypedInner::TraitImplDef(
+                self.trait_instance_key(trait_id, trait_args),
+                target_name.clone(),
+            ),
         }];
 
         for method in methods {
@@ -737,6 +741,8 @@ impl Checker {
                 dispatch_override: None,
             };
             let (param_tys, expected_ret, type_params) = self.resolve_trait_impl_method_signature(
+                &trait_info,
+                trait_args,
                 &inline_method,
                 &target_ty,
                 &trait_method.ret_ty,
@@ -824,6 +830,7 @@ impl Checker {
         &mut self,
         span: &Span,
         trait_id: &ResolvedId,
+        trait_args: &[AstTy],
         target_ast_ty: &AstTy,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<TypedNode, TypeError> {
@@ -839,7 +846,7 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::TraitImplDef(self.trait_key(trait_id), target_name),
+            node: TypedInner::TraitImplDef(self.trait_instance_key(trait_id, trait_args), target_name),
         })
     }
 

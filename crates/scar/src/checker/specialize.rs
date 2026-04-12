@@ -977,6 +977,7 @@ impl Checker {
                 }
             }
             Ty::List(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
+            Ty::TypeRef(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
             Ty::Tuple(items) => {
                 for item in items {
                     self.collect_bound_tyvars_in_ty(&item, ordered, seen);

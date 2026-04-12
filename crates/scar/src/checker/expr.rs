@@ -63,6 +63,14 @@ impl Checker {
                 })
             }
 
+            Resolved::TypeRefWitness(span, ast_ty) => Ok(TypedNode {
+                ty: Ty::TypeRef(Box::new(
+                    self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?,
+                )),
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Unit),
+            }),
+
             Resolved::Bind(span, pat, rhs) => {
                 if !Self::is_total_bind_pattern(pat) {
                     return Err(TypeError {
@@ -177,7 +185,7 @@ impl Checker {
             Resolved::ExtractorDef(span, id, type_params, param, ret_ty, body, _) => {
                 self.check_extractor_def(span, id, type_params, param, ret_ty, body)
             }
-            Resolved::TraitDef(span, id, methods, _) => Ok(TypedNode {
+            Resolved::TraitDef(span, id, _, methods, _) => Ok(TypedNode {
                 ty: Ty::Unit,
                 span: span.clone(),
                 node: TypedInner::TraitDef(
@@ -188,8 +196,8 @@ impl Checker {
                         .collect(),
                 ),
             }),
-            Resolved::TraitImplDef(span, trait_id, target_ty, methods) => {
-                self.check_trait_impl_def(span, trait_id, target_ty, methods)
+            Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) => {
+                self.check_trait_impl_def(span, trait_id, trait_args, target_ty, methods)
             }
             Resolved::BuiltinDecl(span, id, params, ret_ty, _) => {
                 self.check_builtin_decl(span, id, params, ret_ty)
@@ -364,6 +372,7 @@ impl Checker {
             | Resolved::FieldAccess(span, _, _)
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
+            | Resolved::TypeRefWitness(span, _)
             | Resolved::StructDef(span, _, _)
             | Resolved::RecordDef(span, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
@@ -374,8 +383,8 @@ impl Checker {
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
             | Resolved::ResultCtorDecl(span, _, _, _, _)
-            | Resolved::TraitDef(span, _, _, _)
-            | Resolved::TraitImplDef(span, _, _, _)
+            | Resolved::TraitDef(span, _, _, _, _)
+            | Resolved::TraitImplDef(span, _, _, _, _)
             | Resolved::Closure(span, _, _, _)
             | Resolved::Capture(span, _, _)
             | Resolved::Semi(span, _) => span,
@@ -567,6 +576,61 @@ impl Checker {
         }
     }
 
+    fn opposite_conversion_hint(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+        typed_args: &[TypedNode],
+        span: &Span,
+    ) -> Option<TypeError> {
+        let requested_trait = if self.trait_matches_short_name(trait_name, "From") {
+            "From"
+        } else if self.trait_matches_short_name(trait_name, "TryFrom") {
+            "TryFrom"
+        } else {
+            return None;
+        };
+        let opposite_trait = if requested_trait == "From" {
+            "TryFrom"
+        } else {
+            "From"
+        };
+        let receiver_name = self.trait_target_name(receiver_ty)?;
+        let witness_ty = self.resolve_ty(&typed_args.get(1)?.ty);
+        let Ty::TypeRef(target_ty) = witness_ty else {
+            return None;
+        };
+        let opposite_trait_key = self.trait_key_by_short_name(opposite_trait)?;
+        let opposite_instance_key =
+            self.trait_instance_key_from_tys(&opposite_trait_key, &[target_ty.as_ref().clone()]);
+        if !self
+            .trait_impls
+            .contains_key(&(opposite_instance_key, receiver_name.clone()))
+        {
+            return None;
+        }
+
+        let target_name = self.ty_name(&target_ty);
+        let opposite_method = if opposite_trait == "From" {
+            "from"
+        } else {
+            "try_from"
+        };
+        Some(TypeError {
+            message: format!(
+                "{} -> {} implements {}, not {}. Use {}(value, {}).",
+                receiver_name, target_name, opposite_trait, requested_trait, opposite_method, target_name
+            ),
+            span: span.clone(),
+            hint: Some(format!(
+                "{}::{} is not available for this conversion pair.",
+                self.trait_display_name(trait_name),
+                method_name
+            )),
+        })
+    }
+
     pub(super) fn check_trait_method_call(
         &mut self,
         span: &Span,
@@ -608,7 +672,9 @@ impl Checker {
             })?;
 
         let self_ty = self.env.fresh_tyvar();
-        let (param_tys, ret_ty) = self.resolve_trait_method_signature(&method, &self_ty)?;
+        let (param_tys, ret_ty, trait_arg_tys) =
+            self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
+
         let trait_display_name = self.trait_display_name(trait_name);
         let trait_impl_summary = self.trait_implementation_summary(trait_name);
 
@@ -698,21 +764,41 @@ impl Checker {
             }
         }
 
+        let trait_call_name =
+            self.trait_instance_key_from_tys(trait_name, &trait_arg_tys);
+        let trait_call_display_name = self.trait_display_name(&trait_call_name);
+        let trait_call_summary = self.trait_implementation_summary(&trait_call_name);
         let receiver_ty = self.resolve_ty(&self_ty);
         let receiver_span = typed_args
             .first()
             .map(|arg| arg.span.clone())
             .unwrap_or_else(|| span.clone());
+
+        if let Some(err) = self.opposite_conversion_hint(
+            &trait_call_name,
+            method_name,
+            &receiver_ty,
+            &typed_args,
+            &receiver_span,
+        ) {
+            if self
+                .trait_dispatch_target(&trait_call_name, method_name, &receiver_ty)
+                .is_none()
+            {
+                return Err(err);
+            }
+        }
+
         let dispatch = self
-            .trait_dispatch_target(trait_name, method_name, &receiver_ty)
+            .trait_dispatch_target(&trait_call_name, method_name, &receiver_ty)
             .ok_or_else(|| TypeError {
                 message: format!(
                     "{}::{} requires a receiver type implementing {}, got {}. {}",
-                    trait_display_name,
+                    trait_call_display_name,
                     method_name,
-                    trait_display_name,
+                    trait_call_display_name,
                     self.ty_name(&receiver_ty),
-                    trait_impl_summary
+                    trait_call_summary
                 ),
                 span: receiver_span,
                 hint: None,
@@ -722,7 +808,7 @@ impl Checker {
             ty: self.resolve_ty(&ret_ty),
             span: span.clone(),
             node: TypedInner::TraitCall {
-                trait_name: trait_name.into(),
+                trait_name: trait_call_name,
                 method_name: method_name.into(),
                 receiver_ty,
                 dispatch,

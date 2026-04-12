@@ -608,8 +608,8 @@ impl Parser {
             Ast::ExtractorDef(_, _, _, _, _, _, _) => Some(TopLevelDeclKind::ExtractorDef),
             Ast::Defmod(_, _, _, _) => Some(TopLevelDeclKind::Defmod),
             Ast::ImplDef(_, _, _) => Some(TopLevelDeclKind::ImplDef),
-            Ast::TraitDef(_, _, _, _) => Some(TopLevelDeclKind::TraitDef),
-            Ast::TraitImplDef(_, _, _, _) => Some(TopLevelDeclKind::TraitImplDef),
+            Ast::TraitDef(_, _, _, _, _) => Some(TopLevelDeclKind::TraitDef),
+            Ast::TraitImplDef(_, _, _, _, _) => Some(TopLevelDeclKind::TraitImplDef),
             Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
             Ast::StructDef(_, _, _) => Some(TopLevelDeclKind::StructDef),
             Ast::RecordDef(_, _, _) => Some(TopLevelDeclKind::RecordDef),
@@ -779,10 +779,36 @@ impl Parser {
         self.parse_trait_def_with_attrs(DeclAttrs::default(), None)
     }
 
+    fn parse_trait_impl_head(&mut self) -> Result<(Symbol, Vec<AstTy>), ParseError> {
+        let (trait_name, _) = self.expect_ident()?;
+        let trait_args = if matches!(self.peek(), Token::Lt) {
+            self.advance();
+            self.skip_newlines();
+            let mut args = Vec::new();
+            if !matches!(self.peek(), Token::Gt) {
+                loop {
+                    args.push(self.parse_type_in_impl_context(None)?);
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        continue;
+                    }
+                    break;
+                }
+            }
+            self.expect_type_gt()?;
+            args
+        } else {
+            Vec::new()
+        };
+        Ok((trait_name, trait_args))
+    }
+
     fn parse_impl_def(&mut self) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Impl)?;
-        let (head, _) = self.expect_ident()?;
+        let (head, trait_args) = self.parse_trait_impl_head()?;
         self.skip_newlines();
 
         if matches!(self.peek(), Token::For) {
@@ -820,8 +846,16 @@ impl Parser {
                     end: end.end,
                 },
                 head,
+                trait_args,
                 target_ty,
                 methods,
+            ));
+        }
+
+        if !trait_args.is_empty() {
+            return Err(ParseError::syntax(
+                "Plain `impl Type { ... }` does not accept trait-style type arguments",
+                self.peek_span(),
             ));
         }
 
@@ -1027,6 +1061,7 @@ impl Parser {
         let sp = self.peek_span();
         self.expect(&Token::Deftrait)?;
         let (name, _) = self.expect_ident()?;
+        let type_params = self.parse_decl_type_params()?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -1056,6 +1091,7 @@ impl Parser {
                 end: end.end,
             },
             name,
+            type_params,
             methods,
             attrs,
         ))
@@ -4267,9 +4303,17 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|method| shift_ast_span(method, delta))
                 .collect(),
         ),
-        Ast::TraitDef(span, name, methods, attrs) => Ast::TraitDef(
+        Ast::TraitDef(span, name, type_params, methods, attrs) => Ast::TraitDef(
             shift_span(span, delta),
             name,
+            type_params
+                .into_iter()
+                .map(|param| TypeParam {
+                    name: param.name,
+                    bound: param.bound,
+                    span: shift_span(param.span, delta),
+                })
+                .collect(),
             methods
                 .into_iter()
                 .map(|method| TraitMethodSig {
@@ -4294,9 +4338,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::TraitImplDef(span, trait_name, target, methods) => Ast::TraitImplDef(
+        Ast::TraitImplDef(span, trait_name, trait_args, target, methods) => Ast::TraitImplDef(
             shift_span(span, delta),
             trait_name,
+            trait_args
+                .into_iter()
+                .map(|arg| shift_ast_ty(arg, delta))
+                .collect(),
             shift_ast_ty(target, delta),
             methods
                 .into_iter()
@@ -4369,8 +4417,8 @@ impl Ast {
             | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)
             | Ast::ImplDef(s, _, _)
-            | Ast::TraitDef(s, _, _, _)
-            | Ast::TraitImplDef(s, _, _, _)
+            | Ast::TraitDef(s, _, _, _, _)
+            | Ast::TraitImplDef(s, _, _, _, _)
             | Ast::Import(s, _, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
@@ -4558,9 +4606,10 @@ impl User {
         .expect("trait should parse");
 
         match ast.as_slice() {
-            [Ast::TraitDef(_, name, methods, attrs)] => {
+            [Ast::TraitDef(_, name, type_params, methods, attrs)] => {
                 assert_eq!(name, "Numeric");
                 assert_eq!(attrs, &DeclAttrs::default());
+                assert!(type_params.is_empty());
                 assert_eq!(methods.len(), 2);
                 assert_eq!(methods[0].name, "add");
                 assert_eq!(methods[0].params.len(), 2);
@@ -4592,8 +4641,9 @@ impl User {
         .expect("trait impl should parse");
 
         match ast.as_slice() {
-            [Ast::TraitImplDef(_, trait_name, AstTy::Named(_, target), methods)] => {
+            [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods)] => {
                 assert_eq!(trait_name, "Numeric");
+                assert!(trait_args.is_empty());
                 assert_eq!(target, "Int");
                 assert_eq!(methods.len(), 2);
                 assert!(matches!(
@@ -4627,6 +4677,56 @@ impl User {
                 assert_eq!(ret_ty, "$N");
             }
             _ => panic!("Expected Def with bounded type parameters"),
+        }
+    }
+
+    #[test]
+    fn test_trait_def_parses_head_type_params() {
+        let ast = parse_with_context(
+            r#"deftrait From<$To> {
+  def from(self: Self, to: TypeRef<$To>) -> $To
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("generic trait should parse");
+
+        match ast.as_slice() {
+            [Ast::TraitDef(_, name, type_params, methods, _)] => {
+                assert_eq!(name, "From");
+                assert_eq!(type_params.len(), 1);
+                assert_eq!(type_params[0].name, "$To");
+                assert_eq!(methods.len(), 1);
+                assert!(matches!(
+                    methods[0].params[1].ty,
+                    AstTy::Generic(_, ref name, ref args)
+                        if name == "TypeRef"
+                            && matches!(args.as_slice(), [AstTy::Named(_, arg)] if arg == "$To")
+                ));
+            }
+            _ => panic!("Expected TraitDef"),
+        }
+    }
+
+    #[test]
+    fn test_trait_impl_parses_trait_type_args() {
+        let ast = parse_with_context(
+            r#"impl From<String> for Int {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    inspect(self)
+  }
+}"#,
+            ParserContext::module(1, None),
+        )
+        .expect("generic trait impl should parse");
+
+        match ast.as_slice() {
+            [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods)] => {
+                assert_eq!(trait_name, "From");
+                assert!(matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String"));
+                assert_eq!(target, "Int");
+                assert_eq!(methods.len(), 1);
+            }
+            _ => panic!("Expected TraitImplDef"),
         }
     }
 

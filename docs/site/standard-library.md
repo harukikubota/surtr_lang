@@ -89,6 +89,9 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 // int.srt
 @@builtin type Int
 
+// compiler-reserved type witness
+@@builtin type TypeRef<$T>
+
 // list.srt
 @@builtin type List<$A>
 
@@ -103,8 +106,24 @@ compiler はこの head 自体を契約として扱います。
 
 - `List` は `List<$A>`
 - `Result` は `Result<$T>`
+- `TypeRef` は `TypeRef<$T>`
 
 `Result<T, E>` は builtin type declaration ではなく、戻り値位置での error contract 記法として扱います。
+`TypeRef<$T>` は ordinary value type ではなく、target type witness 専用の
+compiler-reserved builtin type です。
+
+`TypeRef<$T>` の使い道は限定されています。
+
+- trait head で宣言した型引数に対応する witness parameter
+- `From<$To>`, `TryFrom<$To>`, `Decode<$To>` のような target-oriented trait method の parameter
+- `from(value, TargetTy)` / `try_from(value, TargetTy)` の第 2 引数を内部で表す型
+
+逆に、次には使いません。
+
+- 通常の `def` の引数や戻り値
+- field type
+- local binding の型注釈
+- first-class value としての生成・保存・返却
 
 ## 4. `Error` と `Result` の読み方
 

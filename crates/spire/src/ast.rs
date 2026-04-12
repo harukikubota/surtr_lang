@@ -320,11 +320,13 @@ pub enum Ast {
     /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
     ImplDef(Span, Symbol, Vec<Ast>),
 
-    /// Trait definition: `deftrait Numeric { def add(self: Self, rhs: Self) -> Self }`
-    TraitDef(Span, Symbol, Vec<TraitMethodSig>, DeclAttrs),
+    /// Trait definition: `deftrait Numeric<$T> { def add(self: Self, rhs: Self) -> Self }`
+    TraitDef(Span, Symbol, Vec<TypeParam>, Vec<TraitMethodSig>, DeclAttrs),
 
-    /// Trait impl definition: `impl Numeric for Int { def add(self: Self, rhs: Self) -> Self { ... } }`
-    TraitImplDef(Span, Symbol, AstTy, Vec<Ast>),
+    /// Trait impl definition:
+    /// `impl Numeric for Int { ... }`
+    /// `impl From<String> for Int { ... }`
+    TraitImplDef(Span, Symbol, Vec<AstTy>, AstTy, Vec<Ast>),
 
     /// Import declaration
     Import(Span, AstPath, ImportSpec),

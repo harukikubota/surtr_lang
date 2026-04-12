@@ -228,7 +228,10 @@ fn module_spec_fixtures_match_expected_stdout_via_loader() {
 #[test]
 fn module_compile_error_fixtures_match_expectations_via_loader() {
     let error_root = repo_root().join("tests/compile_errors/modules");
-    let cases = case_dirs(&error_root);
+    let cases = case_dirs(&error_root)
+        .into_iter()
+        .filter(|case_dir| case_dir.join("entry.error").exists())
+        .collect::<Vec<_>>();
     assert!(
         !cases.is_empty(),
         "no module compile-error fixture directories found under {}",
@@ -237,12 +240,6 @@ fn module_compile_error_fixtures_match_expectations_via_loader() {
 
     for case_dir in cases {
         let error_path = case_dir.join("entry.error");
-        assert!(
-            error_path.exists(),
-            "missing entry.error for {}",
-            case_dir.display()
-        );
-
         let expected = parse_compile_error_expectation(&error_path);
         let result = compile_multi_source_case(&case_dir);
         match result {

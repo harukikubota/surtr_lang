@@ -14,3 +14,9 @@ impl Show for Error {
     inspect(self)
   }
 }
+
+impl From<String> for Error {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}

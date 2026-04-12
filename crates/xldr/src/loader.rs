@@ -36,6 +36,16 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         include_str!("../../../lib/trait/concat.srt"),
         "Concat",
     ),
+    (
+        "trait/from.srt",
+        include_str!("../../../lib/trait/from.srt"),
+        "From",
+    ),
+    (
+        "trait/try_from.srt",
+        include_str!("../../../lib/trait/try_from.srt"),
+        "TryFrom",
+    ),
     ("int.srt", include_str!("../../../lib/int.srt"), "Int"),
     (
         "string.srt",
@@ -669,14 +679,30 @@ mod tests {
         assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
         assert_eq!(loaded.module_stages[1].len(), 1 + DEFAULT_STD_MODULES.len());
-        assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
-        assert_eq!(loaded.module_stages[1][1].module_path, "Numeric");
-        assert_eq!(loaded.module_stages[1][2].module_path, "Show");
-        assert_eq!(loaded.module_stages[1][3].module_path, "Eq");
-        assert_eq!(loaded.module_stages[1][4].module_path, "Ord");
-        assert_eq!(loaded.module_stages[1][5].module_path, "Concat");
-        assert_eq!(loaded.module_stages[1][6].module_path, "Int");
-        assert_eq!(loaded.module_stages[1][7].module_path, "String");
+        let std_paths = loaded.module_stages[1]
+            .iter()
+            .map(|module| module.module_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            std_paths,
+            vec![
+                "Kernel",
+                "Numeric",
+                "Show",
+                "Eq",
+                "Ord",
+                "Concat",
+                "From",
+                "TryFrom",
+                "Int",
+                "String",
+                "Boolean",
+                "Error",
+                "List",
+                "Result",
+                "Float",
+            ]
+        );
     }
 
     #[test]
@@ -758,13 +784,30 @@ mod tests {
         assert_eq!(loaded.module_stages[2][0].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[3][0].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
-        assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
-        assert_eq!(loaded.module_stages[1][1].module_path, "Numeric");
-        assert_eq!(loaded.module_stages[1][2].module_path, "Show");
-        assert_eq!(loaded.module_stages[1][3].module_path, "Eq");
-        assert_eq!(loaded.module_stages[1][4].module_path, "Ord");
-        assert_eq!(loaded.module_stages[1][5].module_path, "Concat");
-        assert_eq!(loaded.module_stages[1][6].module_path, "Int");
+        let std_paths = loaded.module_stages[1]
+            .iter()
+            .map(|module| module.module_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            std_paths,
+            vec![
+                "Kernel",
+                "Numeric",
+                "Show",
+                "Eq",
+                "Ord",
+                "Concat",
+                "From",
+                "TryFrom",
+                "Int",
+                "String",
+                "Boolean",
+                "Error",
+                "List",
+                "Result",
+                "Float",
+            ]
+        );
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
         assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
         assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");

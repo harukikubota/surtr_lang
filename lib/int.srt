@@ -475,6 +475,18 @@ impl Show for Int {
   }
 }
 
+impl From<Int> for Int {
+  def from(self: Self, to: TypeRef<Int>) -> Int {
+    self
+  }
+}
+
+impl From<String> for Int {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}
+
 impl Eq for Int {
   def eq(self: Self, rhs: Self) -> Boolean {
     self == rhs

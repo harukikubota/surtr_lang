@@ -1217,6 +1217,7 @@ mod tests {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            auto_import_modules: BTreeSet::new(),
         }
     }
 

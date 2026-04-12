@@ -200,6 +200,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         name: "Result",
         params: &["$T"],
     },
+    BuiltinTypeMeta {
+        name: "TypeRef",
+        params: &["$T"],
+    },
 ];
 
 pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {

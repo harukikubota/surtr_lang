@@ -42,6 +42,7 @@ struct TraitMethodInfo {
 #[derive(Debug, Clone)]
 struct TraitInfo {
     id: ResolvedId,
+    type_params: Vec<ResolvedTypeParam>,
     methods: HashMap<String, TraitMethodInfo>,
 }
 
@@ -63,6 +64,7 @@ struct TraitImplMethodInfo {
 #[derive(Debug, Clone)]
 struct TraitImplInfo {
     trait_id: ResolvedId,
+    trait_args: Vec<AstTy>,
     target_name: String,
     target_ty: Ty,
     methods: HashMap<String, TraitImplMethodInfo>,
@@ -495,8 +497,9 @@ impl Checker {
         self.ensure_struct_impl_new_contract(&stmts)?;
         let mut typed = Vec::new();
         for stmt in stmts {
-            if let Resolved::TraitImplDef(span, trait_id, target_ty, methods) = &stmt {
-                let nodes = self.check_trait_impl_items(span, trait_id, target_ty, methods)?;
+            if let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) = &stmt {
+                let nodes =
+                    self.check_trait_impl_items(span, trait_id, trait_args, target_ty, methods)?;
                 typed.extend(nodes.into_iter().map(|node| self.resolve_typed_node(node)));
                 continue;
             }
