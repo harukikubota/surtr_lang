@@ -1,0 +1,13 @@
+pair = (1, "two")
+
+print(inspect(pair))
+print(to_string(pair.0))
+print(pair.1)
+
+(left, right) = pair
+print(to_string(left))
+print(right)
+
+print(match pair {
+  (n, text) => text ++ ":" ++ to_string(n),
+})

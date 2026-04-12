@@ -264,6 +264,35 @@ impl Checker {
                 Ok(TypedMatchPattern::As(Box::new(typed_inner), alias.clone()))
             }
             ResolvedPattern::Wildcard(_) => Ok(TypedMatchPattern::Wildcard),
+            ResolvedPattern::Tuple(items) => {
+                let expected_ty = self.resolve_ty(expected_ty);
+                let Ty::Tuple(item_tys) = &expected_ty else {
+                    return Err(TypeError {
+                        message: format!(
+                            "tuple pattern requires tuple scrutinee, got {}",
+                            self.ty_name(&expected_ty)
+                        ),
+                        span: Span { start: 0, end: 0 },
+                        hint: None,
+                    });
+                };
+                if items.len() != item_tys.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "tuple pattern expects {} value(s), got {}",
+                            item_tys.len(),
+                            items.len()
+                        ),
+                        span: Span { start: 0, end: 0 },
+                        hint: None,
+                    });
+                }
+                let mut typed_items = Vec::with_capacity(items.len());
+                for (item, item_ty) in items.iter().zip(item_tys.iter()) {
+                    typed_items.push(self.check_match_subpattern(item, item_ty)?);
+                }
+                Ok(TypedMatchPattern::Tuple(typed_items))
+            }
             ResolvedPattern::BoolLit(span, b) => {
                 if !self.types_compatible(&Ty::Bool, expected_ty) {
                     return Err(TypeError {
@@ -497,6 +526,7 @@ impl Checker {
         match pat {
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => true,
             TypedMatchPattern::As(inner, _) => self.is_match_catch_all(inner),
+            TypedMatchPattern::Tuple(items) => items.iter().all(|item| self.is_match_catch_all(item)),
             TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)

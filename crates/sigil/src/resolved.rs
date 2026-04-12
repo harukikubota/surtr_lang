@@ -63,6 +63,9 @@ pub enum Resolved {
     /// Fixed list literal
     ListLiteral(Span, Vec<Resolved>),
 
+    /// Tuple literal
+    TupleLiteral(Span, Vec<Resolved>),
+
     /// Interpolated string
     InterpolatedStr(Span, Vec<ResolvedInterpolatedPart>),
 
@@ -186,6 +189,7 @@ pub enum ResolvedPattern {
     BoolLit(Span, bool),
     Constructor(ResolvedId, Vec<ResolvedPattern>),
     Extractor(ResolvedId, Vec<ResolvedPattern>),
+    Tuple(Vec<ResolvedPattern>),
     As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
 }
 

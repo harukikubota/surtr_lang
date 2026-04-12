@@ -52,6 +52,7 @@ pub enum Value {
     Bool(bool),
     Unit,
     List(ListHandle),
+    Tuple(Vec<Value>),
     Tagged { tag: u32, fields: Vec<Value> },
     Callable(Callable),
     Error(Box<RichError>),
@@ -117,6 +118,14 @@ impl Value {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", inner)
+            }
+            Value::Tuple(items) => {
+                let inner = items
+                    .iter()
+                    .map(|item| item.to_display_string(registry))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({inner})")
             }
             Value::Tagged { tag, fields } => {
                 if let Some(entry) = registry.lookup(*tag) {

@@ -401,6 +401,12 @@ impl Checker {
                 self.ensure_self_rebinding_types_inner(head, span, expected_self)?;
                 self.ensure_self_rebinding_types_inner(tail, span, expected_self)
             }
+            TypedPattern::Tuple(_, items) => {
+                for item in items {
+                    self.ensure_self_rebinding_types_inner(item, span, expected_self)?;
+                }
+                Ok(())
+            }
             TypedPattern::ResultOk(_, inner) => {
                 self.ensure_self_rebinding_types_inner(inner, span, expected_self)
             }

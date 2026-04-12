@@ -46,6 +46,7 @@ pub enum TypedInner {
     ListNil,
     ListCons(Box<TypedNode>, Box<TypedNode>),
     ListLiteral(Vec<TypedNode>),
+    TupleLiteral(Vec<TypedNode>),
     InterpolatedStr(Vec<TypedInterpolatedPart>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Assert(Box<TypedNode>, Box<TypedNode>),
@@ -110,6 +111,7 @@ pub enum TypedPattern {
     IntLit(Ty, SurtrInt),
     StrLit(Ty, String),
     BoolLit(Ty, bool),
+    Tuple(Ty, Vec<TypedPattern>),
     /// `Ok(inner)` pattern node in safe-bind recursion.
     ResultOk(Ty, Box<TypedPattern>),
     Extractor {
@@ -138,6 +140,7 @@ pub enum TypedMatchPattern {
     IntLit(SurtrInt),
     /// String literal
     StrLit(String),
+    Tuple(Vec<TypedMatchPattern>),
     /// Constructor tag + field patterns + payload field offset.
     Constructor {
         tag: u32,

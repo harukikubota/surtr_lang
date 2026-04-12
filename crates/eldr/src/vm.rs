@@ -1207,6 +1207,36 @@ impl VM {
                 self.stack.push(Value::List(ListHandle::from_items(elems)));
             }
 
+            // Tuple
+            Opcode::TupleNew { len } => {
+                let mut elems = Vec::with_capacity(len as usize);
+                for _ in 0..len {
+                    elems.push(self.pop_stack()?);
+                }
+                elems.reverse();
+                self.stack.push(Value::Tuple(elems));
+            }
+            Opcode::GetTupleField { field_index } => {
+                let tuple = self.pop_stack()?;
+                match tuple {
+                    Value::Tuple(items) => {
+                        let field = items.get(field_index as usize).cloned().ok_or_else(|| {
+                            RuntimeError::new(format!(
+                                "Tuple index {} out of bounds",
+                                field_index
+                            ))
+                        })?;
+                        self.stack.push(field);
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "GetTupleField expects Tuple, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+
             // Struct / Tagged
             Opcode::StructNew { field_count } => {
                 let mut fields = Vec::with_capacity(field_count as usize);

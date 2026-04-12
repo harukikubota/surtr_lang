@@ -59,6 +59,8 @@ pub enum AstTy {
     Named(Span, Symbol),
     /// `List<T>`, `Result<T, E>`, user-defined generic types, ...
     Generic(Span, Symbol, Vec<AstTy>),
+    /// `(A, B, C)`
+    Tuple(Span, Vec<AstTy>),
     /// `(-> T)`, `(A -> B)`, `(A, B -> C)`
     Func(Span, Vec<AstTy>, Box<AstTy>),
 }
@@ -87,6 +89,8 @@ pub enum AstPattern {
     Constructor(Span, Symbol, Vec<AstPattern>),
     /// `uncons(head, tail)` / `User(name, age)` in MatchBlock position.
     Call(Span, Symbol, Vec<AstPattern>),
+    /// `(head, tail, ...)`
+    Tuple(Span, Vec<AstPattern>),
     /// `inner @ alias` / `inner @ alias: Ty`
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
 }
@@ -228,13 +232,16 @@ pub enum Ast {
     /// Fixed list literal: `[1, 2, 3]`
     ListLiteral(Span, Vec<Ast>),
 
+    /// Tuple literal: `(1, 2, 3)`
+    TupleLiteral(Span, Vec<Ast>),
+
     /// Interpolated string: `"hi #{name}"`
     InterpolatedStr(Span, Vec<InterpolatedPart>),
 
     /// Match expression
     Match(Span, Box<Ast>, Vec<(AstPattern, Ast)>),
 
-    /// Field access: `user.name`
+    /// Field access: `user.name`, `pair.0`
     FieldAccess(Span, Box<Ast>, Symbol),
 
     /// Struct definition: `defstruct User { name: String, age: Int }`

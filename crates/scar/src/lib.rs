@@ -373,6 +373,56 @@ print(match value {
     }
 
     #[test]
+    fn tuple_literal_and_field_access_typecheck() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"pair = (1, "two")
+first = pair.0
+second = pair.1"#,
+        );
+        let typed = typecheck(resolved).expect("tuple access should typecheck");
+        assert!(typed.iter().filter(|node| matches!(node.node, TypedInner::Bind(_, _))).count() >= 3);
+    }
+
+    #[test]
+    fn tuple_bind_pattern_typechecks() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"pair = (1, "two")
+(left, right) = pair"#,
+        );
+        let typed = typecheck(resolved).expect("tuple bind should typecheck");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::Bind(_, _))
+        ));
+    }
+
+    #[test]
+    fn extractor_single_value_match_result_contract_typechecks() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct Single {
+  value: Int,
+}
+impl Single {
+  def new(value: Int) -> Self {
+    Single { value: value }
+  }
+
+  def deconstruct(self: Self) -> MatchResult<Int, Error> {
+    MatchResult::Success(self.value)
+  }
+}
+
+value = Single(1)
+print(match value {
+  Single(inner) => to_string(inner),
+  _ => "bad",
+})"#,
+        );
+        let typed = typecheck(resolved).expect("single-value extractor should typecheck");
+        assert!(!typed.is_empty());
+    }
+
+    #[test]
     fn struct_matchblock_head_uses_attached_deconstruct_method() {
         let resolved = resolve_with_builtin_prelude(
             r#"defstruct User {
@@ -383,7 +433,7 @@ impl User {
   def new(name: String, age: Int) -> Self {
     User { name: name, age: age }
   }
-  def deconstruct(self: Self) -> MatchResult<Seq<String, Int>, Error> {
+  def deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
     MatchResult::NoMatch
   }
 }
@@ -940,6 +990,21 @@ answer = match flag {
 }"#,
         );
         let typed = typecheck(resolved).expect("binding arm should be exhaustive");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::Bind(_, _))
+        ));
+    }
+
+    #[test]
+    fn match_tuple_binding_pattern_is_treated_as_exhaustive() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"pair = (1, "two")
+answer = match pair {
+  (left, right) => right,
+}"#,
+        );
+        let typed = typecheck(resolved).expect("tuple binding arm should be exhaustive");
         assert!(matches!(
             typed.last().map(|node| &node.node),
             Some(TypedInner::Bind(_, _))

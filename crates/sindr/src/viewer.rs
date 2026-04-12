@@ -140,6 +140,12 @@ pub enum OpcodeView {
     ListFromItems {
         len: u32,
     },
+    TupleNew {
+        len: u32,
+    },
+    GetTupleField {
+        field_index: u32,
+    },
     StructNew {
         field_count: u32,
     },
@@ -440,6 +446,10 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         Opcode::ListHead => OpcodeView::ListHead,
         Opcode::ListTail => OpcodeView::ListTail,
         Opcode::ListFromItems { len } => OpcodeView::ListFromItems { len: *len },
+        Opcode::TupleNew { len } => OpcodeView::TupleNew { len: *len },
+        Opcode::GetTupleField { field_index } => OpcodeView::GetTupleField {
+            field_index: *field_index,
+        },
         Opcode::StructNew { field_count } => OpcodeView::StructNew {
             field_count: *field_count,
         },

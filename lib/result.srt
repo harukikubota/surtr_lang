@@ -21,12 +21,6 @@ defenum MatchResult<$Value> {
 }
 
 @@doc """
-Extractor の分解結果を運ぶ compiler-special な型。
-一般の tuple 機能ではなく、MatchBlock 用の型付き値列を表す。
-"""
-@@builtin type Seq<$Type>
-
-@@doc """
 Construct the success branch of `Result`.
 This is a declaration-only surface contract for the constructor shape.
 The parser normalizes this special `@@builtin type` spelling into the internal

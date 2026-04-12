@@ -38,6 +38,14 @@ fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
                 .join(", ");
             format!("{name}<{args}>")
         }
+        spire::ast::AstTy::Tuple(_, items) => {
+            let items = items
+                .iter()
+                .map(format_ast_ty)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({items})")
+        }
         spire::ast::AstTy::Func(_, params, ret) => {
             if params.is_empty() {
                 format!("(-> {})", format_ast_ty(ret))
