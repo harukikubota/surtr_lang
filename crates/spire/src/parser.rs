@@ -313,6 +313,7 @@ struct Parser {
     pos: usize,
     context: ParserContext,
     impl_target_stack: Vec<Symbol>,
+    allow_trailing_call_block: bool,
 }
 
 impl Parser {
@@ -322,6 +323,7 @@ impl Parser {
             pos: 0,
             context,
             impl_target_stack: Vec::new(),
+            allow_trailing_call_block: true,
         }
     }
 
@@ -1745,24 +1747,13 @@ impl Parser {
                 .unwrap_or(false);
             if matches!(self.peek(), Token::LParen) {
                 self.advance();
-                self.skip_newlines();
-                let mut args = Vec::new();
-                if !matches!(self.peek(), Token::RParen) {
-                    args.push(self.parse_record_lit_arg()?);
-                    while matches!(self.peek(), Token::Comma) {
-                        self.advance();
-                        self.skip_newlines();
-                        if matches!(self.peek(), Token::RParen) {
-                            break;
-                        }
-                        args.push(self.parse_record_lit_arg()?);
-                    }
-                }
+                let args = self.parse_call_args()?;
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
+                let (args, call_end) = self.attach_trailing_block_arg(args, end_span.end)?;
                 let span = Span {
                     start: name_span.start,
-                    end: end_span.end,
+                    end: call_end,
                 };
                 if path_last_is_uppercase {
                     return Ok(Ast::ConstructorCall(span, path_name, args));
@@ -1772,14 +1763,15 @@ impl Parser {
 
             if matches!(self.peek(), Token::Unit) {
                 let end_span = self.advance().span.clone();
+                let (args, call_end) = self.attach_trailing_block_arg(Vec::new(), end_span.end)?;
                 let span = Span {
                     start: name_span.start,
-                    end: end_span.end,
+                    end: call_end,
                 };
                 if path_last_is_uppercase {
-                    return Ok(Ast::ConstructorCall(span, path_name, Vec::new()));
+                    return Ok(Ast::ConstructorCall(span, path_name, args));
                 }
-                return Ok(Ast::App(span, Box::new(path_expr), Vec::new()));
+                return Ok(Ast::App(span, Box::new(path_expr), args));
             }
 
             if path_last_is_uppercase {
@@ -1838,49 +1830,20 @@ impl Parser {
         // Function call or constructor call: name(args)
         if matches!(self.peek(), Token::LParen) {
             self.advance();
+            let args = self.parse_call_args()?;
             self.skip_newlines();
+            let end_span = self.expect(&Token::RParen)?;
+            let (args, call_end) = self.attach_trailing_block_arg(args, end_span.end)?;
+            let span = Span {
+                start: name_span.start,
+                end: call_end,
+            };
 
             if is_uppercase {
                 // Constructor call: Name(val, ...) or Name(field: val, ...)
-                let mut args = Vec::new();
-                if !matches!(self.peek(), Token::RParen) {
-                    args.push(self.parse_record_lit_arg()?);
-                    while matches!(self.peek(), Token::Comma) {
-                        self.advance();
-                        self.skip_newlines();
-                        if matches!(self.peek(), Token::RParen) {
-                            break;
-                        }
-                        args.push(self.parse_record_lit_arg()?);
-                    }
-                }
-                self.skip_newlines();
-                let end_span = self.expect(&Token::RParen)?;
-                let span = Span {
-                    start: name_span.start,
-                    end: end_span.end,
-                };
                 return Ok(Ast::ConstructorCall(span, name, args));
             } else {
                 // Normal function call
-                let mut args = Vec::new();
-                if !matches!(self.peek(), Token::RParen) {
-                    args.push(self.parse_record_lit_arg()?);
-                    while matches!(self.peek(), Token::Comma) {
-                        self.advance();
-                        self.skip_newlines();
-                        if matches!(self.peek(), Token::RParen) {
-                            break;
-                        }
-                        args.push(self.parse_record_lit_arg()?);
-                    }
-                }
-                self.skip_newlines();
-                let end_span = self.expect(&Token::RParen)?;
-                let span = Span {
-                    start: name_span.start,
-                    end: end_span.end,
-                };
                 let func = Ast::Var(name_span, name);
                 return Ok(Ast::App(span, Box::new(func), args));
             }
@@ -1890,15 +1853,16 @@ impl Parser {
         // Lexer tokenizes `()` as Token::Unit.
         if matches!(self.peek(), Token::Unit) {
             let end_span = self.advance().span.clone();
+            let (args, call_end) = self.attach_trailing_block_arg(Vec::new(), end_span.end)?;
             let span = Span {
                 start: name_span.start,
-                end: end_span.end,
+                end: call_end,
             };
             if is_uppercase {
-                return Ok(Ast::ConstructorCall(span, name, Vec::new()));
+                return Ok(Ast::ConstructorCall(span, name, args));
             }
             let func = Ast::Var(name_span, name);
-            return Ok(Ast::App(span, Box::new(func), Vec::new()));
+            return Ok(Ast::App(span, Box::new(func), args));
         }
 
         // Annotated binding: name: Type = expr / name: Type =? expr
@@ -1971,6 +1935,58 @@ impl Parser {
             ));
         }
         Ok(())
+    }
+
+    fn with_trailing_call_block_disabled<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        let prev = self.allow_trailing_call_block;
+        self.allow_trailing_call_block = false;
+        let result = f(self);
+        self.allow_trailing_call_block = prev;
+        result
+    }
+
+    fn parse_call_args(&mut self) -> Result<Vec<RecordLitArg>, ParseError> {
+        self.skip_newlines();
+
+        let mut args = Vec::new();
+        if !matches!(self.peek(), Token::RParen) {
+            args.push(self.parse_record_lit_arg()?);
+            while matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                if matches!(self.peek(), Token::RParen) {
+                    break;
+                }
+                args.push(self.parse_record_lit_arg()?);
+            }
+        }
+
+        Ok(args)
+    }
+
+    fn attach_trailing_block_arg(
+        &mut self,
+        mut args: Vec<RecordLitArg>,
+        mut call_end: usize,
+    ) -> Result<(Vec<RecordLitArg>, usize), ParseError> {
+        if !self.allow_trailing_call_block || !matches!(self.peek(), Token::LBrace) {
+            return Ok((args, call_end));
+        }
+
+        if args.iter().any(|arg| matches!(arg, RecordLitArg::Named(_, _))) {
+            return Err(ParseError::syntax(
+                "Trailing block sugar cannot follow named arguments",
+                self.peek_span(),
+            ));
+        }
+
+        let trailing = self.parse_primary()?;
+        call_end = trailing.span().end;
+        args.push(RecordLitArg::Positional(trailing));
+        Ok((args, call_end))
     }
 
     /// Parse a record literal argument: either positional or named.
@@ -3604,7 +3620,7 @@ impl Parser {
     fn parse_match_expr(&mut self) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Match)?;
-        let scrutinee = self.parse_expr()?;
+        let scrutinee = self.with_trailing_call_block_disabled(|parser| parser.parse_expr())?;
         self.skip_newlines();
         let lbrace = self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -4499,6 +4515,64 @@ mod tests {
                 assert!(matches!(&args[1], RecordLitArg::Named(n, _) if n == "x"));
             }
             _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_function_call_accepts_trailing_block_arg() {
+        let ast = parse("if_then(True) { num = 10; num }").expect("trailing block call should parse");
+        match &ast[0] {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, ref n) if n == "if_then"));
+                assert_eq!(args.len(), 2);
+                assert!(matches!(
+                    &args[0],
+                    RecordLitArg::Positional(Ast::Lit(_, Lit::Bool(true)))
+                ));
+                assert!(matches!(
+                    &args[1],
+                    RecordLitArg::Positional(Ast::Block(_, stmts))
+                        if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Var(_, name)] if name == "num")
+                ));
+            }
+            _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_zero_arg_call_accepts_trailing_block_arg() {
+        let ast = parse("run() { print(\"x\") }").expect("zero-arg trailing block call should parse");
+        match &ast[0] {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, ref n) if n == "run"));
+                assert_eq!(args.len(), 1);
+                assert!(matches!(
+                    &args[0],
+                    RecordLitArg::Positional(Ast::Block(_, stmts))
+                        if matches!(stmts.as_slice(), [Ast::App(_, _, inner_args)] if inner_args.len() == 1)
+                ));
+            }
+            _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_trailing_block_rejects_named_args() {
+        let err = parse("add(x: 1) { 2 }").expect_err("named args with trailing block should fail");
+        assert!(err
+            .message()
+            .contains("Trailing block sugar cannot follow named arguments"));
+    }
+
+    #[test]
+    fn test_match_scrutinee_does_not_consume_arm_block_as_trailing_call_arg() {
+        let ast = parse("match noop() { _ => 1 }").expect("match scrutinee should parse");
+        match &ast[0] {
+            Ast::Match(_, scrutinee, arms) => {
+                assert!(matches!(scrutinee.as_ref(), Ast::App(_, _, args) if args.is_empty()));
+                assert_eq!(arms.len(), 1);
+            }
+            _ => panic!("Expected Match"),
         }
     }
 
