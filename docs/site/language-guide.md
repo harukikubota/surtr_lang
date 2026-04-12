@@ -562,7 +562,7 @@ value: Result<Int> = Ok(42)
 
 - 値として扱うときは `Result<T>`
 - 関数契約を詳しく見せたいときは `Result<T, E>` が現れることがある
-- どちらも `Ok(...)` / `Err(...)` と `match` を中心に扱う
+- どちらも `Ok(...)` / `Err(...)` と `match` を中心に扱い、variant 判定だけなら `Result::is_ok(...)` / `Result::is_err(...)` も使える
 
 ## 15. 現時点のスコープ
 

@@ -193,10 +193,7 @@ defmod String {
   @@test starts_with("surtr", "sur") == True
   @@test starts_with("surtr", "urt") == False
   def starts_with(value: String, prefix: String) -> Boolean {
-    match String::strip_prefix(value, prefix) {
-      Ok(_) => True,
-      Err(_) => False,
-    }
+    Result::is_ok(String::strip_prefix(value, prefix))
   }
 
   @@doc """
@@ -206,10 +203,7 @@ defmod String {
   @@test ends_with("surtr", "tr") == True
   @@test ends_with("surtr", "su") == False
   def ends_with(value: String, suffix: String) -> Boolean {
-    match String::strip_suffix(value, suffix) {
-      Ok(_) => True,
-      Err(_) => False,
-    }
+    Result::is_ok(String::strip_suffix(value, suffix))
   }
 
   @@doc """
@@ -265,10 +259,7 @@ defmod String {
   @@test contains("surtr", "urt") == True
   @@test contains("surtr", "zzz") == False
   def contains(value: String, needle: String) -> Boolean {
-    match String::split_once(value, needle) {
-      Ok(_) => True,
-      Err(_) => False,
-    }
+    Result::is_ok(String::split_once(value, needle))
   }
 
   @@doc """

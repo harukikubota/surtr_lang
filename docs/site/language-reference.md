@@ -85,7 +85,8 @@ match expr {
 - 成功値: `Ok(value)`
 - 失敗値: `Err(error)`
 
-現時点では、`match` で主に `Ok(...)` / `Err(...)` を扱います。  
+現時点では、`match` を中心に `Ok(...)` / `Err(...)` を扱います。  
+variant 判定だけなら `Result::is_ok(...)` / `Result::is_err(...)` も使えます。  
 考え方としては `Either<Err, Ok>` に近く、失敗も値として明示的に運びます。
 内部表現は enum-like ですが、language surface では `defenum` と区別された専用 abstraction です。
 

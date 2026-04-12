@@ -84,9 +84,6 @@ defmod Result {
   @@test is_err(Ok(1)) == False
   @@test is_err(Err(NoneError)) == True
   def is_err(result: Result<$T>) -> Boolean {
-    match result {
-      Ok(_) => False,
-      Err(_) => True,
-    }
+    if(Result::is_ok(result), False, True)
   }
 }

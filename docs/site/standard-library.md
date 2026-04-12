@@ -258,7 +258,7 @@ ret = List::reverse(acc)
 
 ## 9. `Result` module の位置づけ
 
-`Result` module は現在、constructor contract と説明の置き場です。
+`Result` module は constructor contract と、よく使う variant 判定 helper の置き場です。
 
 ```surtr
 @@builtin type Result<$T>
@@ -266,7 +266,8 @@ ret = List::reverse(acc)
 @@builtin type Err(Error) -> Result<$T>
 ```
 
-現時点では `List` のような helper surface はほとんど持たず、`Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `|=>` の言語構文と型規則で扱うのが中心です。
+現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `|=>` の言語構文と型規則ですが、
+`Result::is_ok(...)` / `Result::is_err(...)` で variant 判定だけを簡潔に書けます。
 
 ## 10. パイプ / bind 系と標準モジュールの関係
 
@@ -284,4 +285,4 @@ ret = List::reverse(acc)
 - apply 系は call 式でも書ける
 - compose 系は closure value を要求する
 - `List` は helper surface を公開する
-- `Result` は helper より言語構文中心で扱う
+- `Result` は言語構文中心だが、variant 判定 helper も持つ
