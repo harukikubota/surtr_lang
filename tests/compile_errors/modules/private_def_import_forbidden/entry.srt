@@ -1,0 +1,3 @@
+import Secrets::secret_suffix
+
+print(secret_suffix())

@@ -34,6 +34,7 @@ pub struct DeclarationEntry {
     pub kind: DeclarationKind,
     pub stage_index: usize,
     pub auto_import: bool,
+    pub visibility: Visibility,
 }
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
@@ -47,6 +48,10 @@ pub(super) fn is_importable_declaration(kind: &DeclarationKind) -> bool {
         kind,
         DeclarationKind::BuiltinType | DeclarationKind::ImplCtorNew | DeclarationKind::Struct
     )
+}
+
+fn entry_visibility(attrs: &DeclAttrs) -> Visibility {
+    attrs.visibility
 }
 
 fn normalize_impl_method_name(target: &str, method_name: &str) -> String {
@@ -305,6 +310,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                     name: field.name,
                     ty: rewrite_self_type(field.ty, target),
                     span: field.span,
+                    visibility: field.visibility,
                 })
                 .collect(),
             Box::new(rewrite_self_ast(*show_expr, target)),
@@ -522,7 +528,7 @@ pub fn precollect_declaration_index(
 
                     let method_module_path = impl_method_module_path(&module.module_path, target);
                     for method in methods {
-                        let Ast::Def(method_span, method_name, _, _, _, _, _) = method else {
+                        let Ast::Def(method_span, method_name, _, _, _, _, attrs) = method else {
                             return Err(ResolveError {
                                 message: "impl body may only contain `def` declarations"
                                     .to_string(),
@@ -564,6 +570,7 @@ pub fn precollect_declaration_index(
                                 kind,
                                 stage_index,
                                 auto_import: false,
+                                visibility: entry_visibility(attrs),
                             },
                         );
                     }
@@ -594,6 +601,7 @@ pub fn precollect_declaration_index(
                             kind: DeclarationKind::Trait,
                             stage_index,
                             auto_import: attrs.auto_import,
+                            visibility: Visibility::Public,
                         },
                     );
 
@@ -624,13 +632,15 @@ pub fn precollect_declaration_index(
                                 kind: DeclarationKind::TraitMethod,
                                 stage_index,
                                 auto_import: false,
+                                visibility: Visibility::Public,
                             },
                         );
                     }
                     continue;
                 }
 
-                if let Ast::TraitImplDef(span, _trait_name, _trait_args, _target_ty, methods) = stmt {
+                if let Ast::TraitImplDef(span, _trait_name, _trait_args, _target_ty, methods) = stmt
+                {
                     for method in methods {
                         let Ast::Def(method_span, method_name, _, _, _, _, _) = method else {
                             return Err(ResolveError {
@@ -669,6 +679,7 @@ pub fn precollect_declaration_index(
                                 kind: DeclarationKind::ImplMethod,
                                 stage_index,
                                 auto_import: false,
+                                visibility: Visibility::Private,
                             },
                         );
                     }
@@ -699,6 +710,7 @@ pub fn precollect_declaration_index(
                             kind: DeclarationKind::Enum,
                             stage_index,
                             auto_import: false,
+                            visibility: Visibility::Public,
                         },
                     );
 
@@ -727,39 +739,71 @@ pub fn precollect_declaration_index(
                                 kind: DeclarationKind::EnumVariant,
                                 stage_index,
                                 auto_import: false,
+                                visibility: Visibility::Public,
                             },
                         );
                     }
                     continue;
                 }
 
-                let (span, name, kind) = match stmt {
-                    Ast::Def(span, name, _, _, _, _, _) => {
-                        (span, name.as_str(), DeclarationKind::Def)
-                    }
-                    Ast::ExtractorDef(span, name, _, _, _, _, _) => {
-                        (span, name.as_str(), DeclarationKind::Extractor)
-                    }
-                    Ast::BuiltinDecl(span, name, _, _, _) => {
-                        (span, name.as_str(), DeclarationKind::Def)
-                    }
-                    Ast::BuiltinExtractorDecl(span, name, _, _, _) => {
-                        (span, name.as_str(), DeclarationKind::Extractor)
-                    }
+                let (span, name, kind, visibility) = match stmt {
+                    Ast::Def(span, name, _, _, _, _, attrs) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::Def,
+                        entry_visibility(attrs),
+                    ),
+                    Ast::ExtractorDef(span, name, _, _, _, _, attrs) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::Extractor,
+                        entry_visibility(attrs),
+                    ),
+                    Ast::BuiltinDecl(span, name, _, _, _) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::Def,
+                        Visibility::Public,
+                    ),
+                    Ast::BuiltinExtractorDecl(span, name, _, _, _) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::Extractor,
+                        Visibility::Public,
+                    ),
                     Ast::ImplDef(_, _, _)
                     | Ast::TraitDef(_, _, _, _, _)
                     | Ast::TraitImplDef(_, _, _, _, _) => continue,
-                    Ast::ResultCtorDecl(span, name, _, _, _) => {
-                        (span, name.as_str(), DeclarationKind::ResultCtor)
-                    }
-                    Ast::BuiltinTypeDecl(span, head, _) => {
-                        (span, head.name.as_str(), DeclarationKind::BuiltinType)
-                    }
-                    Ast::StructDef(span, name, _) => (span, name.as_str(), DeclarationKind::Struct),
-                    Ast::RecordDef(span, name, _) => (span, name.as_str(), DeclarationKind::Record),
-                    Ast::DeferrorDef(span, name, _, _, _) => {
-                        (span, name.as_str(), DeclarationKind::Deferror)
-                    }
+                    Ast::ResultCtorDecl(span, name, _, _, _) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::ResultCtor,
+                        Visibility::Public,
+                    ),
+                    Ast::BuiltinTypeDecl(span, head, _) => (
+                        span,
+                        head.name.as_str(),
+                        DeclarationKind::BuiltinType,
+                        Visibility::Public,
+                    ),
+                    Ast::StructDef(span, name, _) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::Struct,
+                        Visibility::Public,
+                    ),
+                    Ast::RecordDef(span, name, _) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::Record,
+                        Visibility::Public,
+                    ),
+                    Ast::DeferrorDef(span, name, _, _, _) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::Deferror,
+                        Visibility::Public,
+                    ),
                     _ => continue,
                 };
 
@@ -788,6 +832,7 @@ pub fn precollect_declaration_index(
                         kind,
                         stage_index,
                         auto_import: false,
+                        visibility,
                     },
                 );
             }

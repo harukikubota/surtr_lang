@@ -1,6 +1,6 @@
 use sigil::resolved::ResolvedId;
 use sindr::primitives::SurtrInt;
-use spire::ast::{BinOp, Lit, Span};
+use spire::ast::{BinOp, Lit, Span, Visibility};
 
 use crate::types::Ty;
 
@@ -103,6 +103,7 @@ pub enum TypedInner {
         Vec<TypedFunParam>,
         Ty,
         Box<TypedNode>,
+        Visibility,
     ),
 
     /// Extractor definition — function-shaped runtime entry with MatchResult return type.
@@ -113,6 +114,7 @@ pub enum TypedInner {
         TypedFunParam,
         Ty,
         Box<TypedNode>,
+        Visibility,
     ),
 
     /// Trait definition metadata.

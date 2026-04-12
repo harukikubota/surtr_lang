@@ -497,6 +497,7 @@ impl Parser {
                 self.peek(),
                 Token::Annotator(_)
                     | Token::Def
+                    | Token::Defp
                     | Token::Defmod
                     | Token::Deftrait
                     | Token::Impl
@@ -517,7 +518,7 @@ impl Parser {
         // Data definitions
         let stmt = match self.peek() {
             Token::Annotator(_) => self.parse_annotated_decl()?,
-            Token::Def => self.parse_def()?,
+            Token::Def | Token::Defp => self.parse_def()?,
             Token::Defmod => self.parse_defmod()?,
             Token::Deftrait => self.parse_trait_def()?,
             Token::Impl => self.parse_impl_def()?,
@@ -666,6 +667,16 @@ impl Parser {
 
         self.context = prev_context;
         result
+    }
+
+    fn parse_field_visibility(&mut self) -> Visibility {
+        if matches!(self.peek(), Token::Private) {
+            self.advance();
+            self.skip_newlines();
+            Visibility::Private
+        } else {
+            Visibility::Public
+        }
     }
 
     fn parse_import_selector_list(&mut self) -> Result<(Vec<Symbol>, Span), ParseError> {
@@ -869,9 +880,9 @@ impl Parser {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            if !matches!(self.peek(), Token::Def) {
+            if !matches!(self.peek(), Token::Def | Token::Defp) {
                 return Err(ParseError::syntax(
-                    "impl body may only contain `def` declarations",
+                    "impl body may only contain `def` / `defp` declarations",
                     self.peek_span(),
                 ));
             }
@@ -896,7 +907,22 @@ impl Parser {
 
     fn parse_impl_method(&mut self, target: &str) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
-        self.expect(&Token::Def)?;
+        let visibility = match self.peek() {
+            Token::Def => {
+                self.advance();
+                Visibility::Public
+            }
+            Token::Defp => {
+                self.advance();
+                Visibility::Private
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "Expected `def` or `defp`",
+                    self.peek_span(),
+                ));
+            }
+        };
         let (name, _) = self.expect_ident()?;
         let mut params = Vec::new();
 
@@ -1001,7 +1027,10 @@ impl Parser {
             params,
             ret_ty,
             Box::new(body),
-            DeclAttrs::default(),
+            DeclAttrs {
+                visibility,
+                ..DeclAttrs::default()
+            },
         ))
     }
 
@@ -1995,7 +2024,10 @@ impl Parser {
             return Ok((args, call_end));
         }
 
-        if args.iter().any(|arg| matches!(arg, RecordLitArg::Named(_, _))) {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
+        {
             return Err(ParseError::syntax(
                 "Trailing block sugar cannot follow named arguments",
                 self.peek_span(),
@@ -2006,11 +2038,7 @@ impl Parser {
         call_end = trailing.span().end;
         let trailing = match trailing {
             Ast::Block(span, stmts) if Self::trailing_block_uses_closure_sugar(callee) => {
-                Ast::Closure(
-                    span.clone(),
-                    Vec::new(),
-                    Box::new(Ast::Block(span, stmts)),
-                )
+                Ast::Closure(span.clone(), Vec::new(), Box::new(Ast::Block(span, stmts)))
             }
             other => other,
         };
@@ -2710,6 +2738,7 @@ impl Parser {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
+            let visibility = self.parse_field_visibility();
             let (fname, fspan) = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
@@ -2717,6 +2746,7 @@ impl Parser {
                 name: fname,
                 ty: fty,
                 span: fspan,
+                visibility,
             });
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
@@ -2750,6 +2780,7 @@ impl Parser {
                     return Err(ParseError::incomplete(")", self.peek_span()));
                 }
                 self.skip_newlines();
+                let visibility = self.parse_field_visibility();
                 let (fname, fspan) = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
@@ -2757,6 +2788,7 @@ impl Parser {
                     name: fname,
                     ty: fty,
                     span: fspan,
+                    visibility,
                 });
                 self.skip_newlines();
                 if matches!(self.peek(), Token::Comma) {
@@ -2992,6 +3024,7 @@ impl Parser {
                         return Err(ParseError::incomplete(")", self.peek_span()));
                     }
                     self.skip_newlines();
+                    let visibility = self.parse_field_visibility();
                     let (fname, fspan) = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
                     let fty = self.parse_type()?;
@@ -2999,6 +3032,7 @@ impl Parser {
                         name: fname,
                         ty: fty,
                         span: fspan,
+                        visibility,
                     });
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
@@ -3037,16 +3071,51 @@ impl Parser {
 
     fn parse_def_signature(
         &mut self,
-    ) -> Result<(Span, Symbol, Vec<TypeParam>, Vec<FunParam>, Option<AstTy>), ParseError> {
+    ) -> Result<
+        (
+            Span,
+            Symbol,
+            Vec<TypeParam>,
+            Vec<FunParam>,
+            Option<AstTy>,
+            Visibility,
+        ),
+        ParseError,
+    > {
         self.parse_def_signature_with_name_mode(false)
     }
 
     fn parse_def_signature_with_name_mode(
         &mut self,
         allow_builtin_keyword_name: bool,
-    ) -> Result<(Span, Symbol, Vec<TypeParam>, Vec<FunParam>, Option<AstTy>), ParseError> {
+    ) -> Result<
+        (
+            Span,
+            Symbol,
+            Vec<TypeParam>,
+            Vec<FunParam>,
+            Option<AstTy>,
+            Visibility,
+        ),
+        ParseError,
+    > {
         let sp = self.peek_span();
-        self.expect(&Token::Def)?;
+        let visibility = match self.peek() {
+            Token::Def => {
+                self.advance();
+                Visibility::Public
+            }
+            Token::Defp => {
+                self.advance();
+                Visibility::Private
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "Expected `def` or `defp`",
+                    self.peek_span(),
+                ));
+            }
+        };
         let (name, _) = if allow_builtin_keyword_name {
             self.expect_builtin_decl_name()?
         } else {
@@ -3099,7 +3168,7 @@ impl Parser {
 
         self.reject_where_clause()?;
 
-        Ok((sp, name, type_params, params, ret_ty))
+        Ok((sp, name, type_params, params, ret_ty, visibility))
     }
 
     fn parse_extractor_signature(
@@ -3278,7 +3347,7 @@ impl Parser {
     }
 
     fn parse_builtin_decl(&mut self, start: usize, attrs: DeclAttrs) -> Result<Ast, ParseError> {
-        let (_def_span, name, _type_params, params, ret_ty) =
+        let (_def_span, name, _type_params, params, ret_ty, _visibility) =
             self.parse_def_signature_with_name_mode(true)?;
 
         let mut lookahead = self.pos;
@@ -3489,7 +3558,9 @@ impl Parser {
             return self.parse_result_ctor_decl_with_attrs(attrs, annotator_start);
         }
 
-        let (sp, name, type_params, params, ret_ty) = self.parse_def_signature()?;
+        let (sp, name, type_params, params, ret_ty, visibility) = self.parse_def_signature()?;
+        let mut attrs = attrs;
+        attrs.visibility = visibility;
 
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -4198,6 +4269,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     name: f.name,
                     ty: shift_ast_ty(f.ty, delta),
                     span: shift_span(f.span, delta),
+                    visibility: f.visibility,
                 })
                 .collect(),
         ),
@@ -4210,6 +4282,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     name: f.name,
                     ty: shift_ast_ty(f.ty, delta),
                     span: shift_span(f.span, delta),
+                    visibility: f.visibility,
                 })
                 .collect(),
         ),
@@ -4237,6 +4310,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     name: f.name,
                     ty: shift_ast_ty(f.ty, delta),
                     span: shift_span(f.span, delta),
+                    visibility: f.visibility,
                 })
                 .collect(),
             Box::new(shift_ast_span(*show_expr, delta)),
@@ -4503,6 +4577,37 @@ mod tests {
     }
 
     #[test]
+    fn test_defp_marks_definition_private() {
+        let ast = parse("defp helper() -> String { \"ok\" }").unwrap();
+        match &ast[0] {
+            Ast::Def(_, name, _, _, _, _, attrs) => {
+                assert_eq!(name, "helper");
+                assert_eq!(attrs.visibility, Visibility::Private);
+            }
+            _ => panic!("Expected Def"),
+        }
+    }
+
+    #[test]
+    fn test_private_field_modifier_is_preserved() {
+        let ast = parse_with_context(
+            "defstruct User { private password: String, name: String }",
+            ParserContext::project(0),
+        )
+        .unwrap();
+        match &ast[0] {
+            Ast::StructDef(_, name, fields) => {
+                assert_eq!(name, "User");
+                assert_eq!(fields[0].name, "password");
+                assert_eq!(fields[0].visibility, Visibility::Private);
+                assert_eq!(fields[1].name, "name");
+                assert_eq!(fields[1].visibility, Visibility::Public);
+            }
+            _ => panic!("Expected StructDef"),
+        }
+    }
+
+    #[test]
     fn test_safebind() {
         let ast = parse("num =? gen()").unwrap();
         match &ast[0] {
@@ -4549,7 +4654,8 @@ mod tests {
 
     #[test]
     fn test_function_call_accepts_trailing_block_arg() {
-        let ast = parse("if_then(True) { num = 10; num }").expect("trailing block call should parse");
+        let ast =
+            parse("if_then(True) { num = 10; num }").expect("trailing block call should parse");
         match &ast[0] {
             Ast::App(_, func, args) => {
                 assert!(matches!(func.as_ref(), Ast::Var(_, ref n) if n == "if_then"));
@@ -4570,7 +4676,8 @@ mod tests {
 
     #[test]
     fn test_zero_arg_call_accepts_trailing_block_arg() {
-        let ast = parse("run() { print(\"x\") }").expect("zero-arg trailing block call should parse");
+        let ast =
+            parse("run() { print(\"x\") }").expect("zero-arg trailing block call should parse");
         match &ast[0] {
             Ast::App(_, func, args) => {
                 assert!(matches!(func.as_ref(), Ast::Var(_, ref n) if n == "run"));
@@ -4846,7 +4953,9 @@ impl User {
         match ast.as_slice() {
             [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods)] => {
                 assert_eq!(trait_name, "From");
-                assert!(matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String"));
+                assert!(
+                    matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String")
+                );
                 assert_eq!(target, "Int");
                 assert_eq!(methods.len(), 1);
             }

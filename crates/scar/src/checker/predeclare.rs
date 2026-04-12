@@ -54,8 +54,13 @@ impl Checker {
                             ))
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?;
+                    let private_fields = fields
+                        .iter()
+                        .filter(|field| field.visibility == spire::ast::Visibility::Private)
+                        .map(|field| field.name.clone())
+                        .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields.clone())
+                        .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -74,8 +79,13 @@ impl Checker {
                             ))
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?;
+                    let private_fields = fields
+                        .iter()
+                        .filter(|field| field.visibility == spire::ast::Visibility::Private)
+                        .map(|field| field.name.clone())
+                        .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields.clone())
+                        .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -94,8 +104,13 @@ impl Checker {
                             ))
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?;
+                    let private_fields = fields
+                        .iter()
+                        .filter(|field| field.visibility == spire::ast::Visibility::Private)
+                        .map(|field| field.name.clone())
+                        .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields)
+                        .resolve_type_def_signature(&id.name, ty_fields, private_fields)
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -105,7 +120,7 @@ impl Checker {
                 Resolved::EnumDef(_, id, type_params, variants) => {
                     let _ = self
                         .env
-                        .resolve_type_def_signature(&id.name, Vec::new())
+                        .resolve_type_def_signature(&id.name, Vec::new(), HashSet::new())
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -478,11 +493,18 @@ impl Checker {
             AstTy::Generic(_, name, args) => format!(
                 "{}<{}>",
                 name,
-                args.iter().map(Self::ast_ty_key).collect::<Vec<_>>().join(", ")
+                args.iter()
+                    .map(Self::ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             AstTy::Tuple(_, items) => format!(
                 "({})",
-                items.iter().map(Self::ast_ty_key).collect::<Vec<_>>().join(", ")
+                items
+                    .iter()
+                    .map(Self::ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             AstTy::Func(_, params, ret) => format!(
                 "({} -> {})",
@@ -537,13 +559,20 @@ impl Checker {
     }
 
     pub(super) fn trait_matches_short_name(&self, trait_name: &str, short_name: &str) -> bool {
-        let base = trait_name.split_once('<').map(|(base, _)| base).unwrap_or(trait_name);
+        let base = trait_name
+            .split_once('<')
+            .map(|(base, _)| base)
+            .unwrap_or(trait_name);
         self.trait_key_by_short_name(short_name)
             .as_deref()
             .is_some_and(|key| key == base)
     }
 
-    pub(super) fn trait_instance_key_from_tys(&self, trait_name: &str, trait_args: &[Ty]) -> String {
+    pub(super) fn trait_instance_key_from_tys(
+        &self,
+        trait_name: &str,
+        trait_args: &[Ty],
+    ) -> String {
         if trait_args.is_empty() {
             trait_name.to_string()
         } else {
@@ -890,7 +919,8 @@ impl Checker {
         }
 
         for stmt in stmts {
-            let Resolved::TraitImplDef(span, trait_id, trait_args, target_ast_ty, methods) = stmt else {
+            let Resolved::TraitImplDef(span, trait_id, trait_args, target_ast_ty, methods) = stmt
+            else {
                 continue;
             };
 
@@ -901,9 +931,9 @@ impl Checker {
                 .cloned()
                 .ok_or_else(|| TypeError {
                     message: format!("Unknown trait: {}", trait_id.name),
-                span: span.clone(),
-                hint: None,
-            })?;
+                    span: span.clone(),
+                    hint: None,
+                })?;
             if trait_info.type_params.len() != trait_args.len() {
                 return Err(TypeError {
                     message: format!(
@@ -1076,7 +1106,10 @@ impl Checker {
                         message: format!(
                             "{} and {} cannot both be implemented for {} -> {}",
                             trait_id.name,
-                            peer_trait_key.rsplit("::").next().unwrap_or(&peer_trait_key),
+                            peer_trait_key
+                                .rsplit("::")
+                                .next()
+                                .unwrap_or(&peer_trait_key),
                             target_name,
                             trait_args
                                 .iter()

@@ -1,9 +1,10 @@
 use sindr::primitives::SurtrInt;
-use spire::ast::{AstTy, BinOp, Lit, Span, Symbol};
+use spire::ast::{AstTy, BinOp, Lit, Span, Symbol, Visibility};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
+    pub visibility: Visibility,
 }
 
 /// A resolved identifier — name + unique id + source location.
@@ -142,7 +143,13 @@ pub enum Resolved {
     ),
 
     /// Trait impl definition
-    TraitImplDef(Span, ResolvedId, Vec<AstTy>, AstTy, Vec<ResolvedTraitImplMethod>),
+    TraitImplDef(
+        Span,
+        ResolvedId,
+        Vec<AstTy>,
+        AstTy,
+        Vec<ResolvedTraitImplMethod>,
+    ),
 
     /// Builtin declaration
     BuiltinDecl(
@@ -225,6 +232,7 @@ pub struct ResolvedField {
     pub name: Symbol,
     pub ty: AstTy,
     pub span: Span,
+    pub visibility: Visibility,
 }
 
 /// Function parameter (resolved).

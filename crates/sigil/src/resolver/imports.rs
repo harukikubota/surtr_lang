@@ -1,6 +1,7 @@
 use super::declarations::{is_importable_declaration, is_module_visible_declaration};
 use super::scope_init::initialize_scope;
 use super::*;
+use spire::ast::Visibility;
 
 fn auto_import_trait_names(declaration_index: &DeclarationIndex) -> HashSet<String> {
     declaration_index
@@ -28,6 +29,9 @@ pub(super) fn build_global_scope(
     }
     for (fq_name, entry) in index {
         if entry.kind == DeclarationKind::BuiltinType {
+            continue;
+        }
+        if entry.visibility != Visibility::Public {
             continue;
         }
         if let Some(uid) = declaration_uids.get(fq_name) {
@@ -109,6 +113,7 @@ pub(super) fn build_module_scope(
                 }
                 if let Some(uid) = declaration_uids.get(&entry.fq_name) {
                     scope.define_with_id(&entry.name, *uid);
+                    scope.define_with_id(&entry.fq_name, *uid);
                 }
             }
         }
@@ -186,6 +191,9 @@ fn import_module_into_scope(
             continue;
         }
         if !is_importable_declaration(&entry.kind) {
+            continue;
+        }
+        if entry.visibility != Visibility::Public {
             continue;
         }
         if entry.stage_index >= import_context.current_stage_index {
@@ -361,6 +369,12 @@ fn import_single_into_scope(
     if !is_importable_declaration(&entry.kind) {
         return Err(ResolveError {
             message: format!("Import target `{}` is not importable", fq_name),
+            span,
+        });
+    }
+    if entry.visibility != Visibility::Public {
+        return Err(ResolveError {
+            message: format!("Import target `{}` is private", fq_name),
             span,
         });
     }

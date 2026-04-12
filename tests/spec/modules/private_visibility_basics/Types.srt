@@ -1,0 +1,28 @@
+defstruct User {
+  name: String,
+  private password: String,
+}
+
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+
+  defp mask_password(self) -> String {
+    "****"
+  }
+
+  def redacted(self) -> String {
+    self.name ++ ":" ++ User::mask_password(self)
+  }
+}
+
+defmod Secrets {
+  defp secret_suffix() -> String {
+    "::private"
+  }
+
+  def public_secret() -> String {
+    "module" ++ secret_suffix()
+  }
+}

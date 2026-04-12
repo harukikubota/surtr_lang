@@ -1334,8 +1334,8 @@ largest = Numeric::max(1.5, 2.5)"#,
                     crate::typed::TypedInterpolatedPart::Text(_) => false,
                     crate::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
                 }),
-                TypedInner::Def(_, _, _, _, _, body)
-                | TypedInner::ExtractorDef(_, _, _, _, _, body)
+                TypedInner::Def(_, _, _, _, _, body, _)
+                | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
                 | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
                 TypedInner::Lit(_)
                 | TypedInner::Var(_)
@@ -1510,7 +1510,9 @@ b = double(1.5)"#,
     fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
         let resolved = resolve_with_builtin_prelude(r#"value = from("42", Int)"#);
         let err = typecheck(resolved).expect_err("from on fallible conversion must fail");
-        assert!(err.message.contains("String -> Int implements TryFrom, not From"));
+        assert!(err
+            .message
+            .contains("String -> Int implements TryFrom, not From"));
         assert!(err.message.contains("Use try_from(value, Int)."));
     }
 
@@ -1518,7 +1520,9 @@ b = double(1.5)"#,
     fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
         let resolved = resolve_with_builtin_prelude(r#"value = try_from(42, String)"#);
         let err = typecheck(resolved).expect_err("try_from on infallible conversion must fail");
-        assert!(err.message.contains("Int -> String implements From, not TryFrom"));
+        assert!(err
+            .message
+            .contains("Int -> String implements From, not TryFrom"));
         assert!(err.message.contains("Use from(value, String)."));
     }
 

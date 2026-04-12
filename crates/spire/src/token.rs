@@ -71,6 +71,7 @@ pub enum Token {
 
     // ── Keywords ──
     Def,
+    Defp,
     Defmod,
     Deftrait,
     Import,
@@ -85,6 +86,7 @@ pub enum Token {
     For,
     Match,
     Cond,
+    Private,
     Type,
     Where,
 

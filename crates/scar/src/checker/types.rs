@@ -1461,28 +1461,31 @@ impl Checker {
                     .collect(),
                 Box::new(self.resolve_typed_node(*show)),
             ),
-            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body) => TypedInner::Def(
-                fun_idx,
-                id,
-                type_params
-                    .into_iter()
-                    .map(|param| TypedTypeParam {
-                        name: param.name,
-                        ty_var: param.ty_var,
-                        bound: param.bound,
-                    })
-                    .collect(),
-                params
-                    .into_iter()
-                    .map(|param| TypedFunParam {
-                        id: param.id,
-                        ty: self.resolve_ty(&param.ty),
-                    })
-                    .collect(),
-                self.resolve_ty(&ret_ty),
-                Box::new(self.resolve_typed_node(*body)),
-            ),
-            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body) => {
+            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
+                TypedInner::Def(
+                    fun_idx,
+                    id,
+                    type_params
+                        .into_iter()
+                        .map(|param| TypedTypeParam {
+                            name: param.name,
+                            ty_var: param.ty_var,
+                            bound: param.bound,
+                        })
+                        .collect(),
+                    params
+                        .into_iter()
+                        .map(|param| TypedFunParam {
+                            id: param.id,
+                            ty: self.resolve_ty(&param.ty),
+                        })
+                        .collect(),
+                    self.resolve_ty(&ret_ty),
+                    Box::new(self.resolve_typed_node(*body)),
+                    visibility,
+                )
+            }
+            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
                 TypedInner::ExtractorDef(
                     fun_idx,
                     id,
@@ -1500,6 +1503,7 @@ impl Checker {
                     },
                     self.resolve_ty(&ret_ty),
                     Box::new(self.resolve_typed_node(*body)),
+                    visibility,
                 )
             }
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {

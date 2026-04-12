@@ -6,7 +6,7 @@ use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_meta_by_name;
 use sindr::ir::{CompileInfo, DocEntry, FunctionFlags};
 use sindr::primitives::int;
-use spire::ast::{BinOp, Lit, Span};
+use spire::ast::{BinOp, Lit, Span, Visibility};
 
 use crate::bytecode::*;
 use crate::error::CodegenError;
@@ -521,10 +521,10 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::Def(_, id, _, _, _, _) => {
+        TypedInner::Def(_, id, _, _, _, _, _) => {
             function_defs.push(id.name.clone());
         }
-        TypedInner::ExtractorDef(_, id, _, _, _, _) => {
+        TypedInner::ExtractorDef(_, id, _, _, _, _, _) => {
             function_defs.push(id.name.clone());
         }
         // `;` keeps Unit as expression result, but for REPL metadata we still
@@ -1152,8 +1152,8 @@ impl Codegen {
         let max_def_fun_idx = stmts
             .iter()
             .filter_map(|stmt| match &stmt.node {
-                TypedInner::Def(fun_idx, _, _, _, _, _) => Some(*fun_idx),
-                TypedInner::ExtractorDef(fun_idx, _, _, _, _, _) => Some(*fun_idx),
+                TypedInner::Def(fun_idx, _, _, _, _, _, _) => Some(*fun_idx),
+                TypedInner::ExtractorDef(fun_idx, _, _, _, _, _, _) => Some(*fun_idx),
                 TypedInner::DeferrorDef(_, fun_idx, _, _, _) => Some(*fun_idx),
                 _ => None,
             })
@@ -1188,8 +1188,8 @@ impl Codegen {
             }
         }
         defs.sort_by_key(|stmt| match &stmt.node {
-            TypedInner::Def(fun_idx, _, _, _, _, _) => *fun_idx,
-            TypedInner::ExtractorDef(fun_idx, _, _, _, _, _) => *fun_idx,
+            TypedInner::Def(fun_idx, _, _, _, _, _, _) => *fun_idx,
+            TypedInner::ExtractorDef(fun_idx, _, _, _, _, _, _) => *fun_idx,
             TypedInner::DeferrorDef(_, fun_idx, _, _, _) => *fun_idx,
             _ => u32::MAX,
         });
@@ -1219,9 +1219,9 @@ impl Codegen {
     }
 
     fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        let (fun_idx, id, params, ret_ty, body) = match &node.node {
-            TypedInner::Def(fun_idx, id, _type_params, params, ret_ty, body) => {
-                (fun_idx, id, params, ret_ty, body)
+        let (fun_idx, id, params, ret_ty, body, visibility) = match &node.node {
+            TypedInner::Def(fun_idx, id, _type_params, params, ret_ty, body, visibility) => {
+                (fun_idx, id, params, ret_ty, body, visibility)
             }
             _ => {
                 return Err(CodegenError {
@@ -1260,7 +1260,7 @@ impl Codegen {
             span_start: node.span.start as u32,
             span_end: node.span.end as u32,
             flags: FunctionFlags {
-                public: true,
+                public: *visibility == Visibility::Public,
                 closure: false,
                 builtin_wrapper: false,
                 tail_entry: false,
@@ -1349,10 +1349,16 @@ impl Codegen {
     }
 
     fn emit_extractor_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        let (fun_idx, id, param, ret_ty, body) = match &node.node {
-            TypedInner::ExtractorDef(fun_idx, id, _type_params, param, ret_ty, body) => {
-                (fun_idx, id, param, ret_ty, body)
-            }
+        let (fun_idx, id, param, ret_ty, body, visibility) = match &node.node {
+            TypedInner::ExtractorDef(
+                fun_idx,
+                id,
+                _type_params,
+                param,
+                ret_ty,
+                body,
+                visibility,
+            ) => (fun_idx, id, param, ret_ty, body, visibility),
             _ => {
                 return Err(CodegenError {
                     message: "expected extractor definition".into(),
@@ -1393,7 +1399,7 @@ impl Codegen {
             span_start: node.span.start as u32,
             span_end: node.span.end as u32,
             flags: FunctionFlags {
-                public: true,
+                public: *visibility == Visibility::Public,
                 closure: false,
                 builtin_wrapper: false,
                 tail_entry: false,
@@ -1732,7 +1738,7 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::Def(_fun_idx, _id, _type_params, _params, _ret_ty, _body) => {
+            TypedInner::Def(_fun_idx, _id, _type_params, _params, _ret_ty, _body, _) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }

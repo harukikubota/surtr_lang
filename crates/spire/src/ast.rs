@@ -10,11 +10,19 @@ pub struct Span {
 /// A plain identifier string. Kept as its own type for readability.
 pub type Symbol = String;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Visibility {
+    #[default]
+    Public,
+    Private,
+}
+
 /// Attributes attached to a declaration.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeclAttrs {
     pub doc: Option<String>,
     pub auto_import: bool,
+    pub visibility: Visibility,
 }
 
 /// Surface builtin type head declaration: `List<$A>`, `Result<$T>`, `Int`, ...
@@ -105,6 +113,7 @@ pub struct StructField {
     pub name: Symbol,
     pub ty: AstTy,
     pub span: Span,
+    pub visibility: Visibility,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,6 +121,7 @@ pub struct RecordField {
     pub name: Symbol,
     pub ty: AstTy,
     pub span: Span,
+    pub visibility: Visibility,
 }
 
 #[derive(Debug, Clone, PartialEq)]

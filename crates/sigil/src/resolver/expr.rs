@@ -45,15 +45,12 @@ impl Resolver {
             }
             Ast::Path(span, path) => Ok(AstTy::Named(span, path.segments.join("::"))),
             Ast::Var(span, name) if name == "Unit" => Ok(AstTy::Named(span, name)),
-            Ast::Var(span, name)
-                if name.chars().next().is_some_and(|ch| ch.is_uppercase()) =>
-            {
+            Ast::Var(span, name) if name.chars().next().is_some_and(|ch| ch.is_uppercase()) => {
                 Ok(AstTy::Named(span, name))
             }
             other => Err(ResolveError {
-                message:
-                    "conversion target must be a bare type name such as String or Result<Int>"
-                        .into(),
+                message: "conversion target must be a bare type name such as String or Result<Int>"
+                    .into(),
                 span: other.span().clone(),
             }),
         }
@@ -246,8 +243,7 @@ impl Resolver {
                     let resolved_func = self.resolve_node(*func)?;
                     if args.len() != 2 {
                         return Err(ResolveError {
-                            message: "from/try_from expects exactly 2 positional arguments"
-                                .into(),
+                            message: "from/try_from expects exactly 2 positional arguments".into(),
                             span,
                         });
                     }
@@ -267,8 +263,7 @@ impl Resolver {
                                 .push(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?)),
                             RecordLitArg::Named(_, expr) => {
                                 return Err(ResolveError {
-                                    message:
-                                        "from/try_from does not accept named arguments".into(),
+                                    message: "from/try_from does not accept named arguments".into(),
                                     span: expr.span().clone(),
                                 });
                             }
@@ -429,6 +424,7 @@ impl Resolver {
                             name: f.name,
                             ty: self.resolve_type_annotation(f.ty)?,
                             span: f.span,
+                            visibility: f.visibility,
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
@@ -456,6 +452,7 @@ impl Resolver {
                             name: f.name,
                             ty: self.resolve_type_annotation(f.ty)?,
                             span: f.span,
+                            visibility: f.visibility,
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
@@ -489,6 +486,7 @@ impl Resolver {
                         name: f.name,
                         ty: self.resolve_type_annotation(f.ty)?,
                         span: f.span,
+                        visibility: f.visibility,
                     });
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);

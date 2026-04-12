@@ -568,22 +568,25 @@ impl Checker {
                     generated_defs,
                 )?),
             ),
-            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body) => TypedInner::Def(
-                fun_idx,
-                id,
-                type_params,
-                params,
-                ret_ty,
-                Box::new(self.rewrite_specializations_in_node(
-                    *body,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?),
-            ),
-            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body) => {
+            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
+                TypedInner::Def(
+                    fun_idx,
+                    id,
+                    type_params,
+                    params,
+                    ret_ty,
+                    Box::new(self.rewrite_specializations_in_node(
+                        *body,
+                        defs_by_fun_idx,
+                        bound_tyvars_by_fun_idx,
+                        needs_specialization,
+                        specialization_fun_idxs,
+                        generated_defs,
+                    )?),
+                    visibility,
+                )
+            }
+            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
                 TypedInner::ExtractorDef(
                     fun_idx,
                     id,
@@ -598,6 +601,7 @@ impl Checker {
                         specialization_fun_idxs,
                         generated_defs,
                     )?),
+                    visibility,
                 )
             }
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
@@ -724,21 +728,24 @@ impl Checker {
         let span = def.span.clone();
         let ty = self.substitute_ty_with_mapping(&def.ty, mapping);
         let node = match def.node {
-            TypedInner::Def(_, id, _type_params, params, ret_ty, body) => TypedInner::Def(
-                specialized_fun_idx,
-                id,
-                Vec::new(),
-                params
-                    .into_iter()
-                    .map(|param| TypedFunParam {
-                        id: param.id,
-                        ty: self.substitute_ty_with_mapping(&param.ty, mapping),
-                    })
-                    .collect(),
-                self.substitute_ty_with_mapping(&ret_ty, mapping),
-                Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
-            ),
-            TypedInner::ExtractorDef(_, id, _type_params, param, ret_ty, body) => {
+            TypedInner::Def(_, id, _type_params, params, ret_ty, body, visibility) => {
+                TypedInner::Def(
+                    specialized_fun_idx,
+                    id,
+                    Vec::new(),
+                    params
+                        .into_iter()
+                        .map(|param| TypedFunParam {
+                            id: param.id,
+                            ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                        })
+                        .collect(),
+                    self.substitute_ty_with_mapping(&ret_ty, mapping),
+                    Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
+                    visibility,
+                )
+            }
+            TypedInner::ExtractorDef(_, id, _type_params, param, ret_ty, body, visibility) => {
                 TypedInner::ExtractorDef(
                     specialized_fun_idx,
                     id,
@@ -749,6 +756,7 @@ impl Checker {
                     },
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                     Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
+                    visibility,
                 )
             }
             other => {
@@ -774,11 +782,11 @@ impl Checker {
     ) -> Result<HashMap<u32, Ty>, TypeError> {
         let mut mapping = HashMap::new();
         let param_tys = match &def.node {
-            TypedInner::Def(_, _, _, params, _, _) => params
+            TypedInner::Def(_, _, _, params, _, _, _) => params
                 .iter()
                 .map(|param| param.ty.clone())
                 .collect::<Vec<_>>(),
-            TypedInner::ExtractorDef(_, _, _, param, _, _) => vec![param.ty.clone()],
+            TypedInner::ExtractorDef(_, _, _, param, _, _, _) => vec![param.ty.clone()],
             other => {
                 return Err(TypeError {
                     message: format!("Expected def/extractor for specialization, got {:?}", other),
@@ -839,7 +847,7 @@ impl Checker {
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
         match &def.node {
-            TypedInner::Def(_, _, type_params, params, ret_ty, body) => {
+            TypedInner::Def(_, _, type_params, params, ret_ty, body, _) => {
                 for type_param in type_params {
                     if type_param.bound.is_some() && seen.insert(type_param.ty_var) {
                         ordered.push(type_param.ty_var);
@@ -851,7 +859,7 @@ impl Checker {
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
                 self.collect_bound_tyvars_in_node(body, &mut ordered, &mut seen);
             }
-            TypedInner::ExtractorDef(_, _, type_params, param, ret_ty, body) => {
+            TypedInner::ExtractorDef(_, _, type_params, param, ret_ty, body, _) => {
                 for type_param in type_params {
                     if type_param.bound.is_some() && seen.insert(type_param.ty_var) {
                         ordered.push(type_param.ty_var);
@@ -952,8 +960,8 @@ impl Checker {
             TypedInner::DeferrorDef(_, _, _, _, show) => {
                 self.collect_bound_tyvars_in_node(show, ordered, seen);
             }
-            TypedInner::Def(_, _, _, _, _, body)
-            | TypedInner::ExtractorDef(_, _, _, _, _, body)
+            TypedInner::Def(_, _, _, _, _, body, _)
+            | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => {
                 self.collect_bound_tyvars_in_node(body, ordered, seen);
             }
@@ -1173,28 +1181,31 @@ impl Checker {
                     .collect(),
                 Box::new(self.substitute_typed_node_with_mapping(*show, mapping)),
             ),
-            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body) => TypedInner::Def(
-                fun_idx,
-                id,
-                type_params
-                    .into_iter()
-                    .map(|param| TypedTypeParam {
-                        name: param.name,
-                        ty_var: param.ty_var,
-                        bound: param.bound,
-                    })
-                    .collect(),
-                params
-                    .into_iter()
-                    .map(|param| TypedFunParam {
-                        id: param.id,
-                        ty: self.substitute_ty_with_mapping(&param.ty, mapping),
-                    })
-                    .collect(),
-                self.substitute_ty_with_mapping(&ret_ty, mapping),
-                Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
-            ),
-            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body) => {
+            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
+                TypedInner::Def(
+                    fun_idx,
+                    id,
+                    type_params
+                        .into_iter()
+                        .map(|param| TypedTypeParam {
+                            name: param.name,
+                            ty_var: param.ty_var,
+                            bound: param.bound,
+                        })
+                        .collect(),
+                    params
+                        .into_iter()
+                        .map(|param| TypedFunParam {
+                            id: param.id,
+                            ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                        })
+                        .collect(),
+                    self.substitute_ty_with_mapping(&ret_ty, mapping),
+                    Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
+                    visibility,
+                )
+            }
+            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
                 TypedInner::ExtractorDef(
                     fun_idx,
                     id,
@@ -1212,6 +1223,7 @@ impl Checker {
                     },
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                     Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
+                    visibility,
                 )
             }
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
@@ -1540,8 +1552,8 @@ impl Checker {
             TypedInner::DeferrorDef(_, _, _, _, show) => {
                 Self::typed_node_has_pending_trait_call(show)
             }
-            TypedInner::Def(_, _, _, _, _, body)
-            | TypedInner::ExtractorDef(_, _, _, _, _, body)
+            TypedInner::Def(_, _, _, _, _, body, _)
+            | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => Self::typed_node_has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)

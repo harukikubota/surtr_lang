@@ -44,6 +44,10 @@ name = "module_import_fixtures"
 path = "../../tests/integration/module_import_fixtures.rs"
 
 [[test]]
+name = "private_visibility"
+path = "../../tests/integration/private_visibility.rs"
+
+[[test]]
 name = "test_command"
 path = "../../tests/integration/test_command.rs"
 

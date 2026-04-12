@@ -432,6 +432,7 @@ impl Checker {
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
         body: &Resolved,
+        attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
         let mut fun_env = self.env.clone();
         let mut typed_params = Vec::new();
@@ -574,6 +575,7 @@ impl Checker {
                 typed_params,
                 expected_ret,
                 Box::new(typed_body),
+                attrs.visibility,
             ),
         })
     }
@@ -586,6 +588,7 @@ impl Checker {
         param: &ResolvedExtractorParam,
         ret_ty: &AstTy,
         body: &Resolved,
+        attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
         let mut fun_env = self.env.clone();
         let mut tyvars = HashMap::new();
@@ -675,6 +678,7 @@ impl Checker {
                 },
                 self.resolve_ty(&expected_ret),
                 Box::new(typed_body),
+                attrs.visibility,
             ),
         })
     }
@@ -819,6 +823,7 @@ impl Checker {
                     typed_params,
                     expected_ret,
                     Box::new(typed_body),
+                    method.attrs.visibility,
                 ),
             });
         }
@@ -846,7 +851,10 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::TraitImplDef(self.trait_instance_key(trait_id, trait_args), target_name),
+            node: TypedInner::TraitImplDef(
+                self.trait_instance_key(trait_id, trait_args),
+                target_name,
+            ),
         })
     }
 
@@ -873,10 +881,15 @@ impl Checker {
                 ))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
+        let private_fields = fields
+            .iter()
+            .filter(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
 
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone())
+            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
             .ok_or_else(|| TypeError {
                 message: format!("Unknown struct type declaration: {}", id.name),
                 span: span.clone(),
@@ -956,10 +969,15 @@ impl Checker {
                 ))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
+        let private_fields = fields
+            .iter()
+            .filter(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
 
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone())
+            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
             .ok_or_else(|| TypeError {
                 message: format!("Unknown record type declaration: {}", id.name),
                 span: span.clone(),
@@ -1550,6 +1568,11 @@ impl Checker {
                 ty_fields
                     .iter()
                     .map(|(ty, rid)| (rid.name.clone(), ty.clone()))
+                    .collect(),
+                fields
+                    .iter()
+                    .filter(|field| field.visibility == spire::ast::Visibility::Private)
+                    .map(|field| field.name.clone())
                     .collect(),
             )
             .ok_or_else(|| TypeError {

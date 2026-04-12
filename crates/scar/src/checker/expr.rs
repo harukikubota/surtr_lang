@@ -13,14 +13,10 @@ impl Checker {
             }
 
             Resolved::Var(span, id) => {
-                if id
-                    .qualified_name
-                    .as_ref()
-                    .is_some_and(|qualified_name| {
-                        self.trait_methods_by_qualified_name
-                            .contains_key(qualified_name)
-                    })
-                {
+                if id.qualified_name.as_ref().is_some_and(|qualified_name| {
+                    self.trait_methods_by_qualified_name
+                        .contains_key(qualified_name)
+                }) {
                     return Err(TypeError {
                         message: format!(
                             "Trait helper `{}` cannot be referenced directly",
@@ -200,11 +196,11 @@ impl Checker {
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
             }
-            Resolved::Def(span, id, type_params, params, ret_ty, body, _) => {
-                self.check_def(span, id, type_params, params, ret_ty, body)
+            Resolved::Def(span, id, type_params, params, ret_ty, body, attrs) => {
+                self.check_def(span, id, type_params, params, ret_ty, body, attrs)
             }
-            Resolved::ExtractorDef(span, id, type_params, param, ret_ty, body, _) => {
-                self.check_extractor_def(span, id, type_params, param, ret_ty, body)
+            Resolved::ExtractorDef(span, id, type_params, param, ret_ty, body, attrs) => {
+                self.check_extractor_def(span, id, type_params, param, ret_ty, body, attrs)
             }
             Resolved::TraitDef(span, id, _, methods, _) => Ok(TypedNode {
                 ty: Ty::Unit,
@@ -641,7 +637,12 @@ impl Checker {
         Some(TypeError {
             message: format!(
                 "{} -> {} implements {}, not {}. Use {}(value, {}).",
-                receiver_name, target_name, opposite_trait, requested_trait, opposite_method, target_name
+                receiver_name,
+                target_name,
+                opposite_trait,
+                requested_trait,
+                opposite_method,
+                target_name
             ),
             span: span.clone(),
             hint: Some(format!(
@@ -785,8 +786,7 @@ impl Checker {
             }
         }
 
-        let trait_call_name =
-            self.trait_instance_key_from_tys(trait_name, &trait_arg_tys);
+        let trait_call_name = self.trait_instance_key_from_tys(trait_name, &trait_arg_tys);
         let trait_call_display_name = self.trait_display_name(&trait_call_name);
         let trait_call_summary = self.trait_implementation_summary(&trait_call_name);
         let receiver_ty = self.resolve_ty(&self_ty);
@@ -2487,16 +2487,34 @@ impl Checker {
                 })?;
                 (index as u32, field_ty)
             }
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-                .iter()
-                .enumerate()
-                .find(|(_, (name, _))| name == field)
-                .map(|(i, (_, ty))| (i as u32, ty.clone()))
-                .ok_or_else(|| TypeError {
-                    message: format!("No field '{}' on {}", field, self.ty_name(&typed_expr.ty)),
-                    span: span.clone(),
-                    hint: None,
-                })?,
+            Ty::Struct(name, fields) | Ty::Record(name, fields) => {
+                if self.env.is_private_field(name, field)
+                    && self.current_impl_struct_target.as_deref() != Some(name.as_str())
+                {
+                    return Err(TypeError {
+                        message: format!("Field '{}.{}' is private", name, field),
+                        span: span.clone(),
+                        hint: Some(format!(
+                            "Expose the value through a public method on {} instead.",
+                            name
+                        )),
+                    });
+                }
+                fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (field_name, _))| field_name == field)
+                    .map(|(i, (_, ty))| (i as u32, ty.clone()))
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "No field '{}' on {}",
+                            field,
+                            self.ty_name(&typed_expr.ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    })?
+            }
             _ => {
                 let message = if field.chars().all(|ch| ch.is_ascii_digit()) {
                     format!(

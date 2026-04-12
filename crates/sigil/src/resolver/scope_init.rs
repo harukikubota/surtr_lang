@@ -31,6 +31,7 @@ fn is_global_runtime_builtin(name: &str) -> bool {
 pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
     ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
+        visibility: attrs.visibility,
     }
 }
 
