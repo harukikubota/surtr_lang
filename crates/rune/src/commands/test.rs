@@ -1,75 +1,28 @@
-use eldr::value::Value;
-use spire::ast::Span;
-use spire::token::Token;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use eldr::vm::{VmTestEvent, VmTestEventKind};
+use forge::bytecode::{stable_hash_hex, Bytecode};
 
 use crate::compile::{compile_source, ScriptCompilePlan};
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
-use crate::util::{line_column_for_char_offset, slice_by_char_range};
+
+const TEST_PRELUDE_FILE: &str = "lib/tests/prelude.srt";
+const TEST_PRELUDE_MODULE_PATH: &str = "Test";
+const TEST_PRELUDE_SOURCE: &str = include_str!("../../../../lib/tests/prelude.srt");
+const TEST_CACHE_VERSION: &str = "surtr-test-dsl-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestOptions {
-    pub(crate) selector: Option<String>,
+    pub(crate) selector: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TestLocation {
+struct TestScript {
+    selector: String,
     file_path: String,
-    line: usize,
-    column: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TestOperator {
-    Eq,
-    Neq,
-    Lt,
-    Lte,
-    Gt,
-    Gte,
-}
-
-impl TestOperator {
-    fn normalized_label(self) -> &'static str {
-        match self {
-            Self::Eq => "eq",
-            Self::Neq => "neq",
-            Self::Lt => "<",
-            Self::Lte => "<=",
-            Self::Gt => ">",
-            Self::Gte => ">=",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TestCase {
-    module_path: String,
-    target_def: String,
-    expr: String,
-    lhs_expr: String,
-    rhs_expr: String,
-    op: TestOperator,
-    location: TestLocation,
-}
-
-impl TestCase {
-    fn display_name(&self) -> String {
-        if self.module_path.is_empty() {
-            self.target_def.clone()
-        } else {
-            format!("{}::{}", self.module_path, self.target_def)
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TestSelector {
-    All,
-    Module(String),
-    Function {
-        module_path: String,
-        function_name: String,
-    },
+    source: String,
 }
 
 pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
@@ -78,388 +31,58 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
 }
 
 pub(crate) fn parse_test_options(args: &[String]) -> RuneResult<TestOptions> {
-    if args.len() > 1 {
-        return Err(RuneError::usage("test: too many arguments"));
+    if args.len() != 1 {
+        return Err(RuneError::usage("test: expected exactly one lib-relative test name"));
     }
 
-    Ok(TestOptions {
-        selector: args.first().cloned(),
-    })
-}
-
-fn parse_test_selector(raw: Option<&str>) -> TestSelector {
-    let Some(selector) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
-        return TestSelector::All;
-    };
-
-    if let Some((module_path, function_name)) = selector.rsplit_once("::") {
-        if !module_path.is_empty() && !function_name.is_empty() {
-            return TestSelector::Function {
-                module_path: module_path.to_string(),
-                function_name: function_name.to_string(),
-            };
-        }
+    let selector = args[0].trim().to_string();
+    if selector.is_empty() {
+        return Err(RuneError::usage("test: selector must not be empty"));
     }
 
-    TestSelector::Module(selector.to_string())
-}
-
-fn test_case_matches_selector(test: &TestCase, selector: &TestSelector) -> bool {
-    match selector {
-        TestSelector::All => true,
-        TestSelector::Module(module) => &test.module_path == module,
-        TestSelector::Function {
-            module_path,
-            function_name,
-        } => &test.module_path == module_path && &test.target_def == function_name,
-    }
-}
-
-fn split_test_expression(expr: &str) -> Result<(String, String, TestOperator), String> {
-    let tokens = spire::lexer::tokenize(expr).map_err(|e| e.message().to_string())?;
-    let mut depth_paren = 0i32;
-    let mut depth_brack = 0i32;
-    let mut depth_brace = 0i32;
-    let mut found: Option<(TestOperator, Span)> = None;
-
-    for token in tokens {
-        match token.token {
-            Token::LParen => depth_paren += 1,
-            Token::RParen => depth_paren -= 1,
-            Token::LBrack => depth_brack += 1,
-            Token::RBrack => depth_brack -= 1,
-            Token::LBrace => depth_brace += 1,
-            Token::RBrace => depth_brace -= 1,
-            _ => {}
-        }
-
-        if depth_paren != 0 || depth_brack != 0 || depth_brace != 0 {
-            continue;
-        }
-
-        let op = match token.token {
-            Token::EqEq => Some(TestOperator::Eq),
-            Token::BangEq => Some(TestOperator::Neq),
-            Token::Lt => Some(TestOperator::Lt),
-            Token::LtEq => Some(TestOperator::Lte),
-            Token::Gt => Some(TestOperator::Gt),
-            Token::GtEq => Some(TestOperator::Gte),
-            _ => None,
-        };
-
-        if let Some(op) = op {
-            if found.is_some() {
-                return Err("multiple top-level comparison operators in @@test expression".into());
-            }
-            found = Some((op, token.span));
-        }
-    }
-
-    let (op, op_span) = found.ok_or_else(|| {
-        "test expression must contain one top-level comparison operator".to_string()
-    })?;
-
-    let expr_char_len = expr.chars().count();
-    let lhs = slice_by_char_range(expr, 0, op_span.start)
-        .trim()
-        .to_string();
-    let rhs = slice_by_char_range(expr, op_span.end, expr_char_len)
-        .trim()
-        .to_string();
-    if lhs.is_empty() || rhs.is_empty() {
-        return Err("test expression requires both lhs and rhs".into());
-    }
-    Ok((lhs, rhs, op))
-}
-
-fn find_def_name_for_test_chain(
-    tokens: &[spire::token::Spanned<Token>],
-    mut index: usize,
-) -> Result<String, String> {
-    loop {
-        while matches!(tokens.get(index).map(|t| &t.token), Some(Token::Newline)) {
-            index += 1;
-        }
-
-        match tokens.get(index).map(|t| &t.token) {
-            Some(Token::Annotator(_)) => {
-                index += 1;
-                while !matches!(
-                    tokens.get(index).map(|t| &t.token),
-                    Some(Token::Newline) | Some(Token::Eof) | None
-                ) {
-                    index += 1;
-                }
-            }
-            Some(Token::Def) => {
-                index += 1;
-                while matches!(tokens.get(index).map(|t| &t.token), Some(Token::Newline)) {
-                    index += 1;
-                }
-                if let Some(Token::Ident(name)) = tokens.get(index).map(|t| &t.token) {
-                    return Ok(name.clone());
-                }
-                return Err("@@test must target `def <name>(...)`".into());
-            }
-            _ => {
-                return Err("@@test must target a following function definition (`def`)".into());
-            }
-        }
-    }
-}
-
-fn collect_test_cases_from_source(
-    file_path: &str,
-    source: &str,
-    module_path: &str,
-) -> Result<Vec<TestCase>, String> {
-    let tokens = spire::lexer::tokenize(source).map_err(|e| {
-        let (line, column) = line_column_for_char_offset(source, e.span().start);
-        format!(
-            "test: parse error in {}:{}:{}: {}",
-            file_path,
-            line,
-            column,
-            e.message()
-        )
-    })?;
-
-    let mut cases = Vec::new();
-    for (idx, token) in tokens.iter().enumerate() {
-        let Token::Annotator(name) = &token.token else {
-            continue;
-        };
-        if name != "test" {
-            continue;
-        }
-
-        let mut expr_token_end = idx + 1;
-        while !matches!(
-            tokens.get(expr_token_end).map(|t| &t.token),
-            Some(Token::Newline) | Some(Token::Eof) | None
-        ) {
-            expr_token_end += 1;
-        }
-        if expr_token_end == idx + 1 {
-            let (line, column) = line_column_for_char_offset(source, token.span.start);
-            return Err(format!(
-                "test: missing expression for @@test in {}:{}:{}",
-                file_path, line, column
-            ));
-        }
-
-        let expr_start = token.span.end;
-        let expr_end = tokens[expr_token_end - 1].span.end;
-        let expr = slice_by_char_range(source, expr_start, expr_end)
-            .trim()
-            .to_string();
-        let (lhs_expr, rhs_expr, op) = split_test_expression(&expr).map_err(|message| {
-            let (line, column) = line_column_for_char_offset(source, token.span.start);
-            format!(
-                "test: invalid @@test in {}:{}:{}: {}",
-                file_path, line, column, message
-            )
-        })?;
-        let target_def =
-            find_def_name_for_test_chain(&tokens, expr_token_end).map_err(|message| {
-                let (line, column) = line_column_for_char_offset(source, token.span.start);
-                format!(
-                    "test: invalid @@test in {}:{}:{}: {}",
-                    file_path, line, column, message
-                )
-            })?;
-        let (line, column) = line_column_for_char_offset(source, token.span.start);
-
-        cases.push(TestCase {
-            module_path: module_path.to_string(),
-            target_def,
-            expr,
-            lhs_expr,
-            rhs_expr,
-            op,
-            location: TestLocation {
-                file_path: file_path.to_string(),
-                line,
-                column,
-            },
-        });
-    }
-
-    Ok(cases)
-}
-
-fn build_expression_script_source(module_path: &str, target_def: &str, expr: &str) -> String {
-    let mut source = String::new();
-    if !module_path.is_empty() && module_path != "Bootstrap" && module_path != "Kernel" {
-        source.push_str(&format!("import {}::{};\n", module_path, target_def));
-    }
-    source.push_str(expr);
-    source.push('\n');
-    source
-}
-
-fn evaluate_expression(
-    module_sources: &xldr::ModuleSources,
-    module_path: &str,
-    target_def: &str,
-    expr: &str,
-    env: ExecutionEnv,
-) -> RuneResult<(Value, String)> {
-    let raw_script_source = build_expression_script_source(module_path, target_def, expr);
-    let source_for_parse = xldr::strip_test_annotations(&raw_script_source);
-    let compile_plan = ScriptCompilePlan::plain(source_for_parse.clone());
-    let compile_sources = xldr::compose_script_compile_sources(
-        "__surtr_test__.srt",
-        &source_for_parse,
-        module_sources.clone(),
-    );
-    let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
-
-    let mut vm = eldr::VM::new(bytecode)
-        .with_output_capture()
-        .with_error_capture();
-    vm.run().map_err(|e| {
-        RuneError::message(
-            1,
-            format!("runtime error while evaluating test expression: {}", e),
-        )
-    })?;
-    let value = vm.last_value().cloned().unwrap_or(Value::Unit);
-    let display = value.to_display_string(vm.type_registry());
-    Ok((value, display))
-}
-
-fn report_test_failure(
-    module_sources: &xldr::ModuleSources,
-    test: &TestCase,
-    detail: &str,
-    env: ExecutionEnv,
-) {
-    println!(
-        "[FAIL] {} ({}:{}:{})",
-        test.display_name(),
-        test.location.file_path,
-        test.location.line,
-        test.location.column
-    );
-    println!("  expr: {}", test.expr);
-
-    let lhs_display = evaluate_expression(
-        module_sources,
-        &test.module_path,
-        &test.target_def,
-        &test.lhs_expr,
-        env,
-    )
-    .map(|(_, display)| display)
-    .unwrap_or_else(|e| format!("<error: {}>", e.summary()));
-    let rhs_display = evaluate_expression(
-        module_sources,
-        &test.module_path,
-        &test.target_def,
-        &test.rhs_expr,
-        env,
-    )
-    .map(|(_, display)| display)
-    .unwrap_or_else(|e| format!("<error: {}>", e.summary()));
-    println!("  lhs : {} => {}", test.lhs_expr, lhs_display);
-    println!("  rhs : {} => {}", test.rhs_expr, rhs_display);
-    println!("  op  : {}", test.op.normalized_label());
-    if !detail.is_empty() {
-        println!("  note: {}", detail);
-    }
+    Ok(TestOptions { selector })
 }
 
 fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
-    let lib_modules = xldr::collect_lib_module_inputs().map_err(|e| {
-        RuneError::message(
-            1,
-            format!("{}: failed to read `./lib`: {}", env.command_name(), e),
-        )
-    })?;
-    if lib_modules.is_empty() {
-        return Err(RuneError::message(
-            1,
-            "test: no `.srt` files found under `./lib`",
-        ));
-    }
+    let script = load_test_script(&options.selector)?;
+    let bytecode = compile_test_script(&script, env)?;
 
-    let mut all_tests = Vec::new();
-    for module in lib_modules {
-        let tests =
-            collect_test_cases_from_source(&module.file_name, &module.source, &module.module_path)
-                .map_err(|message| RuneError::message(1, message))?;
-        all_tests.extend(tests);
-    }
+    let mut vm = eldr::VM::new(bytecode)
+        .with_source(script.source.clone(), script.file_path.clone())
+        .with_output_capture()
+        .with_error_capture();
 
-    if all_tests.is_empty() {
-        println!("No tests found.");
-        return Ok(());
+    if let Err(err) = vm.run() {
+        println!("[FAIL] {} ({})", script.selector, script.file_path);
+        println!("  note: runtime error while running test script: {}", err);
+        println!("test result: passed=0, failed=1, total=1");
+        return Err(RuneError::silent(1));
     }
-
-    let selector = parse_test_selector(options.selector.as_deref());
-    let selected_tests = all_tests
-        .into_iter()
-        .filter(|test| test_case_matches_selector(test, &selector))
-        .collect::<Vec<_>>();
-    if selected_tests.is_empty() {
-        println!("No tests matched selector.");
-        return Ok(());
-    }
-
-    let module_inputs = xldr::collect_additional_default_std_module_inputs().map_err(|e| {
-        RuneError::message(
-            1,
-            format!(
-                "{}: failed to collect module sources: {}",
-                env.command_name(),
-                e
-            ),
-        )
-    })?;
-    let module_sources = xldr::collect_module_sources_with_module_stages(&[module_inputs])
-        .map_err(|e| {
-            RuneError::message(1, format!("test: failed to collect module sources: {}", e))
-        })?;
 
     let mut passed = 0usize;
     let mut failed = 0usize;
-    for test in selected_tests {
-        match evaluate_expression(
-            &module_sources,
-            &test.module_path,
-            &test.target_def,
-            &test.expr,
-            env,
-        ) {
-            Ok((Value::Bool(true), _)) => {
-                println!("[PASS] {}", test.display_name());
+    for event in vm.test_events() {
+        match event.kind {
+            VmTestEventKind::Passed => {
                 passed += 1;
+                println!("[PASS] {}", format_event_path(event));
             }
-            Ok((Value::Bool(false), _)) => {
-                report_test_failure(&module_sources, &test, "", env);
+            VmTestEventKind::Failed => {
                 failed += 1;
-            }
-            Ok((_other, display)) => {
-                report_test_failure(
-                    &module_sources,
-                    &test,
-                    &format!(
-                        "test expression must evaluate to Boolean (got `{}`)",
-                        display
-                    ),
-                    env,
-                );
-                failed += 1;
-            }
-            Err(error) => {
-                report_test_failure(&module_sources, &test, &error.summary(), env);
-                failed += 1;
+                println!("[FAIL] {} ({})", format_event_path(event), script.file_path);
+                if let Some(detail) = &event.detail {
+                    println!("  note: {}", detail);
+                }
             }
         }
     }
 
     let total = passed + failed;
+    if total == 0 {
+        println!("No tests found in {}.", script.file_path);
+        return Ok(());
+    }
+
     println!(
         "test result: passed={}, failed={}, total={}",
         passed, failed, total
@@ -472,17 +95,250 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
     }
 }
 
+fn load_test_script(selector: &str) -> RuneResult<TestScript> {
+    let path = resolve_test_script_path(selector);
+    let source = fs::read_to_string(&path).map_err(|e| {
+        RuneError::message(
+            1,
+            format!(
+                "test: failed to read {} for selector `{}`: {}",
+                display_path(&path),
+                selector,
+                e
+            ),
+        )
+    })?;
+
+    Ok(TestScript {
+        selector: selector.trim_end_matches(".srt").to_string(),
+        file_path: display_path(&path),
+        source,
+    })
+}
+
+fn resolve_test_script_path(selector: &str) -> PathBuf {
+    let trimmed = selector.trim().replace('\\', "/");
+    let without_prefix = trimmed.trim_start_matches("./");
+    let normalized = without_prefix.trim_start_matches("lib/tests/");
+    let has_extension = normalized.ends_with(".srt");
+    let relative = if has_extension {
+        normalized.to_string()
+    } else {
+        format!("{normalized}.srt")
+    };
+    Path::new("lib").join("tests").join(relative)
+}
+
+fn collect_test_compile_sources(
+    script: &TestScript,
+    env: ExecutionEnv,
+) -> RuneResult<xldr::CompileSources> {
+    let module_inputs = xldr::collect_additional_default_std_module_inputs().map_err(|e| {
+        RuneError::message(
+            1,
+            format!(
+                "{}: failed to collect module sources: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })?;
+    let extra_std_sources = vec![xldr::SourceDescriptor::std_module(
+        TEST_PRELUDE_FILE,
+        TEST_PRELUDE_SOURCE,
+        TEST_PRELUDE_MODULE_PATH,
+    )];
+    let module_sources = xldr::collect_module_sources_with_extra_std_sources(
+        &extra_std_sources,
+        &[module_inputs],
+    )
+    .map_err(|e| {
+        RuneError::message(
+            1,
+            format!(
+                "{}: failed to collect test module sources: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })?;
+    Ok(xldr::compose_script_compile_sources(
+        &script.file_path,
+        &script.source,
+        module_sources,
+    ))
+}
+
+fn compile_test_script(script: &TestScript, env: ExecutionEnv) -> RuneResult<Bytecode> {
+    let cache_path = cached_eldr_path(script)?;
+    if let Some(bytecode) = load_cached_bytecode(&cache_path)? {
+        return Ok(bytecode);
+    }
+
+    let compile_plan = ScriptCompilePlan::plain(script.source.clone());
+    let compile_sources = collect_test_compile_sources(script, env)?;
+    let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
+    store_cached_bytecode(&cache_path, &bytecode)?;
+    Ok(bytecode)
+}
+
+fn fixture_cache_root() -> PathBuf {
+    env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("target")
+        .join("surtr-test-cache")
+        .join("eldr")
+}
+
+fn stable_hash_bytes(bytes: &[u8]) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
+}
+
+fn binary_fingerprint() -> Result<String, RuneError> {
+    let exe = env::current_exe()
+        .map_err(|e| RuneError::message(1, format!("test: failed to locate current exe: {}", e)))?;
+    let bytes = fs::read(&exe).map_err(|e| {
+        RuneError::message(
+            1,
+            format!("test: failed to read current exe {}: {}", exe.display(), e),
+        )
+    })?;
+    Ok(stable_hash_bytes(&bytes))
+}
+
+fn library_sources_fingerprint() -> Result<String, RuneError> {
+    let modules = xldr::collect_lib_module_inputs()
+        .map_err(|e| RuneError::message(1, format!("test: failed to collect lib sources: {}", e)))?;
+    let mut payload = String::new();
+    for module in modules {
+        payload.push_str(&module.file_name);
+        payload.push('\x1f');
+        payload.push_str(&module.module_path);
+        payload.push('\x1f');
+        payload.push_str(&stable_hash_hex(&module.source));
+        payload.push('\x1e');
+    }
+    Ok(stable_hash_hex(&payload))
+}
+
+fn cached_eldr_path(script: &TestScript) -> Result<PathBuf, RuneError> {
+    let mut key = String::new();
+    key.push_str(TEST_CACHE_VERSION);
+    key.push('\x1f');
+    key.push_str(&binary_fingerprint()?);
+    key.push('\x1f');
+    key.push_str(&library_sources_fingerprint()?);
+    key.push('\x1f');
+    key.push_str(&script.file_path);
+    key.push('\x1f');
+    key.push_str(&stable_hash_hex(&script.source));
+    Ok(fixture_cache_root().join(format!("{}.eldr", stable_hash_hex(&key))))
+}
+
+fn load_cached_bytecode(cache_path: &Path) -> RuneResult<Option<Bytecode>> {
+    if !cache_path.exists() {
+        return Ok(None);
+    }
+
+    let bytes = match fs::read(cache_path) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(None),
+    };
+
+    match Bytecode::decode(&bytes) {
+        Ok(bytecode) => Ok(Some(bytecode)),
+        Err(_) => {
+            let _ = fs::remove_file(cache_path);
+            Ok(None)
+        }
+    }
+}
+
+fn store_cached_bytecode(cache_path: &Path, bytecode: &Bytecode) -> RuneResult<()> {
+    if let Some(parent) = cache_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            RuneError::message(
+                1,
+                format!(
+                    "test: failed to create cache directory {}: {}",
+                    parent.display(),
+                    e
+                ),
+            )
+        })?;
+    }
+
+    let bytes = bytecode
+        .encode()
+        .map_err(|e| RuneError::message(1, format!("test: failed to encode bytecode: {}", e)))?;
+    let temp_path = cache_path.with_extension(format!("{}.tmp", std::process::id()));
+    fs::write(&temp_path, bytes).map_err(|e| {
+        RuneError::message(
+            1,
+            format!(
+                "test: failed to write cache file {}: {}",
+                temp_path.display(),
+                e
+            ),
+        )
+    })?;
+    fs::rename(&temp_path, cache_path)
+        .or_else(|_| {
+            fs::copy(&temp_path, cache_path)
+                .map(|_| ())
+                .and_then(|_| fs::remove_file(&temp_path))
+        })
+        .map_err(|e| {
+            RuneError::message(
+                1,
+                format!(
+                    "test: failed to finalize cache file {}: {}",
+                    cache_path.display(),
+                    e
+                ),
+            )
+        })?;
+    Ok(())
+}
+
+fn format_event_path(event: &VmTestEvent) -> String {
+    event.path.join(" > ")
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_test_options;
+    use super::{parse_test_options, resolve_test_script_path};
+    use std::path::Path;
 
     #[test]
-    fn test_options_accept_selector_or_empty() {
-        let with_selector =
-            parse_test_options(&["Kernel::add".to_string()]).expect("selector should parse");
-        assert_eq!(with_selector.selector.as_deref(), Some("Kernel::add"));
+    fn test_options_require_single_selector() {
+        let opts = parse_test_options(&["string".to_string()]).expect("selector should parse");
+        assert_eq!(opts.selector, "string");
+        assert!(parse_test_options(&[]).is_err());
+        assert!(parse_test_options(&["a".to_string(), "b".to_string()]).is_err());
+    }
 
-        let without_selector = parse_test_options(&[]).expect("empty selector should parse");
-        assert_eq!(without_selector.selector, None);
+    #[test]
+    fn selector_resolves_into_lib_tests() {
+        assert_eq!(
+            resolve_test_script_path("string"),
+            Path::new("lib").join("tests").join("string.srt")
+        );
+        assert_eq!(
+            resolve_test_script_path("string.srt"),
+            Path::new("lib").join("tests").join("string.srt")
+        );
     }
 }

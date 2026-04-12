@@ -161,6 +161,36 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "(Result<$T>, Result<()>) -> Result<$T>",
     },
+    BuiltinMeta {
+        name: "__test_push",
+        builtin_id: 23,
+        arity: 2,
+        sig_str: "(String, String) -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_pop",
+        builtin_id: 24,
+        arity: 0,
+        sig_str: "() -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_pass",
+        builtin_id: 25,
+        arity: 1,
+        sig_str: "(String) -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_fail",
+        builtin_id: 26,
+        arity: 2,
+        sig_str: "(String, String) -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_fail_current",
+        builtin_id: 27,
+        arity: 1,
+        sig_str: "(String) -> Unit",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

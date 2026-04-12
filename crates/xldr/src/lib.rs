@@ -6,6 +6,7 @@ pub mod tui;
 
 pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
+    collect_module_sources_with_extra_std_sources,
     collect_module_sources_with_module_file_stages, collect_module_sources_with_module_stages,
     collect_module_sources_with_modules, compose_script_compile_sources,
     derive_primary_module_path, is_default_std_module_file_name, is_default_std_module_path,

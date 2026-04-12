@@ -1,0 +1,105 @@
+@@doc """
+Recoverable assertion failure raised by the test DSL.
+"""
+deferror TestAssertionFailed(detail: String) {
+  detail
+}
+
+@@doc """
+Test DSL helpers loaded only by `surtr test`.
+"""
+defmod Test {
+  @@builtin def __test_push(kind: String, name: String) -> Unit
+  @@builtin def __test_pop() -> Unit
+  @@builtin def __test_pass(name: String) -> Unit
+  @@builtin def __test_fail(name: String, detail: String) -> Unit
+  @@builtin def __test_fail_current(detail: String) -> Unit
+
+  def _fail(detail: String) -> Result<()> {
+    Err(TestAssertionFailed(detail))
+  }
+
+  def test(name: String, body: (-> Result<()>)) -> Result<()> {
+    __test_push("test", name)
+    result = body()
+    match result {
+      Ok(_) => {
+        __test_pop()
+        Ok(())
+      },
+      Err(err) => {
+        __test_fail_current("unexpected test error: " ++ inspect(err))
+        __test_pop()
+        Ok(())
+      },
+    }
+  }
+
+  def describe(name: String, body: (-> Result<()>)) -> Result<()> {
+    __test_push("describe", name)
+    result = body()
+    match result {
+      Ok(_) => {
+        __test_pop()
+        Ok(())
+      },
+      Err(err) => {
+        __test_fail_current("unexpected describe error: " ++ inspect(err))
+        __test_pop()
+        Ok(())
+      },
+    }
+  }
+
+  def it(name: String, body: (-> Result<()>)) -> Result<()> {
+    match body() {
+      Ok(_) => {
+        __test_pass(name)
+        Ok(())
+      },
+      Err(err) => {
+        __test_fail(name, inspect(err))
+        Ok(())
+      },
+    }
+  }
+
+  def assert_true(flag: Boolean) -> Result<()> {
+    if(flag, Ok(()), Test::_fail("expected True, got False"))
+  }
+
+  def assert_false(flag: Boolean) -> Result<()> {
+    if(flag, Test::_fail("expected False, got True"), Ok(()))
+  }
+
+  def assert_eq(expected: $A, actual: $A) -> Result<()> {
+    rendered_expected = inspect(expected)
+    rendered_actual = inspect(actual)
+    if(
+      rendered_expected == rendered_actual,
+      Ok(()),
+      Test::_fail("expected #{rendered_expected}, got #{rendered_actual}"),
+    )
+  }
+
+  def assert_ok_eq(expected: $A, result: Result<$A>) -> Result<()> {
+    match result {
+      Ok(actual) => Test::assert_eq(expected, actual),
+      Err(err) => Test::_fail("expected Ok(#{inspect(expected)}), got Err(#{inspect(err)})"),
+    }
+  }
+
+  def assert_err_contains(fragment: String, result: Result<$A>) -> Result<()> {
+    match result {
+      Ok(actual) => Test::_fail("expected Err containing #{fragment}, got Ok(#{inspect(actual)})"),
+      Err(err) => {
+        rendered = inspect(err)
+        if(
+          String::contains(rendered, fragment),
+          Ok(()),
+          Test::_fail("expected Err containing #{fragment}, got #{rendered}"),
+        )
+      },
+    }
+  }
+}

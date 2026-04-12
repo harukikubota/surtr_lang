@@ -949,6 +949,10 @@ impl Resolver {
                 }
 
                 let mut body_resolver = Resolver::with_scope(closure_scope);
+                body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                body_resolver.current_module_path = self.current_module_path.clone();
+                body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_body = body_resolver.resolve_node(*body)?;
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
 

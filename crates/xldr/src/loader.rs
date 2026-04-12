@@ -487,7 +487,8 @@ pub fn is_default_std_module_file_name(file_name: &str) -> bool {
             .any(|(builtin_file_name, _, _)| *builtin_file_name == file_name)
 }
 
-pub fn collect_module_sources_with_module_stages(
+pub fn collect_module_sources_with_extra_std_sources(
+    extra_std_sources: &[SourceDescriptor],
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
     // Stage 0/1 are reserved for the built-in standard layers. User-provided
@@ -514,6 +515,10 @@ pub fn collect_module_sources_with_module_stages(
         .collect(),
     ];
 
+    if !extra_std_sources.is_empty() {
+        stage_specs.push(extra_std_sources.to_vec());
+    }
+
     for stage in module_input_stages {
         if stage.is_empty() {
             continue;
@@ -529,6 +534,12 @@ pub fn collect_module_sources_with_module_stages(
         stage_specs.push(specs);
     }
     build_module_sources_from_stage_specs(stage_specs)
+}
+
+pub fn collect_module_sources_with_module_stages(
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ModuleSources, LoadError> {
+    collect_module_sources_with_extra_std_sources(&[], module_input_stages)
 }
 
 pub fn compose_script_compile_sources(

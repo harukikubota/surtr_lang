@@ -54,8 +54,6 @@ defmod Result {
   The `is_ok` name is a bit of a misnomer since it returns `True` for any `Ok(...)` value, even if the inner value is an error type.
   It's really more of an `is_ok_variant` check, but the shorter name is more ergonomic for common use.
   """
-  @@test is_ok(Ok(1)) == True
-  @@test is_ok(Err(NoneError)) == False
   def is_ok(result: Result<$T>) -> Boolean {
     match result {
       Ok(_) => True,
@@ -71,8 +69,6 @@ defmod Result {
   even if the inner error is an `Ok`-wrapped success type. It's really more of an `is_err_variant` check,
   but the shorter name is more ergonomic for common use.
   """
-  @@test is_err(Ok(1)) == False
-  @@test is_err(Err(NoneError)) == True
   def is_err(result: Result<$T>) -> Boolean {
     Boolean::not(Result::is_ok(result))
   }
@@ -85,8 +81,6 @@ defmod Result {
 
   Use `cause(...)` when the previous error should remain in the chain.
   """
-  @@test inspect(map_err(Ok(1), NoneError)) == "Ok(1)"
-  @@test inspect(map_err(Err(NoneError), ZeroDivisionError)) == "Err(ZeroDivisionError(\"division by zero\"))"
   @@builtin def map_err(result: Result<$T>, err: Error) -> Result<$T>
 
   @@doc """
@@ -97,8 +91,6 @@ defmod Result {
 
   This keeps `Error` runtime-managed and opaque while still allowing domain layering.
   """
-  @@test inspect(cause(Ok(1), ZeroDivisionError)) == "Ok(1)"
-  @@test inspect(cause(Err(NoneError), ZeroDivisionError)) == "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")"
   @@builtin def cause(result: Result<$T>, err: Error) -> Result<$T>
 
   @@doc """
@@ -111,7 +103,5 @@ defmod Result {
 
   This keeps the success value on the left and uses the right side only for trailing error-capable work.
   """
-  @@test inspect(chain(Ok(1), Ok(()))) == "Ok(1)"
-  @@test inspect(chain(Err(NoneError), Err(ZeroDivisionError))) == "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")"
   @@builtin def chain(head: Result<$T>, tail: Result<()>) -> Result<$T>
 }

@@ -80,6 +80,21 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_result_chain,
     },
+    BuiltinImpl {
+        func: builtin_test_push,
+    },
+    BuiltinImpl {
+        func: builtin_test_pop,
+    },
+    BuiltinImpl {
+        func: builtin_test_pass,
+    },
+    BuiltinImpl {
+        func: builtin_test_fail,
+    },
+    BuiltinImpl {
+        func: builtin_test_fail_current,
+    },
 ];
 
 const _: () = {
@@ -477,6 +492,51 @@ fn builtin_result_chain(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
             err_result_from_rich_error(right)
         }
     })
+}
+
+fn builtin_test_push(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(kind) = &args[0] else {
+        return Err(RuntimeError::new("__test_push expects String as kind"));
+    };
+    let Value::Str(name) = &args[1] else {
+        return Err(RuntimeError::new("__test_push expects String as name"));
+    };
+    vm.push_test_scope(kind, name.clone());
+    Ok(Value::Unit)
+}
+
+fn builtin_test_pop(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    vm.pop_test_scope()?;
+    Ok(Value::Unit)
+}
+
+fn builtin_test_pass(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(name) = &args[0] else {
+        return Err(RuntimeError::new("__test_pass expects String as name"));
+    };
+    vm.record_test_pass(name.clone());
+    Ok(Value::Unit)
+}
+
+fn builtin_test_fail(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(name) = &args[0] else {
+        return Err(RuntimeError::new("__test_fail expects String as name"));
+    };
+    let Value::Str(detail) = &args[1] else {
+        return Err(RuntimeError::new("__test_fail expects String as detail"));
+    };
+    vm.record_test_fail(name.clone(), detail.clone());
+    Ok(Value::Unit)
+}
+
+fn builtin_test_fail_current(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(detail) = &args[0] else {
+        return Err(RuntimeError::new(
+            "__test_fail_current expects String as detail",
+        ));
+    };
+    vm.record_current_scope_fail(detail.clone());
+    Ok(Value::Unit)
 }
 
 pub fn inspect_value(vm: &VM, value: &Value) -> String {

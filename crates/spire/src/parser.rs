@@ -1750,7 +1750,8 @@ impl Parser {
                 let args = self.parse_call_args()?;
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                let (args, call_end) = self.attach_trailing_block_arg(args, end_span.end)?;
+                let (args, call_end) =
+                    self.attach_trailing_block_arg(&path_expr, args, end_span.end)?;
                 let span = Span {
                     start: name_span.start,
                     end: call_end,
@@ -1763,7 +1764,8 @@ impl Parser {
 
             if matches!(self.peek(), Token::Unit) {
                 let end_span = self.advance().span.clone();
-                let (args, call_end) = self.attach_trailing_block_arg(Vec::new(), end_span.end)?;
+                let (args, call_end) =
+                    self.attach_trailing_block_arg(&path_expr, Vec::new(), end_span.end)?;
                 let span = Span {
                     start: name_span.start,
                     end: call_end,
@@ -1833,7 +1835,8 @@ impl Parser {
             let args = self.parse_call_args()?;
             self.skip_newlines();
             let end_span = self.expect(&Token::RParen)?;
-            let (args, call_end) = self.attach_trailing_block_arg(args, end_span.end)?;
+            let func = Ast::Var(name_span.clone(), name.clone());
+            let (args, call_end) = self.attach_trailing_block_arg(&func, args, end_span.end)?;
             let span = Span {
                 start: name_span.start,
                 end: call_end,
@@ -1844,7 +1847,6 @@ impl Parser {
                 return Ok(Ast::ConstructorCall(span, name, args));
             } else {
                 // Normal function call
-                let func = Ast::Var(name_span, name);
                 return Ok(Ast::App(span, Box::new(func), args));
             }
         }
@@ -1853,7 +1855,9 @@ impl Parser {
         // Lexer tokenizes `()` as Token::Unit.
         if matches!(self.peek(), Token::Unit) {
             let end_span = self.advance().span.clone();
-            let (args, call_end) = self.attach_trailing_block_arg(Vec::new(), end_span.end)?;
+            let func = Ast::Var(name_span.clone(), name.clone());
+            let (args, call_end) =
+                self.attach_trailing_block_arg(&func, Vec::new(), end_span.end)?;
             let span = Span {
                 start: name_span.start,
                 end: call_end,
@@ -1861,7 +1865,6 @@ impl Parser {
             if is_uppercase {
                 return Ok(Ast::ConstructorCall(span, name, args));
             }
-            let func = Ast::Var(name_span, name);
             return Ok(Ast::App(span, Box::new(func), args));
         }
 
@@ -1967,8 +1970,24 @@ impl Parser {
         Ok(args)
     }
 
+    fn trailing_block_uses_closure_sugar(callee: &Ast) -> bool {
+        fn is_test_dsl_name(name: &str) -> bool {
+            matches!(name, "test" | "describe" | "it")
+        }
+
+        match callee {
+            Ast::Var(_, name) => is_test_dsl_name(name),
+            Ast::Path(_, path) => path
+                .segments
+                .last()
+                .is_some_and(|name| is_test_dsl_name(name)),
+            _ => false,
+        }
+    }
+
     fn attach_trailing_block_arg(
         &mut self,
+        callee: &Ast,
         mut args: Vec<RecordLitArg>,
         mut call_end: usize,
     ) -> Result<(Vec<RecordLitArg>, usize), ParseError> {
@@ -1985,6 +2004,16 @@ impl Parser {
 
         let trailing = self.parse_primary()?;
         call_end = trailing.span().end;
+        let trailing = match trailing {
+            Ast::Block(span, stmts) if Self::trailing_block_uses_closure_sugar(callee) => {
+                Ast::Closure(
+                    span.clone(),
+                    Vec::new(),
+                    Box::new(Ast::Block(span, stmts)),
+                )
+            }
+            other => other,
+        };
         args.push(RecordLitArg::Positional(trailing));
         Ok((args, call_end))
     }
@@ -4550,6 +4579,27 @@ mod tests {
                     &args[0],
                     RecordLitArg::Positional(Ast::Block(_, stmts))
                         if matches!(stmts.as_slice(), [Ast::App(_, _, inner_args)] if inner_args.len() == 1)
+                ));
+            }
+            _ => panic!("Expected App"),
+        }
+    }
+
+    #[test]
+    fn test_test_dsl_trailing_block_uses_zero_arg_closure() {
+        let ast = parse(r#"test("suite") { it("case") { assert_true(True) } }"#)
+            .expect("test DSL trailing block should parse");
+        match &ast[0] {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, ref n) if n == "test"));
+                assert_eq!(args.len(), 2);
+                assert!(matches!(
+                    &args[0],
+                    RecordLitArg::Positional(Ast::Lit(_, Lit::Str(value))) if value == "suite"
+                ));
+                assert!(matches!(
+                    &args[1],
+                    RecordLitArg::Positional(Ast::Closure(_, params, _)) if params.is_empty()
                 ));
             }
             _ => panic!("Expected App"),

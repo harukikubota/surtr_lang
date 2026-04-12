@@ -194,8 +194,6 @@ defmod String {
   @@doc """
   Return the number of surface characters in `value`.
   """
-  @@test len("surtr") == 5
-  @@test len("あい") == 2
   def len(value: String) -> Int {
     match value {
       "" => 0,
@@ -236,8 +234,6 @@ defmod String {
   Repeat `value` `count` times.
   Negative counts return `Err(NegativeRepeatCount(...))`.
   """
-  @@test inspect(repeat("na", 3)) == "Ok(nanana)"
-  @@test inspect(repeat("na", -1)) == "Err(NegativeRepeatCount(\"repeat count must be non-negative: -1\"))"
   def repeat(value: String, count: Int) -> Result<String, NegativeRepeatCount> {
     if(
       count < 0,
@@ -250,8 +246,6 @@ defmod String {
   Return `True` when `value` starts with `prefix`.
   The empty prefix always matches.
   """
-  @@test starts_with("surtr", "sur") == True
-  @@test starts_with("surtr", "urt") == False
   def starts_with(value: String, prefix: String) -> Boolean {
     Result::is_ok(String::strip_prefix(value, prefix))
   }
@@ -260,8 +254,6 @@ defmod String {
   Return `True` when `value` ends with `suffix`.
   The empty suffix always matches.
   """
-  @@test ends_with("surtr", "tr") == True
-  @@test ends_with("surtr", "su") == False
   def ends_with(value: String, suffix: String) -> Boolean {
     Result::is_ok(String::strip_suffix(value, suffix))
   }
@@ -270,8 +262,6 @@ defmod String {
   Remove `prefix` from the start of `value`.
   Missing prefixes return `Err(NoneError)`.
   """
-  @@test inspect(strip_prefix("surtr", "sur")) == "Ok(tr)"
-  @@test inspect(strip_prefix("surtr", "ur")) == "Err(NoneError(\"None Value.\"))"
   def strip_prefix(value: String, prefix: String) -> Result<String, NoneError> {
     match prefix {
       "" => Ok(value),
@@ -290,8 +280,6 @@ defmod String {
   Remove `suffix` from the end of `value`.
   Missing suffixes return `Err(NoneError)`.
   """
-  @@test inspect(strip_suffix("surtr", "tr")) == "Ok(sur)"
-  @@test inspect(strip_suffix("surtr", "su")) == "Err(NoneError(\"None Value.\"))"
   def strip_suffix(value: String, suffix: String) -> Result<String, NoneError> {
     reversed_rest =? String::_strip_prefix_chars(
       List::reverse(String::chars(value)),
@@ -305,9 +293,6 @@ defmod String {
   Success returns `StringSplit::Split(before, after)`.
   Missing separators return `Err(NoneError)`.
   """
-  @@test inspect(split_once("key=value", "=")) == "Ok(StringSplit::Split(key, value))"
-  @@test inspect(split_once("surtr", "")) == "Ok(StringSplit::Split(, surtr))"
-  @@test inspect(split_once("surtr", "/")) == "Err(NoneError(\"None Value.\"))"
   def split_once(value: String, separator: String) -> Result<StringSplit, NoneError> {
     String::_split_once_go(value, separator, [])
   }
@@ -316,8 +301,6 @@ defmod String {
   Return `True` when `needle` occurs anywhere inside `value`.
   The empty needle always matches.
   """
-  @@test contains("surtr", "urt") == True
-  @@test contains("surtr", "zzz") == False
   def contains(value: String, needle: String) -> Boolean {
     Result::is_ok(String::split_once(value, needle))
   }
@@ -325,7 +308,6 @@ defmod String {
   @@doc """
   Expand `value` into a list of single-character `String` values.
   """
-  @@test inspect(chars("あb")) == "[あ, b]"
   def chars(value: String) -> List<String> {
     match value {
       "" => [],
@@ -337,8 +319,6 @@ defmod String {
   Build a string from a list of single-character strings.
   Non-character elements return `Err(InvalidCharList(...))`.
   """
-  @@test inspect(from_chars(["あ", "b"])) == "Ok(あb)"
-  @@test inspect(from_chars(["ab"])) == "Err(InvalidCharList(\"expected single-character string at index 0, got ab\"))"
   def from_chars(chars: List<String>) -> Result<String, InvalidCharList> {
     _validated =? String::_validate_char_list(chars, 0)
     Ok(String::_from_chars_go(chars, ""))
@@ -350,9 +330,6 @@ defmod String {
   `Ascii` returns 7-bit ASCII codes and rejects non-ASCII text.
   """
   @@builtin
-  @@test inspect(codepoints("Aあ", StringEncoding::Utf8)) == "Ok([65, 227, 129, 130])"
-  @@test inspect(codepoints("AZ", StringEncoding::Ascii)) == "Ok([65, 90])"
-  @@test inspect(codepoints("あ", StringEncoding::Ascii)) == "Err(InvalidStringEncoding(\"ASCII encoding does not support character at index 0: あ\"))"
   def codepoints(value: String, encoding: StringEncoding) -> Result<List<Int>, InvalidStringEncoding>
 
   @@doc """
@@ -361,16 +338,12 @@ defmod String {
   `Ascii` expects byte values in the range `0..127`.
   """
   @@builtin
-  @@test inspect(from_codepoints([65, 227, 129, 130], StringEncoding::Utf8)) == "Ok(Aあ)"
-  @@test inspect(from_codepoints([65, 90], StringEncoding::Ascii)) == "Ok(AZ)"
-  @@test inspect(from_codepoints([128], StringEncoding::Ascii)) == "Err(InvalidStringEncoding(\"ASCII code out of range at index 0: 128\"))"
   def from_codepoints(values: List<Int>, encoding: StringEncoding) -> Result<String, InvalidStringEncoding>
 
   @@doc """
   Remove ASCII whitespace from the start of `value`.
   Trimmed characters are space, newline, tab, and carriage return.
   """
-  @@test trim_start(" \n\tcore") == "core"
   def trim_start(value: String) -> String {
     String::_from_chars_go(String::_trim_start_chars(String::chars(value)), "")
   }
@@ -379,7 +352,6 @@ defmod String {
   Remove ASCII whitespace from the end of `value`.
   Trimmed characters are space, newline, tab, and carriage return.
   """
-  @@test trim_end("core \n\t") == "core"
   def trim_end(value: String) -> String {
     trimmed_rev = String::_trim_start_chars(List::reverse(String::chars(value)))
     String::_from_chars_go(List::reverse(trimmed_rev), "")
@@ -389,7 +361,6 @@ defmod String {
   Remove ASCII whitespace from both ends of `value`.
   Trimmed characters are space, newline, tab, and carriage return.
   """
-  @@test trim(" \ncore\t ") == "core"
   def trim(value: String) -> String {
     String::trim_end(String::trim_start(value))
   }

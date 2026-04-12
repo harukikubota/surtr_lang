@@ -8,7 +8,7 @@ Usage:\n\
   surtr --version\n\
   surtr check <file.srt> [--format json]\n\
   surtr run <file.srt|file.eldr> [--entry <name>]\n\
-  surtr test [selector]\n\
+  surtr test <lib-relative-name>\n\
   surtr repl [--quiet] [--banner] [--version]\n\
   surtr build <file.srt> [output.eldr]\n\
   surtr dump <file.eldr|entry.srt> [--format json] [--entry <name>]\n\

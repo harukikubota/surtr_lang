@@ -12,6 +12,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::builtin::call_builtin;
 use crate::error::{RuntimeError, RuntimeErrorContext};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VmTestEventKind {
+    Passed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmTestEvent {
+    pub path: Vec<String>,
+    pub detail: Option<String>,
+    pub kind: VmTestEventKind,
+}
+
 #[derive(Debug, Clone)]
 struct CallFrame {
     return_pc: usize,
@@ -29,6 +42,8 @@ struct VmCheckpoint {
     last_result: Option<Value>,
     output_len: Option<usize>,
     error_output_len: Option<usize>,
+    test_scope_len: usize,
+    test_event_len: usize,
     opcode_len: usize,
     constant_len: usize,
     type_entry_len: usize,
@@ -167,6 +182,10 @@ pub struct VM {
     last_result: Option<Value>,
     /// Optional developer-facing execution observer.
     observer: Option<VmObserver>,
+    /// Current nested test/describe scope names.
+    test_scope: Vec<String>,
+    /// Collected test events emitted by the test DSL runtime helpers.
+    test_events: Vec<VmTestEvent>,
 }
 
 impl VM {
@@ -189,6 +208,8 @@ impl VM {
             exit_code: 0,
             last_result: None,
             observer: None,
+            test_scope: Vec::new(),
+            test_events: Vec::new(),
         }
     }
 
@@ -346,6 +367,49 @@ impl VM {
         self.last_result.as_ref()
     }
 
+    pub fn test_events(&self) -> &[VmTestEvent] {
+        &self.test_events
+    }
+
+    pub(crate) fn push_test_scope(&mut self, _kind: &str, name: String) {
+        self.test_scope.push(name);
+    }
+
+    pub(crate) fn pop_test_scope(&mut self) -> Result<(), RuntimeError> {
+        self.test_scope
+            .pop()
+            .map(|_| ())
+            .ok_or_else(|| RuntimeError::new("test scope stack underflow"))
+    }
+
+    pub(crate) fn record_test_pass(&mut self, name: String) {
+        let mut path = self.test_scope.clone();
+        path.push(name);
+        self.test_events.push(VmTestEvent {
+            path,
+            detail: None,
+            kind: VmTestEventKind::Passed,
+        });
+    }
+
+    pub(crate) fn record_test_fail(&mut self, name: String, detail: String) {
+        let mut path = self.test_scope.clone();
+        path.push(name);
+        self.test_events.push(VmTestEvent {
+            path,
+            detail: Some(detail),
+            kind: VmTestEventKind::Failed,
+        });
+    }
+
+    pub(crate) fn record_current_scope_fail(&mut self, detail: String) {
+        self.test_events.push(VmTestEvent {
+            path: self.test_scope.clone(),
+            detail: Some(detail),
+            kind: VmTestEventKind::Failed,
+        });
+    }
+
     pub fn enable_observation(&mut self, options: VmObservationOptions) {
         self.observer = Some(VmObserver::new(options));
     }
@@ -365,6 +429,8 @@ impl VM {
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         self.verify_loaded_bytecode()?;
         self.last_result = None;
+        self.test_scope.clear();
+        self.test_events.clear();
         loop {
             if self.pc >= self.bytecode.opcodes.len() {
                 return Err(RuntimeError::new("PC out of bounds"));
@@ -520,6 +586,8 @@ impl VM {
             last_result: self.last_result.clone(),
             output_len: self.output.as_ref().map(Vec::len),
             error_output_len: self.error_output.as_ref().map(Vec::len),
+            test_scope_len: self.test_scope.len(),
+            test_event_len: self.test_events.len(),
             opcode_len: self.bytecode.opcodes.len(),
             constant_len: self.bytecode.constants.len(),
             type_entry_len: self.bytecode.type_registry.entries.len(),
@@ -548,6 +616,8 @@ impl VM {
         if let (Some(buf), Some(len)) = (self.error_output.as_mut(), checkpoint.error_output_len) {
             buf.truncate(len);
         }
+        self.test_scope.truncate(checkpoint.test_scope_len);
+        self.test_events.truncate(checkpoint.test_event_len);
 
         self.bytecode.opcodes.truncate(checkpoint.opcode_len);
         self.bytecode.constants.truncate(checkpoint.constant_len);
