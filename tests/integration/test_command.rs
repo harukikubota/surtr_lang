@@ -1,45 +1,7 @@
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn surtr_bin() -> String {
-    if let Ok(path) = env::var("CARGO_BIN_EXE_surtr") {
-        return path;
-    }
-
-    let mut path = env::current_exe().expect("failed to locate current test executable");
-    path.pop(); // <test-binary>
-    path.pop(); // deps
-    path.push("surtr");
-    if cfg!(windows) {
-        path.set_extension("exe");
-    }
-    assert!(
-        path.exists(),
-        "surtr binary not found at {}",
-        path.display()
-    );
-    path.to_string_lossy().into_owned()
-}
-
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be after unix epoch")
-        .as_nanos();
-    let dir = env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), nanos));
-    fs::create_dir_all(&dir).expect("failed to create temp dir");
-    dir
-}
-
-fn write_source(path: &Path, source: &str) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("failed to create parent directory");
-    }
-    fs::write(path, source).expect("failed to write source file");
-}
+mod common;
+use common::{surtr_bin, unique_temp_dir, write_source};
 
 #[test]
 fn test_command_supports_all_module_and_function_selectors() {

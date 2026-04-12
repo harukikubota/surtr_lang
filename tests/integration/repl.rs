@@ -1,30 +1,9 @@
-use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn surtr_bin() -> String {
-    if let Ok(path) = env::var("CARGO_BIN_EXE_surtr") {
-        return path;
-    }
-
-    let mut path = env::current_exe().expect("failed to locate current test executable");
-    // .../target/debug/deps/<test-binary> -> .../target/debug/surtr
-    path.pop(); // <test-binary>
-    path.pop(); // deps
-    path.push("surtr");
-    if cfg!(windows) {
-        path.set_extension("exe");
-    }
-    assert!(
-        path.exists(),
-        "surtr binary not found at {}",
-        path.display()
-    );
-    path.to_string_lossy().into_owned()
-}
+mod common;
+use common::{surtr_bin, unique_temp_dir};
 
 fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
     run_repl_session_with_args_in_dir(args, input, None)
@@ -78,16 +57,6 @@ fn strip_ansi(input: &str) -> String {
     out
 }
 
-fn temp_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be after unix epoch")
-        .as_nanos();
-    let dir = env::temp_dir().join(format!("surtr-{prefix}-{nanos}"));
-    fs::create_dir_all(&dir).expect("failed to create temp dir");
-    dir
-}
-
 #[test]
 fn repl_quit_exits_cleanly() {
     let output = run_repl_session(":quit\n");
@@ -101,7 +70,7 @@ fn repl_quit_exits_cleanly() {
 
 #[test]
 fn repl_fails_fast_when_additional_stdlib_bootstrap_fails() {
-    let dir = temp_dir("repl-bootstrap-failure");
+    let dir = unique_temp_dir("repl-bootstrap-failure");
     let lib_dir = dir.join("lib");
     fs::create_dir_all(&lib_dir).expect("failed to create lib dir");
     fs::write(lib_dir.join("bad.srt"), "defmod Broken { def nope( }")
@@ -468,7 +437,7 @@ fn repl_displays_local_function_refs_with_named_inspect_format() {
 
 #[test]
 fn repl_save_command_writes_decodable_eldr_snapshot() {
-    let dir = temp_dir("repl-save");
+    let dir = unique_temp_dir("repl-save");
     let save_base = dir.join("session");
     let input = format!("x = 1\n:save {}\n:quit\n", save_base.to_string_lossy());
     let output = run_repl_session(&input);

@@ -4,14 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod common;
 mod support;
-
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("failed to resolve repository root")
-}
+use common::{extract_phase_tag, normalize_text, parse_compile_error_expectation, repo_root};
 
 fn collect_files_with_extension(root: &Path, ext: &str) -> Vec<PathBuf> {
     fn walk(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
@@ -59,55 +54,10 @@ fn run_surtr(source: &str) -> Result<Vec<String>, String> {
     support::run_script("fixture.srt", source)
 }
 
-fn normalize_text(text: &str) -> String {
-    text.replace("\r\n", "\n").trim_end().to_string()
-}
-
-#[derive(Debug)]
-struct CompileErrorExpectation {
-    phase: Option<String>,
-    contains: Vec<String>,
-}
-
 #[derive(Debug)]
 struct PhaseTiming {
     phase: String,
     duration: Duration,
-}
-
-fn parse_compile_error_expectation(path: &Path) -> CompileErrorExpectation {
-    let content = fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    let mut phase = None;
-    let mut contains = Vec::new();
-
-    for raw in content.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("phase:") {
-            phase = Some(rest.trim().to_string());
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("contains:") {
-            contains.push(rest.trim().to_string());
-            continue;
-        }
-        panic!(
-            "invalid compile error expectation line in {}: {}",
-            path.display(),
-            line
-        );
-    }
-
-    CompileErrorExpectation { phase, contains }
-}
-
-fn extract_phase_tag(message: &str) -> Option<&str> {
-    message
-        .strip_prefix("phase=")
-        .and_then(|rest| rest.split_once(';').map(|(phase, _)| phase))
 }
 
 fn timing_breakdown_enabled() -> bool {
