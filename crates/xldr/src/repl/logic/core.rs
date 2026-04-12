@@ -301,7 +301,8 @@ impl ReplEngine {
                 ));
             }
         };
-        self.sigil_session.replace_scope(scope);
+        self.sigil_session
+            .replace_scope_with_declarations(scope, &declaration_index);
 
         for name in &meta.function_defs {
             self.symbols.insert(name.clone());
@@ -412,7 +413,8 @@ impl ReplEngine {
                 ));
             }
         };
-        self.sigil_session.replace_scope(scope);
+        self.sigil_session
+            .replace_scope_with_declarations(scope, &declaration_index);
         Ok(())
     }
 

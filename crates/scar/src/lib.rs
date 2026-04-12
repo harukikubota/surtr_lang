@@ -1400,4 +1400,28 @@ b = double(1.5)"#,
             )
         }));
     }
+
+    #[test]
+    fn numeric_trait_mismatch_lists_available_implementations() {
+        let resolved = resolve_with_builtin_prelude("value = Numeric::add(1, False)");
+        let err = typecheck(resolved).expect_err("mismatched numeric trait call must fail");
+        assert!(err.message.contains("Numeric::add expects argument 2"));
+        assert!(err.message.contains("receiver type Int"));
+        assert!(err.message.contains("got Boolean"));
+        assert!(err
+            .message
+            .contains("Numeric is implemented for: Float, Int"));
+    }
+
+    #[test]
+    fn numeric_trait_missing_receiver_lists_available_implementations() {
+        let resolved = resolve_with_builtin_prelude("value = Numeric::add(False, True)");
+        let err = typecheck(resolved).expect_err("invalid numeric receiver must fail");
+        assert!(err
+            .message
+            .contains("Numeric::add requires a receiver type implementing Numeric, got Boolean"));
+        assert!(err
+            .message
+            .contains("Numeric is implemented for: Float, Int"));
+    }
 }

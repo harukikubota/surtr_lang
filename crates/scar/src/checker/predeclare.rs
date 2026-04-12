@@ -472,6 +472,19 @@ impl Checker {
         id.qualified_name.clone().unwrap_or_else(|| id.name.clone())
     }
 
+    pub(super) fn trait_display_name(&self, trait_name: &str) -> String {
+        self.traits
+            .get(trait_name)
+            .map(|info| info.id.name.clone())
+            .unwrap_or_else(|| {
+                trait_name
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or(trait_name)
+                    .to_string()
+            })
+    }
+
     pub(super) fn trait_key_by_short_name(&self, short_name: &str) -> Option<String> {
         self.traits
             .values()
@@ -483,6 +496,52 @@ impl Checker {
         self.trait_key_by_short_name(short_name)
             .as_deref()
             .is_some_and(|key| key == trait_name)
+    }
+
+    fn compiler_trait_target_names(&self, trait_name: &str) -> &'static [&'static str] {
+        if self.trait_matches_short_name(trait_name, "Numeric") {
+            return &["Float", "Int"];
+        }
+        if self.trait_matches_short_name(trait_name, "Concat") {
+            return &["String"];
+        }
+        if self.trait_matches_short_name(trait_name, "Ord") {
+            return &["Float", "Int"];
+        }
+        if self.trait_matches_short_name(trait_name, "Eq") {
+            return &["Boolean", "Float", "Int", "String"];
+        }
+        if self.trait_matches_short_name(trait_name, "Show") {
+            return &["Boolean", "Error", "Float", "Int", "String", "Unit"];
+        }
+        &[]
+    }
+
+    pub(super) fn trait_implementation_targets(&self, trait_name: &str) -> Vec<String> {
+        let mut targets = std::collections::BTreeSet::new();
+        for target in self.compiler_trait_target_names(trait_name) {
+            targets.insert((*target).to_string());
+        }
+        for (impl_trait_name, target_name) in self.trait_impls.keys() {
+            if impl_trait_name == trait_name {
+                targets.insert(target_name.clone());
+            }
+        }
+        targets.into_iter().collect()
+    }
+
+    pub(super) fn trait_implementation_summary(&self, trait_name: &str) -> String {
+        let display_name = self.trait_display_name(trait_name);
+        let targets = self.trait_implementation_targets(trait_name);
+        if targets.is_empty() {
+            format!("{} has no visible implementations", display_name)
+        } else {
+            format!(
+                "{} is implemented for: {}",
+                display_name,
+                targets.join(", ")
+            )
+        }
     }
 
     pub(super) fn tyvar_satisfies_compiler_trait(&self, var: u32, trait_name: &str) -> bool {

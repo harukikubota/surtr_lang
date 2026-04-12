@@ -609,6 +609,8 @@ impl Checker {
 
         let self_ty = self.env.fresh_tyvar();
         let (param_tys, ret_ty) = self.resolve_trait_method_signature(&method, &self_ty)?;
+        let trait_display_name = self.trait_display_name(trait_name);
+        let trait_impl_summary = self.trait_implementation_summary(trait_name);
 
         if args.len() != param_tys.len() {
             return Err(TypeError {
@@ -635,7 +637,7 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        for (expected, arg) in param_tys.iter().zip(&typed_args) {
+        for (idx, (expected, arg)) in param_tys.iter().zip(&typed_args).enumerate() {
             if !self.types_compatible(expected, &arg.ty) {
                 if typed_args.len() == 2 {
                     let left_ty = self.ty_name(&typed_args[0].ty);
@@ -644,7 +646,10 @@ impl Checker {
                         || self.trait_matches_short_name(trait_name, "Ord")
                     {
                         return Err(TypeError {
-                            message: format!("Cannot compare {} and {}", left_ty, right_ty),
+                            message: format!(
+                                "Cannot compare {} and {}. {}",
+                                left_ty, right_ty, trait_impl_summary
+                            ),
                             span: arg.span.clone(),
                             hint: None,
                         });
@@ -652,19 +657,40 @@ impl Checker {
                     if self.trait_matches_short_name(trait_name, "Concat") {
                         return Err(TypeError {
                             message: format!(
-                                "++ requires (String, String), got ({}, {})",
-                                left_ty, right_ty
+                                "++ requires (String, String), got ({}, {}). {}",
+                                left_ty, right_ty, trait_impl_summary
                             ),
                             span: arg.span.clone(),
                             hint: None,
                         });
                     }
                 }
+                let receiver_ty = self.resolve_ty(&self_ty);
+                if !matches!(receiver_ty, Ty::Var(_))
+                    && self.trait_impl_exists(trait_name, &receiver_ty)
+                {
+                    return Err(TypeError {
+                        message: format!(
+                            "{}::{} expects argument {} to match receiver type {}, got {}. {}",
+                            trait_display_name,
+                            method_name,
+                            idx + 1,
+                            self.ty_name(&receiver_ty),
+                            self.ty_name(&arg.ty),
+                            trait_impl_summary
+                        ),
+                        span: arg.span.clone(),
+                        hint: None,
+                    });
+                }
                 return Err(TypeError {
                     message: format!(
-                        "Argument type mismatch: expected {}, got {}",
+                        "Argument type mismatch in {}::{}: expected {}, got {}. {}",
+                        trait_display_name,
+                        method_name,
                         self.ty_name(expected),
-                        self.ty_name(&arg.ty)
+                        self.ty_name(&arg.ty),
+                        trait_impl_summary
                     ),
                     span: arg.span.clone(),
                     hint: None,
@@ -673,14 +699,22 @@ impl Checker {
         }
 
         let receiver_ty = self.resolve_ty(&self_ty);
+        let receiver_span = typed_args
+            .first()
+            .map(|arg| arg.span.clone())
+            .unwrap_or_else(|| span.clone());
         let dispatch = self
             .trait_dispatch_target(trait_name, method_name, &receiver_ty)
             .ok_or_else(|| TypeError {
                 message: format!(
-                    "{}::{} requires a receiver type implementing {}",
-                    trait_name, method_name, trait_name
+                    "{}::{} requires a receiver type implementing {}, got {}. {}",
+                    trait_display_name,
+                    method_name,
+                    trait_display_name,
+                    self.ty_name(&receiver_ty),
+                    trait_impl_summary
                 ),
-                span: span.clone(),
+                span: receiver_span,
                 hint: None,
             })?;
 

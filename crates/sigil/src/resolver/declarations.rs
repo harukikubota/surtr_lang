@@ -926,11 +926,16 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
+                    let qualified_name = self.qualify_current_declaration_name(name);
                     let uid = self
                         .declaration_uids
-                        .get(&self.qualify_current_declaration_name(name))
+                        .get(&qualified_name)
                         .copied()
-                        .unwrap_or_else(|| self.scope.reserve_id());
+                        .unwrap_or_else(|| {
+                            let fresh = self.scope.reserve_id();
+                            self.declaration_uids.insert(qualified_name.clone(), fresh);
+                            fresh
+                        });
                     self.predeclared_ids
                         .entry(name.clone())
                         .or_default()
@@ -953,11 +958,16 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
+                    let qualified_name = self.qualify_current_declaration_name(name);
                     let uid = self
                         .declaration_uids
-                        .get(&self.qualify_current_declaration_name(name))
+                        .get(&qualified_name)
                         .copied()
-                        .unwrap_or_else(|| self.scope.reserve_id());
+                        .unwrap_or_else(|| {
+                            let fresh = self.scope.reserve_id();
+                            self.declaration_uids.insert(qualified_name.clone(), fresh);
+                            fresh
+                        });
                     self.predeclared_ids
                         .entry(name.clone())
                         .or_default()
@@ -979,11 +989,16 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
+                    let qualified_trait = self.qualify_current_declaration_name(name);
                     let uid = self
                         .declaration_uids
-                        .get(name)
+                        .get(&qualified_trait)
                         .copied()
-                        .unwrap_or_else(|| self.scope.reserve_id());
+                        .unwrap_or_else(|| {
+                            let fresh = self.scope.reserve_id();
+                            self.declaration_uids.insert(qualified_trait.clone(), fresh);
+                            fresh
+                        });
                     self.predeclared_ids
                         .entry(name.clone())
                         .or_default()
@@ -1022,7 +1037,12 @@ impl Resolver {
                             .declaration_uids
                             .get(&qualified_method)
                             .copied()
-                            .unwrap_or_else(|| self.scope.reserve_id());
+                            .unwrap_or_else(|| {
+                                let fresh = self.scope.reserve_id();
+                                self.declaration_uids
+                                    .insert(qualified_method.clone(), fresh);
+                                fresh
+                            });
                         self.predeclared_ids
                             .entry(method_alias.clone())
                             .or_default()
@@ -1132,11 +1152,16 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
+                    let qualified_name = self.qualify_current_declaration_name(name);
                     let uid = self
                         .declaration_uids
-                        .get(&self.qualify_current_declaration_name(name))
+                        .get(&qualified_name)
                         .copied()
-                        .unwrap_or_else(|| self.scope.reserve_id());
+                        .unwrap_or_else(|| {
+                            let fresh = self.scope.reserve_id();
+                            self.declaration_uids.insert(qualified_name.clone(), fresh);
+                            fresh
+                        });
                     self.predeclared_ids
                         .entry(name.clone())
                         .or_default()
@@ -1163,11 +1188,16 @@ impl Resolver {
                             span: span.clone(),
                         });
                     }
+                    let qualified_enum = self.qualify_current_declaration_name(name);
                     let uid = self
                         .declaration_uids
-                        .get(&self.qualify_current_declaration_name(name))
+                        .get(&qualified_enum)
                         .copied()
-                        .unwrap_or_else(|| self.scope.reserve_id());
+                        .unwrap_or_else(|| {
+                            let fresh = self.scope.reserve_id();
+                            self.declaration_uids.insert(qualified_enum.clone(), fresh);
+                            fresh
+                        });
                     self.predeclared_ids
                         .entry(name.clone())
                         .or_default()
@@ -1202,7 +1232,13 @@ impl Resolver {
                             .declaration_uids
                             .get(&self.qualify_current_declaration_name(&qualified_ctor))
                             .copied()
-                            .unwrap_or_else(|| self.scope.reserve_id());
+                            .unwrap_or_else(|| {
+                                let fresh = self.scope.reserve_id();
+                                let qualified_ctor_name =
+                                    self.qualify_current_declaration_name(&qualified_ctor);
+                                self.declaration_uids.insert(qualified_ctor_name, fresh);
+                                fresh
+                            });
                         self.predeclared_ids
                             .entry(qualified_ctor.clone())
                             .or_default()

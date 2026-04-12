@@ -267,6 +267,24 @@ fn repl_infers_closure_argument_type_from_add_constraint() {
 }
 
 #[test]
+fn repl_auto_imports_concat_trait_helper() {
+    let output = run_repl_session("concat(\"q\", \"q\")\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("qq"),
+        "expected concat helper result in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_accepts_top_level_function_definition() {
     let output = run_repl_session("def add(x: Int, y: Int) -> Int { x + y }\nadd(1, 2)\n:quit\n");
     assert!(
@@ -723,6 +741,34 @@ fn repl_duplicate_function_name_is_rejected() {
     assert!(
         stderr.contains("Duplicate top-level definition: f"),
         "expected duplicate definition error in stderr, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn repl_numeric_trait_errors_list_available_implementations() {
+    let output = run_repl_session("Numeric::add(1,False)\nNumeric::add(False, True)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("Numeric::add expects argument 2 to match receiver type Int, got Boolean"),
+        "expected Numeric mismatch detail in stderr, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Numeric::add requires a receiver type implementing Numeric, got Boolean"),
+        "expected missing receiver impl detail in stderr, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Numeric is implemented for: Float, Int"),
+        "expected trait implementation list in stderr, got:\n{}",
         stderr
     );
 }
