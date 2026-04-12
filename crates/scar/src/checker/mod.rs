@@ -48,13 +48,15 @@ struct TraitInfo {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct TraitImplMethodInfo {
-    id: ResolvedId,
+    method_name: String,
+    function_id: ResolvedId,
     type_params: Vec<ResolvedTypeParam>,
     params: Vec<ResolvedFunParam>,
     ret_ty: Option<AstTy>,
     body: Box<Resolved>,
     attrs: ResolvedDeclAttrs,
     span: Span,
+    dispatch_override: Option<TraitDispatchTarget>,
 }
 
 #[allow(dead_code)]
@@ -303,6 +305,10 @@ impl ScarSession {
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
+            self.traits.clone(),
+            self.trait_impls.clone(),
+            self.trait_methods_by_qualified_name.clone(),
+            self.tyvar_bounds.clone(),
             context,
         );
         let typed = checker.check_program(resolved)?;
@@ -406,6 +412,10 @@ impl Checker {
         user_func_params: HashMap<u32, Vec<String>>,
         impl_method_uids: HashMap<String, u32>,
         function_ids_by_name: HashMap<String, ResolvedId>,
+        traits: HashMap<String, TraitInfo>,
+        trait_impls: HashMap<(String, String), TraitImplInfo>,
+        trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+        tyvar_bounds: HashMap<u32, Vec<String>>,
         context: TypecheckContext,
     ) -> Self {
         Self {
@@ -417,13 +427,13 @@ impl Checker {
             impl_method_uids,
             function_ids_by_name,
             substitutions: HashMap::new(),
-            tyvar_bounds: HashMap::new(),
+            tyvar_bounds,
             source_rules: context.source_rules,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             seen_builtin_type_decls: HashMap::new(),
-            traits: HashMap::new(),
-            trait_impls: HashMap::new(),
-            trait_methods_by_qualified_name: HashMap::new(),
+            traits,
+            trait_impls,
+            trait_methods_by_qualified_name,
         }
     }
 
@@ -433,6 +443,10 @@ impl Checker {
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
+            self.traits.clone(),
+            self.trait_impls.clone(),
+            self.trait_methods_by_qualified_name.clone(),
+            self.tyvar_bounds.clone(),
             TypecheckContext {
                 source_rules: self.source_rules.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
@@ -444,11 +458,7 @@ impl Checker {
         checker.impl_method_uids = self.impl_method_uids.clone();
         checker.function_ids_by_name = self.function_ids_by_name.clone();
         checker.substitutions = self.substitutions.clone();
-        checker.tyvar_bounds = self.tyvar_bounds.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
-        checker.traits = self.traits.clone();
-        checker.trait_impls = self.trait_impls.clone();
-        checker.trait_methods_by_qualified_name = self.trait_methods_by_qualified_name.clone();
         checker
     }
 
@@ -485,6 +495,11 @@ impl Checker {
         self.ensure_struct_impl_new_contract(&stmts)?;
         let mut typed = Vec::new();
         for stmt in stmts {
+            if let Resolved::TraitImplDef(span, trait_id, target_ty, methods) = &stmt {
+                let nodes = self.check_trait_impl_items(span, trait_id, target_ty, methods)?;
+                typed.extend(nodes.into_iter().map(|node| self.resolve_typed_node(node)));
+                continue;
+            }
             let node = self.check_node(&stmt)?;
             typed.push(self.resolve_typed_node(node));
         }

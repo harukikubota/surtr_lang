@@ -51,7 +51,7 @@ impl Numeric for Float {
   }
 
   def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
-    Int::safe_div(self, rhs)
+    safe_div(self, rhs)
   }
 
   def abs(self: Self) -> Self {

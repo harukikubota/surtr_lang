@@ -28,7 +28,8 @@ pub use self::declarations::{
 pub use self::session::{SigilCheckpoint, SigilSession};
 
 use self::declarations::{
-    assign_declaration_uids, declaration_uid_kind_map, trait_method_qualified_name,
+    assign_declaration_uids, declaration_uid_kind_map, trait_impl_method_qualified_name,
+    trait_method_qualified_name,
 };
 use self::imports::{build_global_scope, build_module_scope};
 

@@ -7,12 +7,23 @@ pub(super) fn build_global_scope(
     declaration_uids: &HashMap<String, u32>,
 ) -> Scope {
     let mut scope = initialize_scope();
+    let mut trait_alias_counts = HashMap::new();
+    for entry in index.values() {
+        if matches!(entry.kind, DeclarationKind::Trait | DeclarationKind::TraitMethod) {
+            *trait_alias_counts.entry(entry.name.clone()).or_insert(0usize) += 1;
+        }
+    }
     for (fq_name, entry) in index {
         if entry.kind == DeclarationKind::BuiltinType {
             continue;
         }
         if let Some(uid) = declaration_uids.get(fq_name) {
             scope.define_with_id(fq_name, *uid);
+            if matches!(entry.kind, DeclarationKind::Trait | DeclarationKind::TraitMethod)
+                && trait_alias_counts.get(&entry.name) == Some(&1)
+            {
+                scope.define_with_id(&entry.name, *uid);
+            }
         }
     }
     scope
@@ -233,8 +244,40 @@ fn import_single_into_scope(
         import_context.declaration_uids[&entry.fq_name],
         module_name,
         false,
-        span,
-    )
+        span.clone(),
+        )?;
+
+    if entry.kind == DeclarationKind::Trait {
+        let trait_prefix = format!("{}::", name);
+        for method_entry in import_context.declaration_index.values() {
+            if method_entry.module_path != module_name
+                || method_entry.kind != DeclarationKind::TraitMethod
+                || !method_entry.name.starts_with(&trait_prefix)
+            {
+                continue;
+            }
+            if method_entry.stage_index >= import_context.current_stage_index {
+                return Err(ResolveError {
+                    message: format!(
+                        "Import target `{}` is not available in the current stage",
+                        method_entry.fq_name
+                    ),
+                    span: span.clone(),
+                });
+            }
+            bind_import_name(
+                scope,
+                import_context,
+                &method_entry.name,
+                import_context.declaration_uids[&method_entry.fq_name],
+                module_name,
+                false,
+                span.clone(),
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 fn bind_import_name(

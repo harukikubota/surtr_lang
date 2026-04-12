@@ -1,2 +1,2 @@
 phase: resolve
-contains: Multiple trait impl blocks for `Summable for Int` are not allowed
+contains: Multiple trait impl blocks for `

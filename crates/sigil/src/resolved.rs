@@ -261,7 +261,8 @@ pub struct ResolvedTraitMethodSig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTraitImplMethod {
-    pub id: ResolvedId,
+    pub method_name: Symbol,
+    pub function_id: ResolvedId,
     pub type_params: Vec<ResolvedTypeParam>,
     pub params: Vec<ResolvedFunParam>,
     pub ret_ty: Option<AstTy>,

@@ -242,20 +242,22 @@ fn test_precollect_trait_methods_as_trait_namespace_members() {
     )]];
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
-    let trait_entry = index.get("Numeric").expect("trait should be indexed");
+    let trait_entry = index
+        .get("Numeric::Numeric")
+        .expect("trait should be indexed");
     assert_eq!(trait_entry.name, "Numeric");
     assert_eq!(trait_entry.kind, DeclarationKind::Trait);
 
     let add = index
-        .get("Numeric::add")
+        .get("Numeric::Numeric::add")
         .expect("trait method should be indexed");
     assert_eq!(add.module_path, "Numeric");
-    assert_eq!(add.name, "add");
+    assert_eq!(add.name, "Numeric::add");
     assert_eq!(add.kind, DeclarationKind::TraitMethod);
 }
 
 #[test]
-fn test_precollect_rejects_multiple_trait_impl_blocks_for_same_pair() {
+fn test_resolve_rejects_multiple_trait_impl_blocks_for_same_pair() {
     let module_stages = vec![vec![staged_module(
         "Numeric",
         parse_module_ast(
@@ -278,11 +280,20 @@ impl Numeric for Int {
         ),
     )]];
 
-    let err = precollect_declaration_index(&module_stages)
-        .expect_err("duplicate trait impl pair must fail");
+    let declaration_index =
+        precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    let err = resolve_staged_program(
+        &module_stages,
+        Vec::new(),
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+    .expect_err("duplicate trait impl pair must fail");
     assert!(err
         .message
-        .contains("Multiple trait impl blocks for `Numeric for Int` are not allowed"));
+        .contains("Multiple trait impl blocks for `"));
+    assert!(err.message.contains("Numeric"));
+    assert!(err.message.contains("Int"));
 }
 
 #[test]

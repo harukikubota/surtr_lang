@@ -468,6 +468,17 @@ impl Checker {
         self.function_ids_by_name.insert(key, id.clone());
     }
 
+    pub(super) fn trait_key(&self, id: &ResolvedId) -> String {
+        id.qualified_name.clone().unwrap_or_else(|| id.name.clone())
+    }
+
+    pub(super) fn trait_key_by_short_name(&self, short_name: &str) -> Option<String> {
+        self.traits
+            .values()
+            .find(|info| info.id.name == short_name)
+            .map(|info| self.trait_key(&info.id))
+    }
+
     pub(super) fn trait_target_name(&self, ty: &Ty) -> Option<String> {
         match self.resolve_ty(ty) {
             Ty::Int => Some("Int".into()),
@@ -485,6 +496,27 @@ impl Checker {
     pub(super) fn trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
         self.trait_target_name(ty)
             .is_some_and(|target_name| self.trait_impls.contains_key(&(trait_name.into(), target_name)))
+    }
+
+    pub(super) fn trait_dispatch_override(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        target_name: &str,
+    ) -> Option<TraitDispatchTarget> {
+        let Some(numeric_trait) = self.trait_key_by_short_name("Numeric") else {
+            return None;
+        };
+        if trait_name != numeric_trait || !matches!(target_name, "Int" | "Float") {
+            return None;
+        }
+        match method_name {
+            "add" => Some(TraitDispatchTarget::BinOp(BinOp::Add)),
+            "sub" => Some(TraitDispatchTarget::BinOp(BinOp::Sub)),
+            "mul" => Some(TraitDispatchTarget::BinOp(BinOp::Mul)),
+            "safe_div" => Some(TraitDispatchTarget::Builtin("safe_div".into())),
+            _ => None,
+        }
     }
 
     pub(super) fn resolve_trait_method_signature(
@@ -520,7 +552,7 @@ impl Checker {
         method: &TraitImplMethodInfo,
         self_ty: &Ty,
         fallback_ret_ty: &AstTy,
-    ) -> Result<(Vec<Ty>, Ty), TypeError> {
+    ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
         let mut tyvars = HashMap::new();
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
         let params = method
@@ -542,7 +574,15 @@ impl Checker {
             self_ty,
             &mut tyvars,
         )?;
-        Ok((params, ret))
+        let type_params = method
+            .type_params
+            .iter()
+            .filter_map(|param| match tyvars.get(&param.name) {
+                Some(Ty::Var(var)) => Some(*var),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        Ok((params, ret, type_params))
     }
 
     pub(super) fn predeclare_traits(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
@@ -550,12 +590,13 @@ impl Checker {
             let Resolved::TraitDef(span, id, methods, _) = stmt else {
                 continue;
             };
+            let trait_key = self.trait_key(id);
             let mut method_map = HashMap::new();
             for method in methods {
                 if let Some(qualified_name) = &method.id.qualified_name {
                     self.trait_methods_by_qualified_name.insert(
                         qualified_name.clone(),
-                        (id.name.clone(), method.id.name.clone()),
+                        (trait_key.clone(), method.id.name.clone()),
                     );
                 }
                 method_map.insert(
@@ -570,7 +611,7 @@ impl Checker {
                 );
             }
             self.traits.insert(
-                id.name.clone(),
+                trait_key,
                 TraitInfo {
                     id: id.clone(),
                     methods: method_map,
@@ -584,7 +625,8 @@ impl Checker {
                 continue;
             };
 
-            let trait_info = self.traits.get(&trait_id.name).cloned().ok_or_else(|| TypeError {
+            let trait_key = self.trait_key(trait_id);
+            let trait_info = self.traits.get(&trait_key).cloned().ok_or_else(|| TypeError {
                 message: format!("Unknown trait: {}", trait_id.name),
                 span: span.clone(),
                 hint: None,
@@ -600,15 +642,21 @@ impl Checker {
             let mut method_map = HashMap::new();
             for method in methods {
                 method_map.insert(
-                    method.id.name.clone(),
+                    method.method_name.clone(),
                     TraitImplMethodInfo {
-                        id: method.id.clone(),
+                        method_name: method.method_name.clone(),
+                        function_id: method.function_id.clone(),
                         type_params: method.type_params.clone(),
                         params: method.params.clone(),
                         ret_ty: method.ret_ty.clone(),
                         body: method.body.clone(),
                         attrs: method.attrs.clone(),
                         span: method.span.clone(),
+                        dispatch_override: self.trait_dispatch_override(
+                            &trait_key,
+                            &method.method_name,
+                            &target_name,
+                        ),
                     },
                 );
             }
@@ -654,7 +702,7 @@ impl Checker {
 
                 let (trait_params, trait_ret) =
                     self.resolve_trait_method_signature(trait_method, &target_ty)?;
-                let (impl_params, impl_ret) = self.resolve_trait_impl_method_signature(
+                let (impl_params, impl_ret, _) = self.resolve_trait_impl_method_signature(
                     impl_method,
                     &target_ty,
                     &trait_method.ret_ty,
@@ -710,7 +758,7 @@ impl Checker {
             }
 
             self.trait_impls.insert(
-                (trait_id.name.clone(), target_name.clone()),
+                (trait_key, target_name.clone()),
                 TraitImplInfo {
                     trait_id: trait_id.clone(),
                     target_name,
@@ -890,6 +938,68 @@ impl Checker {
                 Resolved::BuiltinTypeDecl(_, _, _, _) => {}
                 Resolved::ResultCtorDecl(_, _, _, _, _) => {}
                 _ => {}
+            }
+        }
+
+        let mut trait_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+        trait_impls.sort_by(|left, right| {
+            let left_key = (
+                self.trait_key(&left.trait_id),
+                left.target_name.clone(),
+            );
+            let right_key = (
+                self.trait_key(&right.trait_id),
+                right.target_name.clone(),
+            );
+            left_key.cmp(&right_key)
+        });
+
+        for trait_impl in trait_impls {
+            let trait_key = self.trait_key(&trait_impl.trait_id);
+            let trait_info = self.traits.get(&trait_key).cloned().ok_or_else(|| TypeError {
+                message: format!("Unknown trait: {}", trait_impl.trait_id.name),
+                span: trait_impl.trait_id.span.clone(),
+                hint: None,
+            })?;
+            let mut methods = trait_impl.methods.iter().collect::<Vec<_>>();
+            methods.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+
+            for (method_name, method) in methods {
+                self.register_function_id(&method.function_id);
+                let trait_method = trait_info.methods.get(method_name).ok_or_else(|| TypeError {
+                    message: format!(
+                        "Unknown trait method: {}::{}",
+                        trait_impl.trait_id.name, method_name
+                    ),
+                    span: method.span.clone(),
+                    hint: None,
+                })?;
+                let (param_tys, ret, type_params) = self.resolve_trait_impl_method_signature(
+                    method,
+                    &trait_impl.target_ty,
+                    &trait_method.ret_ty,
+                )?;
+                let param_names = method
+                    .params
+                    .iter()
+                    .map(|param| param.id.name.clone())
+                    .collect::<Vec<_>>();
+                self.env.bind_var(
+                    method.function_id.unique_id,
+                    Ty::UserFunc {
+                        fun_idx,
+                        type_params,
+                        params: param_tys,
+                        ret: Box::new(ret),
+                    },
+                );
+                self.user_func_params
+                    .insert(method.function_id.unique_id, param_names);
+                if Self::split_impl_method_name(&method.function_id.name).is_some() {
+                    self.impl_method_uids
+                        .insert(method.function_id.name.clone(), method.function_id.unique_id);
+                }
+                fun_idx += 1;
             }
         }
 

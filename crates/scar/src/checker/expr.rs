@@ -181,7 +181,7 @@ impl Checker {
                 ty: Ty::Unit,
                 span: span.clone(),
                 node: TypedInner::TraitDef(
-                    id.name.clone(),
+                    self.trait_key(id),
                     methods.iter().map(|method| method.id.name.clone()).collect(),
                 ),
             }),
@@ -531,52 +531,28 @@ impl Checker {
             }
             concrete => {
                 let target_name = self.trait_target_name(&concrete)?;
-                let has_impl = self.trait_impl_exists(trait_name, &concrete);
-                let allow_numeric_builtin_fallback =
-                    trait_name == "Numeric" && matches!(target_name.as_str(), "Int" | "Float");
-                if !has_impl && !allow_numeric_builtin_fallback {
+                let impl_info = self
+                    .trait_impls
+                    .get(&(trait_name.into(), target_name.clone()))?;
+                let method = impl_info.methods.get(method_name)?;
+
+                if let Some(dispatch_override) = &method.dispatch_override {
+                    return Some(TraitDispatch::Static(dispatch_override.clone()));
+                }
+                let function_key = method
+                    .function_id
+                    .qualified_name
+                    .as_ref()
+                    .unwrap_or(&method.function_id.name);
+                let function_id = self.function_ids_by_name.get(function_key)?;
+                let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                let Ty::UserFunc { fun_idx, .. } = function_ty else {
                     return None;
-                }
-                match (trait_name, method_name, self.trait_target_name(&concrete).as_deref()) {
-                    ("Numeric", "add", Some("Int")) | ("Numeric", "add", Some("Float")) => {
-                        Some(TraitDispatch::Static(TraitDispatchTarget::BinOp(
-                            BinOp::Add,
-                        )))
-                    }
-                    ("Numeric", "sub", Some("Int")) | ("Numeric", "sub", Some("Float")) => {
-                        Some(TraitDispatch::Static(TraitDispatchTarget::BinOp(
-                            BinOp::Sub,
-                        )))
-                    }
-                    ("Numeric", "mul", Some("Int")) | ("Numeric", "mul", Some("Float")) => {
-                        Some(TraitDispatch::Static(TraitDispatchTarget::BinOp(
-                            BinOp::Mul,
-                        )))
-                    }
-                    ("Numeric", "safe_div", Some("Int"))
-                    | ("Numeric", "safe_div", Some("Float")) => Some(TraitDispatch::Static(
-                        TraitDispatchTarget::Builtin("safe_div".into()),
-                    )),
-                    ("Numeric", "abs", Some("Int"))
-                    | ("Numeric", "min", Some("Int"))
-                    | ("Numeric", "max", Some("Int"))
-                    | ("Numeric", "abs", Some("Float"))
-                    | ("Numeric", "min", Some("Float"))
-                    | ("Numeric", "max", Some("Float")) => {
-                        let target_name = self.trait_target_name(&concrete)?;
-                        let function_name = format!("{}::{}", target_name, method_name);
-                        let function_id = self.function_ids_by_name.get(&function_name)?;
-                        let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                        let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                            return None;
-                        };
-                        Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                            name: function_name,
-                            fun_idx: *fun_idx,
-                        }))
-                    }
-                    _ => None,
-                }
+                };
+                Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                    name: method.function_id.name.clone(),
+                    fun_idx: *fun_idx,
+                }))
             }
         }
     }
@@ -1834,8 +1810,15 @@ impl Checker {
                 });
             }
             let receiver_ty = self.resolve_ty(&lt);
+            let numeric_trait = self
+                .trait_key_by_short_name("Numeric")
+                .ok_or_else(|| TypeError {
+                    message: "Unknown trait: Numeric".into(),
+                    span: span.clone(),
+                    hint: None,
+                })?;
             let dispatch = self
-                .trait_dispatch_target("Numeric", method_name, &receiver_ty)
+                .trait_dispatch_target(&numeric_trait, method_name, &receiver_ty)
                 .ok_or_else(|| TypeError {
                     message: format!(
                         "Operator {:?} requires both operands to implement Numeric",
@@ -1848,7 +1831,7 @@ impl Checker {
                 ty: self.resolve_ty(&receiver_ty),
                 span: span.clone(),
                 node: TypedInner::TraitCall {
-                    trait_name: "Numeric".into(),
+                    trait_name: numeric_trait,
                     method_name: method_name.into(),
                     receiver_ty,
                     dispatch,

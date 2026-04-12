@@ -717,13 +717,13 @@ impl Checker {
         })
     }
 
-    pub(super) fn check_trait_impl_def(
+    pub(super) fn check_trait_impl_items(
         &mut self,
         span: &Span,
         trait_id: &ResolvedId,
         target_ast_ty: &AstTy,
         methods: &[ResolvedTraitImplMethod],
-    ) -> Result<TypedNode, TypeError> {
+    ) -> Result<Vec<TypedNode>, TypeError> {
         let target_ty =
             self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
         let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
@@ -731,37 +731,45 @@ impl Checker {
             span: Self::ast_ty_span(target_ast_ty).clone(),
             hint: None,
         })?;
-        let trait_info = self.traits.get(&trait_id.name).cloned().ok_or_else(|| TypeError {
+        let trait_key = self.trait_key(trait_id);
+        let trait_info = self.traits.get(&trait_key).cloned().ok_or_else(|| TypeError {
             message: format!("Unknown trait: {}", trait_id.name),
             span: span.clone(),
             hint: None,
         })?;
+        let mut typed_nodes = vec![TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::TraitImplDef(trait_key.clone(), target_name.clone()),
+        }];
 
         for method in methods {
             let trait_method =
                 trait_info
                     .methods
-                    .get(&method.id.name)
+                    .get(&method.method_name)
                     .cloned()
                     .ok_or_else(|| TypeError {
                         message: format!(
                             "Trait impl {} for {} defines unknown method `{}`",
-                            trait_id.name, target_name, method.id.name
+                            trait_id.name, target_name, method.method_name
                         ),
                         span: method.span.clone(),
                         hint: None,
                     })?;
 
             let inline_method = TraitImplMethodInfo {
-                id: method.id.clone(),
+                method_name: method.method_name.clone(),
+                function_id: method.function_id.clone(),
                 type_params: method.type_params.clone(),
                 params: method.params.clone(),
                 ret_ty: method.ret_ty.clone(),
                 body: method.body.clone(),
                 attrs: method.attrs.clone(),
                 span: method.span.clone(),
+                dispatch_override: None,
             };
-            let (param_tys, expected_ret) = self.resolve_trait_impl_method_signature(
+            let (param_tys, expected_ret, type_params) = self.resolve_trait_impl_method_signature(
                 &inline_method,
                 &target_ty,
                 &trait_method.ret_ty,
@@ -786,10 +794,7 @@ impl Checker {
                 body_checker.current_impl_struct_target = Some(target_name.clone());
             }
             body_checker.function_return_ty = Some(expected_ret.clone());
-            body_checker.current_function_symbol = Some(format!(
-                "{}::{} for {}",
-                trait_id.name, method.id.name, target_name
-            ));
+            body_checker.current_function_symbol = Some(method.function_id.name.clone());
             let typed_body = body_checker.check_node(&method.body)?;
             let typed_body = body_checker.resolve_typed_node(typed_body);
             self.absorb_child_progress(&body_checker);
@@ -811,13 +816,61 @@ impl Checker {
                 });
             }
 
-            let _ = typed_params;
+            let fun_idx = match self.env.lookup_var(method.function_id.unique_id) {
+                Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
+                _ => {
+                    return Err(TypeError {
+                        message: format!("Undefined function: {}", method.function_id.name),
+                        span: method.span.clone(),
+                        hint: None,
+                    });
+                }
+            };
+            let typed_type_params = method
+                .type_params
+                .iter()
+                .zip(type_params.iter())
+                .map(|(param, ty_var)| TypedTypeParam {
+                    name: param.name.clone(),
+                    ty_var: *ty_var,
+                    bound: param.bound.clone(),
+                })
+                .collect::<Vec<_>>();
+            typed_nodes.push(TypedNode {
+                ty: Ty::Unit,
+                span: method.span.clone(),
+                node: TypedInner::Def(
+                    fun_idx,
+                    method.function_id.clone(),
+                    typed_type_params,
+                    typed_params,
+                    expected_ret,
+                    Box::new(typed_body),
+                ),
+            });
         }
 
+        Ok(typed_nodes)
+    }
+
+    pub(super) fn check_trait_impl_def(
+        &mut self,
+        span: &Span,
+        trait_id: &ResolvedId,
+        target_ast_ty: &AstTy,
+        _methods: &[ResolvedTraitImplMethod],
+    ) -> Result<TypedNode, TypeError> {
+        let target_ty =
+            self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+        let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
+            message: "trait impl target must be a concrete named type".into(),
+            span: Self::ast_ty_span(target_ast_ty).clone(),
+            hint: None,
+        })?;
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::TraitImplDef(trait_id.name.clone(), target_name),
+            node: TypedInner::TraitImplDef(self.trait_key(trait_id), target_name),
         })
     }
 

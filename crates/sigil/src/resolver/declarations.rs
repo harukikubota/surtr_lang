@@ -37,7 +37,7 @@ pub struct DeclarationEntry {
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
 
 pub(super) fn is_module_visible_declaration(kind: &DeclarationKind) -> bool {
-    !matches!(kind, DeclarationKind::BuiltinType | DeclarationKind::Trait)
+    !matches!(kind, DeclarationKind::BuiltinType)
 }
 
 pub(super) fn is_importable_declaration(kind: &DeclarationKind) -> bool {
@@ -46,7 +46,6 @@ pub(super) fn is_importable_declaration(kind: &DeclarationKind) -> bool {
         DeclarationKind::BuiltinType
             | DeclarationKind::ImplCtorNew
             | DeclarationKind::Struct
-            | DeclarationKind::Trait
     )
 }
 
@@ -86,8 +85,25 @@ fn ast_ty_key(ty: &AstTy) -> String {
     }
 }
 
-fn trait_impl_pair_key(trait_name: &str, target: &AstTy) -> String {
-    format!("{} for {}", trait_name, ast_ty_key(target))
+pub(super) fn trait_impl_method_qualified_name(
+    module_path: Option<&str>,
+    trait_name: &str,
+    target: &AstTy,
+    method_name: &str,
+    span_start: usize,
+) -> String {
+    let private_module = match module_path {
+        Some(module_path) if !module_path.is_empty() => format!("{}::__traitimpl__", module_path),
+        _ => "__traitimpl__".to_string(),
+    };
+    format!(
+        "{}::{}::{}::{}::{}",
+        private_module,
+        trait_name,
+        ast_ty_key(target),
+        method_name,
+        span_start
+    )
 }
 
 fn rewrite_self_type(ty: AstTy, target: &str) -> AstTy {
@@ -425,8 +441,6 @@ pub fn precollect_declaration_index(
 ) -> Result<DeclarationIndex, ResolveError> {
     let mut index = DeclarationIndex::new();
     let mut seen_impl_targets = HashSet::new();
-    let mut seen_trait_impl_pairs = HashSet::new();
-
     for (stage_index, stage) in module_stages.iter().enumerate() {
         for module in stage {
             let mut local_types: HashMap<String, DeclarationKind> = HashMap::new();
@@ -537,7 +551,11 @@ pub fn precollect_declaration_index(
                 }
 
                 if let Ast::TraitDef(span, name, methods, _) = stmt {
-                    let fq_name = name.clone();
+                    let fq_name = if module.module_path.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{}::{}", module.module_path, name)
+                    };
                     if let Some(prev) = index.get(&fq_name) {
                         return Err(ResolveError {
                             message: format!(
@@ -550,7 +568,7 @@ pub fn precollect_declaration_index(
                     index.insert(
                         fq_name.clone(),
                         DeclarationEntry {
-                            module_path: String::new(),
+                            module_path: module.module_path.clone(),
                             name: name.clone(),
                             fq_name,
                             kind: DeclarationKind::Trait,
@@ -559,7 +577,14 @@ pub fn precollect_declaration_index(
                     );
 
                     for method in methods {
-                        let method_fq_name = trait_method_qualified_name(name, &method.name);
+                        let method_name = trait_method_qualified_name(name, &method.name);
+                        let qualified_trait_name = if module.module_path.is_empty() {
+                            name.clone()
+                        } else {
+                            format!("{}::{}", module.module_path, name)
+                        };
+                        let method_fq_name =
+                            trait_method_qualified_name(&qualified_trait_name, &method.name);
                         if let Some(prev) = index.get(&method_fq_name) {
                             return Err(ResolveError {
                                 message: format!(
@@ -572,8 +597,8 @@ pub fn precollect_declaration_index(
                         index.insert(
                             method_fq_name.clone(),
                             DeclarationEntry {
-                                module_path: name.clone(),
-                                name: method.name.clone(),
+                                module_path: module.module_path.clone(),
+                                name: method_name,
                                 fq_name: method_fq_name,
                                 kind: DeclarationKind::TraitMethod,
                                 stage_index,
@@ -583,26 +608,45 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitImplDef(span, trait_name, target_ty, methods) = stmt {
-                    let pair_key = trait_impl_pair_key(trait_name, target_ty);
-                    if !seen_trait_impl_pairs.insert(pair_key.clone()) {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Multiple trait impl blocks for `{}` are not allowed",
-                                pair_key
-                            ),
-                            span: span.clone(),
-                        });
-                    }
-
+                if let Ast::TraitImplDef(span, _trait_name, _target_ty, methods) = stmt {
                     for method in methods {
-                        if !matches!(method, Ast::Def(_, _, _, _, _, _, _)) {
+                        let Ast::Def(method_span, method_name, _, _, _, _, _) = method else {
                             return Err(ResolveError {
                                 message: "trait impl body may only contain `def` declarations"
                                     .to_string(),
                                 span: span.clone(),
                             });
+                        };
+                        let internal_name = trait_impl_method_qualified_name(
+                            Some(module.module_path.as_str()),
+                            _trait_name,
+                            _target_ty,
+                            method_name,
+                            method_span.start,
+                        );
+                        if let Some(prev) = index.get(&internal_name) {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
+                                    internal_name, prev.stage_index, prev.module_path
+                                ),
+                                span: method_span.clone(),
+                            });
                         }
+                        index.insert(
+                            internal_name.clone(),
+                            DeclarationEntry {
+                                module_path: if module.module_path.is_empty() {
+                                    "__traitimpl__".to_string()
+                                } else {
+                                    format!("{}::__traitimpl__", module.module_path)
+                                },
+                                name: internal_name.clone(),
+                                fq_name: internal_name,
+                                kind: DeclarationKind::ImplMethod,
+                                stage_index,
+                            },
+                        );
                     }
                     continue;
                 }
@@ -748,7 +792,7 @@ impl Resolver {
         }
 
         let mut lowered = Vec::new();
-        let mut seen_impl_targets = HashSet::new();
+                let mut seen_impl_targets = HashSet::new();
 
         for stmt in stmts {
             match stmt {
@@ -954,23 +998,27 @@ impl Resolver {
                     self.scope.define_with_id(name, uid);
 
                     for method in methods {
-                        let qualified_method = trait_method_qualified_name(name, &method.name);
-                        if !declared_in_batch.insert(qualified_method.clone()) {
+                        let method_alias = trait_method_qualified_name(name, &method.name);
+                        let qualified_method = trait_method_qualified_name(
+                            &self.qualify_current_declaration_name(name),
+                            &method.name,
+                        );
+                        if !declared_in_batch.insert(method_alias.clone()) {
                             return Err(ResolveError {
                                 message: format!(
                                     "Duplicate top-level definition: {}",
-                                    qualified_method
+                                    method_alias
                                 ),
                                 span: method.span.clone(),
                             });
                         }
                         if !self.allow_top_level_shadowing
-                            && self.scope.lookup(&qualified_method).is_some()
+                            && self.scope.lookup(&method_alias).is_some()
                         {
                             return Err(ResolveError {
                                 message: format!(
                                     "Duplicate top-level definition: {}",
-                                    qualified_method
+                                    method_alias
                                 ),
                                 span: method.span.clone(),
                             });
@@ -981,12 +1029,12 @@ impl Resolver {
                             .copied()
                             .unwrap_or_else(|| self.scope.reserve_id());
                         self.predeclared_ids
-                            .entry(qualified_method.clone())
+                            .entry(method_alias.clone())
                             .or_default()
                             .push_back(method_uid);
                         self.declaration_uid_kinds
                             .insert(method_uid, DeclarationKind::TraitMethod);
-                        self.scope.define_with_id(&qualified_method, method_uid);
+                        self.scope.define_with_id(&method_alias, method_uid);
                     }
                 }
                 Ast::BuiltinDecl(_, name, _, _, _) => {
