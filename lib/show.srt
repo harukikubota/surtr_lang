@@ -4,6 +4,7 @@ Standard `Show` trait declaration.
 Standard runtime-visible values may use compiler-provided implementations,
 while user-defined named types can provide explicit impls.
 """
+@@autoimport
 deftrait Show {
   def to_string(self: Self) -> String
 }

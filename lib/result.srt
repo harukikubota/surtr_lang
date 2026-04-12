@@ -46,12 +46,8 @@ language keeps `Result` distinct from the future general `Enum` surface.
 `Result` is auto-imported. `Ok(...)` / `Err(...)` belong to the `Result` module,
 but they are available without an explicit `import Result`.
 """
+@@autoimport
 defmod Result {
-  @@doc """
-  Placeholder entry that keeps the `Result` module present while the API grows.
-  """
-  def dummy() { () }
-
   @@doc """
   Helper for matching on `Result` success vs failure.
   This is not a general-purpose combinator, but it is a common enough pattern that it deserves a helper.

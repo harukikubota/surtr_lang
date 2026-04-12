@@ -176,6 +176,7 @@ fn parse_program_with_module_sources(
                     module_path: module.module_path,
                     ast: module.ast,
                     module_doc: module.module_doc,
+                    auto_import: module.auto_import,
                 })
                 .collect(),
         );

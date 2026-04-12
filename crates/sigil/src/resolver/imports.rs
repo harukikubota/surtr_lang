@@ -1,6 +1,14 @@
 use super::declarations::{is_importable_declaration, is_module_visible_declaration};
-use super::scope_init::{initialize_scope, AUTO_IMPORT_MODULES, AUTO_IMPORT_TRAITS};
+use super::scope_init::initialize_scope;
 use super::*;
+
+fn auto_import_trait_names(declaration_index: &DeclarationIndex) -> HashSet<String> {
+    declaration_index
+        .values()
+        .filter(|entry| entry.kind == DeclarationKind::Trait && entry.auto_import)
+        .map(|entry| entry.name.clone())
+        .collect()
+}
 
 pub(super) fn build_global_scope(
     index: &DeclarationIndex,
@@ -40,6 +48,7 @@ pub(super) fn build_global_scope(
 
 pub(super) fn build_module_scope(
     global_scope: &Scope,
+    auto_import_modules: &[String],
     declaration_index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
     declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
@@ -49,11 +58,18 @@ pub(super) fn build_module_scope(
 ) -> Result<Scope, ResolveError> {
     let mut scope = global_scope.clone();
     let mut import_state = ImportState::default();
+    let auto_import_traits = auto_import_trait_names(declaration_index);
+    let auto_import_module_set = auto_import_modules
+        .iter()
+        .map(|name| name.as_str())
+        .collect::<HashSet<_>>();
     let mut import_context = ImportContext {
+        auto_import_modules: &auto_import_module_set,
         declaration_index,
         declaration_uids,
         declaration_uid_kinds,
         current_stage_index,
+        auto_import_traits: &auto_import_traits,
         import_state: &mut import_state,
     };
 
@@ -63,8 +79,8 @@ pub(super) fn build_module_scope(
         }
     }
 
-    for auto_import in AUTO_IMPORT_MODULES {
-        if current_module_path == Some(*auto_import) {
+    for auto_import in auto_import_modules {
+        if current_module_path == Some(auto_import.as_str()) {
             continue;
         }
         import_module_into_scope(
@@ -75,7 +91,7 @@ pub(super) fn build_module_scope(
             Span { start: 0, end: 0 },
         )?;
     }
-    for auto_import in AUTO_IMPORT_TRAITS {
+    for auto_import in &auto_import_traits {
         import_trait_into_scope(
             &mut scope,
             &mut import_context,
@@ -102,10 +118,12 @@ pub(super) fn build_module_scope(
 }
 
 struct ImportContext<'a> {
+    auto_import_modules: &'a HashSet<&'a str>,
     declaration_index: &'a DeclarationIndex,
     declaration_uids: &'a HashMap<String, u32>,
     declaration_uid_kinds: &'a HashMap<u32, DeclarationKind>,
     current_stage_index: usize,
+    auto_import_traits: &'a HashSet<String>,
     import_state: &'a mut ImportState,
 }
 
@@ -129,19 +147,6 @@ fn apply_import_to_scope(
     span: Span,
 ) -> Result<(), ResolveError> {
     let module_name = path.segments.join("::");
-    if AUTO_IMPORT_MODULES
-        .iter()
-        .chain(AUTO_IMPORT_TRAITS.iter())
-        .any(|auto| *auto == module_name)
-    {
-        return Err(ResolveError {
-            message: format!(
-                "Duplicate import: `{}` is auto-imported and cannot be explicitly imported",
-                module_name
-            ),
-            span,
-        });
-    }
     match spec {
         spire::ast::ImportSpec::All => {
             import_module_into_scope(scope, import_context, &module_name, false, span)
@@ -200,7 +205,7 @@ fn import_module_into_scope(
         imported_any = true;
     }
 
-    if imported_any || (auto_import && AUTO_IMPORT_MODULES.contains(&module_name)) {
+    if imported_any || (auto_import && import_context.auto_import_modules.contains(module_name)) {
         Ok(())
     } else if blocked_by_stage {
         Err(ResolveError {
@@ -450,6 +455,14 @@ fn bind_import_name(
             return Ok(());
         }
         if auto_import
+            && !import_context
+                .declaration_uid_kinds
+                .contains_key(&existing_uid)
+        {
+            scope.define_with_id(short_name, uid);
+            return Ok(());
+        }
+        if auto_import
             && module_name == "Result"
             && matches!(short_name, "Ok" | "Err")
             && !import_context
@@ -470,6 +483,61 @@ fn bind_import_name(
             return Ok(());
         }
         if auto_import {
+            let existing_name = import_context
+                .declaration_uids
+                .iter()
+                .find_map(|(fq_name, known_uid)| (*known_uid == existing_uid).then_some(fq_name))
+                .cloned()
+                .unwrap_or_else(|| format!("<uid:{}>", existing_uid));
+            let existing_is_auto_imported = import_context
+                .declaration_index
+                .get(&existing_name)
+                .is_some_and(|entry| {
+                    entry.auto_import
+                        || import_context
+                            .auto_import_modules
+                            .contains(entry.module_path.as_str())
+                        || import_context
+                            .auto_import_traits
+                            .contains(&entry.module_path)
+                });
+            if !existing_is_auto_imported {
+                return Ok(());
+            }
+            let incoming_name = import_context
+                .declaration_uids
+                .iter()
+                .find_map(|(fq_name, known_uid)| (*known_uid == uid).then_some(fq_name))
+                .cloned()
+                .unwrap_or_else(|| format!("{}::{}", module_name, short_name));
+            return Err(ResolveError {
+                message: format!(
+                    "Auto-import conflict for `{}` between `{}` and `{}`",
+                    short_name, existing_name, incoming_name
+                ),
+                span,
+            });
+        }
+        let existing_name = import_context
+            .declaration_uids
+            .iter()
+            .find_map(|(fq_name, known_uid)| (*known_uid == existing_uid).then_some(fq_name))
+            .cloned()
+            .unwrap_or_else(|| format!("<uid:{}>", existing_uid));
+        let existing_is_auto_imported = import_context
+            .declaration_index
+            .get(&existing_name)
+            .is_some_and(|entry| {
+                entry.auto_import
+                    || import_context
+                        .auto_import_modules
+                        .contains(entry.module_path.as_str())
+                    || import_context
+                        .auto_import_traits
+                        .contains(&entry.module_path)
+            });
+        if existing_is_auto_imported {
+            scope.define_with_id(short_name, uid);
             return Ok(());
         }
         return Err(ResolveError {

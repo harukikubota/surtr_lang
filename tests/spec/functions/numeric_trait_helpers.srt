@@ -10,6 +10,7 @@ def pick_max<$N: Numeric>(left: $N, right: $N) -> $N {
   Numeric::max(left, right)
 }
 
+print(to_string(add(1, 2)))
 print(to_string(double(21)))
 print(to_string(double(1.25)))
 print(to_string(pick_max(3, 7)))

@@ -18,6 +18,7 @@ Use this layer for operations that are not owned by a single primitive module
 such as conditional special forms, printing, debug inspection, sequence
 decomposition, and process-oriented entrypoint control.
 """
+@@autoimport
 defmod Kernel {
   @@doc """
   Conditional execution for side-effect-oriented code paths.

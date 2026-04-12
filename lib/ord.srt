@@ -3,6 +3,7 @@ Standard `Ord` trait declaration.
 `Ord` models ordering comparisons for values that can be ordered.
 Operators and call-style helpers lower through this trait in V1.
 """
+@@autoimport
 deftrait Ord {
   def lt(self: Self, rhs: Self) -> Boolean
   def lte(self: Self, rhs: Self) -> Boolean

@@ -1,3 +1,0 @@
-import Result::Ok;
-
-print(inspect(Ok(1)))

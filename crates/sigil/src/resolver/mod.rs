@@ -33,6 +33,19 @@ use self::declarations::{
 };
 use self::imports::{build_global_scope, build_module_scope};
 
+fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut seen = HashSet::new();
+    for stage in module_stages {
+        for module in stage {
+            if module.auto_import && seen.insert(module.module_path.clone()) {
+                names.push(module.module_path.clone());
+            }
+        }
+    }
+    names
+}
+
 /// Resolve all identifiers in the AST to unique references.
 pub fn resolve(ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
     let mut resolver = Resolver::new();
@@ -48,12 +61,14 @@ pub fn resolve_staged_program(
     let declaration_uids = assign_declaration_uids(declaration_index);
     let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
     let global_scope = build_global_scope(declaration_index, &declaration_uids);
+    let auto_import_modules = auto_import_module_names(module_stages);
     let mut resolved = Vec::new();
 
     for (stage_index, stage) in module_stages.iter().enumerate() {
         for module in stage {
             let scope = build_module_scope(
                 &global_scope,
+                &auto_import_modules,
                 declaration_index,
                 &declaration_uids,
                 &declaration_uid_kinds,
@@ -72,6 +87,7 @@ pub fn resolve_staged_program(
 
     let user_scope = build_module_scope(
         &global_scope,
+        &auto_import_modules,
         declaration_index,
         &declaration_uids,
         &declaration_uid_kinds,
@@ -97,8 +113,10 @@ pub fn build_scope_for_module(
     let declaration_uids = assign_declaration_uids(&declaration_index);
     let declaration_uid_kinds = declaration_uid_kind_map(&declaration_index, &declaration_uids);
     let global_scope = build_global_scope(&declaration_index, &declaration_uids);
+    let auto_import_modules = auto_import_module_names(module_stages);
     build_module_scope(
         &global_scope,
+        &auto_import_modules,
         &declaration_index,
         &declaration_uids,
         &declaration_uid_kinds,

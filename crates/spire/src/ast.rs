@@ -14,6 +14,7 @@ pub type Symbol = String;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeclAttrs {
     pub doc: Option<String>,
+    pub auto_import: bool,
 }
 
 /// Surface builtin type head declaration: `List<$A>`, `Result<$T>`, `Int`, ...

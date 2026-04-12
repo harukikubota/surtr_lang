@@ -69,6 +69,7 @@ mod tests {
                         module_path,
                         ast: module_ast,
                         module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
                     });
                 }
                 Ast::Import(_, _, _) => {}
@@ -97,6 +98,7 @@ mod tests {
                 module_path: fallback_module_path.to_string(),
                 ast: global_ast,
                 module_doc: None,
+                auto_import: false,
             });
         }
 
@@ -107,6 +109,7 @@ mod tests {
                 module_path: String::new(),
                 ast: global_ast,
                 module_doc: None,
+                auto_import: false,
             });
         }
 

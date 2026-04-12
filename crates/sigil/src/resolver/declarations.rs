@@ -1,4 +1,4 @@
-use super::scope_init::{initialize_scope, AUTO_IMPORT_MODULES};
+use super::scope_init::initialize_scope;
 use super::*;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -6,6 +6,7 @@ pub struct StagedModuleAst {
     pub module_path: String,
     pub ast: Vec<Ast>,
     pub module_doc: Option<String>,
+    pub auto_import: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +33,7 @@ pub struct DeclarationEntry {
     pub fq_name: String,
     pub kind: DeclarationKind,
     pub stage_index: usize,
+    pub auto_import: bool,
 }
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
@@ -544,13 +546,14 @@ pub fn precollect_declaration_index(
                                 fq_name,
                                 kind,
                                 stage_index,
+                                auto_import: false,
                             },
                         );
                     }
                     continue;
                 }
 
-                if let Ast::TraitDef(span, name, methods, _) = stmt {
+                if let Ast::TraitDef(span, name, methods, attrs) = stmt {
                     let fq_name = if module.module_path.is_empty() {
                         name.clone()
                     } else {
@@ -573,6 +576,7 @@ pub fn precollect_declaration_index(
                             fq_name,
                             kind: DeclarationKind::Trait,
                             stage_index,
+                            auto_import: attrs.auto_import,
                         },
                     );
 
@@ -602,6 +606,7 @@ pub fn precollect_declaration_index(
                                 fq_name: method_fq_name,
                                 kind: DeclarationKind::TraitMethod,
                                 stage_index,
+                                auto_import: false,
                             },
                         );
                     }
@@ -645,6 +650,7 @@ pub fn precollect_declaration_index(
                                 fq_name: internal_name,
                                 kind: DeclarationKind::ImplMethod,
                                 stage_index,
+                                auto_import: false,
                             },
                         );
                     }
@@ -674,6 +680,7 @@ pub fn precollect_declaration_index(
                             fq_name,
                             kind: DeclarationKind::Enum,
                             stage_index,
+                            auto_import: false,
                         },
                     );
 
@@ -701,6 +708,7 @@ pub fn precollect_declaration_index(
                                 fq_name: variant_fq_name,
                                 kind: DeclarationKind::EnumVariant,
                                 stage_index,
+                                auto_import: false,
                             },
                         );
                     }
@@ -761,6 +769,7 @@ pub fn precollect_declaration_index(
                         fq_name,
                         kind,
                         stage_index,
+                        auto_import: false,
                     },
                 );
             }
@@ -888,21 +897,7 @@ impl Resolver {
     pub(super) fn validate_auto_import_conflicts(&self, stmts: &[Ast]) -> Result<(), ResolveError> {
         for stmt in stmts {
             match stmt {
-                Ast::Import(span, path, _) => {
-                    let module_name = path.segments.join("::");
-                    if AUTO_IMPORT_MODULES
-                        .iter()
-                        .any(|auto| auto == &module_name.as_str())
-                    {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Duplicate import: `{}` is auto-imported and cannot be explicitly imported",
-                                module_name
-                            ),
-                            span: span.clone(),
-                        });
-                    }
-                }
+                Ast::Import(_, _, _) => {}
                 Ast::Defmod(_, _, body, _) => self.validate_auto_import_conflicts(body)?,
                 _ => {}
             }

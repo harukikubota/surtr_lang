@@ -12,6 +12,7 @@ live at the top level of their corresponding files, and the abstract `Error`
 type itself lives in `error.srt`.
 """
 
+@@autoimport
 # `defmod` introduces a module namespace.
 # Bootstrap is the first auto-imported standard module and acts as the fixed
 # stage-0 anchor for the loader.

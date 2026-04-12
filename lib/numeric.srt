@@ -8,6 +8,7 @@ Dispatch is compile-time only: implementations lower to existing concrete
 opcodes, builtins, or user functions rather than introducing runtime trait
 objects.
 """
+@@autoimport
 deftrait Numeric {
   def add(self: Self, rhs: Self) -> Self
   def sub(self: Self, rhs: Self) -> Self

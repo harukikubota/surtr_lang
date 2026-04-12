@@ -32,6 +32,16 @@ fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
         module_path: module_path.to_string(),
         ast,
         module_doc: None,
+        auto_import: matches!(module_path, "Bootstrap" | "Kernel" | "Result"),
+    }
+}
+
+fn staged_auto_import_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
+    StagedModuleAst {
+        module_path: module_path.to_string(),
+        ast,
+        module_doc: None,
+        auto_import: true,
     }
 }
 
@@ -1232,25 +1242,152 @@ fn test_closure_param_annotations_are_preserved() {
 }
 
 #[test]
-fn test_explicit_auto_import_is_rejected() {
-    let err = parse_and_resolve(
-        r#"import Bootstrap;
-print("ok")"#,
-    )
-    .expect_err("explicit auto-import must fail");
-    assert!(err.message.contains("Duplicate import"));
-    assert!(err.message.contains("Bootstrap"));
+fn test_std_module_is_auto_imported_from_module_attribute() {
+    let module_stages = vec![vec![staged_auto_import_module(
+        "Prelude",
+        parse_module_ast(r#"def greet() -> String { "hi" }"#, "Prelude"),
+    )]];
+
+    let resolved = resolve_user_with_modules(r#"value = greet()"#, &module_stages)
+        .expect("auto-import module should inject members");
+
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, _) => match func.as_ref() {
+                Resolved::Var(_, id) => {
+                    assert_eq!(id.name, "greet");
+                    assert_eq!(id.qualified_name.as_deref(), Some("Prelude::greet"));
+                }
+                other => panic!("expected imported function var, got {:?}", other),
+            },
+            other => panic!("expected app, got {:?}", other),
+        },
+        other => panic!("expected bind, got {:?}", other),
+    }
 }
 
 #[test]
-fn test_explicit_kernel_auto_import_is_rejected() {
-    let err = parse_and_resolve(
-        r#"import Kernel;
-print(to_string(add(1, 2)))"#,
+fn test_explicit_import_of_autoimport_module_is_allowed() {
+    let module_stages = vec![vec![staged_auto_import_module(
+        "Prelude",
+        parse_module_ast(r#"def greet() -> String { "hi" }"#, "Prelude"),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"import Prelude;
+value = greet()"#,
+        &module_stages,
     )
-    .expect_err("explicit kernel auto-import must fail");
-    assert!(err.message.contains("Duplicate import"));
-    assert!(err.message.contains("Kernel"));
+    .expect("explicit import of autoimport module should be allowed");
+
+    assert!(resolved
+        .iter()
+        .any(|node| matches!(node, Resolved::Bind(_, _, _))));
+}
+
+#[test]
+fn test_std_trait_method_is_auto_imported_from_trait_attribute() {
+    let module_stages = vec![vec![staged_module(
+        "Numeric",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}"#,
+            "Numeric",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules("value = add(1, 2)", &module_stages)
+        .expect("std trait method should auto-import");
+
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert_eq!(args.len(), 2);
+                match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "add");
+                        assert!(id
+                            .qualified_name
+                            .as_deref()
+                            .is_some_and(|name| name.ends_with("::add")));
+                    }
+                    other => panic!("expected trait method var, got {:?}", other),
+                }
+            }
+            other => panic!("expected app, got {:?}", other),
+        },
+        other => panic!("expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_explicit_import_of_autoimport_trait_is_allowed() {
+    let module_stages = vec![vec![staged_module(
+        "Numeric",
+        parse_module_ast(
+            r#"@@autoimport
+deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}"#,
+            "Numeric",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"import Numeric;
+value = add(1, 2)"#,
+        &module_stages,
+    )
+    .expect("explicit import of autoimport trait should be allowed");
+
+    assert!(resolved
+        .iter()
+        .any(|node| matches!(node, Resolved::Bind(_, _, _))));
+}
+
+#[test]
+fn test_autoimport_trait_helper_conflict_is_rejected() {
+    let module_stages = vec![vec![
+        staged_module(
+            "Concat",
+            parse_module_ast(
+                r#"@@autoimport
+deftrait Concat {
+  def concat(self: Self, rhs: Self) -> Self
+}"#,
+                "Concat",
+            ),
+        ),
+        staged_module(
+            "Fake",
+            parse_module_ast(
+                r#"@@autoimport
+deftrait Fake {
+  def concat(self: Self) -> Self
+}"#,
+                "Fake",
+            ),
+        ),
+    ]];
+
+    let err = resolve_user_with_modules("value = 1", &module_stages)
+        .expect_err("conflicting auto-import trait helpers must fail");
+    assert!(err.message.contains("Auto-import conflict"));
+    assert!(err.message.contains("concat"));
+    assert!(err.message.contains("Concat"));
+    assert!(err.message.contains("Fake"));
 }
 
 #[test]

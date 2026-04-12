@@ -20,7 +20,6 @@ use crate::{
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub(crate) const REPL_AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel"];
 
 /// Error returned when loading a `.eldr` file into a REPL engine.
 #[derive(Debug)]
@@ -63,6 +62,7 @@ pub struct ReplEngine {
     result_metas: Vec<Option<forge::ChunkMeta>>,
     symbols: BTreeSet<String>,
     docs: Vec<DocEntry>,
+    auto_import_modules: BTreeSet<String>,
 }
 
 impl ReplEngine {
@@ -94,6 +94,7 @@ impl ReplEngine {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            auto_import_modules: BTreeSet::new(),
         };
         engine.bootstrap_std_modules()?;
         Ok(engine)
@@ -157,6 +158,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols,
             docs,
+            auto_import_modules: BTreeSet::new(),
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
         engine
@@ -178,6 +180,13 @@ impl ReplEngine {
         if module_stages.iter().all(|stage| stage.is_empty()) {
             return Ok(());
         }
+
+        self.auto_import_modules = module_stages
+            .iter()
+            .flat_map(|stage| stage.iter())
+            .filter(|module| module.auto_import)
+            .map(|module| module.module_path.clone())
+            .collect();
 
         let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
             Ok(index) => index,
@@ -320,6 +329,13 @@ impl ReplEngine {
         if module_stages.iter().all(|stage| stage.is_empty()) {
             return Ok(());
         }
+
+        self.auto_import_modules = module_stages
+            .iter()
+            .flat_map(|stage| stage.iter())
+            .filter(|module| module.auto_import)
+            .map(|module| module.module_path.clone())
+            .collect();
 
         let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
             Ok(index) => index,
@@ -523,14 +539,19 @@ impl ReplEngine {
 
     fn apply_repl_imports(&mut self, ast: &[Ast]) -> Result<ReplImportResult, ResolveError> {
         let mut result = ReplImportResult::default();
+        let auto_import_traits = self
+            .declaration_index
+            .values()
+            .filter(|entry| entry.kind == sigil::DeclarationKind::Trait && entry.auto_import)
+            .map(|entry| entry.name.clone())
+            .collect::<std::collections::BTreeSet<_>>();
         for stmt in ast {
             let Ast::Import(span, path, spec) = stmt else {
                 continue;
             };
             let module_name = path.segments.join("::");
-            if REPL_AUTO_IMPORT_MODULES
-                .iter()
-                .any(|auto| auto == &module_name.as_str())
+            if self.auto_import_modules.contains(&module_name)
+                || auto_import_traits.contains(&module_name)
             {
                 return Err(ResolveError {
                     message: format!(
@@ -1142,6 +1163,7 @@ pub(crate) fn parse_module_stages_from_sources(
                     module_path: lowered.module_path,
                     ast: lowered.ast,
                     module_doc: lowered.module_doc,
+                    auto_import: lowered.auto_import,
                 });
             }
         }

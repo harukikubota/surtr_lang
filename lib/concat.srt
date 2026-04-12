@@ -3,6 +3,7 @@ Standard `Concat` trait declaration.
 `Concat` models the `++` / `concat(...)` contract.
 V1 ships compiler-provided dispatch for `String`.
 """
+@@autoimport
 deftrait Concat {
   def concat(self: Self, rhs: Self) -> Self
 }

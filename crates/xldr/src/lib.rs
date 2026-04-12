@@ -25,6 +25,7 @@ pub struct LoweredModuleAst {
     pub ast: Vec<spire::ast::Ast>,
     pub declared_span: Option<spire::ast::Span>,
     pub module_doc: Option<String>,
+    pub auto_import: bool,
 }
 
 fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
@@ -440,6 +441,7 @@ pub fn lower_module_source_ast(
                     ast: module_ast,
                     declared_span: Some(span),
                     module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
                 });
             }
             spire::ast::Ast::Import(_, _, _) => {}
@@ -490,6 +492,7 @@ pub fn lower_module_source_ast(
                 ast: shared_ast,
                 declared_span: None,
                 module_doc: None,
+                auto_import: false,
             });
         }
     }
@@ -502,6 +505,7 @@ pub fn lower_module_source_ast(
             ast: shared_ast,
             declared_span: None,
             module_doc: None,
+            auto_import: false,
         });
     }
 
@@ -628,6 +632,7 @@ deferror NoneError { "None Value." }"#,
                 module_path: module.module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
+                auto_import: module.auto_import,
             })
             .collect::<Vec<_>>()];
 

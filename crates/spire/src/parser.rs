@@ -3146,6 +3146,15 @@ impl Parser {
                         }
                     }
                 }
+                "autoimport" => {
+                    if attrs.auto_import {
+                        return Err(ParseError::syntax(
+                            "@@autoimport may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    attrs.auto_import = true;
+                }
                 _ => {
                     return Err(ParseError::syntax(
                         format!("Unknown annotator: @@{}", name),
@@ -3180,7 +3189,7 @@ impl Parser {
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
-                    "@@doc must annotate `def`, `defmod`, `deftrait`, `deferror`, `defenum`, `defextractor`, or `@@builtin type/def/defextractor`",
+                    "@@doc / @@autoimport must annotate `def`, `defmod`, `deftrait`, `deferror`, `defenum`, `defextractor`, or `@@builtin type/def/defextractor`",
                     self.peek_span(),
                 )),
             }
@@ -4768,7 +4777,7 @@ impl User {
 
         assert!(matches!(
             ast.as_slice(),
-            [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, .. }, DeclAttrs { doc: Some(doc) })]
+            [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, .. }, DeclAttrs { doc: Some(doc), .. })]
                 if name == "Int" && doc == "\nBuiltin Int.\n"
         ));
     }
@@ -4783,8 +4792,23 @@ impl User {
 
         assert!(matches!(
             ast.as_slice(),
-            [Ast::Defmod(_, name, _, DeclAttrs { doc: Some(doc) })]
+            [Ast::Defmod(_, name, _, DeclAttrs { doc: Some(doc), .. })]
                 if name == "Kernel" && doc == "Kernel docs"
+        ));
+    }
+
+    #[test]
+    fn test_autoimport_annotates_defmod() {
+        let ast = parse_with_context(
+            "@@autoimport\ndefmod Kernel { def add(x: Int, y: Int) -> Int { x + y } }",
+            ParserContext::module(1, None),
+        )
+        .expect("autoimport + defmod should parse");
+
+        assert!(matches!(
+            ast.as_slice(),
+            [Ast::Defmod(_, name, _, DeclAttrs { auto_import: true, .. })]
+                if name == "Kernel"
         ));
     }
 
@@ -4798,7 +4822,7 @@ impl User {
 
         assert!(matches!(
             ast.as_slice(),
-            [Ast::DeferrorDef(_, name, _, _, DeclAttrs { doc: Some(doc) })]
+            [Ast::DeferrorDef(_, name, _, _, DeclAttrs { doc: Some(doc), .. })]
                 if name == "NoneError" && doc == "Missing value error"
         ));
     }
@@ -4843,12 +4867,12 @@ def Err(Error) -> Result<$T>"#,
         assert_eq!(ast.len(), 2);
         assert!(matches!(
             &ast[0],
-            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc), .. })
                 if name == "Ok" && param == "$T" && ret_name == "Result" && args.len() == 1 && doc.contains("success")
         ));
         assert!(matches!(
             &ast[1],
-            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc), .. })
                 if name == "Err" && param == "Error" && ret_name == "Result" && args.len() == 1 && doc.contains("error")
         ));
     }
@@ -4872,12 +4896,12 @@ Construct the error branch.
         assert_eq!(ast.len(), 2);
         assert!(matches!(
             &ast[0],
-            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc), .. })
                 if name == "Ok" && param == "$T" && ret_name == "Result" && args.len() == 1 && doc.contains("success")
         ));
         assert!(matches!(
             &ast[1],
-            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc) })
+            Ast::ResultCtorDecl(_, name, AstTy::Named(_, param), AstTy::Generic(_, ret_name, args), DeclAttrs { doc: Some(doc), .. })
                 if name == "Err" && param == "Error" && ret_name == "Result" && args.len() == 1 && doc.contains("error")
         ));
     }

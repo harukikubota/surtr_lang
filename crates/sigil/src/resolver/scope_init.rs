@@ -1,8 +1,5 @@
 use super::*;
 
-pub(super) const AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel", "Result"];
-pub(super) const AUTO_IMPORT_TRAITS: &[&str] = &["Show", "Eq", "Ord", "Concat"];
-
 fn initialize_base_scope() -> Scope {
     let mut scope = Scope::new();
     let dummy = Span { start: 0, end: 0 };
