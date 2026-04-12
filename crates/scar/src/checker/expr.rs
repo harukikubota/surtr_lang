@@ -13,6 +13,27 @@ impl Checker {
             }
 
             Resolved::Var(span, id) => {
+                if id
+                    .qualified_name
+                    .as_ref()
+                    .is_some_and(|qualified_name| {
+                        self.trait_methods_by_qualified_name
+                            .contains_key(qualified_name)
+                    })
+                {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait helper `{}` cannot be referenced directly",
+                            id.name
+                        ),
+                        span: span.clone(),
+                        hint: Some(
+                            "Call the helper with arguments so the receiver type can choose an impl."
+                                .into(),
+                        ),
+                    });
+                }
+
                 if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
                     let ty = match &stored_ty {
                         Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {

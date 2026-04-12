@@ -411,6 +411,58 @@ fn repl_displays_bare_std_callable_refs_with_named_inspect_format() {
 }
 
 #[test]
+fn repl_rejects_bare_trait_helper_callable_refs() {
+    let output = run_repl_session("&concat\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&combined);
+    assert!(
+        combined.contains("Trait helper `concat` cannot be referenced directly"),
+        "expected bare trait helper ref to be rejected, got:\n{}",
+        combined
+    );
+    assert!(
+        !combined.contains("FnCapture(module: Result, name: chain"),
+        "bare trait helper ref must not reuse an unrelated function id, got:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn repl_concat_helper_works_inside_annotated_closure() {
+    let output =
+        run_repl_session("f = {|x: String, y: String| concat(x,y)}\nf(\"a\",\"b\")\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("f: (String, String -> String)"),
+        "expected closure to infer String concat signature, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("> ab"),
+        "expected closure call to concatenate strings, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_displays_local_function_refs_with_named_inspect_format() {
     let output = run_repl_session(
         "def add(x: Int, y: Int) -> Int { x + y }\n&add\nprint(inspect(&add))\n:quit\n",
