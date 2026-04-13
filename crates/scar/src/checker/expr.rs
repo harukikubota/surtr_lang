@@ -96,14 +96,11 @@ impl Checker {
                 if let Some(index) = Self::parse_standalone_tuple_root_index(id.name.as_str()) {
                     return Err(TypeError {
                         message: format!(
-                            "Standalone tuple lens root _{} requires expected Lens<...> type context",
-                            index
+                            "Standalone tuple root _{} is not allowed; use tuple access with ._{}",
+                            index, index
                         ),
                         span: span.clone(),
-                        hint: Some(
-                            "Use _N in Lens::view/set/over with a typed source, or provide a Lens type annotation."
-                                .into(),
-                        ),
+                        hint: Some("Tuple elements are accessed as value._0, value._1, ...".into()),
                     });
                 }
 
@@ -284,81 +281,6 @@ impl Checker {
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         match (node, expected) {
-            (Resolved::Var(span, id), Some(expected_ty))
-                if Self::parse_standalone_tuple_root_index(id.name.as_str()).is_some() =>
-            {
-                let index =
-                    Self::parse_standalone_tuple_root_index(id.name.as_str()).expect("checked");
-                match self.resolve_ty(expected_ty) {
-                    Ty::Lens(source_ty, focus_ty) => match source_ty.as_ref() {
-                        Ty::Tuple(items) => {
-                            let Some(item_ty) = items.get(index).cloned() else {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "Tuple lens root _{} is out of bounds for {}",
-                                        index,
-                                        self.ty_name(source_ty.as_ref())
-                                    ),
-                                    span: span.clone(),
-                                    hint: None,
-                                });
-                            };
-                            if !self.types_compatible(focus_ty.as_ref(), &item_ty) {
-                                return Err(TypeError {
-                                    message: format!(
-                                        "Tuple lens root _{} focus type mismatch: expected {}, got {}",
-                                        index,
-                                        self.ty_name(focus_ty.as_ref()),
-                                        self.ty_name(&item_ty)
-                                    ),
-                                    span: span.clone(),
-                                    hint: None,
-                                });
-                            }
-                            let source_ty = source_ty.as_ref().clone();
-                            let focus_ty = self.resolve_ty(&item_ty);
-                            return Ok(TypedNode {
-                                ty: Ty::Lens(
-                                    Box::new(source_ty.clone()),
-                                    Box::new(focus_ty.clone()),
-                                ),
-                                span: span.clone(),
-                                node: TypedInner::LensPath(TypedLensPath {
-                                    source_ty,
-                                    focus_ty,
-                                    may_fail: false,
-                                    segments: vec![TypedLensSegment::Tuple {
-                                        field_index: index as u32,
-                                        tuple_len: items.len() as u32,
-                                    }],
-                                }),
-                            });
-                        }
-                        other => {
-                            return Err(TypeError {
-                                message: format!(
-                                    "Standalone tuple lens root _{} requires tuple source, got {}",
-                                    index,
-                                    self.ty_name(other)
-                                ),
-                                span: span.clone(),
-                                hint: None,
-                            });
-                        }
-                    },
-                    other => {
-                        return Err(TypeError {
-                            message: format!(
-                                "Standalone tuple lens root _{} requires expected Lens<...>, got {}",
-                                index,
-                                self.ty_name(&other)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                }
-            }
             (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
                 self.check_closure(span, params, captures, body, Some(expected_ty))
             }

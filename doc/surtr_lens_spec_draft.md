@@ -24,7 +24,7 @@ Surtr の Lens は一般 optics ライブラリではなく、**compiler-managed
 本書の目的は次の 2 点。
 
 - Stage1: 既存実装と一致した外部契約を固定する
-- Stage2: `set/over`・first-class Lens・standalone `_N` を実装可能な粒度で確定する
+- Stage2: `set/over`・first-class Lens を実装可能な粒度で確定する
 
 ---
 
@@ -144,18 +144,13 @@ Stage2 では Lens を言語表面で first-class として許可する。
 - 静的解決できない Lens 値（runtime でしか確定しない経路）は compile error とする
 - lowering 漏れで runtime builtin 到達が起きた場合は防御的 `RuntimeError` とする
 
-### 3.4 standalone `_N` root（型文脈必須）
+### 3.4 tuple index `_N` の扱い
 
-Stage2 では standalone `_N` を導入するが、受理条件は型文脈必須とする。
+Stage2 でも `_N` は path segment 専用とし、standalone root は導入しない。
 
-- 期待型が `Lens<(T0, T1, ...), TN>` のときのみ `_N` を受理する
-- 期待型がない位置では `_N` 単体を受理しない
+- 許可: `pair._0` / `Tuple._0` のような `._N` 形式
+- 不許可: `_0` 単体
 - 無文脈後方推論は採用しない
-
-```surtr
-first_lens: Lens<(Int, String), Int> = _0  # OK
-first_lens = _0                            # NG（期待型不足）
-```
 
 ### 3.5 failure / diagnostic 契約
 
@@ -191,7 +186,7 @@ first_lens = _0                            # NG（期待型不足）
 
 - 旧合成 API 記述（`compose` 以外）が残っていないこと
 - `view` の文脈依存返り型規則と矛盾する記述が本文に残っていないこと
-- すべてのサンプルが `compose` と standalone `_N` ルールに一致すること
+- すべてのサンプルが `compose` と `._N` ルールに一致すること
 - Stage1 と Stage2 の節が混在していないこと
 
 ### 6.2 Stage2 実装時の必須受け入れシナリオ
@@ -207,9 +202,9 @@ first_lens = _0                            # NG（期待型不足）
   - bind / arg / return / capture の成功
   - 静的解決不能 path の compile error
   - lowering 漏れ時の runtime 防御エラー
-- standalone `_N`
-  - 型文脈あり成功
-  - 型文脈なし失敗
+- tuple index `._N`
+  - `pair._0` / `Tuple._0` 成功
+  - `_0` 単体は失敗
 
 ---
 
@@ -217,7 +212,7 @@ first_lens = _0                            # NG（期待型不足）
 
 - Scar
   - first-class Lens の型フローを許可しつつ、静的 path 解決可能性を判定する
-  - `_N` root の受理を期待型駆動で実装する
+  - `_N` は segment 専用（`._N` のみ）を維持する
 - Forge
   - first-class Lens 値を runtime 表現に変換せず、compile-time 展開で消去する
   - `set/over` を path segment 単位で更新 lowering する
@@ -230,4 +225,4 @@ first_lens = _0                            # NG（期待型不足）
 
 Surtr Lens は Stage1 ではコード実装準拠の compile-time path 機構として運用し、Stage2 では `set/over` と first-class Lens を導入する。
 ただし first-class 化後も runtime 値化は行わず、compile-time 展開モデルを維持する。
-standalone `_N` は型文脈必須で導入し、推論の曖昧性を避ける。
+`_N` は standalone では導入せず、`._N` 形式のみを維持する。

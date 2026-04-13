@@ -1471,15 +1471,6 @@ fn test_duplicate_binding_in_pattern_is_error() {
 }
 
 #[test]
-fn test_standalone_tuple_root_is_left_for_type_context_resolution() {
-    let resolved = parse_and_resolve("_0").expect("standalone tuple root should resolve");
-    assert!(matches!(
-        resolved.as_slice(),
-        [Resolved::Var(_, id)] if id.name == "_0" && id.qualified_name.is_none()
-    ));
-}
-
-#[test]
 fn test_block_binding_does_not_escape() {
     let result = parse_and_resolve(
         r#"{

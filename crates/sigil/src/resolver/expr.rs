@@ -7,13 +7,6 @@ use super::special_forms::{IfKind, LogicKind};
 use super::*;
 
 impl Resolver {
-    fn is_standalone_tuple_root_name(name: &str) -> bool {
-        let Some(suffix) = name.strip_prefix('_') else {
-            return false;
-        };
-        !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
-    }
-
     fn conversion_call_head(func: &Ast) -> Option<&'static str> {
         match func {
             Ast::Var(_, name) if name == "from" => Some("from"),
@@ -188,19 +181,10 @@ impl Resolver {
             Ast::Lit(span, lit) => Ok(Resolved::Lit(span, lit)),
 
             Ast::Var(span, name) => {
-                let uid = match self.scope.lookup(&name) {
-                    Some(uid) => uid,
-                    None if Self::is_standalone_tuple_root_name(name.as_str()) => {
-                        // `_N` may be resolved later by Scar when an expected Lens type exists.
-                        self.scope.reserve_id()
-                    }
-                    None => {
-                        return Err(ResolveError {
-                            message: format!("Undefined variable: {}", name),
-                            span: span.clone(),
-                        });
-                    }
-                };
+                let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
+                    message: format!("Undefined variable: {}", name),
+                    span: span.clone(),
+                })?;
                 let qualified_name = self.declaration_fq_name_for_uid(uid);
                 Ok(Resolved::Var(
                     span.clone(),
