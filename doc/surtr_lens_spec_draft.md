@@ -76,13 +76,17 @@ defmod Lens {
 
 ### 2.4 Stage1 制約
 
-Stage1 の Lens は first-class 非対応。許可するのは即時利用のみ。
+Stage1 起点では Lens は first-class 非対応としていたが、現行コードでは次の先行実装を含む。
 
-- 束縛不可: `lens = User.name`
+- 束縛可（静的 path 限定）: `lens = User.name`
+- capture 可（静的 path 限定）: `getter = {|u| Lens::view(lens, u)}`
+- standalone `_0` は未対応（`pair._0` のみ可）
+
+一方で、次は未対応のまま維持する。
+
 - 引数受け渡し不可: `f(User.name)`
 - 戻り値化不可: `def x() -> Lens<...> { ... }`
-- capture 不可: `captured = &Lens::compose(User.name)`
-- standalone `_0` は未対応（`pair._0` のみ可）
+- `=?` での Lens 束縛は不可
 
 ### 2.5 Lowering / runtime 契約
 
@@ -136,6 +140,11 @@ Stage2 では Lens を言語表面で first-class として許可する。
 - 引数受け渡し可
 - 戻り値化可
 - capture 可
+
+進捗メモ（コード先行実装）:
+
+- 束縛 / capture は「静的 path が解決可能な場合」に限り先行導入済み
+- 引数受け渡し / 戻り値化は未実装
 
 ただし実体モデルは compile-time 値のままとする。
 
