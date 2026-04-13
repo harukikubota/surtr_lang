@@ -1,14 +1,15 @@
 @@doc """
 Standard `Lens` type declaration.
 `Lens<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
-Stage1 supports `view`/`compose`; Stage2 extends this surface with update
-operations while keeping compile-time path semantics.
+Lens values are consumed in the same scope via `Lens::view/set/over` and are not
+transported as runtime values across function boundaries.
 """
 @@builtin type Lens<$S, $A>
 
 @@doc """
 Lens module.
-Provides the Stage1 surface for compiler-managed path access and composition.
+Provides compiler-managed path access/update intrinsics:
+`view`, `set`, `over`, `compose`.
 """
 @@autoimport
 defmod Lens {

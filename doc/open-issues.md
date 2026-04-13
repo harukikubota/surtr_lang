@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない将来課題を追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md` を正本とする。
 
-最終更新日: 2026-04-11
+最終更新日: 2026-04-13
 
 2026-04-09 整理メモ:
 
@@ -33,7 +33,7 @@
 - `.eldr` viewer 向け chunk 基盤
   - `Code`, `Cnst`, `Func`, `Type`, `ErrT`, `CInf`, `LblT`, `ImpT`, `ExpT`, `LitT`, `Line`, `SpnT`, `SrcP`, `PcSp`
 - 標準モジュールの type 単位分割
-  - `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> user`
+  - `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Lens, Float] -> user`
   - cross-cutting builtin は `kernel.srt` へ置く
   - builtin type 宣言は各対応 `lib/*.srt` のトップレベルへ置く
 - `List` 最小 surface の固定
@@ -309,6 +309,24 @@
   - tail recursion / mutual recursion / non-tail recursion の観測テストを回帰基準にする。
   - CLI や dump へ露出を足す場合は integration で stderr / JSON 形状を固定する。
   - bytecode 表現を増やす場合は `unit/sindr` と viewer schema テストを更新する。
+
+### OI-014 private value 持ち出し warning 方針
+
+- 策定コミット: `42fd699`（Lens / private capability 境界固定）
+- 背景:
+  - 現行仕様では `User.password`（type-root capability）は禁止し、`user.password`（value access）は許可している。
+  - また closure 内 private access（`{|| user.password}`）は scope 外 escape 防止のため禁止した。
+  - 一方で `return user.password` は「値の持ち出し」として現行仕様上は許可しており、warning を出すかどうかは未確定である。
+- 未確定点:
+  - warning を導入するか（導入する場合の default severity）
+  - warning message に「ユーザ責任の持ち出し」であることを明示するか
+  - lint 体系（on/off / warning code / CI fail-on-warning）とどう接続するか
+- 受け入れ条件:
+  - warning 導入有無が `doc/要件定義v9.md` と `doc/テスト方針.md` で一貫する。
+  - warning を導入する場合、`return user.password` は compile error にしない。
+- テスト方針:
+  - warning 導入時は `integration` で diagnostics（human/json）の warning 出力を固定する。
+  - warning 非導入の場合は現行どおり `spec/modules/private_visibility_function_return_private_value` の成功を維持する。
 
 ---
 
