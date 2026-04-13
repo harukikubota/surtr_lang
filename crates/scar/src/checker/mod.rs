@@ -449,6 +449,7 @@ struct Checker {
     function_return_ty: Option<Ty>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
+    lens_bindings: HashMap<u32, TypedLensPath>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -469,6 +470,7 @@ impl Checker {
             function_return_ty: None,
             current_function_symbol: None,
             current_impl_struct_target: None,
+            lens_bindings: HashMap::new(),
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
@@ -499,6 +501,7 @@ impl Checker {
             function_return_ty: None,
             current_function_symbol: None,
             current_impl_struct_target: None,
+            lens_bindings: HashMap::new(),
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
@@ -531,6 +534,7 @@ impl Checker {
         checker.function_return_ty = self.function_return_ty.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
+        checker.lens_bindings = self.lens_bindings.clone();
         checker.impl_method_uids = self.impl_method_uids.clone();
         checker.function_ids_by_name = self.function_ids_by_name.clone();
         checker.substitutions = self.substitutions.clone();

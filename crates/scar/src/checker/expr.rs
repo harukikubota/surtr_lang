@@ -46,14 +46,29 @@ impl Checker {
                         _ => self.resolve_ty(&stored_ty),
                     };
                     if matches!(ty, Ty::Lens(_, _)) {
+                        if let Some(path) = self.lens_bindings.get(&id.unique_id).cloned() {
+                            let source_ty = self.resolve_ty(&path.source_ty);
+                            let focus_ty = self.resolve_ty(&path.focus_ty);
+                            return Ok(TypedNode {
+                                ty: Ty::Lens(
+                                    Box::new(source_ty.clone()),
+                                    Box::new(focus_ty.clone()),
+                                ),
+                                span: span.clone(),
+                                node: TypedInner::LensPath(TypedLensPath {
+                                    source_ty,
+                                    focus_ty,
+                                    may_fail: path.may_fail,
+                                    segments: path.segments,
+                                }),
+                            });
+                        }
                         return Err(TypeError {
-                            message:
-                                "Lens values are compile-time only in Stage1 and cannot be used as runtime values"
-                                    .into(),
+                            message: "Lens value is not statically resolvable at this usage site"
+                                .into(),
                             span: span.clone(),
                             hint: Some(
-                                "Use Lens::view(...) immediately instead of binding or passing Lens values."
-                                    .into(),
+                                "Use a concrete path expression like User.name or pair._0.".into(),
                             ),
                         });
                     }
@@ -141,15 +156,11 @@ impl Checker {
                 } else {
                     self.check_node(rhs)?
                 };
-                if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
-                    return Err(TypeError {
-                        message:
-                            "Lens values are compile-time only in Stage1 and cannot be bound with `=`"
-                                .into(),
-                        span: typed_rhs.span.clone(),
-                        hint: Some("Call Lens::view(...) directly at the usage site.".into()),
-                    });
-                }
+                let lens_path = if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
+                    Some(self.resolve_lens_path_from_node(typed_rhs.clone(), span)?)
+                } else {
+                    None
+                };
                 if matches!(typed_rhs.ty, Ty::Error) {
                     return Err(TypeError {
                         message: "Error values must be wrapped with Err(...)".into(),
@@ -161,6 +172,11 @@ impl Checker {
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
+                if let Some(path) = &lens_path {
+                    self.bind_lens_pattern_bindings(&typed_pat, path, span)?;
+                } else {
+                    self.clear_lens_pattern_bindings(&typed_pat);
+                }
                 self.normalize_env_bindings();
 
                 Ok(TypedNode {
@@ -296,6 +312,63 @@ impl Checker {
         }
     }
 
+    fn bind_lens_pattern_bindings(
+        &mut self,
+        pattern: &TypedPattern,
+        path: &TypedLensPath,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        match pattern {
+            TypedPattern::Var(_, id) => {
+                self.lens_bindings.insert(id.unique_id, path.clone());
+                Ok(())
+            }
+            TypedPattern::As(_, inner, alias) => {
+                self.bind_lens_pattern_bindings(inner, path, span)?;
+                self.lens_bindings.insert(alias.unique_id, path.clone());
+                Ok(())
+            }
+            TypedPattern::Wildcard(_) => Ok(()),
+            _ => Err(TypeError {
+                message: "Lens values can only be bound to variables or `_` patterns".into(),
+                span: span.clone(),
+                hint: Some("Use `lens = User.name` or `_ = User.name`.".into()),
+            }),
+        }
+    }
+
+    fn clear_lens_pattern_bindings(&mut self, pattern: &TypedPattern) {
+        match pattern {
+            TypedPattern::Var(_, id) => {
+                self.lens_bindings.remove(&id.unique_id);
+            }
+            TypedPattern::As(_, inner, alias) => {
+                self.clear_lens_pattern_bindings(inner);
+                self.lens_bindings.remove(&alias.unique_id);
+            }
+            TypedPattern::ListCons(_, head, tail) => {
+                self.clear_lens_pattern_bindings(head);
+                self.clear_lens_pattern_bindings(tail);
+            }
+            TypedPattern::Tuple(_, items) => {
+                for item in items {
+                    self.clear_lens_pattern_bindings(item);
+                }
+            }
+            TypedPattern::ResultOk(_, inner) => self.clear_lens_pattern_bindings(inner),
+            TypedPattern::Extractor { items, .. } => {
+                for item in items {
+                    self.clear_lens_pattern_bindings(item);
+                }
+            }
+            TypedPattern::Wildcard(_)
+            | TypedPattern::ListNil(_)
+            | TypedPattern::IntLit(_, _)
+            | TypedPattern::StrLit(_, _)
+            | TypedPattern::BoolLit(_, _) => {}
+        }
+    }
+
     pub(super) fn check_safebind(
         &mut self,
         span: &Span,
@@ -305,11 +378,9 @@ impl Checker {
         let typed_rhs = self.check_node(rhs)?;
         if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
             return Err(TypeError {
-                message:
-                    "Lens values are compile-time only in Stage1 and cannot be bound with `=?`"
-                        .into(),
+                message: "Lens values cannot be bound with `=?`".into(),
                 span: typed_rhs.span.clone(),
-                hint: Some("Call Lens::view(...) directly at the usage site.".into()),
+                hint: Some("Use `=` for compile-time Lens bindings.".into()),
             });
         }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
@@ -2333,15 +2404,9 @@ impl Checker {
         for capture in captures {
             if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
                 if matches!(ty, Ty::Lens(_, _)) {
-                    return Err(TypeError {
-                        message:
-                            "Lens is compile-time only in Stage1 and cannot be captured by closures"
-                                .into(),
-                        span: capture.span.clone(),
-                        hint: Some(
-                            "Apply Lens::view(...) before building the closure value.".into(),
-                        ),
-                    });
+                    if let Some(path) = self.lens_bindings.get(&capture.unique_id).cloned() {
+                        body_checker.lens_bindings.insert(capture.unique_id, path);
+                    }
                 }
                 body_checker
                     .env

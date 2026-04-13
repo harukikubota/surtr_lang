@@ -613,15 +613,31 @@ Lens::view(_0, pair)"#,
     }
 
     #[test]
-    fn lens_is_not_first_class_in_stage1() {
-        let bind_err = typecheck_with_rules(
+    fn lens_bindings_can_be_reused_by_lens_intrinsics() {
+        let typed = typecheck_with_builtin_prelude(
             r#"defrecord User(name: String)
-lens = User.name"#,
-            SourceRules::script(),
-        )
-        .expect_err("binding Lens value should fail");
-        assert!(bind_err.message.contains("cannot be bound with `=`"));
+user = User("alice")
+lens = User.name
+Lens::view(lens, user)"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+    }
 
+    #[test]
+    fn lens_capture_can_be_used_inside_closure_body() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+lens = User.name
+getter = {|user| Lens::view(lens, user)}
+getter(User("alice"))"#,
+        );
+        assert!(!typed.is_empty());
+    }
+
+    #[test]
+    fn lens_runtime_transport_restrictions_remain() {
         let arg_err = typecheck_with_rules(
             r#"defrecord User(name: String)
 print(to_string(User.name))"#,
@@ -641,14 +657,6 @@ def bad() -> Lens<User, String> {
         assert!(return_err
             .message
             .contains("cannot be used as a function return type"));
-
-        let capture_err = typecheck_with_rules(
-            r#"defrecord User(name: String)
-captured = &Lens::compose(User.name)"#,
-            SourceRules::script(),
-        )
-        .expect_err("capturing Lens value should fail");
-        assert!(capture_err.message.contains("Partial application"));
     }
 
     #[test]

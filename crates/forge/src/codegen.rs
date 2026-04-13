@@ -1441,6 +1441,11 @@ impl Codegen {
             }
 
             TypedInner::Bind(pat, rhs) => {
+                if matches!(rhs.ty, Ty::Lens(_, _)) {
+                    let unit_idx = self.add_constant(Constant::Unit);
+                    self.emit(Opcode::LoadConst(unit_idx));
+                    return Ok(());
+                }
                 self.emit_node(rhs)?;
                 let payload_slot = self.state.next_slot;
                 self.state.next_slot += 1;

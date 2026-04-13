@@ -399,6 +399,37 @@ user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
     }
 
     #[test]
+    fn lens_bindings_and_captures_are_erased_without_runtime_transport() {
+        let bytecode = codegen_source(
+            r#"defrecord User(name: String)
+lens = User.name
+getter = {|user| Lens::view(lens, user)}
+result = getter(User("alice"))"#,
+        );
+
+        let lens_view_id = builtin_meta_by_name("view")
+            .expect("view builtin metadata must exist")
+            .builtin_id;
+        let lens_compose_id = builtin_meta_by_name("compose")
+            .expect("compose builtin metadata must exist")
+            .builtin_id;
+
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == lens_view_id || *builtin_id == lens_compose_id
+            )
+        }));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { arity: 1, .. })));
+    }
+
+    #[test]
     fn bounded_numeric_generic_helpers_emit_specialized_functions() {
         let bytecode = codegen_source(
             r#"def double<$N: Numeric>(x: $N) -> $N { x + x }
