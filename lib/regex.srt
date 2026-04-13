@@ -1,0 +1,134 @@
+@@doc """
+Standard `Regex` type declaration.
+`Regex` is an opaque compiled regular expression value handled by runtime
+builtins.
+"""
+@@builtin type Regex
+
+@@doc """
+Standard `RegexCaptures` type declaration.
+Represents one successful capture set produced by `Regex::captures`.
+"""
+@@builtin type RegexCaptures
+
+@@doc """
+Standard `RegexMatch` type declaration.
+Represents one concrete match span produced by `Regex::find` / `Regex::find_all`.
+"""
+@@builtin type RegexMatch
+
+@@doc """
+Regex compile error returned by `Regex::compile`.
+"""
+deferror RegexCompileError(detail: String) {
+  detail
+}
+
+@@doc """
+Regex module.
+Provides Rust-regex-backed helpers for pattern compilation, matching, capture
+access, replacement, and text splitting.
+"""
+defmod Regex {
+  @@doc """
+  Compile a pattern string into a `Regex` value.
+  Invalid syntax returns `Err(RegexCompileError(...))`.
+  """
+  @@builtin def compile(pattern: String) -> Result<Regex, RegexCompileError>
+
+  @@doc """
+  Return `True` when the regex matches any part of `input`.
+  """
+  @@builtin def is_match(re: Regex, input: String) -> Boolean
+
+  @@doc """
+  Return the first capture set for `input`.
+  Missing match returns `Err(NoneError)`.
+  """
+  @@builtin def captures(re: Regex, input: String) -> Result<RegexCaptures, NoneError>
+
+  @@doc """
+  Return the first match span for `input`.
+  Missing match returns `Err(NoneError)`.
+  """
+  @@builtin def find(re: Regex, input: String) -> Result<RegexMatch, NoneError>
+
+  @@doc """
+  Return all match spans for `input`.
+  """
+  @@builtin def find_all(re: Regex, input: String) -> List<RegexMatch>
+
+  @@doc """
+  Split `input` by regex matches.
+  """
+  @@builtin def split(re: Regex, input: String) -> List<String>
+
+  @@doc """
+  Replace the first regex match in `input`.
+  """
+  @@builtin def replace(re: Regex, input: String, replacement: String) -> String
+
+  @@doc """
+  Replace all regex matches in `input`.
+  """
+  @@builtin def replace_all(re: Regex, input: String, replacement: String) -> String
+
+  @@doc """
+  Escape regex meta-characters in plain text.
+  """
+  @@builtin def escape(text: String) -> String
+
+  @@doc """
+  Return declared capture-group names in definition order.
+  """
+  @@builtin def group_names(re: Regex) -> List<String>
+}
+
+@@doc """
+Capture-access module.
+Extracts per-group values from `RegexCaptures`.
+"""
+defmod RegexCaptures {
+  @@doc """
+  Return the whole matched text (`group 0`).
+  """
+  @@builtin def whole(caps: RegexCaptures) -> String
+
+  @@doc """
+  Return capture-group count, including `group 0`.
+  """
+  @@builtin def capture_count(caps: RegexCaptures) -> Int
+
+  @@doc """
+  Return capture text by index.
+  Missing index or non-participating group returns `Err(NoneError)`.
+  """
+  @@builtin def get(caps: RegexCaptures, idx: Int) -> Result<String, NoneError>
+
+  @@doc """
+  Return capture text by group name.
+  Missing name or non-participating group returns `Err(NoneError)`.
+  """
+  @@builtin def get_name(caps: RegexCaptures, name: String) -> Result<String, NoneError>
+}
+
+@@doc """
+Match-span module.
+Accessors for `RegexMatch`.
+"""
+defmod RegexMatch {
+  @@doc """
+  Return matched text.
+  """
+  @@builtin def text(m: RegexMatch) -> String
+
+  @@doc """
+  Return start byte offset in source input.
+  """
+  @@builtin def start(m: RegexMatch) -> Int
+
+  @@doc """
+  Return end byte offset in source input.
+  """
+  @@builtin def end(m: RegexMatch) -> Int
+}

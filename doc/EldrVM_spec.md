@@ -194,9 +194,11 @@ Opcode は以下のカテゴリを持つ。
 - Lens の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
+- regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
+- `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>`, `input: String` を保持する
 - `Float` の厳密契約は `doc/float.md` を参照する
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Lens, Float] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Result, Lens, Float] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.1 TypeRegistry
 

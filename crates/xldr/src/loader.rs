@@ -62,6 +62,7 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         include_str!("../../../lib/string.srt"),
         "String",
     ),
+    ("regex.srt", include_str!("../../../lib/regex.srt"), "Regex"),
     (
         "boolean.srt",
         include_str!("../../../lib/boolean.srt"),
@@ -709,7 +710,8 @@ mod tests {
             std_paths,
             vec![
                 "Kernel", "Numeric", "Show", "Eq", "Ordering", "Compare", "Ord", "Concat", "From",
-                "TryFrom", "Int", "String", "Boolean", "Error", "List", "Result", "Lens", "Float",
+                "TryFrom", "Int", "String", "Regex", "Boolean", "Error", "List", "Result", "Lens",
+                "Float",
             ]
         );
     }
@@ -801,7 +803,8 @@ mod tests {
             std_paths,
             vec![
                 "Kernel", "Numeric", "Show", "Eq", "Ordering", "Compare", "Ord", "Concat", "From",
-                "TryFrom", "Int", "String", "Boolean", "Error", "List", "Result", "Lens", "Float",
+                "TryFrom", "Int", "String", "Regex", "Boolean", "Error", "List", "Result", "Lens",
+                "Float",
             ]
         );
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");

@@ -1,10 +1,15 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
 use crate::vm::VM;
+use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
 use sindr::ir::DocKind;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
-use sindr::runtime::{Callable, CallableTarget, ListHandle, Location, RichError};
+use sindr::runtime::{
+    Callable, CallableTarget, ListHandle, Location, RegexCapturesHandle, RegexHandle,
+    RegexMatchHandle, RichError,
+};
+use std::collections::HashMap;
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -112,6 +117,57 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         func: builtin_lens_over,
+    },
+    BuiltinImpl {
+        func: builtin_regex_compile,
+    },
+    BuiltinImpl {
+        func: builtin_regex_is_match,
+    },
+    BuiltinImpl {
+        func: builtin_regex_captures,
+    },
+    BuiltinImpl {
+        func: builtin_regex_whole,
+    },
+    BuiltinImpl {
+        func: builtin_regex_capture_count,
+    },
+    BuiltinImpl {
+        func: builtin_regex_get,
+    },
+    BuiltinImpl {
+        func: builtin_regex_get_name,
+    },
+    BuiltinImpl {
+        func: builtin_regex_find,
+    },
+    BuiltinImpl {
+        func: builtin_regex_find_all,
+    },
+    BuiltinImpl {
+        func: builtin_regex_split,
+    },
+    BuiltinImpl {
+        func: builtin_regex_replace,
+    },
+    BuiltinImpl {
+        func: builtin_regex_replace_all,
+    },
+    BuiltinImpl {
+        func: builtin_regex_escape,
+    },
+    BuiltinImpl {
+        func: builtin_regex_group_names,
+    },
+    BuiltinImpl {
+        func: builtin_regex_match_text,
+    },
+    BuiltinImpl {
+        func: builtin_regex_match_start,
+    },
+    BuiltinImpl {
+        func: builtin_regex_match_end,
     },
 ];
 
@@ -620,6 +676,219 @@ fn builtin_lens_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeEr
     ))
 }
 
+fn builtin_regex_compile(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(pattern) = &args[0] else {
+        return Err(RuntimeError::new("compile expects String as pattern"));
+    };
+
+    match Regex::new(pattern) {
+        Ok(_) => Ok(ok_result(Value::Regex(RegexHandle {
+            pattern: pattern.clone(),
+        }))),
+        Err(err) => Ok(err_result(vm, "RegexCompileError", &err.to_string())),
+    }
+}
+
+fn builtin_regex_is_match(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let pattern = decode_regex_arg(&args[0], "is_match", "re")?;
+    let Value::Str(input) = &args[1] else {
+        return Err(RuntimeError::new("is_match expects String as input"));
+    };
+    let re = compile_cached_regex(pattern, "is_match")?;
+    Ok(Value::Bool(re.is_match(input)))
+}
+
+fn builtin_regex_captures(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let pattern = decode_regex_arg(&args[0], "captures", "re")?;
+    let Value::Str(input) = &args[1] else {
+        return Err(RuntimeError::new("captures expects String as input"));
+    };
+    let re = compile_cached_regex(pattern, "captures")?;
+    let Some(captures) = re.captures(input) else {
+        return Ok(none_result(vm));
+    };
+
+    let mut groups = Vec::with_capacity(captures.len());
+    for idx in 0..captures.len() {
+        groups.push(captures.get(idx).map(|m| (m.start(), m.end())));
+    }
+
+    let mut name_to_index = HashMap::new();
+    for (idx, maybe_name) in re.capture_names().enumerate() {
+        if let Some(name) = maybe_name {
+            name_to_index.insert(name.to_string(), idx);
+        }
+    }
+
+    Ok(ok_result(Value::RegexCaptures(RegexCapturesHandle {
+        input: input.clone(),
+        groups,
+        name_to_index,
+    })))
+}
+
+fn builtin_regex_whole(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let caps = decode_regex_captures_arg(&args[0], "whole", "caps")?;
+    let Some((start, end)) = caps.groups.first().and_then(|item| *item) else {
+        return Err(RuntimeError::new(
+            "whole expects captures with group 0 present",
+        ));
+    };
+    Ok(Value::Str(
+        slice_with_span(&caps.input, start, end, "whole")?.to_string(),
+    ))
+}
+
+fn builtin_regex_capture_count(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let caps = decode_regex_captures_arg(&args[0], "capture_count", "caps")?;
+    Ok(Value::Int(int(caps.groups.len() as u64)))
+}
+
+fn builtin_regex_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let caps = decode_regex_captures_arg(&args[0], "get", "caps")?;
+    let Value::Int(index) = &args[1] else {
+        return Err(RuntimeError::new("get expects Int as idx"));
+    };
+    let Some(index) = index.to_usize() else {
+        return Ok(none_result(vm));
+    };
+    let Some((start, end)) = caps.groups.get(index).and_then(|item| *item) else {
+        return Ok(none_result(vm));
+    };
+    Ok(ok_result(Value::Str(
+        slice_with_span(&caps.input, start, end, "get")?.to_string(),
+    )))
+}
+
+fn builtin_regex_get_name(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let caps = decode_regex_captures_arg(&args[0], "get_name", "caps")?;
+    let Value::Str(name) = &args[1] else {
+        return Err(RuntimeError::new("get_name expects String as name"));
+    };
+    let Some(index) = caps.name_to_index.get(name) else {
+        return Ok(none_result(vm));
+    };
+    let Some((start, end)) = caps.groups.get(*index).and_then(|item| *item) else {
+        return Ok(none_result(vm));
+    };
+    Ok(ok_result(Value::Str(
+        slice_with_span(&caps.input, start, end, "get_name")?.to_string(),
+    )))
+}
+
+fn builtin_regex_find(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let pattern = decode_regex_arg(&args[0], "find", "re")?;
+    let Value::Str(input) = &args[1] else {
+        return Err(RuntimeError::new("find expects String as input"));
+    };
+    let re = compile_cached_regex(pattern, "find")?;
+    let Some(matched) = re.find(input) else {
+        return Ok(none_result(vm));
+    };
+    Ok(ok_result(Value::RegexMatch(RegexMatchHandle {
+        input: input.clone(),
+        start: matched.start(),
+        end: matched.end(),
+    })))
+}
+
+fn builtin_regex_find_all(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let pattern = decode_regex_arg(&args[0], "find_all", "re")?;
+    let Value::Str(input) = &args[1] else {
+        return Err(RuntimeError::new("find_all expects String as input"));
+    };
+    let re = compile_cached_regex(pattern, "find_all")?;
+    let items = re
+        .find_iter(input)
+        .map(|matched| {
+            Value::RegexMatch(RegexMatchHandle {
+                input: input.clone(),
+                start: matched.start(),
+                end: matched.end(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_regex_split(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let pattern = decode_regex_arg(&args[0], "split", "re")?;
+    let Value::Str(input) = &args[1] else {
+        return Err(RuntimeError::new("split expects String as input"));
+    };
+    let re = compile_cached_regex(pattern, "split")?;
+    let items = re
+        .split(input)
+        .map(|part| Value::Str(part.to_string()))
+        .collect::<Vec<_>>();
+    Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_regex_replace(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let pattern = decode_regex_arg(&args[0], "replace", "re")?;
+    let Value::Str(input) = &args[1] else {
+        return Err(RuntimeError::new("replace expects String as input"));
+    };
+    let Value::Str(replacement) = &args[2] else {
+        return Err(RuntimeError::new("replace expects String as replacement"));
+    };
+    let re = compile_cached_regex(pattern, "replace")?;
+    Ok(Value::Str(
+        re.replace(input, replacement.as_str()).into_owned(),
+    ))
+}
+
+fn builtin_regex_replace_all(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let pattern = decode_regex_arg(&args[0], "replace_all", "re")?;
+    let Value::Str(input) = &args[1] else {
+        return Err(RuntimeError::new("replace_all expects String as input"));
+    };
+    let Value::Str(replacement) = &args[2] else {
+        return Err(RuntimeError::new(
+            "replace_all expects String as replacement",
+        ));
+    };
+    let re = compile_cached_regex(pattern, "replace_all")?;
+    Ok(Value::Str(
+        re.replace_all(input, replacement.as_str()).into_owned(),
+    ))
+}
+
+fn builtin_regex_escape(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(text) = &args[0] else {
+        return Err(RuntimeError::new("escape expects String as text"));
+    };
+    Ok(Value::Str(regex::escape(text)))
+}
+
+fn builtin_regex_group_names(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let pattern = decode_regex_arg(&args[0], "group_names", "re")?;
+    let re = compile_cached_regex(pattern, "group_names")?;
+    let items = re
+        .capture_names()
+        .flatten()
+        .map(|name| Value::Str(name.to_string()))
+        .collect::<Vec<_>>();
+    Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_regex_match_text(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let matched = decode_regex_match_arg(&args[0], "text", "m")?;
+    Ok(Value::Str(
+        slice_with_span(&matched.input, matched.start, matched.end, "text")?.to_string(),
+    ))
+}
+
+fn builtin_regex_match_start(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let matched = decode_regex_match_arg(&args[0], "start", "m")?;
+    Ok(Value::Int(int(matched.start as u64)))
+}
+
+fn builtin_regex_match_end(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let matched = decode_regex_match_arg(&args[0], "end", "m")?;
+    Ok(Value::Int(int(matched.end as u64)))
+}
+
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     if let Value::Callable(callable) = value {
         if let Some(display) = inspect_callable(vm, callable) {
@@ -676,6 +945,71 @@ fn split_qualified_name(qualified_name: &str) -> (&str, &str) {
         Some((module, name)) if !module.is_empty() => (module, name),
         _ => ("<local>", qualified_name),
     }
+}
+
+fn decode_regex_arg<'a>(
+    value: &'a Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<&'a str, RuntimeError> {
+    match value {
+        Value::Regex(handle) => Ok(handle.pattern.as_str()),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Regex as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_regex_captures_arg<'a>(
+    value: &'a Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<&'a RegexCapturesHandle, RuntimeError> {
+    match value {
+        Value::RegexCaptures(handle) => Ok(handle),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects RegexCaptures as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_regex_match_arg<'a>(
+    value: &'a Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<&'a RegexMatchHandle, RuntimeError> {
+    match value {
+        Value::RegexMatch(handle) => Ok(handle),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects RegexMatch as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn compile_cached_regex(pattern: &str, builtin_name: &str) -> Result<Regex, RuntimeError> {
+    Regex::new(pattern).map_err(|err| {
+        RuntimeError::new(format!(
+            "{builtin_name} failed to compile cached regex pattern {:?}: {}",
+            pattern, err
+        ))
+    })
+}
+
+fn slice_with_span<'a>(
+    input: &'a str,
+    start: usize,
+    end: usize,
+    builtin_name: &str,
+) -> Result<&'a str, RuntimeError> {
+    input.get(start..end).ok_or_else(|| {
+        RuntimeError::new(format!(
+            "{builtin_name} observed invalid regex span: {}..{}",
+            start, end
+        ))
+    })
 }
 
 fn bit_mask(bit_index: usize) -> SurtrInt {
@@ -820,6 +1154,10 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
     })
 }
 
+fn none_result(vm: &VM) -> Value {
+    err_result(vm, "NoneError", "None Value.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{call_builtin, err_result_from_rich_error, inspect_value};
@@ -870,6 +1208,12 @@ mod tests {
 
     fn sample_error_value(kind: &str, message: &str) -> Value {
         Value::Error(Box::new(sample_error(kind, message)))
+    }
+
+    fn builtin_id(name: &str) -> u16 {
+        builtin_meta_by_name(name)
+            .unwrap_or_else(|| panic!("missing builtin metadata for {name}"))
+            .builtin_id
     }
 
     /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
@@ -957,6 +1301,7 @@ mod tests {
             include_str!("../../../lib/result.srt"),
             include_str!("../../../lib/lens.srt"),
             include_str!("../../../lib/string.srt"),
+            include_str!("../../../lib/regex.srt"),
         ];
 
         // Collect all lines across the std-module files that currently declare
@@ -964,7 +1309,7 @@ mod tests {
         // Kernel owns the cross-cutting builtins, Int currently carries both
         // arithmetic-result builtins and bit-shift helpers, List declares
         // the O(1) length helper, Result carries result/error helpers, and
-        // String carries encoding helpers.
+        // String carries encoding helpers and Regex carries regex wrappers.
         let all_lines: Vec<&str> = sources
             .iter()
             .flat_map(|s| s.lines())
@@ -1039,6 +1384,121 @@ mod tests {
             !entry_map.contains_key("to_string"),
             "to_string is trait-backed and should not be declared via @@builtin def"
         );
+    }
+
+    #[test]
+    fn regex_compile_returns_ok_and_err_shapes() {
+        let mut vm = test_vm();
+
+        let ok = call_builtin(
+            &mut vm,
+            builtin_id("compile"),
+            vec![Value::Str("^[a-z]+$".into())],
+        )
+        .expect("compile should return Result");
+        match ok {
+            Value::Tagged { tag: 0, fields } => {
+                assert!(matches!(
+                    fields.first(),
+                    Some(Value::Regex(handle)) if handle.pattern == "^[a-z]+$"
+                ));
+            }
+            other => panic!("expected Ok(Regex), got {:?}", other),
+        }
+
+        let err = call_builtin(&mut vm, builtin_id("compile"), vec![Value::Str("[".into())])
+            .expect("compile should return Result");
+        match err {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => {
+                    assert_eq!(rich.kind, "RegexCompileError");
+                    assert!(
+                        !rich.message.is_empty(),
+                        "RegexCompileError should carry regex parser detail"
+                    );
+                }
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn regex_capture_access_and_find_helpers_work() {
+        let mut vm = test_vm();
+        let compiled = call_builtin(
+            &mut vm,
+            builtin_id("compile"),
+            vec![Value::Str("^(?<name>[A-Za-z]+)-(?<id>[0-9]+)$".into())],
+        )
+        .expect("compile should return Result");
+        let regex_value = match compiled {
+            Value::Tagged { tag: 0, fields } => {
+                fields.first().expect("Ok should have payload").clone()
+            }
+            other => panic!("expected Ok result, got {:?}", other),
+        };
+
+        let captures = call_builtin(
+            &mut vm,
+            builtin_id("captures"),
+            vec![regex_value.clone(), Value::Str("alice-42".into())],
+        )
+        .expect("captures should return Result");
+        let captures_value = match captures {
+            Value::Tagged { tag: 0, fields } => {
+                fields.first().expect("Ok should have payload").clone()
+            }
+            other => panic!("expected Ok result, got {:?}", other),
+        };
+
+        let name = call_builtin(
+            &mut vm,
+            builtin_id("get_name"),
+            vec![captures_value.clone(), Value::Str("name".into())],
+        )
+        .expect("get_name should return Result");
+        assert!(matches!(
+            name,
+            Value::Tagged { tag: 0, fields } if matches!(fields.first(), Some(Value::Str(s)) if s == "alice")
+        ));
+
+        let full = call_builtin(&mut vm, builtin_id("whole"), vec![captures_value.clone()])
+            .expect("whole should succeed");
+        assert!(matches!(full, Value::Str(text) if text == "alice-42"));
+
+        let count = call_builtin(
+            &mut vm,
+            builtin_id("capture_count"),
+            vec![captures_value.clone()],
+        )
+        .expect("capture_count should succeed");
+        assert!(matches!(count, Value::Int(value) if value == int(3)));
+
+        let found = call_builtin(
+            &mut vm,
+            builtin_id("find"),
+            vec![regex_value.clone(), Value::Str("alice-42".into())],
+        )
+        .expect("find should return Result");
+        let match_value = match found {
+            Value::Tagged { tag: 0, fields } => {
+                fields.first().expect("Ok should have payload").clone()
+            }
+            other => panic!("expected Ok result, got {:?}", other),
+        };
+
+        let text = call_builtin(&mut vm, builtin_id("text"), vec![match_value.clone()])
+            .expect("text should succeed");
+        assert!(matches!(text, Value::Str(s) if s == "alice-42"));
+
+        let start = call_builtin(&mut vm, builtin_id("start"), vec![match_value.clone()])
+            .expect("start should succeed");
+        assert!(matches!(start, Value::Int(value) if value == int(0)));
+
+        let end = call_builtin(&mut vm, builtin_id("end"), vec![match_value])
+            .expect("end should succeed");
+        assert!(matches!(end, Value::Int(value) if value == int(8)));
     }
 
     #[test]

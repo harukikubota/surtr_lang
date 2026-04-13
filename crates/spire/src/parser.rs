@@ -1821,6 +1821,31 @@ impl Parser {
             .map(|c| c.is_uppercase())
             .unwrap_or(false);
 
+        // Regex generated literal sugar:
+        //   re"pattern" / re'pattern'  => Regex::compile("pattern")
+        if name == "re" {
+            if let Token::Str(raw) = self.peek().clone() {
+                let str_span = self.advance().span.clone();
+                let pattern_expr = self.parse_string_or_interpolated(str_span.clone(), raw)?;
+                let call_span = Span {
+                    start: name_span.start,
+                    end: pattern_expr.span().end,
+                };
+                let path = Ast::Path(
+                    call_span.clone(),
+                    AstPath {
+                        span: call_span.clone(),
+                        segments: vec!["Regex".into(), "compile".into()],
+                    },
+                );
+                return Ok(Ast::App(
+                    call_span,
+                    Box::new(path),
+                    vec![RecordLitArg::Positional(pattern_expr)],
+                ));
+            }
+        }
+
         // Struct literal: Name { field: val, ... }
         if is_uppercase && matches!(self.peek(), Token::LBrace) {
             self.advance();
@@ -5935,6 +5960,48 @@ Construct the error branch.
                 assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Str(s)) if s == "#{name}"));
             }
             _ => panic!("Expected Bind"),
+        }
+    }
+
+    #[test]
+    fn test_regex_generated_literal_double_quote_lowers_to_compile_call() {
+        let ast = parse(r#"rx = re"^a+$""#).unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::App(_, callee, args) => {
+                    assert!(matches!(
+                        callee.as_ref(),
+                        Ast::Path(_, path) if path.segments == vec!["Regex", "compile"]
+                    ));
+                    assert!(matches!(
+                        args.as_slice(),
+                        [RecordLitArg::Positional(Ast::Lit(_, Lit::Str(pat)))] if pat == "^a+$"
+                    ));
+                }
+                other => panic!("Expected compile App, got {:?}", other),
+            },
+            other => panic!("Expected Bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_regex_generated_literal_single_quote_lowers_to_compile_call() {
+        let ast = parse("rx = re'^a+$'").unwrap();
+        match &ast[0] {
+            Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+                Ast::App(_, callee, args) => {
+                    assert!(matches!(
+                        callee.as_ref(),
+                        Ast::Path(_, path) if path.segments == vec!["Regex", "compile"]
+                    ));
+                    assert!(matches!(
+                        args.as_slice(),
+                        [RecordLitArg::Positional(Ast::Lit(_, Lit::Str(pat)))] if pat == "^a+$"
+                    ));
+                }
+                other => panic!("Expected compile App, got {:?}", other),
+            },
+            other => panic!("Expected Bind, got {:?}", other),
         }
     }
 
