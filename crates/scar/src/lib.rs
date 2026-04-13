@@ -645,6 +645,15 @@ Lens::view(_2, pair)"#,
     }
 
     #[test]
+    fn lens_standalone_tuple_root_requires_type_context() {
+        let err = typecheck_with_rules(r#"first = _0"#, SourceRules::script())
+            .expect_err("standalone tuple root without context should fail");
+        assert!(err
+            .message
+            .contains("requires expected Lens<...> type context"));
+    }
+
+    #[test]
     fn lens_is_not_first_class_in_stage1() {
         let bind_err = typecheck_with_rules(
             r#"defrecord User(name: String)

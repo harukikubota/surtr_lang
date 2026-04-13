@@ -93,6 +93,20 @@ impl Checker {
                     });
                 }
 
+                if let Some(index) = Self::parse_standalone_tuple_root_index(id.name.as_str()) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Standalone tuple lens root _{} requires expected Lens<...> type context",
+                            index
+                        ),
+                        span: span.clone(),
+                        hint: Some(
+                            "Use _N in Lens::view/set/over with a typed source, or provide a Lens type annotation."
+                                .into(),
+                        ),
+                    });
+                }
+
                 Err(TypeError {
                     message: format!("Undefined variable: {}", id.name),
                     span: span.clone(),
