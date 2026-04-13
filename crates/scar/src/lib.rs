@@ -626,14 +626,74 @@ Lens::view(lens, user)"#,
     }
 
     #[test]
-    fn lens_capture_can_be_used_inside_closure_body() {
-        let typed = typecheck_with_builtin_prelude(
+    fn lens_capture_is_rejected_for_scope_local_model() {
+        let err = typecheck_with_rules(
             r#"defrecord User(name: String)
 lens = User.name
 getter = {|user| Lens::view(lens, user)}
 getter(User("alice"))"#,
+            SourceRules::script(),
+        )
+        .expect_err("capturing Lens value should fail");
+        assert!(err.message.contains("cannot be captured by closures"));
+    }
+
+    #[test]
+    fn private_value_access_is_allowed_but_capability_root_is_rejected() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+user = User("alice", "s3cr3t")
+user.password"#,
         );
-        assert!(!typed.is_empty());
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+
+        let err = typecheck_with_rules(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+User.password"#,
+            SourceRules::script(),
+        )
+        .expect_err("private capability root should fail");
+        assert!(err.message.contains("Field 'User.password' is private"));
+    }
+
+    #[test]
+    fn private_value_access_inside_closure_is_rejected_outside_impl() {
+        let err = typecheck_with_rules(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+user = User("alice", "s3cr3t")
+{|| user.password}"#,
+            SourceRules::script(),
+        )
+        .expect_err("private value access inside closure should fail");
+        assert!(err
+            .message
+            .contains("cannot be accessed from closures outside impl"));
     }
 
     #[test]

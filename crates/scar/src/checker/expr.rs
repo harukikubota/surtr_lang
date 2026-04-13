@@ -2338,6 +2338,7 @@ impl Checker {
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         let mut body_checker = self.spawn_child_checker(self.env.clone());
+        body_checker.closure_depth = self.closure_depth.saturating_add(1);
         let mut typed_params = Vec::new();
         let param_tys = match expected {
             Some(Ty::Func(expected_params, _)) => {
@@ -2404,9 +2405,14 @@ impl Checker {
         for capture in captures {
             if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
                 if matches!(ty, Ty::Lens(_, _)) {
-                    if let Some(path) = self.lens_bindings.get(&capture.unique_id).cloned() {
-                        body_checker.lens_bindings.insert(capture.unique_id, path);
-                    }
+                    return Err(TypeError {
+                        message: "Lens values are scope-local compile-time capabilities and cannot be captured by closures".into(),
+                        span: capture.span.clone(),
+                        hint: Some(
+                            "Consume the Lens in the current scope with Lens::view/set/over before creating the closure."
+                                .into(),
+                        ),
+                    });
                 }
                 body_checker
                     .env
@@ -3048,6 +3054,7 @@ impl Checker {
         source_ty: &Ty,
         field: &str,
         span: &Span,
+        for_capability: bool,
     ) -> Result<(TypedLensSegment, Ty, bool), TypeError> {
         match self.resolve_ty(source_ty) {
             Ty::Tuple(items) => {
@@ -3083,17 +3090,32 @@ impl Checker {
                 ))
             }
             Ty::Struct(name, fields) | Ty::Record(name, fields) => {
-                if self.env.is_private_field(&name, field)
-                    && self.current_impl_struct_target.as_deref() != Some(name.as_str())
-                {
-                    return Err(TypeError {
-                        message: format!("Field '{}.{}' is private", name, field),
-                        span: span.clone(),
-                        hint: Some(format!(
-                            "Expose the value through a public method on {} instead.",
-                            name
-                        )),
-                    });
+                if self.env.is_private_field(&name, field) {
+                    let outside_impl =
+                        self.current_impl_struct_target.as_deref() != Some(name.as_str());
+                    if for_capability && outside_impl {
+                        return Err(TypeError {
+                            message: format!("Field '{}.{}' is private", name, field),
+                            span: span.clone(),
+                            hint: Some(format!(
+                                "Expose the value through a public method on {} instead.",
+                                name
+                            )),
+                        });
+                    }
+                    if !for_capability && outside_impl && self.closure_depth > 0 {
+                        return Err(TypeError {
+                            message: format!(
+                                "Field '{}.{}' is private and cannot be accessed from closures outside impl {}",
+                                name, field, name
+                            ),
+                            span: span.clone(),
+                            hint: Some(format!(
+                                "Read {}.{} in the current scope first, then capture the plain value.",
+                                name, field
+                            )),
+                        });
+                    }
                 }
                 let (field_index, field_ty) = fields
                     .iter()
@@ -3203,7 +3225,7 @@ impl Checker {
         if matches!(typed_expr.ty, Ty::Lens(_, _)) {
             let path = self.resolve_lens_path_from_node(typed_expr, span)?;
             let (segment, focus_ty, may_fail) =
-                self.resolve_lens_segment_for_source_ty(&path.focus_ty, field, span)?;
+                self.resolve_lens_segment_for_source_ty(&path.focus_ty, field, span, true)?;
             let source_ty = self.resolve_ty(&path.source_ty);
             let focus_ty = self.resolve_ty(&focus_ty);
             let mut segments = path.segments;
@@ -3225,7 +3247,7 @@ impl Checker {
             if self.env.is_type_constructor_id(id.unique_id) {
                 let source_ty = self.resolve_ty(&typed_expr.ty);
                 let (segment, focus_ty, may_fail) =
-                    self.resolve_lens_segment_for_source_ty(&source_ty, field, span)?;
+                    self.resolve_lens_segment_for_source_ty(&source_ty, field, span, true)?;
                 let focus_ty = self.resolve_ty(&focus_ty);
                 let path = TypedLensPath {
                     source_ty: source_ty.clone(),
@@ -3246,7 +3268,7 @@ impl Checker {
             other => (false, other),
         };
         let (segment, focus_ty, may_fail) =
-            self.resolve_lens_segment_for_source_ty(&source_focus_ty, field, span)?;
+            self.resolve_lens_segment_for_source_ty(&source_focus_ty, field, span, false)?;
         let focus_ty = self.resolve_ty(&focus_ty);
         let path = TypedLensPath {
             source_ty: source_focus_ty,

@@ -59,17 +59,23 @@ defmod Lens {
 
 ## 3. Stage1 制約
 
-- `Lens` は first-class 非対応
-  - 束縛不可（`lens = User.name` 不可）
-  - 引数受け渡し不可
-  - 戻り値化不可
-  - capture 不可
-- 許可するのは即時式での利用のみ
-  - `Lens::view(User.name, user)`
-  - `Lens::view(Lens::compose(User.profile, Profile.name), user)`
+- `Lens` は compile-time capability として扱い、runtime 値としては運搬しない
+- スコープ内での束縛は許可する
+  - `lens = User.name`
+  - `Lens::view(lens, user)`
+- 関数境界での Lens 運搬は禁止する
+  - 関数引数・戻り値の `Lens<...>` 注釈は禁止
+  - 閉包 capture で Lens を持ち出すことは禁止
+- 関数には Lens ではなく `view` 済み値（`A` / `Result<A>`）を渡す
 - `_0` 単体 root 定数は未対応
   - `pair._0` は可
   - `_0` 単体は不可
+
+### 3.1 private capability 境界（Stage1）
+
+- `Type.private_field` の capability 参照は禁止（`Field 'T.private_field' is private`）
+- `value.private_field` は値アクセスとしては許可する
+- ただし closure 内で private field を参照する形（例: `{|| user.password}`）は、scope 外 escape を防ぐため禁止する
 
 ---
 
@@ -119,11 +125,11 @@ defmod Lens {
   - `result_user.name` は `Result<String>`
   - `expr.Add` は `Result<...>`、`expr.add` は失敗
   - `Lens::compose` の整合 / 不整合
-  - first-class 制約違反（bind/arg/return/capture）
+  - 関数境界運搬制約違反（arg/return/capture）
+  - private capability 境界（`Type.private_field` NG、`value.private_field` OK、closure 内 private NG）
 - Forge/Eldr:
   - plain/result 文脈の lowering 分岐
   - variant mismatch で `VariantMismatch` を `Err(...)` で返す
 - Fixture:
   - `.0/.1` を `._N` へ移行
   - `join` 名は `compose` に置換
-
