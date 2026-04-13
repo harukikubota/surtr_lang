@@ -1546,6 +1546,28 @@ impl Checker {
                 path: self.resolve_typed_lens_path(path),
                 source_is_result,
             },
+            TypedInner::LensSet {
+                source,
+                path,
+                value,
+                source_is_result,
+            } => TypedInner::LensSet {
+                source: Box::new(self.resolve_typed_node(*source)),
+                path: self.resolve_typed_lens_path(path),
+                value: Box::new(self.resolve_typed_node(*value)),
+                source_is_result,
+            },
+            TypedInner::LensOver {
+                source,
+                path,
+                update_fun,
+                source_is_result,
+            } => TypedInner::LensOver {
+                source: Box::new(self.resolve_typed_node(*source)),
+                path: self.resolve_typed_lens_path(path),
+                update_fun: Box::new(self.resolve_typed_node(*update_fun)),
+                source_is_result,
+            },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
                 fields

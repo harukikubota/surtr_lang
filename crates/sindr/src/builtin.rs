@@ -215,6 +215,18 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "(Lens<$S, $A>, Lens<$A, $B>) -> Lens<$S, $B>",
     },
+    BuiltinMeta {
+        name: "set",
+        builtin_id: 32,
+        arity: 3,
+        sig_str: "(Lens<$S, $A>, $S, $A) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "over",
+        builtin_id: 33,
+        arity: 3,
+        sig_str: "(Lens<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

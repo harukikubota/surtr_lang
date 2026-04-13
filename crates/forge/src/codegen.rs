@@ -684,6 +684,12 @@ struct PendingInjectCall {
     span: Span,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum LensUpdateLeaf {
+    Set { value_slot: u32 },
+    Over { update_fun_slot: u32 },
+}
+
 struct Codegen {
     ir: Vec<IrOp>,
     state: CodegenState,
@@ -1712,6 +1718,22 @@ impl Codegen {
             } => {
                 self.emit_lens_view(node, source, path, *source_is_result)?;
             }
+            TypedInner::LensSet {
+                source,
+                path,
+                value,
+                source_is_result,
+            } => {
+                self.emit_lens_set(node, source, path, value, *source_is_result)?;
+            }
+            TypedInner::LensOver {
+                source,
+                path,
+                update_fun,
+                source_is_result,
+            } => {
+                self.emit_lens_over(node, source, path, update_fun, *source_is_result)?;
+            }
 
             TypedInner::StructLit(tag, fields) => {
                 // Push tag first, then fields
@@ -1909,6 +1931,324 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_lens_set(
+        &mut self,
+        node: &TypedNode,
+        source: &TypedNode,
+        path: &TypedLensPath,
+        value: &TypedNode,
+        source_is_result: bool,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(source)?;
+        let source_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(source_slot));
+
+        self.emit_node(value)?;
+        let value_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(value_slot));
+
+        self.emit_lens_update_from_source_slot(
+            node,
+            source_slot,
+            path,
+            source_is_result,
+            LensUpdateLeaf::Set { value_slot },
+        )
+    }
+
+    fn emit_lens_over(
+        &mut self,
+        node: &TypedNode,
+        source: &TypedNode,
+        path: &TypedLensPath,
+        update_fun: &TypedNode,
+        source_is_result: bool,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(source)?;
+        let source_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(source_slot));
+
+        self.emit_callable_ref(update_fun)?;
+        let update_fun_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(update_fun_slot));
+
+        self.emit_lens_update_from_source_slot(
+            node,
+            source_slot,
+            path,
+            source_is_result,
+            LensUpdateLeaf::Over { update_fun_slot },
+        )
+    }
+
+    fn emit_lens_update_from_source_slot(
+        &mut self,
+        node: &TypedNode,
+        source_slot: u32,
+        path: &TypedLensPath,
+        source_is_result: bool,
+        leaf: LensUpdateLeaf,
+    ) -> Result<(), CodegenError> {
+        if !matches!(node.ty, Ty::Result(_, _)) {
+            return Err(CodegenError {
+                message: "Internal invariant broken: Lens::set/over must return Result".into(),
+                span: node.span.clone(),
+            });
+        }
+
+        let end_label = self.fresh_label();
+        let root_slot = if source_is_result {
+            self.emit(Opcode::LoadLocal(source_slot));
+            self.emit(Opcode::GetTag);
+            let err_tag = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(err_tag));
+            self.emit(Opcode::EqTag);
+
+            let ok_label = self.fresh_label();
+            self.emit_jump_if_false(ok_label);
+            self.emit(Opcode::LoadLocal(source_slot));
+            self.emit_jump(end_label);
+            self.patch_label(ok_label);
+
+            let root_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(source_slot));
+            self.emit(Opcode::GetField { field_index: 0 });
+            self.emit(Opcode::StoreLocal(root_slot));
+            root_slot
+        } else {
+            source_slot
+        };
+
+        self.emit_lens_update_at_path(root_slot, path, 0, leaf, &node.span, end_label)?;
+
+        let ok_tag = self.add_constant(Constant::Tag(0));
+        self.emit(Opcode::LoadConst(ok_tag));
+        self.emit(Opcode::LoadLocal(root_slot));
+        self.emit(Opcode::StructNew { field_count: 1 });
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn emit_lens_update_at_path(
+        &mut self,
+        current_slot: u32,
+        path: &TypedLensPath,
+        segment_idx: usize,
+        leaf: LensUpdateLeaf,
+        span: &Span,
+        failure_end: Label,
+    ) -> Result<(), CodegenError> {
+        if segment_idx == path.segments.len() {
+            return self.emit_lens_leaf_update(current_slot, leaf, span, failure_end);
+        }
+
+        match &path.segments[segment_idx] {
+            TypedLensSegment::Field {
+                field_index,
+                container_field_count,
+                ..
+            } => {
+                let focus_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetField {
+                    field_index: *field_index,
+                });
+                self.emit(Opcode::StoreLocal(focus_slot));
+
+                self.emit_lens_update_at_path(
+                    focus_slot,
+                    path,
+                    segment_idx + 1,
+                    leaf,
+                    span,
+                    failure_end,
+                )?;
+
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetTag);
+                for index in 0..*container_field_count {
+                    if index == *field_index {
+                        self.emit(Opcode::LoadLocal(focus_slot));
+                    } else {
+                        self.emit(Opcode::LoadLocal(current_slot));
+                        self.emit(Opcode::GetField { field_index: index });
+                    }
+                }
+                self.emit(Opcode::StructNew {
+                    field_count: *container_field_count,
+                });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            TypedLensSegment::Tuple {
+                field_index,
+                tuple_len,
+            } => {
+                let focus_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetTupleField {
+                    field_index: *field_index,
+                });
+                self.emit(Opcode::StoreLocal(focus_slot));
+
+                self.emit_lens_update_at_path(
+                    focus_slot,
+                    path,
+                    segment_idx + 1,
+                    leaf,
+                    span,
+                    failure_end,
+                )?;
+
+                for index in 0..*tuple_len {
+                    if index == *field_index {
+                        self.emit(Opcode::LoadLocal(focus_slot));
+                    } else {
+                        self.emit(Opcode::LoadLocal(current_slot));
+                        self.emit(Opcode::GetTupleField { field_index: index });
+                    }
+                }
+                self.emit(Opcode::TupleNew { len: *tuple_len });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            TypedLensSegment::Variant {
+                enum_name,
+                variant_name,
+                variant_tag,
+                payload_arity,
+            } => {
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetTag);
+                let expected_tag = self.add_constant(Constant::Tag(*variant_tag));
+                self.emit(Opcode::LoadConst(expected_tag));
+                self.emit(Opcode::EqTag);
+
+                let mismatch_label = self.fresh_label();
+                let continue_label = self.fresh_label();
+                self.emit_jump_if_false(mismatch_label);
+
+                let focus_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                match *payload_arity {
+                    0 => {
+                        let unit_idx = self.add_constant(Constant::Unit);
+                        self.emit(Opcode::LoadConst(unit_idx));
+                        self.emit(Opcode::StoreLocal(focus_slot));
+                    }
+                    1 => {
+                        self.emit(Opcode::LoadLocal(current_slot));
+                        self.emit(Opcode::GetField { field_index: 1 });
+                        self.emit(Opcode::StoreLocal(focus_slot));
+                    }
+                    n => {
+                        for index in 0..n {
+                            self.emit(Opcode::LoadLocal(current_slot));
+                            self.emit(Opcode::GetField {
+                                field_index: index + 1,
+                            });
+                        }
+                        self.emit(Opcode::TupleNew { len: n });
+                        self.emit(Opcode::StoreLocal(focus_slot));
+                    }
+                }
+
+                self.emit_lens_update_at_path(
+                    focus_slot,
+                    path,
+                    segment_idx + 1,
+                    leaf,
+                    span,
+                    failure_end,
+                )?;
+
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetTag);
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetField { field_index: 0 });
+                match *payload_arity {
+                    0 => {
+                        self.emit(Opcode::StructNew { field_count: 1 });
+                    }
+                    1 => {
+                        self.emit(Opcode::LoadLocal(focus_slot));
+                        self.emit(Opcode::StructNew { field_count: 2 });
+                    }
+                    n => {
+                        for index in 0..n {
+                            self.emit(Opcode::LoadLocal(focus_slot));
+                            self.emit(Opcode::GetTupleField { field_index: index });
+                        }
+                        self.emit(Opcode::StructNew { field_count: n + 1 });
+                    }
+                }
+                self.emit(Opcode::StoreLocal(current_slot));
+                self.emit_jump(continue_label);
+
+                self.patch_label(mismatch_label);
+                let detail = format!(
+                    "Expected variant {}::{}, but got a different variant",
+                    enum_name, variant_name
+                );
+                self.emit_variant_mismatch_result(&detail, span);
+                self.emit_jump(failure_end);
+
+                self.patch_label(continue_label);
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_lens_leaf_update(
+        &mut self,
+        current_slot: u32,
+        leaf: LensUpdateLeaf,
+        span: &Span,
+        failure_end: Label,
+    ) -> Result<(), CodegenError> {
+        match leaf {
+            LensUpdateLeaf::Set { value_slot } => {
+                self.emit(Opcode::LoadLocal(value_slot));
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            LensUpdateLeaf::Over { update_fun_slot } => {
+                self.emit(Opcode::LoadLocal(update_fun_slot));
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                let update_result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(update_result_slot));
+
+                self.emit(Opcode::LoadLocal(update_result_slot));
+                self.emit(Opcode::GetTag);
+                let err_tag = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(err_tag));
+                self.emit(Opcode::EqTag);
+
+                let ok_label = self.fresh_label();
+                self.emit_jump_if_false(ok_label);
+                self.emit(Opcode::LoadLocal(update_result_slot));
+                self.emit_jump(failure_end);
+
+                self.patch_label(ok_label);
+                self.emit(Opcode::LoadLocal(update_result_slot));
+                self.emit(Opcode::GetField { field_index: 0 });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+        }
+        Ok(())
+    }
+
     fn emit_lens_segments_from_local(
         &mut self,
         current_slot: u32,
@@ -1925,7 +2265,7 @@ impl Codegen {
                     });
                     self.emit(Opcode::StoreLocal(current_slot));
                 }
-                TypedLensSegment::Tuple { field_index } => {
+                TypedLensSegment::Tuple { field_index, .. } => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit(Opcode::GetTupleField {
                         field_index: *field_index,

@@ -558,6 +558,51 @@ Lens::compose(Profile.name, User.profile)"#,
     }
 
     #[test]
+    fn lens_set_returns_result_source() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+user = User("alice")
+Lens::set(User.name, user, "bob")"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(
+            &last.ty,
+            crate::types::Ty::Result(ok, err)
+                if matches!(ok.as_ref(), crate::types::Ty::Record(name, _) if name == "User")
+                    && matches!(err.as_ref(), crate::types::Ty::Error)
+        ));
+        assert!(matches!(last.node, TypedInner::LensSet { .. }));
+    }
+
+    #[test]
+    fn lens_over_requires_unary_result_callable() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+user = User("alice")
+Lens::over(User.name, user, {|name| Ok(name)})"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(
+            &last.ty,
+            crate::types::Ty::Result(ok, err)
+                if matches!(ok.as_ref(), crate::types::Ty::Record(name, _) if name == "User")
+                    && matches!(err.as_ref(), crate::types::Ty::Error)
+        ));
+        assert!(matches!(last.node, TypedInner::LensOver { .. }));
+
+        let err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+user = User("alice")
+Lens::over(User.name, user, {|name| name})"#,
+            SourceRules::script(),
+        )
+        .expect_err("non-Result update function should fail");
+        assert!(err
+            .message
+            .contains("Lens::over update function must return Result"));
+    }
+
+    #[test]
     fn lens_is_not_first_class_in_stage1() {
         let bind_err = typecheck_with_rules(
             r#"defrecord User(name: String)
@@ -1535,6 +1580,12 @@ largest = Numeric::max(1.5, 2.5)"#,
                 | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
                 TypedInner::LensPath(_) => false,
                 TypedInner::LensView { source, .. } => has_pending_trait_call(source),
+                TypedInner::LensSet { source, value, .. } => {
+                    has_pending_trait_call(source) || has_pending_trait_call(value)
+                }
+                TypedInner::LensOver {
+                    source, update_fun, ..
+                } => has_pending_trait_call(source) || has_pending_trait_call(update_fun),
                 TypedInner::BinOp(_, left, right)
                 | TypedInner::Pipe(left, right)
                 | TypedInner::ResultMap(left, right)

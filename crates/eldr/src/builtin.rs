@@ -107,6 +107,12 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_lens_compose,
     },
+    BuiltinImpl {
+        func: builtin_lens_set,
+    },
+    BuiltinImpl {
+        func: builtin_lens_over,
+    },
 ];
 
 const _: () = {
@@ -599,6 +605,18 @@ fn builtin_lens_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeEr
 fn builtin_lens_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Lens::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_lens_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Lens::set should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_lens_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Lens::over should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 

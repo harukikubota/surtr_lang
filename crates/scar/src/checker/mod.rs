@@ -270,6 +270,35 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
                 ret: Box::new(Ty::Lens(Box::new(source), Box::new(focus))),
             }
         }
+        "set" => {
+            let source = env.fresh_tyvar();
+            let focus = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Lens(Box::new(source.clone()), Box::new(focus.clone())),
+                    source.clone(),
+                    focus,
+                ],
+                ret: Box::new(Ty::Result(Box::new(source), Box::new(Ty::Error))),
+            }
+        }
+        "over" => {
+            let source = env.fresh_tyvar();
+            let focus = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Lens(Box::new(source.clone()), Box::new(focus.clone())),
+                    source.clone(),
+                    Ty::Func(
+                        vec![focus.clone()],
+                        Box::new(Ty::Result(Box::new(focus), Box::new(Ty::Error))),
+                    ),
+                ],
+                ret: Box::new(Ty::Result(Box::new(source), Box::new(Ty::Error))),
+            }
+        }
         _ => Ty::BuiltinFunc {
             name: meta.name.into(),
             params: vec![Ty::Unit; meta.arity as usize],

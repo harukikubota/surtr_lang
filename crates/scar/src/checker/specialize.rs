@@ -539,6 +539,56 @@ impl Checker {
                 path,
                 source_is_result,
             },
+            TypedInner::LensSet {
+                source,
+                path,
+                value,
+                source_is_result,
+            } => TypedInner::LensSet {
+                source: Box::new(self.rewrite_specializations_in_node(
+                    *source,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                path,
+                value: Box::new(self.rewrite_specializations_in_node(
+                    *value,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                source_is_result,
+            },
+            TypedInner::LensOver {
+                source,
+                path,
+                update_fun,
+                source_is_result,
+            } => TypedInner::LensOver {
+                source: Box::new(self.rewrite_specializations_in_node(
+                    *source,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                path,
+                update_fun: Box::new(self.rewrite_specializations_in_node(
+                    *update_fun,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                source_is_result,
+            },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
                 fields
@@ -978,6 +1028,28 @@ impl Checker {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
             }
+            TypedInner::LensSet {
+                source,
+                path,
+                value,
+                ..
+            } => {
+                self.collect_bound_tyvars_in_node(source, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
+                self.collect_bound_tyvars_in_node(value, ordered, seen);
+            }
+            TypedInner::LensOver {
+                source,
+                path,
+                update_fun,
+                ..
+            } => {
+                self.collect_bound_tyvars_in_node(source, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
+                self.collect_bound_tyvars_in_node(update_fun, ordered, seen);
+            }
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
                 for field in fields {
                     self.collect_bound_tyvars_in_node(field, ordered, seen);
@@ -1202,6 +1274,38 @@ impl Checker {
                     may_fail: path.may_fail,
                     segments: path.segments,
                 },
+                source_is_result,
+            },
+            TypedInner::LensSet {
+                source,
+                path,
+                value,
+                source_is_result,
+            } => TypedInner::LensSet {
+                source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
+                path: TypedLensPath {
+                    source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
+                    focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    may_fail: path.may_fail,
+                    segments: path.segments,
+                },
+                value: Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                source_is_result,
+            },
+            TypedInner::LensOver {
+                source,
+                path,
+                update_fun,
+                source_is_result,
+            } => TypedInner::LensOver {
+                source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
+                path: TypedLensPath {
+                    source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
+                    focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    may_fail: path.may_fail,
+                    segments: path.segments,
+                },
+                update_fun: Box::new(self.substitute_typed_node_with_mapping(*update_fun, mapping)),
                 source_is_result,
             },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
@@ -1602,6 +1706,16 @@ impl Checker {
             TypedInner::FieldAccess(expr, _) => Self::typed_node_has_pending_trait_call(expr),
             TypedInner::LensPath(_) => false,
             TypedInner::LensView { source, .. } => Self::typed_node_has_pending_trait_call(source),
+            TypedInner::LensSet { source, value, .. } => {
+                Self::typed_node_has_pending_trait_call(source)
+                    || Self::typed_node_has_pending_trait_call(value)
+            }
+            TypedInner::LensOver {
+                source, update_fun, ..
+            } => {
+                Self::typed_node_has_pending_trait_call(source)
+                    || Self::typed_node_has_pending_trait_call(update_fun)
+            }
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
                 fields.iter().any(Self::typed_node_has_pending_trait_call)
             }

@@ -52,9 +52,11 @@ pub enum TypedLensSegment {
     Field {
         field_name: String,
         field_index: u32,
+        container_field_count: u32,
     },
     Tuple {
         field_index: u32,
+        tuple_len: u32,
     },
     Variant {
         enum_name: String,
@@ -116,6 +118,22 @@ pub enum TypedInner {
     LensView {
         source: Box<TypedNode>,
         path: TypedLensPath,
+        source_is_result: bool,
+    },
+
+    /// Lens set application with compile-time path metadata.
+    LensSet {
+        source: Box<TypedNode>,
+        path: TypedLensPath,
+        value: Box<TypedNode>,
+        source_is_result: bool,
+    },
+
+    /// Lens over application with compile-time path metadata.
+    LensOver {
+        source: Box<TypedNode>,
+        path: TypedLensPath,
+        update_fun: Box<TypedNode>,
         source_is_result: bool,
     },
 

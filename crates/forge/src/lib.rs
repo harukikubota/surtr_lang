@@ -33,6 +33,7 @@ mod tests {
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
+    const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
 
     fn strip_test_annotations(source: &str) -> String {
@@ -140,6 +141,7 @@ mod tests {
                 ("Error", ERROR_MODULE_SOURCE),
                 ("List", LIST_MODULE_SOURCE),
                 ("Result", RESULT_MODULE_SOURCE),
+                ("Lens", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),
             ]
             .into_iter()
@@ -363,6 +365,37 @@ largest = Numeric::max(1.5, 2.5)"#,
             .opcodes
             .iter()
             .any(|op| matches!(op, Opcode::Call { arity: 2, .. })));
+    }
+
+    #[test]
+    fn lens_set_and_over_are_lowered_without_runtime_builtin_calls() {
+        let bytecode = codegen_source(
+            r#"defrecord User(name: String)
+user = User("alice")
+user2 = Lens::set(User.name, user, "bob")
+user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
+        );
+
+        let lens_set_id = builtin_meta_by_name("set")
+            .expect("set builtin metadata must exist")
+            .builtin_id;
+        let lens_over_id = builtin_meta_by_name("over")
+            .expect("over builtin metadata must exist")
+            .builtin_id;
+
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == lens_set_id || *builtin_id == lens_over_id
+            )
+        }));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { arity: 1, .. })));
     }
 
     #[test]
