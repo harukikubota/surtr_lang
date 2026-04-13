@@ -198,6 +198,22 @@ mod tests {
         sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
     }
 
+    fn resolve_with_builtin_prelude_in_script_module(
+        source: &str,
+    ) -> Result<Vec<sigil::resolved::Resolved>, sigil::error::ResolveError> {
+        let module_stages = std_module_stages();
+        let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+            .expect("source should parse");
+        let declaration_index = sigil::precollect_declaration_index(&module_stages)
+            .expect("std modules should precollect");
+        sigil::resolve_staged_program(
+            &module_stages,
+            user_ast,
+            &declaration_index,
+            Some("__Script::fixture".to_string()),
+        )
+    }
+
     fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
         resolve_with_builtin_prelude_result(source).expect("source should resolve")
     }
@@ -205,6 +221,12 @@ mod tests {
     fn typecheck_with_builtin_prelude(source: &str) -> Vec<TypedNode> {
         let resolved = resolve_with_builtin_prelude(source);
         typecheck(resolved).expect("source should typecheck")
+    }
+
+    fn typecheck_with_builtin_prelude_in_script_module(source: &str) -> Vec<TypedNode> {
+        let resolved = resolve_with_builtin_prelude_in_script_module(source)
+            .expect("source should resolve inside script module");
+        typecheck(resolved).expect("source should typecheck inside script module")
     }
 
     fn typecheck_with_rules(
@@ -600,6 +622,74 @@ deferror NotFound(code: String) {
         }
 
         assert_eq!(collect_type_tags(&first), collect_type_tags(&second));
+    }
+
+    #[test]
+    fn user_function_calls_typecheck_inside_script_module_scope() {
+        let typed = typecheck_with_builtin_prelude_in_script_module(
+            "def add1(x: Int) -> Int { x + 1 }\nprint(to_string(add1(41)))",
+        );
+        assert!(
+            typed.iter()
+                .any(|node| matches!(node.node, TypedInner::Def(..))),
+            "expected user function definition to survive typechecking"
+        );
+    }
+
+    #[test]
+    fn generic_user_function_calls_typecheck_inside_script_module_scope() {
+        let typed = typecheck_with_builtin_prelude_in_script_module(
+            r#"def id(x: $A) -> $A { x }
+
+print(to_string(id(1)))
+print(id("ok"))"#,
+        );
+        assert!(
+            typed.iter()
+                .filter(|node| matches!(node.node, TypedInner::App(_, _)))
+                .count()
+                >= 2,
+            "expected both generic function call sites to typecheck"
+        );
+    }
+
+    #[test]
+    fn named_args_user_function_calls_typecheck_inside_script_module_scope() {
+        let typed = typecheck_with_builtin_prelude_in_script_module(
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
+
+print(to_string(add(y: 2, x: 1)))
+print(to_string(add3(z: 3, y: 2, x: 1)))"#,
+        );
+        assert!(
+            typed.iter()
+                .filter(|node| matches!(node.node, TypedInner::Def(..)))
+                .count()
+                >= 2,
+            "expected named-argument user functions to typecheck"
+        );
+    }
+
+    #[test]
+    fn trailing_block_calls_typecheck_inside_script_module_scope() {
+        let typed = typecheck_with_builtin_prelude_in_script_module(
+            r#"def take(flag: Boolean, value: Int) -> Int {
+  if(flag, value, 0)
+}
+
+print(to_string(take(True) { num = 10; num }))
+
+v = if_then(True) { print("x") }
+print(to_string(v))"#,
+        );
+        assert!(
+            typed.iter()
+                .filter(|node| matches!(node.node, TypedInner::App(_, _)))
+                .count()
+                >= 2,
+            "expected trailing-block call sites to typecheck"
+        );
     }
 
     #[test]

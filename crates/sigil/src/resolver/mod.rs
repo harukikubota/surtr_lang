@@ -63,10 +63,17 @@ pub fn resolve_staged_program(
     let global_scope = build_global_scope(declaration_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     let mut resolved = Vec::new();
+    let mut next_local_id = declaration_uids
+        .values()
+        .copied()
+        .max()
+        .map(|uid| uid + 1)
+        .unwrap_or_else(|| global_scope.next_id());
+    next_local_id = next_local_id.max(global_scope.next_id());
 
     for (stage_index, stage) in module_stages.iter().enumerate() {
         for module in stage {
-            let scope = build_module_scope(
+            let mut scope = build_module_scope(
                 &global_scope,
                 &auto_import_modules,
                 declaration_index,
@@ -76,16 +83,18 @@ pub fn resolve_staged_program(
                 Some(module.module_path.as_str()),
                 stage_index,
             )?;
+            scope.advance_next_id_to(next_local_id);
             let mut resolver = Resolver::with_scope(scope);
             resolver.current_module_path = Some(module.module_path.clone());
             resolver.declaration_uids = declaration_uids.clone();
             resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
             resolver.allow_top_level_shadowing = true;
             resolved.extend(resolver.resolve_program(module.ast.clone())?);
+            next_local_id = resolver.scope.next_id();
         }
     }
 
-    let user_scope = build_module_scope(
+    let mut user_scope = build_module_scope(
         &global_scope,
         &auto_import_modules,
         declaration_index,
@@ -95,6 +104,7 @@ pub fn resolve_staged_program(
         user_module_path.as_deref(),
         module_stages.len(),
     )?;
+    user_scope.advance_next_id_to(next_local_id);
     let mut user_resolver = Resolver::with_scope(user_scope);
     user_resolver.declaration_uids = declaration_uids;
     user_resolver.declaration_uid_kinds = declaration_uid_kinds;
