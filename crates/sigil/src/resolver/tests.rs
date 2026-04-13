@@ -869,7 +869,10 @@ deftrait Compare {
                 match func.as_ref() {
                     Resolved::Var(_, id) => {
                         assert_eq!(id.name, "compare");
-                        assert_eq!(id.qualified_name.as_deref(), Some("Compare::Compare::compare"));
+                        assert_eq!(
+                            id.qualified_name.as_deref(),
+                            Some("Compare::Compare::compare")
+                        );
                     }
                     other => panic!("expected helper var, got {:?}", other),
                 }
@@ -1013,12 +1016,11 @@ deftrait TryFrom<$To> {
         ),
     )]];
 
-    let err = resolve_user_with_modules(
-        r#"x = try_from(value: "42", to: Int)"#,
-        &module_stages,
-    )
-    .expect_err("named args must fail");
-    assert!(err.message.contains("from/try_from does not accept named arguments"));
+    let err = resolve_user_with_modules(r#"x = try_from(value: "42", to: Int)"#, &module_stages)
+        .expect_err("named args must fail");
+    assert!(err
+        .message
+        .contains("from/try_from does not accept named arguments"));
 }
 
 #[test]
@@ -1877,6 +1879,61 @@ print(to_string(add(7, 3)))"#,
         .expect("user call should resolve imported add");
 
     assert_eq!(imported_add_uid, helper_add_uid);
+}
+
+#[test]
+fn test_staged_resolution_keeps_local_binder_ids_distinct_from_user_defs() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def keep(x: Int) -> Int { x }"#, "Helper"),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"def add1(x: Int) -> Int { x + 1 }
+value = add1(41)"#,
+        &module_stages,
+    )
+    .expect("script module should resolve");
+
+    let mut helper_param_uid = None;
+    let mut user_def_uid = None;
+    let mut user_param_uid = None;
+    for node in &resolved {
+        if let Resolved::Def(_, id, _, params, _, _, _) = node {
+            match id.qualified_name.as_deref() {
+                Some("Helper::keep") => {
+                    helper_param_uid = params.first().map(|param| param.id.unique_id);
+                }
+                Some("__Script::fixture::add1") => {
+                    user_def_uid = Some(id.unique_id);
+                    user_param_uid = params.first().map(|param| param.id.unique_id);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let helper_param_uid = helper_param_uid.expect("helper param should exist");
+    let user_def_uid = user_def_uid.expect("user def should exist");
+    let user_param_uid = user_param_uid.expect("user param should exist");
+    assert_ne!(helper_param_uid, user_def_uid);
+    assert_ne!(helper_param_uid, user_param_uid);
+    assert_ne!(user_def_uid, user_param_uid);
+
+    let call_uid = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::App(_, func, _) => match func.as_ref() {
+                    Resolved::Var(_, id) if id.name == "add1" => Some(id.unique_id),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("user call should resolve to add1");
+    assert_eq!(call_uid, user_def_uid);
 }
 
 #[test]

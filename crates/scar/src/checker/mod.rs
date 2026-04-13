@@ -241,10 +241,7 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
             let b = env.fresh_tyvar();
             Ty::BuiltinFunc {
                 name: meta.name.into(),
-                params: vec![
-                    Ty::List(Box::new(a.clone())),
-                    Ty::List(Box::new(b.clone())),
-                ],
+                params: vec![Ty::List(Box::new(a.clone())), Ty::List(Box::new(b.clone()))],
                 ret: Box::new(Ty::List(Box::new(Ty::Tuple(vec![a, b])))),
             }
         }

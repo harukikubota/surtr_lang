@@ -32,7 +32,9 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
 
 pub(crate) fn parse_test_options(args: &[String]) -> RuneResult<TestOptions> {
     if args.len() != 1 {
-        return Err(RuneError::usage("test: expected exactly one lib-relative test name"));
+        return Err(RuneError::usage(
+            "test: expected exactly one lib-relative test name",
+        ));
     }
 
     let selector = args[0].trim().to_string();
@@ -148,20 +150,18 @@ fn collect_test_compile_sources(
         TEST_PRELUDE_SOURCE,
         TEST_PRELUDE_MODULE_PATH,
     )];
-    let module_sources = xldr::collect_module_sources_with_extra_std_sources(
-        &extra_std_sources,
-        &[module_inputs],
-    )
-    .map_err(|e| {
-        RuneError::message(
-            1,
-            format!(
-                "{}: failed to collect test module sources: {}",
-                env.command_name(),
-                e
-            ),
-        )
-    })?;
+    let module_sources =
+        xldr::collect_module_sources_with_extra_std_sources(&extra_std_sources, &[module_inputs])
+            .map_err(|e| {
+            RuneError::message(
+                1,
+                format!(
+                    "{}: failed to collect test module sources: {}",
+                    env.command_name(),
+                    e
+                ),
+            )
+        })?;
     Ok(xldr::compose_script_compile_sources(
         &script.file_path,
         &script.source,
@@ -215,8 +215,9 @@ fn binary_fingerprint() -> Result<String, RuneError> {
 }
 
 fn library_sources_fingerprint() -> Result<String, RuneError> {
-    let modules = xldr::collect_lib_module_inputs()
-        .map_err(|e| RuneError::message(1, format!("test: failed to collect lib sources: {}", e)))?;
+    let modules = xldr::collect_lib_module_inputs().map_err(|e| {
+        RuneError::message(1, format!("test: failed to collect lib sources: {}", e))
+    })?;
     let mut payload = String::new();
     for module in modules {
         payload.push_str(&module.file_name);

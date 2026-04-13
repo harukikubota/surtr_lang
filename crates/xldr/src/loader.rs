@@ -707,23 +707,8 @@ mod tests {
         assert_eq!(
             std_paths,
             vec![
-                "Kernel",
-                "Numeric",
-                "Show",
-                "Eq",
-                "Ordering",
-                "Compare",
-                "Ord",
-                "Concat",
-                "From",
-                "TryFrom",
-                "Int",
-                "String",
-                "Boolean",
-                "Error",
-                "List",
-                "Result",
-                "Float",
+                "Kernel", "Numeric", "Show", "Eq", "Ordering", "Compare", "Ord", "Concat", "From",
+                "TryFrom", "Int", "String", "Boolean", "Error", "List", "Result", "Float",
             ]
         );
     }
@@ -814,23 +799,8 @@ mod tests {
         assert_eq!(
             std_paths,
             vec![
-                "Kernel",
-                "Numeric",
-                "Show",
-                "Eq",
-                "Ordering",
-                "Compare",
-                "Ord",
-                "Concat",
-                "From",
-                "TryFrom",
-                "Int",
-                "String",
-                "Boolean",
-                "Error",
-                "List",
-                "Result",
-                "Float",
+                "Kernel", "Numeric", "Show", "Eq", "Ordering", "Compare", "Ord", "Concat", "From",
+                "TryFrom", "Int", "String", "Boolean", "Error", "List", "Result", "Float",
             ]
         );
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");

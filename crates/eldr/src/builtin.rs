@@ -552,10 +552,7 @@ fn builtin_list_group_count(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
 
     let mut groups: Vec<(Value, usize)> = Vec::new();
     for value in values.iter() {
-        if let Some((_, count)) = groups
-            .iter_mut()
-            .find(|(existing, _)| *existing == value)
-        {
+        if let Some((_, count)) = groups.iter_mut().find(|(existing, _)| *existing == value) {
             *count += 1;
         } else {
             groups.push((value, 1));
