@@ -299,6 +299,93 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
                 ret: Box::new(Ty::Result(Box::new(source), Box::new(Ty::Error))),
             }
         }
+        "compile" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Str],
+            ret: Box::new(Ty::Result(
+                Box::new(Ty::Enum("Regex".into(), Vec::new())),
+                Box::new(Ty::Error),
+            )),
+        },
+        "is_match" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::Bool),
+        },
+        "captures" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::Result(
+                Box::new(Ty::Enum("RegexCaptures".into(), Vec::new())),
+                Box::new(Ty::Error),
+            )),
+        },
+        "whole" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new())],
+            ret: Box::new(Ty::Str),
+        },
+        "capture_count" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new())],
+            ret: Box::new(Ty::Int),
+        },
+        "get" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new()), Ty::Int],
+            ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
+        },
+        "get_name" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
+        },
+        "find" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::Result(
+                Box::new(Ty::Enum("RegexMatch".into(), Vec::new())),
+                Box::new(Ty::Error),
+            )),
+        },
+        "find_all" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::List(Box::new(Ty::Enum(
+                "RegexMatch".into(),
+                Vec::new(),
+            )))),
+        },
+        "split" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::List(Box::new(Ty::Str))),
+        },
+        "replace" | "replace_all" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str, Ty::Str],
+            ret: Box::new(Ty::Str),
+        },
+        "escape" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Str],
+            ret: Box::new(Ty::Str),
+        },
+        "group_names" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new())],
+            ret: Box::new(Ty::List(Box::new(Ty::Str))),
+        },
+        "text" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexMatch".into(), Vec::new())],
+            ret: Box::new(Ty::Str),
+        },
+        "start" | "end" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexMatch".into(), Vec::new())],
+            ret: Box::new(Ty::Int),
+        },
         _ => Ty::BuiltinFunc {
             name: meta.name.into(),
             params: vec![Ty::Unit; meta.arity as usize],

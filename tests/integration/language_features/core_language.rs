@@ -58,6 +58,28 @@ print(inspect(Err(MyError)))"#,
 }
 
 #[test]
+fn regex_generated_literal_and_builtin_wrappers_work_end_to_end() {
+    assert_output(
+        r#"rx =? re"(?<name>[A-Za-z]+)-(?<id>[0-9]+)"
+caps =? Regex::captures(rx, "alice-42")
+name =? RegexCaptures::get_name(caps, "name")
+id =? RegexCaptures::get(caps, 2)
+full = RegexCaptures::whole(caps)
+count = RegexCaptures::capture_count(caps)
+first =? Regex::find(rx, "alice-42")
+
+print(name)
+print(id)
+print(full)
+print(to_string(count))
+print(RegexMatch::text(first))
+print(to_string(Regex::is_match(rx, "bob-7")))
+print(Regex::replace_all(rx, "alice-42 bob-7", "X"))"#,
+        &["alice", "42", "alice-42", "3", "alice-42", "True", "X X"],
+    );
+}
+
+#[test]
 fn int_negative_literal() {
     assert_output("x = -5\nprint(to_string(x))", &["-5"]);
 }

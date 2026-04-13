@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
@@ -56,6 +57,28 @@ pub enum Value {
     Tagged { tag: u32, fields: Vec<Value> },
     Callable(Callable),
     Error(Box<RichError>),
+    Regex(RegexHandle),
+    RegexCaptures(RegexCapturesHandle),
+    RegexMatch(RegexMatchHandle),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegexHandle {
+    pub pattern: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegexCapturesHandle {
+    pub input: String,
+    pub groups: Vec<Option<(usize, usize)>>,
+    pub name_to_index: HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegexMatchHandle {
+    pub input: String,
+    pub start: usize,
+    pub end: usize,
 }
 
 pub type ListRef = Option<Rc<ListNode>>;
@@ -189,6 +212,11 @@ impl Value {
                 }
             },
             Value::Error(rich) => rich.to_display_string(),
+            Value::Regex(handle) => format!("Regex({:?})", handle.pattern),
+            Value::RegexCaptures(handle) => {
+                format!("RegexCaptures(groups: {})", handle.groups.len())
+            }
+            Value::RegexMatch(handle) => format!("RegexMatch({}..{})", handle.start, handle.end),
         }
     }
 }

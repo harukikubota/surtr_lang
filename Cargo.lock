@@ -321,6 +321,7 @@ name = "eldr"
 version = "0.1.0"
 dependencies = [
  "ariadne",
+ "regex",
  "sindr",
 ]
 

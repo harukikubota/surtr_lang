@@ -28,6 +28,7 @@ mod tests {
     const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/try_from.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
+    const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/regex.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
     const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/ordering.srt");
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
@@ -163,6 +164,10 @@ mod tests {
                 (
                     "String",
                     pick_override("String", STRING_MODULE_SOURCE, overrides),
+                ),
+                (
+                    "Regex",
+                    pick_override("Regex", REGEX_MODULE_SOURCE, overrides),
                 ),
                 (
                     "Boolean",

@@ -29,6 +29,7 @@ mod tests {
     const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/try_from.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
+    const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/regex.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
     const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/ordering.srt");
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
@@ -138,6 +139,7 @@ mod tests {
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
                 ("Int", INT_MODULE_SOURCE),
                 ("String", STRING_MODULE_SOURCE),
+                ("Regex", REGEX_MODULE_SOURCE),
                 ("Boolean", BOOLEAN_MODULE_SOURCE),
                 ("Error", ERROR_MODULE_SOURCE),
                 ("List", LIST_MODULE_SOURCE),

@@ -239,6 +239,108 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 0,
         sig_str: "() -> List<String>",
     },
+    BuiltinMeta {
+        name: "compile",
+        builtin_id: 36,
+        arity: 1,
+        sig_str: "(String) -> Result<Regex, RegexCompileError>",
+    },
+    BuiltinMeta {
+        name: "is_match",
+        builtin_id: 37,
+        arity: 2,
+        sig_str: "(Regex, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "captures",
+        builtin_id: 38,
+        arity: 2,
+        sig_str: "(Regex, String) -> Result<RegexCaptures, NoneError>",
+    },
+    BuiltinMeta {
+        name: "whole",
+        builtin_id: 39,
+        arity: 1,
+        sig_str: "(RegexCaptures) -> String",
+    },
+    BuiltinMeta {
+        name: "capture_count",
+        builtin_id: 40,
+        arity: 1,
+        sig_str: "(RegexCaptures) -> Int",
+    },
+    BuiltinMeta {
+        name: "get",
+        builtin_id: 41,
+        arity: 2,
+        sig_str: "(RegexCaptures, Int) -> Result<String, NoneError>",
+    },
+    BuiltinMeta {
+        name: "get_name",
+        builtin_id: 42,
+        arity: 2,
+        sig_str: "(RegexCaptures, String) -> Result<String, NoneError>",
+    },
+    BuiltinMeta {
+        name: "find",
+        builtin_id: 43,
+        arity: 2,
+        sig_str: "(Regex, String) -> Result<RegexMatch, NoneError>",
+    },
+    BuiltinMeta {
+        name: "find_all",
+        builtin_id: 44,
+        arity: 2,
+        sig_str: "(Regex, String) -> List<RegexMatch>",
+    },
+    BuiltinMeta {
+        name: "split",
+        builtin_id: 45,
+        arity: 2,
+        sig_str: "(Regex, String) -> List<String>",
+    },
+    BuiltinMeta {
+        name: "replace",
+        builtin_id: 46,
+        arity: 3,
+        sig_str: "(Regex, String, String) -> String",
+    },
+    BuiltinMeta {
+        name: "replace_all",
+        builtin_id: 47,
+        arity: 3,
+        sig_str: "(Regex, String, String) -> String",
+    },
+    BuiltinMeta {
+        name: "escape",
+        builtin_id: 48,
+        arity: 1,
+        sig_str: "(String) -> String",
+    },
+    BuiltinMeta {
+        name: "group_names",
+        builtin_id: 49,
+        arity: 1,
+        sig_str: "(Regex) -> List<String>",
+    },
+    BuiltinMeta {
+        name: "text",
+        builtin_id: 50,
+        arity: 1,
+        sig_str: "(RegexMatch) -> String",
+    },
+    BuiltinMeta {
+        name: "start",
+        builtin_id: 51,
+        arity: 1,
+        sig_str: "(RegexMatch) -> Int",
+    },
+    BuiltinMeta {
+        name: "end",
+        builtin_id: 52,
+        arity: 1,
+        sig_str: "(RegexMatch) -> Int",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.
@@ -268,6 +370,18 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     },
     BuiltinTypeMeta {
         name: "Error",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "Regex",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "RegexCaptures",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "RegexMatch",
         params: &[],
     },
     BuiltinTypeMeta {
