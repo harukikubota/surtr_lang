@@ -227,6 +227,18 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 3,
         sig_str: "(Lens<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
     },
+    BuiltinMeta {
+        name: "__test_capture_stdout",
+        builtin_id: 34,
+        arity: 0,
+        sig_str: "() -> List<String>",
+    },
+    BuiltinMeta {
+        name: "__test_capture_stderr",
+        builtin_id: 35,
+        arity: 0,
+        sig_str: "() -> List<String>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

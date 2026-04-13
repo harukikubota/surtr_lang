@@ -113,6 +113,12 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_lens_over,
     },
+    BuiltinImpl {
+        func: builtin_test_capture_stdout,
+    },
+    BuiltinImpl {
+        func: builtin_test_capture_stderr,
+    },
 ];
 
 const _: () = {
@@ -153,10 +159,7 @@ fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
         Value::Str(s) => s.clone(),
         other => inspect_value(vm, other),
     };
-    match &mut vm.output {
-        Some(buf) => buf.push(s),
-        None => println!("{}", s),
-    }
+    vm.emit_stdout_line(s);
     Ok(Value::Unit)
 }
 
@@ -210,8 +213,10 @@ fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
 fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match &args[0] {
         Value::Error(rich) => {
-            if let Some(buf) = vm.error_output.as_mut() {
-                buf.extend(rich.to_eprint_lines());
+            if vm.is_stderr_captured() {
+                for line in rich.to_eprint_lines() {
+                    vm.emit_stderr_line(line);
+                }
             } else if let (Some(source), Some(file)) = (vm.source(), vm.source_file()) {
                 use ariadne::{Color, Label, Report, ReportKind, Source};
 
@@ -237,16 +242,13 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
                 }
             } else {
                 for line in rich.to_eprint_lines() {
-                    eprintln!("{}", line);
+                    vm.emit_stderr_line(line);
                 }
             }
         }
         other => {
             let s = inspect_value(vm, other);
-            match &mut vm.error_output {
-                Some(buf) => buf.push(s),
-                None => eprintln!("{}", s),
-            }
+            vm.emit_stderr_line(s);
         }
     }
     Ok(Value::Unit)
@@ -555,6 +557,24 @@ fn builtin_test_fail_current(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     };
     vm.record_current_scope_fail(detail.clone());
     Ok(Value::Unit)
+}
+
+fn builtin_test_capture_stdout(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let items = vm
+        .take_stdout()
+        .into_iter()
+        .map(Value::Str)
+        .collect::<Vec<_>>();
+    Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_test_capture_stderr(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let items = vm
+        .take_stderr()
+        .into_iter()
+        .map(Value::Str)
+        .collect::<Vec<_>>();
+    Ok(Value::List(ListHandle::from_items(items)))
 }
 
 fn builtin_list_group_count(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

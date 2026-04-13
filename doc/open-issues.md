@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない将来課題を追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md` を正本とする。
 
-最終更新日: 2026-04-13
+最終更新日: 2026-04-14
 
 2026-04-09 整理メモ:
 
@@ -327,6 +327,26 @@
 - テスト方針:
   - warning 導入時は `integration` で diagnostics（human/json）の warning 出力を固定する。
   - warning 非導入の場合は現行どおり `spec/modules/private_visibility_function_return_private_value` の成功を維持する。
+
+### OI-015 test DSL I/O capture の `it` 単位分離
+
+- 策定コミット: `2026-04-14 capture API 導入`
+- 背景:
+  - `Test::capture_stdout` / `Test::capture_stderr` を追加し、Surtr test script から `print` / `eprint` 出力を直接アサート可能にした。
+  - 現行実装は per-VM バッファ + drain cursor 方式のため、同一 script VM 内で `it` 間の未読出力が次の `capture_*` に流入しうる。
+- 2026-04-14 時点の固定事項:
+  - Rust 側の並列実行（別 process / 別 VM）ではバッファは分離される。
+  - 直近運用は `it` 内で `print` と `capture_*` を 1 対 1 で完結させる前提とする。
+- 未確定点:
+  - `it` 開始/終了に合わせた自動 cursor reset を入れるか
+  - `test` / `describe` / `it` のどの粒度で capture scope を切るか
+  - `capture_*` を drain API のまま維持するか、peek API を追加するか
+- 受け入れ条件:
+  - `it` 単位で deterministic に capture でき、隣接 `it` の未読出力が混入しない。
+  - 現行の `capture_*` 利用コードに対して後方互換方針（移行手順）が明示される。
+- テスト方針:
+  - `tests/integration/test_command.rs` に「前の `it` が出した未読出力を次の `it` が拾わない」ケースを追加する。
+  - `lib/tests/*.srt` に capture API の推奨パターン fixture を追加して契約を固定する。
 
 ---
 

@@ -236,3 +236,38 @@ fn test_nested_lib_tests_are_ignored_by_normal_script_run() {
 
     let _ = fs::remove_dir_all(temp);
 }
+
+#[test]
+fn test_command_allows_asserting_captured_stdout_in_surtr_test_code() {
+    let temp = unique_temp_dir("surtr_test_command_capture_stdout_assert");
+    write_source(
+        &temp.join("lib/tests/capture_stdout.srt"),
+        r#"import Test;
+
+test("Capture") {
+  it("asserts captured print lines") {
+    print("first")
+    assert_eq(["first"], capture_stdout())
+
+    print("second")
+    print("third")
+    assert_stdout_eq(["second", "third"])
+  }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "capture_stdout"]);
+    assert!(
+        output.status.success(),
+        "test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PASS] Capture > asserts captured print lines"));
+    assert!(stdout.contains("test result: passed=1, failed=0, total=1"));
+
+    let _ = fs::remove_dir_all(temp);
+}

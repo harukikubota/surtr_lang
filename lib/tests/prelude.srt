@@ -14,6 +14,8 @@ defmod Test {
   @@builtin def __test_pass(name: String) -> Unit
   @@builtin def __test_fail(name: String, detail: String) -> Unit
   @@builtin def __test_fail_current(detail: String) -> Unit
+  @@builtin def __test_capture_stdout() -> List<String>
+  @@builtin def __test_capture_stderr() -> List<String>
 
   defp _fail(detail: String) -> Result<()> {
     Err(TestAssertionFailed(detail))
@@ -101,5 +103,38 @@ defmod Test {
         )
       },
     }
+  }
+
+  @@doc """
+  Drain captured stdout lines produced since the previous capture read.
+  Current contract:
+  - buffer is per-VM (safe across parallel Rust test processes)
+  - drain cursor is shared in the same test script VM
+  - output left unread by a previous `it` can be observed by a later `it`
+  """
+  def capture_stdout() -> List<String> {
+    __test_capture_stdout()
+  }
+
+  @@doc """
+  Drain captured stderr lines produced since the previous capture read.
+  Shares the same drain semantics and script-local cursor model as `capture_stdout`.
+  """
+  def capture_stderr() -> List<String> {
+    __test_capture_stderr()
+  }
+
+  @@doc """
+  Assert captured stdout lines equal expected lines.
+  """
+  def assert_stdout_eq(expected: List<String>) -> Result<()> {
+    assert_eq(expected, __test_capture_stdout())
+  }
+
+  @@doc """
+  Assert captured stderr lines equal expected lines.
+  """
+  def assert_stderr_eq(expected: List<String>) -> Result<()> {
+    assert_eq(expected, __test_capture_stderr())
   }
 }
