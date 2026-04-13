@@ -1790,11 +1790,9 @@ impl Checker {
         })
     }
 
-    fn check_lens_source_argument(
+    fn check_lens_source_value(
         &mut self,
-        span: &Span,
         op_name: &str,
-        path: &TypedLensPath,
         source_expr: &Resolved,
     ) -> Result<(TypedNode, bool, Ty), TypeError> {
         let typed_source = self.check_node(source_expr)?;
@@ -1811,20 +1809,39 @@ impl Checker {
             other => (false, other),
         };
 
-        if !self.types_compatible(&path.source_ty, &source_value_ty) {
+        Ok((typed_source, source_is_result, source_value_ty))
+    }
+
+    fn check_lens_path_argument(
+        &mut self,
+        span: &Span,
+        op_name: &str,
+        path_expr: &Resolved,
+        source_value_ty: &Ty,
+        source_input_ty: &Ty,
+    ) -> Result<TypedLensPath, TypeError> {
+        let expected_focus_ty = self.env.fresh_tyvar();
+        let expected_path_ty = Ty::Lens(
+            Box::new(self.resolve_ty(source_value_ty)),
+            Box::new(expected_focus_ty),
+        );
+        let path_node = self.check_node_with_expected(path_expr, Some(&expected_path_ty))?;
+        let path = self.resolve_lens_path_from_node(path_node, span)?;
+
+        if !self.types_compatible(&path.source_ty, source_value_ty) {
             return Err(TypeError {
                 message: format!(
                     "{} source type mismatch: lens expects {}, got {}",
                     op_name,
                     self.ty_name(&path.source_ty),
-                    self.ty_name(&typed_source.ty)
+                    self.ty_name(source_input_ty)
                 ),
                 span: span.clone(),
                 hint: None,
             });
         }
 
-        Ok((typed_source, source_is_result, source_value_ty))
+        Ok(path)
     }
 
     fn check_lens_view_intrinsic(
@@ -1857,10 +1874,15 @@ impl Checker {
             unreachable!("validated argument form above")
         };
 
-        let path_node = self.check_node(path_expr)?;
-        let path = self.resolve_lens_path_from_node(path_node, span)?;
-        let (typed_source, source_is_result, _) =
-            self.check_lens_source_argument(span, "Lens::view", &path, source_expr)?;
+        let (typed_source, source_is_result, source_value_ty) =
+            self.check_lens_source_value("Lens::view", source_expr)?;
+        let path = self.check_lens_path_argument(
+            span,
+            "Lens::view",
+            path_expr,
+            &source_value_ty,
+            &typed_source.ty,
+        )?;
 
         let focus_ty = self.resolve_ty(&path.focus_ty);
         let out_ty = if source_is_result || path.may_fail {
@@ -1913,10 +1935,15 @@ impl Checker {
             unreachable!("validated argument form above")
         };
 
-        let path_node = self.check_node(path_expr)?;
-        let path = self.resolve_lens_path_from_node(path_node, span)?;
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_argument(span, "Lens::set", &path, source_expr)?;
+            self.check_lens_source_value("Lens::set", source_expr)?;
+        let path = self.check_lens_path_argument(
+            span,
+            "Lens::set",
+            path_expr,
+            &source_value_ty,
+            &typed_source.ty,
+        )?;
 
         let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
         if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
@@ -1979,10 +2006,15 @@ impl Checker {
             unreachable!("validated argument form above")
         };
 
-        let path_node = self.check_node(path_expr)?;
-        let path = self.resolve_lens_path_from_node(path_node, span)?;
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_argument(span, "Lens::over", &path, source_expr)?;
+            self.check_lens_source_value("Lens::over", source_expr)?;
+        let path = self.check_lens_path_argument(
+            span,
+            "Lens::over",
+            path_expr,
+            &source_value_ty,
+            &typed_source.ty,
+        )?;
 
         let typed_update = self.check_node(update_expr)?;
         let (in_ty, out_ty) = self.unary_function_parts(&typed_update.ty, "Lens::over", span)?;

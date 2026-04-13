@@ -603,6 +603,48 @@ Lens::over(User.name, user, {|name| name})"#,
     }
 
     #[test]
+    fn lens_standalone_tuple_root_is_accepted_in_intrinsics() {
+        let typed_view = typecheck_with_builtin_prelude(
+            r#"pair = (1, "one")
+Lens::view(_0, pair)"#,
+        );
+        let view_last = typed_view
+            .last()
+            .expect("typed program should not be empty for view");
+        assert!(matches!(view_last.ty, crate::types::Ty::Int));
+        assert!(matches!(view_last.node, TypedInner::LensView { .. }));
+
+        let typed_set = typecheck_with_builtin_prelude(
+            r#"pair = (1, "one")
+Lens::set(_0, pair, 2)"#,
+        );
+        let set_last = typed_set
+            .last()
+            .expect("typed program should not be empty for set");
+        assert!(matches!(
+            &set_last.ty,
+            crate::types::Ty::Result(ok, err)
+                if matches!(ok.as_ref(), crate::types::Ty::Tuple(items)
+                    if items.len() == 2
+                        && matches!(items[0], crate::types::Ty::Int)
+                        && matches!(items[1], crate::types::Ty::Str))
+                    && matches!(err.as_ref(), crate::types::Ty::Error)
+        ));
+        assert!(matches!(set_last.node, TypedInner::LensSet { .. }));
+    }
+
+    #[test]
+    fn lens_standalone_tuple_root_reports_out_of_bounds() {
+        let err = typecheck_with_rules(
+            r#"pair = (1, "one")
+Lens::view(_2, pair)"#,
+            SourceRules::script(),
+        )
+        .expect_err("out-of-bounds tuple root should fail");
+        assert!(err.message.contains("out of bounds"));
+    }
+
+    #[test]
     fn lens_is_not_first_class_in_stage1() {
         let bind_err = typecheck_with_rules(
             r#"defrecord User(name: String)
