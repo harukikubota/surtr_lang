@@ -9,6 +9,14 @@ impl Checker {
         suffix.parse::<usize>().ok()
     }
 
+    fn parse_tuple_segment_index(field: &str) -> Option<usize> {
+        let suffix = field.strip_prefix('_')?;
+        if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        suffix.parse::<usize>().ok()
+    }
+
     pub(super) fn check_node(&mut self, node: &Resolved) -> Result<TypedNode, TypeError> {
         match node {
             Resolved::Lit(span, lit) => {
@@ -145,14 +153,10 @@ impl Checker {
                         ),
                     });
                 }
-                let typed_rhs = if let (
-                    ResolvedPattern::Annotated(_, ast_ty),
-                    Resolved::Closure(cspan, params, captures, body),
-                ) = (pat, rhs.as_ref())
-                {
+                let typed_rhs = if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
-                    self.check_closure(cspan, params, captures, body, Some(&expected))?
+                    self.check_node_with_expected(rhs, Some(&expected))?
                 } else {
                     self.check_node(rhs)?
                 };
@@ -299,6 +303,9 @@ impl Checker {
         match (node, expected) {
             (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
                 self.check_closure(span, params, captures, body, Some(expected_ty))
+            }
+            (Resolved::FieldAccess(span, expr, field), expected_ty) => {
+                self.check_field_access_with_expected(span, expr, field, expected_ty)
             }
             (_, Some(expected_ty)) => {
                 let typed = self.check_node(node)?;
@@ -1633,6 +1640,7 @@ impl Checker {
                     hint: None,
                 })?;
                 let typed = self.check_node_with_expected(expr, Some(expected_ty))?;
+                self.ensure_no_runtime_lens_value(&typed, "Function call arguments")?;
                 if !self.types_compatible(expected_ty, &typed.ty) {
                     return Err(TypeError {
                         message: format!(
@@ -1666,6 +1674,7 @@ impl Checker {
                 unreachable!("validated argument form above")
             };
             let typed = self.check_node_with_expected(expr, Some(expected_ty))?;
+            self.ensure_no_runtime_lens_value(&typed, "Function call arguments")?;
             if !self.types_compatible(expected_ty, &typed.ty) {
                 return Err(TypeError {
                     message: format!(
@@ -1764,8 +1773,14 @@ impl Checker {
         };
 
         let left = self.check_node(left_expr)?;
-        let right = self.check_node(right_expr)?;
         let left_path = self.resolve_lens_path_from_node(left, span)?;
+
+        let expected_right_focus = self.env.fresh_tyvar();
+        let expected_right_ty = Ty::Lens(
+            Box::new(self.resolve_ty(&left_path.focus_ty)),
+            Box::new(expected_right_focus),
+        );
+        let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
         let right_path = self.resolve_lens_path_from_node(right, span)?;
 
         if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
@@ -2108,7 +2123,7 @@ impl Checker {
         span: &Span,
         callee: &str,
     ) -> Result<(), TypeError> {
-        if args.iter().any(|arg| matches!(arg.ty, Ty::Lens(_, _))) {
+        if args.iter().any(|arg| self.ty_contains_lens(&arg.ty)) {
             return Err(TypeError {
                 message: format!(
                     "{} cannot accept Lens values in Stage1 (Lens is compile-time only)",
@@ -2116,6 +2131,27 @@ impl Checker {
                 ),
                 span: span.clone(),
                 hint: Some("Apply Lens::view(...) before passing the value.".into()),
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_no_runtime_lens_value(
+        &self,
+        value: &TypedNode,
+        context: &str,
+    ) -> Result<(), TypeError> {
+        if self.ty_contains_lens(&value.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "{} cannot contain Lens values in Stage1 (Lens is compile-time only)",
+                    context
+                ),
+                span: value.span.clone(),
+                hint: Some(
+                    "Consume Lens with Lens::view/set/over first, then pass the plain value."
+                        .into(),
+                ),
             });
         }
         Ok(())
@@ -2787,6 +2823,8 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_head = self.check_node(head)?;
         let typed_tail = self.check_node(tail)?;
+        self.ensure_no_runtime_lens_value(&typed_head, "List construction")?;
+        self.ensure_no_runtime_lens_value(&typed_tail, "List construction")?;
         let tail_elem_ty = match &typed_tail.ty {
             Ty::List(inner) => inner.as_ref().clone(),
             other => {
@@ -2831,6 +2869,9 @@ impl Checker {
             .iter()
             .map(|e| self.check_node(e))
             .collect::<Result<Vec<_>, _>>()?;
+        for typed in &typed_elems {
+            self.ensure_no_runtime_lens_value(typed, "List literal")?;
+        }
 
         let elem_ty = typed_elems[0].ty.clone();
         for te in typed_elems.iter().skip(1) {
@@ -2871,6 +2912,9 @@ impl Checker {
             .iter()
             .map(|elem| self.check_node(elem))
             .collect::<Result<Vec<_>, _>>()?;
+        for typed in &typed_elems {
+            self.ensure_no_runtime_lens_value(typed, "Tuple literal")?;
+        }
         let item_tys = typed_elems.iter().map(|elem| elem.ty.clone()).collect();
 
         Ok(TypedNode {
@@ -2893,6 +2937,7 @@ impl Checker {
                 }
                 ResolvedInterpolatedPart::Expr(expr) => {
                     let typed_expr = self.check_node(expr)?;
+                    self.ensure_no_runtime_lens_value(&typed_expr, "String interpolation")?;
                     if matches!(typed_expr.ty, Ty::Result(_, _)) {
                         return Err(TypeError {
                             message: "Interpolation does not allow Result type".into(),
@@ -3214,12 +3259,124 @@ impl Checker {
         }
     }
 
-    pub(super) fn check_field_access(
+    fn try_check_tuple_type_root_lens_path(
         &mut self,
         span: &Span,
         expr: &Resolved,
         field: &str,
+        expected: Option<&Ty>,
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Resolved::Var(_, id) = expr else {
+            return Ok(None);
+        };
+        if id.name != "Tuple" {
+            return Ok(None);
+        }
+        let Some(index) = Self::parse_tuple_segment_index(field) else {
+            return Ok(None);
+        };
+
+        let expected_ty = expected.ok_or_else(|| TypeError {
+            message: format!(
+                "Tuple.{} requires Lens type context (e.g. Lens::view(Tuple.{}, source_tuple))",
+                field, field
+            ),
+            span: span.clone(),
+            hint: Some("Use Tuple._N only where a Lens<(...), ...> is expected.".into()),
+        })?;
+        let expected_ty = self.resolve_ty(expected_ty);
+        let (expected_source, expected_focus) = match expected_ty {
+            Ty::Lens(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "Tuple.{} requires expected Lens<..., ...> context, got {}",
+                        field,
+                        self.ty_name(&other)
+                    ),
+                    span: span.clone(),
+                    hint: Some(
+                        "Use Tuple._N as a Lens path argument in Lens::view/set/over.".into(),
+                    ),
+                });
+            }
+        };
+
+        let tuple_items = match self.resolve_ty(&expected_source) {
+            Ty::Tuple(items) => items,
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "Tuple.{} requires tuple source context, got {}",
+                        field,
+                        self.ty_name(&other)
+                    ),
+                    span: span.clone(),
+                    hint: Some("Expected source type like (A, B, ...) for Tuple._N.".into()),
+                });
+            }
+        };
+
+        let focus_ty = tuple_items.get(index).cloned().ok_or_else(|| TypeError {
+            message: format!(
+                "Tuple index ._{} is out of bounds for ({})",
+                index,
+                tuple_items
+                    .iter()
+                    .map(|item| self.ty_name(item))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            span: span.clone(),
+            hint: None,
+        })?;
+
+        if !self.types_compatible(&focus_ty, &expected_focus) {
+            return Err(TypeError {
+                message: format!(
+                    "Tuple.{} focus type mismatch: expected {}, got {}",
+                    field,
+                    self.ty_name(&expected_focus),
+                    self.ty_name(&focus_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let source_ty = Ty::Tuple(tuple_items);
+        let path = TypedLensPath {
+            source_ty: source_ty.clone(),
+            focus_ty: focus_ty.clone(),
+            may_fail: false,
+            segments: vec![TypedLensSegment::Tuple {
+                field_index: index as u32,
+                tuple_len: match &source_ty {
+                    Ty::Tuple(items) => items.len() as u32,
+                    _ => unreachable!("source_ty is always Tuple here"),
+                },
+            }],
+        };
+
+        Ok(Some(TypedNode {
+            ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+            span: span.clone(),
+            node: TypedInner::LensPath(path),
+        }))
+    }
+
+    fn check_field_access_with_expected(
+        &mut self,
+        span: &Span,
+        expr: &Resolved,
+        field: &str,
+        expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
+        if let Some(tuple_root_path) =
+            self.try_check_tuple_type_root_lens_path(span, expr, field, expected)?
+        {
+            return Ok(tuple_root_path);
+        }
         let typed_expr = self.check_node(expr)?;
 
         if matches!(typed_expr.ty, Ty::Lens(_, _)) {
@@ -3291,5 +3448,14 @@ impl Checker {
                 source_is_result,
             },
         })
+    }
+
+    pub(super) fn check_field_access(
+        &mut self,
+        span: &Span,
+        expr: &Resolved,
+        field: &str,
+    ) -> Result<TypedNode, TypeError> {
+        self.check_field_access_with_expected(span, expr, field, None)
     }
 }

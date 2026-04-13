@@ -1401,6 +1401,30 @@ impl Checker {
         }
     }
 
+    pub(super) fn ty_contains_lens(&self, ty: &Ty) -> bool {
+        match self.resolve_ty(ty) {
+            Ty::Lens(_, _) => true,
+            Ty::List(inner) | Ty::TypeRef(inner) => self.ty_contains_lens(inner.as_ref()),
+            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_lens(item)),
+            Ty::Func(params, ret) => {
+                params.iter().any(|param| self.ty_contains_lens(param))
+                    || self.ty_contains_lens(ret.as_ref())
+            }
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                params.iter().any(|param| self.ty_contains_lens(param))
+                    || self.ty_contains_lens(ret.as_ref())
+            }
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+                .iter()
+                .any(|(_, field_ty)| self.ty_contains_lens(field_ty)),
+            Ty::Enum(_, args) => args.iter().any(|arg| self.ty_contains_lens(arg)),
+            Ty::Result(ok, err) => {
+                self.ty_contains_lens(ok.as_ref()) || self.ty_contains_lens(err.as_ref())
+            }
+            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Var(_) | Ty::Error => false,
+        }
+    }
+
     fn resolve_typed_lens_path(&self, path: TypedLensPath) -> TypedLensPath {
         TypedLensPath {
             source_ty: self.resolve_ty(&path.source_ty),

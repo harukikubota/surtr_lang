@@ -6,6 +6,8 @@ use super::scope_init::{
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
 
+const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
+
 impl Resolver {
     fn conversion_call_head(func: &Ast) -> Option<&'static str> {
         match func {
@@ -181,11 +183,23 @@ impl Resolver {
             Ast::Lit(span, lit) => Ok(Resolved::Lit(span, lit)),
 
             Ast::Var(span, name) => {
-                let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
-                    message: format!("Undefined variable: {}", name),
-                    span: span.clone(),
-                })?;
-                let qualified_name = self.declaration_fq_name_for_uid(uid);
+                let uid = self
+                    .scope
+                    .lookup(&name)
+                    .or_else(|| {
+                        if name == "Tuple" {
+                            Some(TUPLE_TYPE_ROOT_UID)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| ResolveError {
+                        message: format!("Undefined variable: {}", name),
+                        span: span.clone(),
+                    })?;
+                let qualified_name = (uid != TUPLE_TYPE_ROOT_UID)
+                    .then(|| self.declaration_fq_name_for_uid(uid))
+                    .flatten();
                 Ok(Resolved::Var(
                     span.clone(),
                     ResolvedId {
@@ -198,17 +212,32 @@ impl Resolver {
             }
             Ast::Path(span, path) => {
                 let name = path.segments.join("::");
-                let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
-                    message: format!("Undefined variable: {}", name),
-                    span: span.clone(),
-                })?;
-                let qualified_name = self
-                    .declaration_fq_name_for_uid(uid)
-                    .unwrap_or_else(|| name.clone());
+                let uid = self
+                    .scope
+                    .lookup(&name)
+                    .or_else(|| {
+                        if name == "Tuple" {
+                            Some(TUPLE_TYPE_ROOT_UID)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| ResolveError {
+                        message: format!("Undefined variable: {}", name),
+                        span: span.clone(),
+                    })?;
+                let qualified_name = if uid == TUPLE_TYPE_ROOT_UID {
+                    None
+                } else {
+                    Some(
+                        self.declaration_fq_name_for_uid(uid)
+                            .unwrap_or_else(|| name.clone()),
+                    )
+                };
                 Ok(Resolved::Var(
                     span.clone(),
                     ResolvedId {
-                        qualified_name: Some(qualified_name),
+                        qualified_name,
                         name,
                         unique_id: uid,
                         span,

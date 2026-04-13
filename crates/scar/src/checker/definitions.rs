@@ -445,10 +445,10 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
-            if matches!(param_ty, Ty::Lens(_, _)) {
+            if self.ty_contains_lens(&param_ty) {
                 return Err(TypeError {
                     message:
-                        "Lens is compile-time only in Stage1 and cannot be used as a function parameter type"
+                        "Lens is compile-time only in Stage1 and cannot appear in function parameter types"
                             .into(),
                     span: param.id.span.clone(),
                     hint: None,
@@ -469,10 +469,10 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
-        if matches!(expected_ret, Ty::Lens(_, _)) {
+        if self.ty_contains_lens(&expected_ret) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot be used as a function return type"
+                    "Lens is compile-time only in Stage1 and cannot appear in function return types"
                         .into(),
                 span: span.clone(),
                 hint: None,
@@ -620,10 +620,10 @@ impl Checker {
             )?,
             None => self.env.fresh_tyvar(),
         };
-        if matches!(param_ty, Ty::Lens(_, _)) {
+        if self.ty_contains_lens(&param_ty) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot be used as an extractor parameter type"
+                    "Lens is compile-time only in Stage1 and cannot appear in extractor parameter types"
                         .into(),
                 span: param.id.span.clone(),
                 hint: None,
@@ -640,10 +640,10 @@ impl Checker {
             TypeSyntaxContext::FunctionReturn,
             &mut tyvars,
         )?;
-        if matches!(expected_ret, Ty::Lens(_, _)) {
+        if self.ty_contains_lens(&expected_ret) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot be used as an extractor return type"
+                    "Lens is compile-time only in Stage1 and cannot appear in extractor return types"
                         .into(),
                 span: span.clone(),
                 hint: None,
@@ -1094,6 +1094,15 @@ impl Checker {
                         hint: None,
                     })?;
             let typed_val = self.check_node(resolved_val)?;
+            if self.ty_contains_lens(&typed_val.ty) {
+                return Err(TypeError {
+                    message:
+                        "Struct literal fields cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                            .into(),
+                    span: typed_val.span.clone(),
+                    hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                });
+            }
             if !self.types_compatible(def_ty, &typed_val.ty) {
                 return Err(TypeError {
                     message: format!(
@@ -1134,6 +1143,18 @@ impl Checker {
             let inner = match &args[0] {
                 ResolvedRecordLitArg::Positional(expr) => {
                     let typed = self.check_node(expr)?;
+                    if self.ty_contains_lens(&typed.ty) {
+                        return Err(TypeError {
+                            message:
+                                "Result constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    .into(),
+                            span: typed.span.clone(),
+                            hint: Some(
+                                "Apply Lens::view/set/over before wrapping with Ok(...) or Err(...)."
+                                    .into(),
+                            ),
+                        });
+                    }
                     self.maybe_call_zero_arg_function(typed, span.clone())
                 }
                 ResolvedRecordLitArg::Named(_, _) => {
@@ -1209,6 +1230,15 @@ impl Checker {
                         });
                     }
                 };
+                if self.ty_contains_lens(&typed.ty) {
+                    return Err(TypeError {
+                        message:
+                            "Enum constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                .into(),
+                        span: typed.span.clone(),
+                        hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                    });
+                }
                 if !self.types_compatible(expected, &typed.ty) {
                     return Err(TypeError {
                         message: format!(
@@ -1265,6 +1295,18 @@ impl Checker {
                                 });
                             }
                         };
+                        if self.ty_contains_lens(&typed_val.ty) {
+                            return Err(TypeError {
+                                message:
+                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                        .into(),
+                                span: typed_val.span.clone(),
+                                hint: Some(
+                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                        .into(),
+                                ),
+                            });
+                        }
                         if !self.types_compatible(param_ty, &typed_val.ty) {
                             return Err(TypeError {
                                 message: format!(
@@ -1337,6 +1379,18 @@ impl Checker {
                             unreachable!("validated argument form above")
                         };
                         let typed = self.check_node(expr)?;
+                        if self.ty_contains_lens(&typed.ty) {
+                            return Err(TypeError {
+                                message:
+                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                        .into(),
+                                span: typed.span.clone(),
+                                hint: Some(
+                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                        .into(),
+                                ),
+                            });
+                        }
                         if !self.types_compatible(expected_ty, &typed.ty) {
                             return Err(TypeError {
                                 message: format!(
@@ -1490,6 +1544,15 @@ impl Checker {
             for (i, arg) in args.iter().enumerate() {
                 if let ResolvedRecordLitArg::Positional(expr) = arg {
                     let typed_val = self.check_node(expr)?;
+                    if self.ty_contains_lens(&typed_val.ty) {
+                        return Err(TypeError {
+                            message:
+                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    .into(),
+                            span: typed_val.span.clone(),
+                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                        });
+                    }
                     let (_, def_ty) = &def.fields[i];
                     if !self.types_compatible(def_ty, &typed_val.ty) {
                         return Err(TypeError {
@@ -1527,6 +1590,15 @@ impl Checker {
                             hint: None,
                         })?;
                     let typed_val = self.check_node(expr)?;
+                    if self.ty_contains_lens(&typed_val.ty) {
+                        return Err(TypeError {
+                            message:
+                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    .into(),
+                            span: typed_val.span.clone(),
+                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                        });
+                    }
                     let (_, def_ty) = &def.fields[idx];
                     if !self.types_compatible(def_ty, &typed_val.ty) {
                         return Err(TypeError {

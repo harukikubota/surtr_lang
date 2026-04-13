@@ -626,6 +626,35 @@ Lens::view(lens, user)"#,
     }
 
     #[test]
+    fn lens_tuple_type_root_view_works_with_expected_context() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"pair = ("alice", 42)
+Lens::view(Tuple._0, pair)"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+    }
+
+    #[test]
+    fn lens_tuple_type_root_compose_works_as_inner_path() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(pair: (String, Int))
+user = User(("alice", 42))
+Lens::view(Lens::compose(User.pair, Tuple._0), user)"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+    }
+
+    #[test]
+    fn lens_tuple_type_root_without_context_is_rejected() {
+        let err = typecheck_with_rules("Tuple._0", SourceRules::script())
+            .expect_err("Tuple._0 without context should fail");
+        assert!(err.message.contains("requires Lens type context"));
+    }
+
+    #[test]
     fn lens_capture_is_rejected_for_scope_local_model() {
         let err = typecheck_with_rules(
             r#"defrecord User(name: String)
@@ -636,6 +665,62 @@ getter(User("alice"))"#,
         )
         .expect_err("capturing Lens value should fail");
         assert!(err.message.contains("cannot be captured by closures"));
+    }
+
+    #[test]
+    fn lens_values_cannot_be_embedded_in_runtime_containers() {
+        let tuple_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+(User.name, 1)"#,
+            SourceRules::script(),
+        )
+        .expect_err("tuple literal should reject lens");
+        assert!(tuple_err
+            .message
+            .contains("Tuple literal cannot contain Lens values"));
+
+        let list_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+[User.name, User.name]"#,
+            SourceRules::script(),
+        )
+        .expect_err("list literal should reject lens");
+        assert!(list_err
+            .message
+            .contains("List literal cannot contain Lens values"));
+
+        let ok_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+Ok(User.name)"#,
+            SourceRules::script(),
+        )
+        .expect_err("result constructors should reject lens");
+        assert!(ok_err
+            .message
+            .contains("Result constructors cannot contain Lens values"));
+    }
+
+    #[test]
+    fn nested_lens_types_are_rejected_in_function_signatures() {
+        let param_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+def bad(values: List<Lens<User, String>>) -> Unit { () }"#,
+            SourceRules::script(),
+        )
+        .expect_err("nested lens in parameter type should fail");
+        assert!(param_err
+            .message
+            .contains("cannot appear in function parameter types"));
+
+        let ret_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+def bad() -> List<Lens<User, String>> { [] }"#,
+            SourceRules::script(),
+        )
+        .expect_err("nested lens in return type should fail");
+        assert!(ret_err
+            .message
+            .contains("cannot appear in function return types"));
     }
 
     #[test]
@@ -818,7 +903,7 @@ def bad() -> Lens<User, String> {
         .expect_err("returning Lens value should fail");
         assert!(return_err
             .message
-            .contains("cannot be used as a function return type"));
+            .contains("cannot appear in function return types"));
 
         let arg_var_err = typecheck_with_rules(
             r#"defrecord User(name: String)
@@ -833,6 +918,7 @@ consume(lens)"#,
         assert!(
             arg_var_err.message.contains("cannot accept Lens values")
                 || arg_var_err.message.contains("Argument type mismatch")
+                || arg_var_err.message.contains("compile-time only")
         );
     }
 

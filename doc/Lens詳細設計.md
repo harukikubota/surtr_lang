@@ -1,4 +1,4 @@
-# Surtr Lens 詳細設計（Stage1）
+# Surtr Lens 詳細設計（Stage1 + Stage2実装進捗）
 
 最終更新日: 2026-04-13
 
@@ -6,14 +6,17 @@
 
 ## 1. 目的
 
-Stage1 では、compiler-managed な `Lens<S, A>` を導入し、次を確定する。
+Surtr の Lens は compiler-managed な `Lens<S, A>` として実装する。
+現時点では Stage1 の基盤に加えて、Stage2 の一部（`set/over` と `Tuple._N` 文脈付き root）まで反映済み。
 
 - `Lens::view`
 - `Lens::compose`
+- `Lens::set`
+- `Lens::over`
 - value-root access sugar（`value.path`）
 - 文脈依存な `Lens::view` 返り型
 
-`set/over`、first-class Lens、standalone `_0` は Stage2 以降へ送る。
+first-class Lens と standalone `_0` は導入しない方針を維持する。
 
 ---
 
@@ -27,6 +30,8 @@ Stage1 では、compiler-managed な `Lens<S, A>` を導入し、次を確定す
 @@autoimport
 defmod Lens {
   @@builtin def view(lens: Lens<$S, $A>, source: $S) -> Result<$A>
+  @@builtin def set(lens: Lens<$S, $A>, source: $S, value: $A) -> Result<$S>
+  @@builtin def over(lens: Lens<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
   @@builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
 }
 ```
@@ -69,6 +74,7 @@ defmod Lens {
 - 関数には Lens ではなく `view` 済み値（`A` / `Result<A>`）を渡す
 - `_0` 単体 root 定数は未対応
   - `pair._0` は可
+  - `Tuple._0` は **型文脈あり** のときのみ可
   - `_0` 単体は不可
 
 ### 3.1 private capability 境界（Stage1）
@@ -101,7 +107,7 @@ defmod Lens {
 
 ### 4.3 Eldr
 
-- `view` / `compose` は `BUILTIN_METAS` へ追加する（末尾 ID 追加）。
+- `view` / `compose` / `set` / `over` は `BUILTIN_METAS` へ追加する（末尾 ID 追加）。
 - これらが runtime builtin として直接呼ばれた場合は防御的 `RuntimeError` を返す。
   - 意味: Forge lowering 漏れ検出。
 
@@ -125,7 +131,10 @@ defmod Lens {
   - `result_user.name` は `Result<String>`
   - `expr.Add` は `Result<...>`、`expr.add` は失敗
   - `Lens::compose` の整合 / 不整合
+  - `Lens::set` / `Lens::over` の型契約
+  - `Tuple._N`（型文脈あり）成功 / 無文脈失敗
   - 関数境界運搬制約違反（arg/return/capture）
+  - runtime container（tuple/list/constructor）への Lens 混入拒否
   - private capability 境界（`Type.private_field` NG、`value.private_field` OK、closure 内 private NG）
 - Forge/Eldr:
   - plain/result 文脈の lowering 分岐

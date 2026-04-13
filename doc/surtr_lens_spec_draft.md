@@ -4,6 +4,18 @@
 
 ---
 
+## 0.5 実装状況（2026-04-13）
+
+- 実装済み:
+  - `view` / `compose` / `set` / `over`（Scar + Forge + Eldr）
+  - Lens 非運搬モデル（arg / return / capture 禁止）
+  - `Tuple._N` の type-root path（**型文脈あり**の場合）
+  - variant mismatch の `VariantMismatch` 統一
+- 未実装:
+  - `return user.password` に対する warning（任意仕様）
+
+---
+
 ## 0. 規範優先順位
 
 本書は Lens 仕様の設計正本だが、フェーズごとに優先順位を固定する。
@@ -92,9 +104,9 @@ Stage1 はコード優先だが、運用方針として次を採用する。
 
 ---
 
-## 3. Stage2（仕様確定・未実装）契約
+## 3. Stage2（仕様確定・実装進行中）契約
 
-この章は pending implementation だが、仕様は確定とする。
+この章は仕様確定で、実装は段階的に反映済み。
 
 ### 3.1 Surface 拡張
 
@@ -146,7 +158,7 @@ Stage2 では Lens を first-class 化しない。採用するのは次のモデ
 
 Stage2 でも `_N` は path segment 専用とし、standalone root は導入しない。
 
-- 許可: `pair._0` / `Tuple._0` のような `._N` 形式
+- 許可: `pair._0` / `Tuple._0` のような `._N` 形式（`Tuple._N` は型文脈必須）
 - 不許可: `_0` 単体
 - 無文脈後方推論は採用しない
 
@@ -216,7 +228,7 @@ Stage2 でも `_N` は path segment 専用とし、standalone root は導入し�
 - private capability
   - `return {|| user.password}` が拒否されること
   - `return User.password` が拒否されること
-  - `return user.password` は許可（任意 warning）
+  - `return user.password` は許可（warning は任意）
 
 ---
 

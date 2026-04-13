@@ -11,6 +11,7 @@ pub use codegen::{
 #[cfg(test)]
 mod tests {
     use super::codegen;
+    use crate::bytecode::Constant;
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
     use sindr::builtin::builtin_meta_by_name;
@@ -399,12 +400,13 @@ user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
     }
 
     #[test]
-    fn lens_bindings_and_captures_are_erased_without_runtime_transport() {
+    fn lens_bindings_are_erased_and_only_viewed_values_are_captured() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
 lens = User.name
-getter = {|user| Lens::view(lens, user)}
-result = getter(User("alice"))"#,
+name = Lens::view(lens, User("alice"))
+getter = {|| name}
+result = getter()"#,
         );
 
         let lens_view_id = builtin_meta_by_name("view")
@@ -426,7 +428,32 @@ result = getter(User("alice"))"#,
         assert!(bytecode
             .opcodes
             .iter()
-            .any(|op| matches!(op, Opcode::CallClosure { arity: 1, .. })));
+            .any(|op| matches!(op, Opcode::CallClosure { .. })));
+    }
+
+    #[test]
+    fn lens_variant_mismatch_detail_includes_segment_context() {
+        let bytecode = codegen_source(
+            r#"defenum Expr {
+  Add(Int, Int),
+  Halt,
+}
+expr = Expr::Halt
+Lens::view(Expr.Add, expr)"#,
+        );
+
+        let has_segment_detail = bytecode.constants.iter().any(|constant| {
+            matches!(
+                constant,
+                Constant::Str(message)
+                    if message.contains("Variant mismatch at segment 1")
+                        && message.contains(".Add")
+            )
+        });
+        assert!(
+            has_segment_detail,
+            "expected variant mismatch detail with segment context in constants"
+        );
     }
 
     #[test]

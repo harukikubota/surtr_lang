@@ -2198,8 +2198,11 @@ impl Codegen {
 
                 self.patch_label(mismatch_label);
                 let detail = format!(
-                    "Expected variant {}::{}, but got a different variant",
-                    enum_name, variant_name
+                    "Variant mismatch at segment {} ({}) in lens path: expected variant {}::{}, but got a different variant",
+                    segment_idx + 1,
+                    Self::lens_segment_display(&path.segments[segment_idx]),
+                    enum_name,
+                    variant_name
                 );
                 self.emit_variant_mismatch_result(&detail, span);
                 self.emit_jump(failure_end);
@@ -2261,7 +2264,7 @@ impl Codegen {
         span: &Span,
         mismatch_end: Option<Label>,
     ) -> Result<(), CodegenError> {
-        for segment in &path.segments {
+        for (segment_idx, segment) in path.segments.iter().enumerate() {
             match segment {
                 TypedLensSegment::Field { field_index, .. } => {
                     self.emit(Opcode::LoadLocal(current_slot));
@@ -2307,8 +2310,11 @@ impl Codegen {
 
                     self.patch_label(mismatch_label);
                     let detail = format!(
-                        "Expected variant {}::{}, but got a different variant",
-                        enum_name, variant_name
+                        "Variant mismatch at segment {} ({}) in lens path: expected variant {}::{}, but got a different variant",
+                        segment_idx + 1,
+                        Self::lens_segment_display(segment),
+                        enum_name,
+                        variant_name
                     );
                     self.emit_variant_mismatch_result(&detail, span);
                     self.emit_jump(end_label);
@@ -2342,6 +2348,14 @@ impl Codegen {
                 self.emit(Opcode::TupleNew { len: n });
                 self.emit(Opcode::StoreLocal(current_slot));
             }
+        }
+    }
+
+    fn lens_segment_display(segment: &TypedLensSegment) -> String {
+        match segment {
+            TypedLensSegment::Field { field_name, .. } => format!(".{}", field_name),
+            TypedLensSegment::Tuple { field_index, .. } => format!("._{}", field_index),
+            TypedLensSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
         }
     }
 

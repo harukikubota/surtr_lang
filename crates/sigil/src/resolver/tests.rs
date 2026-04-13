@@ -2146,6 +2146,24 @@ val = p.x"#,
 }
 
 #[test]
+fn test_tuple_type_root_resolves_in_field_access() {
+    let resolved = parse_and_resolve("lens = Tuple._0").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::FieldAccess(_, expr, field) => {
+                assert_eq!(field, "_0");
+                assert!(
+                    matches!(expr.as_ref(), Resolved::Var(_, id) if id.name == "Tuple"),
+                    "field access target should be tuple type root"
+                );
+            }
+            other => panic!("Expected FieldAccess, got {:?}", other),
+        },
+        other => panic!("Expected Bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_list_literal_resolves_all_elements() {
     let resolved = parse_and_resolve("items = [1, 2, 3]").unwrap();
     match &resolved[0] {

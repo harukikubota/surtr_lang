@@ -1,0 +1,2 @@
+pair = ("alice", 42)
+print(Lens::view(Tuple._0, pair))
