@@ -15,7 +15,7 @@ defmod Test {
   @@builtin def __test_fail(name: String, detail: String) -> Unit
   @@builtin def __test_fail_current(detail: String) -> Unit
 
-  def _fail(detail: String) -> Result<()> {
+  defp _fail(detail: String) -> Result<()> {
     Err(TestAssertionFailed(detail))
   }
 
@@ -65,11 +65,11 @@ defmod Test {
   }
 
   def assert_true(flag: Boolean) -> Result<()> {
-    if(flag, Ok(()), Test::_fail("expected True, got False"))
+    if(flag, Ok(()), _fail("expected True, got False"))
   }
 
   def assert_false(flag: Boolean) -> Result<()> {
-    if(flag, Test::_fail("expected False, got True"), Ok(()))
+    if(flag, _fail("expected False, got True"), Ok(()))
   }
 
   def assert_eq(expected: $A, actual: $A) -> Result<()> {
@@ -78,26 +78,26 @@ defmod Test {
     if(
       rendered_expected == rendered_actual,
       Ok(()),
-      Test::_fail("expected #{rendered_expected}, got #{rendered_actual}"),
+      _fail("expected #{rendered_expected}, got #{rendered_actual}"),
     )
   }
 
   def assert_ok_eq(expected: $A, result: Result<$A>) -> Result<()> {
     match result {
-      Ok(actual) => Test::assert_eq(expected, actual),
-      Err(err) => Test::_fail("expected Ok(#{inspect(expected)}), got Err(#{inspect(err)})"),
+      Ok(actual) => assert_eq(expected, actual),
+      Err(err) => _fail("expected Ok(#{inspect(expected)}), got Err(#{inspect(err)})"),
     }
   }
 
   def assert_err_contains(fragment: String, result: Result<$A>) -> Result<()> {
     match result {
-      Ok(actual) => Test::_fail("expected Err containing #{fragment}, got Ok(#{inspect(actual)})"),
+      Ok(actual) => _fail("expected Err containing #{fragment}, got Ok(#{inspect(actual)})"),
       Err(err) => {
         rendered = inspect(err)
         if(
           String::contains(rendered, fragment),
           Ok(()),
-          Test::_fail("expected Err containing #{fragment}, got #{rendered}"),
+          _fail("expected Err containing #{fragment}, got #{rendered}"),
         )
       },
     }

@@ -70,7 +70,7 @@ defmod Result {
   but the shorter name is more ergonomic for common use.
   """
   def is_err(result: Result<$T>) -> Boolean {
-    Boolean::not(Result::is_ok(result))
+    Boolean::not(is_ok(result))
   }
 
   @@doc """

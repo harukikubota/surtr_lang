@@ -74,28 +74,28 @@ This module is loaded with the standard library and documented from source so
 the module docs and the actual surface stay in one place.
 """
 defmod String {
-  def _from_chars_go(chars: List<String>, acc: String) -> String {
+  defp _from_chars_go(chars: List<String>, acc: String) -> String {
     match chars {
       [] => acc,
-      [head, ..tail] => String::_from_chars_go(tail, acc ++ head),
+      [head, ..tail] => _from_chars_go(tail, acc ++ head),
     }
   }
 
-  def _strip_prefix_chars(values: List<String>, prefix: List<String>) -> Result<List<String>, NoneError> {
+  defp _strip_prefix_chars(values: List<String>, prefix: List<String>) -> Result<List<String>, NoneError> {
     match prefix {
       [] => Ok(values),
       [prefix_head, ..prefix_tail] => match values {
         [] => Err(NoneError),
         [value_head, ..value_tail] => if(
           value_head == prefix_head,
-          String::_strip_prefix_chars(value_tail, prefix_tail),
+          _strip_prefix_chars(value_tail, prefix_tail),
           Err(NoneError),
         ),
       },
     }
   }
 
-  def _is_trim_char(value: String) -> Boolean {
+  defp _is_trim_char(value: String) -> Boolean {
     if(
       value == " ",
       True,
@@ -103,35 +103,35 @@ defmod String {
     )
   }
 
-  def _trim_start_chars(chars: List<String>) -> List<String> {
+  defp _trim_start_chars(chars: List<String>) -> List<String> {
     match chars {
       [] => [],
-      [head, ..tail] => if(String::_is_trim_char(head), String::_trim_start_chars(tail), chars),
+      [head, ..tail] => if(_is_trim_char(head), _trim_start_chars(tail), chars),
     }
   }
 
-  def _validate_char_list(chars: List<String>, index: Int) -> Result<Unit, InvalidCharList> {
+  defp _validate_char_list(chars: List<String>, index: Int) -> Result<Unit, InvalidCharList> {
     match chars {
       [] => Ok(()),
       [head, ..tail] => if(
-        String::len(head) == 1,
-        String::_validate_char_list(tail, index + 1),
+        len(head) == 1,
+        _validate_char_list(tail, index + 1),
         Err(InvalidCharList("expected single-character string at index #{index}, got #{inspect(head)}")),
       ),
     }
   }
 
-  def _split_once_go(value: String, separator: String, prefix_rev: List<String>) -> Result<StringSplit, NoneError> {
-    match String::strip_prefix(value, separator) {
-      Ok(after) => Ok(StringSplit::Split(String::_from_chars_go(List::reverse(prefix_rev), ""), after)),
+  defp _split_once_go(value: String, separator: String, prefix_rev: List<String>) -> Result<StringSplit, NoneError> {
+    match strip_prefix(value, separator) {
+      Ok(after) => Ok(StringSplit::Split(_from_chars_go(List::reverse(prefix_rev), ""), after)),
       Err(_) => match value {
         "" => Err(NoneError),
-        [head, ..tail] => String::_split_once_go(tail, separator, [head, ..prefix_rev]),
+        [head, ..tail] => _split_once_go(tail, separator, [head, ..prefix_rev]),
       },
     }
   }
 
-  def _decimal_digit_value(ch: String, input: String) -> Result<Int, InvalidIntegerLiteral> {
+  defp _decimal_digit_value(ch: String, input: String) -> Result<Int, InvalidIntegerLiteral> {
     if(
       ch == "0",
       Ok(0),
@@ -167,12 +167,12 @@ defmod String {
     )
   }
 
-  def _parse_decimal_go(chars: List<String>, acc: Int, input: String) -> Result<Int, InvalidIntegerLiteral> {
+  defp _parse_decimal_go(chars: List<String>, acc: Int, input: String) -> Result<Int, InvalidIntegerLiteral> {
     match chars {
       [] => Ok(acc),
       [head, ..tail] => {
-        digit =? String::_decimal_digit_value(head, input)
-        String::_parse_decimal_go(tail, acc * 10 + digit, input)
+        digit =? _decimal_digit_value(head, input)
+        _parse_decimal_go(tail, acc * 10 + digit, input)
       },
     }
   }
@@ -197,7 +197,7 @@ defmod String {
   def len(value: String) -> Int {
     match value {
       "" => 0,
-      [_, ..tail] => 1 + String::len(tail),
+      [_, ..tail] => 1 + len(tail),
     }
   }
 
@@ -208,10 +208,10 @@ defmod String {
     prefix ++ value ++ suffix
   }
 
-  def _join_go(parts: List<String>, separator: String, acc: String) -> String {
+  defp _join_go(parts: List<String>, separator: String, acc: String) -> String {
     match parts {
       [] => acc,
-      [head, ..tail] => String::_join_go(tail, separator, acc ++ separator ++ head),
+      [head, ..tail] => _join_go(tail, separator, acc ++ separator ++ head),
     }
   }
 
@@ -222,12 +222,12 @@ defmod String {
   def join(parts: List<String>, separator: String) -> String {
     match parts {
       [] => "",
-      [head, ..tail] => String::_join_go(tail, separator, head),
+      [head, ..tail] => _join_go(tail, separator, head),
     }
   }
 
-  def _repeat_go(value: String, remaining: Int, acc: String) -> String {
-    if(remaining == 0, acc, String::_repeat_go(value, remaining - 1, acc ++ value))
+  defp _repeat_go(value: String, remaining: Int, acc: String) -> String {
+    if(remaining == 0, acc, _repeat_go(value, remaining - 1, acc ++ value))
   }
 
   @@doc """
@@ -238,7 +238,7 @@ defmod String {
     if(
       count < 0,
       Err(NegativeRepeatCount(count)),
-      Ok(String::_repeat_go(value, count, "")),
+      Ok(_repeat_go(value, count, "")),
     )
   }
 
@@ -269,7 +269,7 @@ defmod String {
         "" => Err(NoneError),
         [value_head, ..value_tail] => if(
           value_head == prefix_head,
-          String::strip_prefix(value_tail, prefix_tail),
+          strip_prefix(value_tail, prefix_tail),
           Err(NoneError),
         ),
       },
@@ -281,11 +281,11 @@ defmod String {
   Missing suffixes return `Err(NoneError)`.
   """
   def strip_suffix(value: String, suffix: String) -> Result<String, NoneError> {
-    reversed_rest =? String::_strip_prefix_chars(
-      List::reverse(String::chars(value)),
-      List::reverse(String::chars(suffix)),
+    reversed_rest =? _strip_prefix_chars(
+      List::reverse(chars(value)),
+      List::reverse(chars(suffix)),
     )
-    Ok(String::_from_chars_go(List::reverse(reversed_rest), ""))
+    Ok(_from_chars_go(List::reverse(reversed_rest), ""))
   }
 
   @@doc """
@@ -294,7 +294,7 @@ defmod String {
   Missing separators return `Err(NoneError)`.
   """
   def split_once(value: String, separator: String) -> Result<StringSplit, NoneError> {
-    String::_split_once_go(value, separator, [])
+    _split_once_go(value, separator, [])
   }
 
   @@doc """
@@ -311,7 +311,7 @@ defmod String {
   def chars(value: String) -> List<String> {
     match value {
       "" => [],
-      [head, ..tail] => [head, ..String::chars(tail)],
+      [head, ..tail] => [head, ..chars(tail)],
     }
   }
 
@@ -320,8 +320,8 @@ defmod String {
   Non-character elements return `Err(InvalidCharList(...))`.
   """
   def from_chars(chars: List<String>) -> Result<String, InvalidCharList> {
-    _validated =? String::_validate_char_list(chars, 0)
-    Ok(String::_from_chars_go(chars, ""))
+    _validated =? _validate_char_list(chars, 0)
+    Ok(_from_chars_go(chars, ""))
   }
 
   @@doc """
@@ -345,7 +345,7 @@ defmod String {
   Trimmed characters are space, newline, tab, and carriage return.
   """
   def trim_start(value: String) -> String {
-    String::_from_chars_go(String::_trim_start_chars(String::chars(value)), "")
+    _from_chars_go(_trim_start_chars(chars(value)), "")
   }
 
   @@doc """
@@ -353,8 +353,8 @@ defmod String {
   Trimmed characters are space, newline, tab, and carriage return.
   """
   def trim_end(value: String) -> String {
-    trimmed_rev = String::_trim_start_chars(List::reverse(String::chars(value)))
-    String::_from_chars_go(List::reverse(trimmed_rev), "")
+    trimmed_rev = _trim_start_chars(List::reverse(chars(value)))
+    _from_chars_go(List::reverse(trimmed_rev), "")
   }
 
   @@doc """
@@ -362,7 +362,7 @@ defmod String {
   Trimmed characters are space, newline, tab, and carriage return.
   """
   def trim(value: String) -> String {
-    String::trim_end(String::trim_start(value))
+    trim_end(trim_start(value))
   }
 
   @@doc """
@@ -370,23 +370,23 @@ defmod String {
   Accepts an optional leading `+` or `-`.
   """
   def try_to_int(value: String) -> Result<Int, InvalidIntegerLiteral> {
-    chars = String::chars(value)
-    match chars {
+    value_chars = chars(value)
+    match value_chars {
       [] => Err(InvalidIntegerLiteral(value)),
       ["-", ..tail] => if(
         List::len(tail) == 0,
         Err(InvalidIntegerLiteral(value)),
         {
-          num =? String::_parse_decimal_go(tail, 0, value)
+          num =? _parse_decimal_go(tail, 0, value)
           Ok(0 - num)
         },
       ),
       ["+", ..tail] => if(
         List::len(tail) == 0,
         Err(InvalidIntegerLiteral(value)),
-        String::_parse_decimal_go(tail, 0, value),
+        _parse_decimal_go(tail, 0, value),
       ),
-      _ => String::_parse_decimal_go(chars, 0, value),
+      _ => _parse_decimal_go(value_chars, 0, value),
     }
   }
 

@@ -127,34 +127,34 @@ defmod Int {
   @@builtin
   def toggle_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
 
-  def _pow2_go(remaining: Int, acc: Int) -> Int {
-    if(remaining == 0, acc, Int::_pow2_go(remaining - 1, acc + acc))
+  defp _pow2_go(remaining: Int, acc: Int) -> Int {
+    if(remaining == 0, acc, _pow2_go(remaining - 1, acc + acc))
   }
 
-  def _pow2(count: Int) -> Int {
-    Int::_pow2_go(count, 1)
+  defp _pow2(count: Int) -> Int {
+    _pow2_go(count, 1)
   }
 
-  def _positive_mod(value: Int, modulus: Int) -> Int {
-    match Int::safe_mod(value, modulus) {
+  defp _positive_mod(value: Int, modulus: Int) -> Int {
+    match safe_mod(value, modulus) {
       Ok(rem) => if(rem < 0, rem + modulus, rem),
       Err(_) => 0,
     }
   }
 
-  def _mask_bits(width_bits: Int) -> Int {
-    Int::_pow2(width_bits) - 1
+  defp _mask_bits(width_bits: Int) -> Int {
+    _pow2(width_bits) - 1
   }
 
-  def _wrap_unsigned_bits(value: Int, width_bits: Int) -> Int {
-    Int::_positive_mod(value, Int::_pow2(width_bits))
+  defp _wrap_unsigned_bits(value: Int, width_bits: Int) -> Int {
+    _positive_mod(value, _pow2(width_bits))
   }
 
-  def _validate_shift_count(bits: Int) -> Result<Int, NegativeShiftCount> {
+  defp _validate_shift_count(bits: Int) -> Result<Int, NegativeShiftCount> {
     if(bits < 0, Err(NegativeShiftCount(bits)), Ok(bits))
   }
 
-  def _validate_fixed_bit_index(index: Int, width_bits: Int) -> Result<Int> {
+  defp _validate_fixed_bit_index(index: Int, width_bits: Int) -> Result<Int> {
     if(
       index < 0,
       Err(NegativeBitIndex(index)),
@@ -162,11 +162,11 @@ defmod Int {
     )
   }
 
-  def _shr_logical_bits(value: Int, shift: Int, width_bits: Int) -> Int {
+  defp _shr_logical_bits(value: Int, shift: Int, width_bits: Int) -> Int {
     if(
       shift >= width_bits,
       0,
-      match Int::safe_div(value, Int::_pow2(shift)) {
+      match safe_div(value, _pow2(shift)) {
         Ok(quotient) => quotient,
         Err(_) => 0,
       },
@@ -193,26 +193,26 @@ defmod Int {
   For example, `W8` returns `255`.
   """
   def mask(width: BitWidth) -> Result<Int, InvalidBitWidth> {
-    width_bits =? Int::width_bits(width)
-    Ok(Int::_mask_bits(width_bits))
+    bits =? width_bits(width)
+    Ok(_mask_bits(bits))
   }
 
   @@doc """
   Wrap `value` into the unsigned range represented by `width`.
   """
   def wrap_unsigned(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
-    width_bits =? Int::width_bits(width)
-    Ok(Int::_wrap_unsigned_bits(value, width_bits))
+    bits =? width_bits(width)
+    Ok(_wrap_unsigned_bits(value, bits))
   }
 
   @@doc """
   Wrap `value` into the signed two's-complement range represented by `width`.
   """
   def wrap_signed(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
-    width_bits =? Int::width_bits(width)
-    unsigned = Int::_wrap_unsigned_bits(value, width_bits)
-    modulus = Int::_pow2(width_bits)
-    sign_bit = Int::_pow2(width_bits - 1)
+    bits =? width_bits(width)
+    unsigned = _wrap_unsigned_bits(value, bits)
+    modulus = _pow2(bits)
+    sign_bit = _pow2(bits - 1)
     Ok(if(unsigned >= sign_bit, unsigned - modulus, unsigned))
   }
 
@@ -221,10 +221,10 @@ defmod Int {
   `value` is first wrapped into the unsigned range of `width`.
   """
   def bit_not_in(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
-    width_bits =? Int::width_bits(width)
-    width_mask = Int::_mask_bits(width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    Ok(Int::bit_xor(width_mask, wrapped))
+    bits =? width_bits(width)
+    width_mask = _mask_bits(bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    Ok(bit_xor(width_mask, wrapped))
   }
 
   @@doc """
@@ -232,11 +232,11 @@ defmod Int {
   Indexes must satisfy `0 <= index < width`.
   """
   def test_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Boolean> {
-    width_bits =? Int::width_bits(width)
-    checked =? Int::_validate_fixed_bit_index(index, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    bit_mask = Int::_pow2(checked)
-    Ok(Int::bit_and(wrapped, bit_mask) != 0)
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    Ok(bit_and(wrapped, bit_mask) != 0)
   }
 
   @@doc """
@@ -244,11 +244,11 @@ defmod Int {
   Indexes must satisfy `0 <= index < width`.
   """
   def set_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    checked =? Int::_validate_fixed_bit_index(index, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    bit_mask = Int::_pow2(checked)
-    Ok(Int::bit_or(wrapped, bit_mask))
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    Ok(bit_or(wrapped, bit_mask))
   }
 
   @@doc """
@@ -256,12 +256,12 @@ defmod Int {
   Indexes must satisfy `0 <= index < width`.
   """
   def clear_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    checked =? Int::_validate_fixed_bit_index(index, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    bit_mask = Int::_pow2(checked)
-    clear_mask = Int::bit_xor(Int::_mask_bits(width_bits), bit_mask)
-    Ok(Int::bit_and(wrapped, clear_mask))
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    clear_mask = bit_xor(_mask_bits(bits), bit_mask)
+    Ok(bit_and(wrapped, clear_mask))
   }
 
   @@doc """
@@ -269,11 +269,11 @@ defmod Int {
   Indexes must satisfy `0 <= index < width`.
   """
   def toggle_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    checked =? Int::_validate_fixed_bit_index(index, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    bit_mask = Int::_pow2(checked)
-    Ok(Int::bit_xor(wrapped, bit_mask))
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    Ok(bit_xor(wrapped, bit_mask))
   }
 
   @@doc """
@@ -281,10 +281,10 @@ defmod Int {
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
   def shl_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    shift =? Int::_validate_shift_count(bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    Ok(Int::_wrap_unsigned_bits(wrapped * Int::_pow2(shift), width_bits))
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    Ok(_wrap_unsigned_bits(wrapped * _pow2(shift), width_size))
   }
 
   @@doc """
@@ -292,10 +292,10 @@ defmod Int {
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
   def shr_logical_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    shift =? Int::_validate_shift_count(bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    Ok(Int::_shr_logical_bits(wrapped, shift, width_bits))
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    Ok(_shr_logical_bits(wrapped, shift, width_size))
   }
 
   @@doc """
@@ -303,13 +303,13 @@ defmod Int {
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
   def rotl_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    shift =? Int::_validate_shift_count(bits)
-    normalized = Int::_positive_mod(shift, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    left = Int::_wrap_unsigned_bits(wrapped * Int::_pow2(normalized), width_bits)
-    right = Int::_shr_logical_bits(wrapped, width_bits - normalized, width_bits)
-    Ok(Int::bit_or(left, right))
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    normalized = _positive_mod(shift, width_size)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    left = _wrap_unsigned_bits(wrapped * _pow2(normalized), width_size)
+    right = _shr_logical_bits(wrapped, width_size - normalized, width_size)
+    Ok(bit_or(left, right))
   }
 
   @@doc """
@@ -317,13 +317,13 @@ defmod Int {
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
   def rotr_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    shift =? Int::_validate_shift_count(bits)
-    normalized = Int::_positive_mod(shift, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    left = Int::_wrap_unsigned_bits(wrapped * Int::_pow2(width_bits - normalized), width_bits)
-    right = Int::_shr_logical_bits(wrapped, normalized, width_bits)
-    Ok(Int::bit_or(left, right))
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    normalized = _positive_mod(shift, width_size)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    left = _wrap_unsigned_bits(wrapped * _pow2(width_size - normalized), width_size)
+    right = _shr_logical_bits(wrapped, normalized, width_size)
+    Ok(bit_or(left, right))
   }
 
   @@doc """
@@ -372,7 +372,7 @@ defmod Int {
   Return `True` when `value` is divisible by two.
   """
   def is_even(value: Int) -> Boolean {
-    match Int::safe_mod(value, 2) {
+    match safe_mod(value, 2) {
       Ok(rem) => rem == 0,
       Err(_) => False,
     }
@@ -382,7 +382,7 @@ defmod Int {
   Return `True` when `value` is not divisible by two.
   """
   def is_odd(value: Int) -> Boolean {
-    match Int::safe_mod(value, 2) {
+    match safe_mod(value, 2) {
       Ok(rem) => rem != 0,
       Err(_) => False,
     }

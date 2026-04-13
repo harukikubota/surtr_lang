@@ -22,14 +22,14 @@ defmod Boolean {
   Return `True` when exactly one input is `True`.
   """
   def xor(left: Boolean, right: Boolean) -> Boolean {
-    if(left, Boolean::not(right), right)
+    if(left, not(right), right)
   }
 
   @@doc """
   Return `True` when both inputs have the same truth value.
   """
   def eqv(left: Boolean, right: Boolean) -> Boolean {
-    if(left, right, Boolean::not(right))
+    if(left, right, not(right))
   }
 
   @@doc """
