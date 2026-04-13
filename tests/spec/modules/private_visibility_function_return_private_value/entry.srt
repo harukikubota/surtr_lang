@@ -1,0 +1,6 @@
+def read_password(user: User) -> String {
+  user.password
+}
+
+user = User("alice", "s3cr3t")
+print(read_password(user))

@@ -697,6 +697,108 @@ user = User("alice", "s3cr3t")
     }
 
     #[test]
+    fn private_value_can_be_returned_as_plain_value() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+def read_password(user: User) -> String {
+  user.password
+}
+user = User("alice", "s3cr3t")
+read_password(user)"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+    }
+
+    #[test]
+    fn private_value_capture_after_scope_local_read_is_allowed() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+user = User("alice", "s3cr3t")
+password = user.password
+reader = {|| password}
+reader()"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+    }
+
+    #[test]
+    fn private_value_access_inside_param_closure_is_rejected_outside_impl() {
+        let err = typecheck_with_rules(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+reader = {|user: User| user.password}
+user = User("alice", "s3cr3t")
+reader(user)"#,
+            SourceRules::script(),
+        )
+        .expect_err("private value access inside closure parameter should fail");
+        assert!(
+            err.message
+                .contains("cannot be accessed from closures outside impl")
+                || err.message.contains("Field 'User.password' is private")
+        );
+    }
+
+    #[test]
+    fn private_capability_root_is_rejected_in_lens_view_call() {
+        let err = typecheck_with_rules(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+user = User("alice", "s3cr3t")
+Lens::view(User.password, user)"#,
+            SourceRules::script(),
+        )
+        .expect_err("private capability root in Lens::view should fail");
+        assert!(err.message.contains("Field 'User.password' is private"));
+    }
+
+    #[test]
+    fn lens_scope_local_value_can_flow_to_closure_after_view() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+user = User("alice")
+lens = User.name
+name = Lens::view(lens, user)
+reader = {|| name}
+reader()"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+    }
+
+    #[test]
     fn lens_runtime_transport_restrictions_remain() {
         let arg_err = typecheck_with_rules(
             r#"defrecord User(name: String)
@@ -717,6 +819,21 @@ def bad() -> Lens<User, String> {
         assert!(return_err
             .message
             .contains("cannot be used as a function return type"));
+
+        let arg_var_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+def consume(value: String) -> String {
+  value
+}
+lens = User.name
+consume(lens)"#,
+            SourceRules::script(),
+        )
+        .expect_err("passing Lens binding as runtime function argument should fail");
+        assert!(
+            arg_var_err.message.contains("cannot accept Lens values")
+                || arg_var_err.message.contains("Argument type mismatch")
+        );
     }
 
     #[test]
