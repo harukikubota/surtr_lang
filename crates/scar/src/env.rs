@@ -69,6 +69,8 @@ pub struct TypeEnv {
     pub enum_variant_tags: HashMap<u32, EnumVariantInfo>,
     /// enum type name -> variants
     pub enum_variants_by_enum: HashMap<Symbol, Vec<EnumVariantInfo>>,
+    /// type declaration bindings usable as type-root lens path heads.
+    pub type_constructor_ids: HashSet<u32>,
 }
 
 impl Default for TypeEnv {
@@ -90,6 +92,7 @@ impl TypeEnv {
             enum_constructor_ids: HashMap::new(),
             enum_variant_tags: HashMap::new(),
             enum_variants_by_enum: HashMap::new(),
+            type_constructor_ids: HashSet::new(),
         }
     }
 
@@ -242,6 +245,14 @@ impl TypeEnv {
 
     pub fn enum_variants_of(&self, enum_name: &str) -> Option<&Vec<EnumVariantInfo>> {
         self.enum_variants_by_enum.get(enum_name)
+    }
+
+    pub fn register_type_constructor_id(&mut self, unique_id: u32) {
+        self.type_constructor_ids.insert(unique_id);
+    }
+
+    pub fn is_type_constructor_id(&self, unique_id: u32) -> bool {
+        self.type_constructor_ids.contains(&unique_id)
     }
 }
 

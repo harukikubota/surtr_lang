@@ -1,0 +1,27 @@
+@@doc """
+Standard `Lens` type declaration.
+`Lens<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
+Stage1 keeps lens values compile-time only and supports `view`/`compose` on
+immediate expressions.
+"""
+@@builtin type Lens<$S, $A>
+
+@@doc """
+Lens module.
+Provides the Stage1 surface for compiler-managed path access and composition.
+"""
+@@autoimport
+defmod Lens {
+  @@doc """
+  View the focus at `lens` from `source`.
+  The declared contract is `Result`-shaped; the compiler refines this in
+  Stage1 based on path context.
+  """
+  @@builtin def view(lens: Lens<$S, $A>, source: $S) -> Result<$A>
+
+  @@doc """
+  Compose two lens paths in sequence.
+  `compose(outer, inner)` focuses from `S` to `B` via `A`.
+  """
+  @@builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
+}

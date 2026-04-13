@@ -66,6 +66,7 @@ impl Checker {
                             span: id.span.clone(),
                             hint: None,
                         })?;
+                    self.env.register_type_constructor_id(id.unique_id);
                     self.env
                         .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields));
                 }
@@ -91,6 +92,7 @@ impl Checker {
                             span: id.span.clone(),
                             hint: None,
                         })?;
+                    self.env.register_type_constructor_id(id.unique_id);
                     self.env
                         .bind_var(id.unique_id, Ty::Record(id.name.clone(), ty_fields));
                 }
@@ -138,6 +140,7 @@ impl Checker {
                         id.unique_id,
                         Ty::Enum(id.name.clone(), enum_ty_args.clone()),
                     );
+                    self.env.register_type_constructor_id(id.unique_id);
 
                     let mut next_discriminant = sindr::primitives::int(0);
                     let mut seen_discriminants: HashSet<sindr::primitives::SurtrInt> =
@@ -1140,6 +1143,19 @@ impl Checker {
 
     pub(super) fn predeclare_functions(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
         let mut fun_idx = self.env.next_fun_idx;
+        let trait_impl_method_ids_in_stmts = stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Resolved::TraitImplDef(_, _, _, _, methods) => Some(
+                    methods
+                        .iter()
+                        .map(|method| method.function_id.unique_id)
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect::<HashSet<_>>();
 
         for stmt in stmts {
             match stmt {
@@ -1336,6 +1352,9 @@ impl Checker {
             methods.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
 
             for (method_name, method) in methods {
+                if !trait_impl_method_ids_in_stmts.contains(&method.function_id.unique_id) {
+                    continue;
+                }
                 self.register_function_id(&method.function_id);
                 let trait_method =
                     trait_info

@@ -1523,13 +1523,9 @@ impl Parser {
                     let span = self.advance().span.clone();
                     (field, span)
                 }
-                Token::Int(index) => {
-                    let span = self.advance().span.clone();
-                    (index.to_string(), span)
-                }
                 _ => {
                     return Err(ParseError::syntax(
-                        "Expected field name or tuple index after '.'",
+                        "Expected field name after '.'. Tuple access uses ._0, ._1, ...",
                         self.peek_span(),
                     ));
                 }
@@ -6043,13 +6039,19 @@ Construct the error branch.
 
     #[test]
     fn test_tuple_index_field_access() {
-        let ast = parse("first = pair.0").unwrap();
+        let ast = parse("first = pair._0").unwrap();
         match &ast[0] {
             Ast::Bind(_, _, rhs) => {
-                assert!(matches!(rhs.as_ref(), Ast::FieldAccess(_, _, field) if field == "0"));
+                assert!(matches!(rhs.as_ref(), Ast::FieldAccess(_, _, field) if field == "_0"));
             }
             other => panic!("Expected Bind, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_tuple_dot_numeric_index_is_rejected() {
+        let err = parse("first = pair.0").expect_err("Expected parse error");
+        assert!(err.message().contains("Tuple access uses ._0, ._1, ..."));
     }
 
     #[test]

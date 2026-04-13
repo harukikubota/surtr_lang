@@ -240,6 +240,20 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::List(Box::new(inner_ty)))
                 }
+                "Lens" => {
+                    if args.len() != 2 {
+                        return Err(TypeError {
+                            message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let source =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    let focus =
+                        self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
+                    Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+                }
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -400,6 +414,26 @@ impl Checker {
                     tyvars,
                 )?;
                 Ok(Ty::List(Box::new(inner)))
+            }
+            AstTy::Generic(span, name, args) if name == "Lens" => {
+                if args.len() != 2 {
+                    return Err(TypeError {
+                        message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let source = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                let focus = self.resolve_signature_ast_ty_in_context(
+                    &args[1],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::Lens(Box::new(source), Box::new(focus)))
             }
             AstTy::Generic(span, name, args) if name == "MatchResult" => {
                 if args.is_empty() || args.len() > 2 {
@@ -615,6 +649,28 @@ impl Checker {
                     tyvars,
                 )?;
                 Ok(Ty::List(Box::new(inner)))
+            }
+            AstTy::Generic(span, name, args) if name == "Lens" => {
+                if args.len() != 2 {
+                    return Err(TypeError {
+                        message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let source = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                let focus = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[1],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                Ok(Ty::Lens(Box::new(source), Box::new(focus)))
             }
             AstTy::Generic(span, name, args) if name == "MatchResult" => {
                 if args.is_empty() || args.len() > 2 {
@@ -842,6 +898,26 @@ impl Checker {
                     )?;
                     Ok(Ty::List(Box::new(inner_ty)))
                 }
+                "Lens" => {
+                    if args.len() != 2 {
+                        return Err(TypeError {
+                            message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let source = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    let focus = self.resolve_builtin_ast_ty_in_context(
+                        &args[1],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+                }
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -978,6 +1054,9 @@ impl Checker {
             | (Ty::Error, Ty::Error) => true,
             (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
             (Ty::TypeRef(a), Ty::TypeRef(b)) => self.types_compatible(a, b),
+            (Ty::Lens(src_a, focus_a), Ty::Lens(src_b, focus_b)) => {
+                self.types_compatible(src_a, src_b) && self.types_compatible(focus_a, focus_b)
+            }
             (Ty::Tuple(a), Ty::Tuple(b)) => {
                 a.len() == b.len()
                     && a.iter()
@@ -1058,6 +1137,9 @@ impl Checker {
             Ty::Var(var) => var == needle,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
             Ty::TypeRef(inner) => self.ty_contains_var(&inner, needle),
+            Ty::Lens(source, focus) => {
+                self.ty_contains_var(&source, needle) || self.ty_contains_var(&focus, needle)
+            }
             Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
             Ty::Func(params, ret) => {
                 params
@@ -1090,6 +1172,10 @@ impl Checker {
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
             Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
+            Ty::Lens(source, focus) => Ty::Lens(
+                Box::new(self.resolve_ty(source)),
+                Box::new(self.resolve_ty(focus)),
+            ),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect()),
             Ty::Func(params, ret) => Ty::Func(
                 params.iter().map(|param| self.resolve_ty(param)).collect(),
@@ -1158,6 +1244,10 @@ impl Checker {
             Ty::TypeRef(inner) => {
                 Ty::TypeRef(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
             }
+            Ty::Lens(source, focus) => Ty::Lens(
+                Box::new(self.instantiate_ty_with_fresh(source, fresh)),
+                Box::new(self.instantiate_ty_with_fresh(focus, fresh)),
+            ),
             Ty::Tuple(items) => Ty::Tuple(
                 items
                     .iter()
@@ -1266,6 +1356,9 @@ impl Checker {
             Ty::Error => "Error".into(),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
+            Ty::Lens(source, focus) => {
+                format!("Lens<{}, {}>", self.ty_name(source), self.ty_name(focus))
+            }
             Ty::Tuple(items) => format!(
                 "({})",
                 items
@@ -1305,6 +1398,15 @@ impl Checker {
             }
             Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
             Ty::UserFunc { .. } => "UserFunc".into(),
+        }
+    }
+
+    fn resolve_typed_lens_path(&self, path: TypedLensPath) -> TypedLensPath {
+        TypedLensPath {
+            source_ty: self.resolve_ty(&path.source_ty),
+            focus_ty: self.resolve_ty(&path.focus_ty),
+            may_fail: path.may_fail,
+            segments: path.segments,
         }
     }
 
@@ -1434,6 +1536,16 @@ impl Checker {
             TypedInner::FieldAccess(expr, idx) => {
                 TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
             }
+            TypedInner::LensPath(path) => TypedInner::LensPath(self.resolve_typed_lens_path(path)),
+            TypedInner::LensView {
+                source,
+                path,
+                source_is_result,
+            } => TypedInner::LensView {
+                source: Box::new(self.resolve_typed_node(*source)),
+                path: self.resolve_typed_lens_path(path),
+                source_is_result,
+            },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
                 fields

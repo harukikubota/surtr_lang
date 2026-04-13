@@ -595,6 +595,9 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Unit => "Unit".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
         Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
+        Ty::Lens(source, focus) => {
+            format!("Lens<{}, {}>", ty_to_string(source), ty_to_string(focus))
+        }
         Ty::Tuple(items) => format!(
             "({})",
             items
@@ -1693,6 +1696,23 @@ impl Codegen {
                 }
             }
 
+            TypedInner::LensPath(_) => {
+                return Err(CodegenError {
+                    message:
+                        "Lens path value leaked to codegen; Lens is compile-time only in Stage1"
+                            .into(),
+                    span: node.span.clone(),
+                });
+            }
+
+            TypedInner::LensView {
+                source,
+                path,
+                source_is_result,
+            } => {
+                self.emit_lens_view(node, source, path, *source_is_result)?;
+            }
+
             TypedInner::StructLit(tag, fields) => {
                 // Push tag first, then fields
                 let tag_const = self.add_constant(Constant::Tag(*tag));
@@ -1818,6 +1838,173 @@ impl Codegen {
             }
         }
         Ok(())
+    }
+
+    fn emit_lens_view(
+        &mut self,
+        node: &TypedNode,
+        source: &TypedNode,
+        path: &TypedLensPath,
+        source_is_result: bool,
+    ) -> Result<(), CodegenError> {
+        let returns_result = matches!(node.ty, Ty::Result(_, _));
+
+        if source_is_result {
+            self.emit_node(source)?;
+            let result_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(result_slot));
+
+            self.emit(Opcode::LoadLocal(result_slot));
+            self.emit(Opcode::GetTag);
+            let err_tag = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(err_tag));
+            self.emit(Opcode::EqTag);
+
+            let ok_label = self.fresh_label();
+            let end_label = self.fresh_label();
+            self.emit_jump_if_false(ok_label);
+            self.emit(Opcode::LoadLocal(result_slot));
+            self.emit_jump(end_label);
+
+            self.patch_label(ok_label);
+
+            self.emit(Opcode::LoadLocal(result_slot));
+            self.emit(Opcode::GetField { field_index: 0 });
+            let current_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(current_slot));
+
+            self.emit_lens_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+
+            let ok_tag = self.add_constant(Constant::Tag(0));
+            self.emit(Opcode::LoadConst(ok_tag));
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+
+            self.patch_label(end_label);
+            return Ok(());
+        }
+
+        self.emit_node(source)?;
+        let current_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(current_slot));
+
+        if returns_result {
+            let end_label = self.fresh_label();
+            self.emit_lens_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+
+            let ok_tag = self.add_constant(Constant::Tag(0));
+            self.emit(Opcode::LoadConst(ok_tag));
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+
+            self.patch_label(end_label);
+        } else {
+            self.emit_lens_segments_from_local(current_slot, path, &node.span, None)?;
+            self.emit(Opcode::LoadLocal(current_slot));
+        }
+
+        Ok(())
+    }
+
+    fn emit_lens_segments_from_local(
+        &mut self,
+        current_slot: u32,
+        path: &TypedLensPath,
+        span: &Span,
+        mismatch_end: Option<Label>,
+    ) -> Result<(), CodegenError> {
+        for segment in &path.segments {
+            match segment {
+                TypedLensSegment::Field { field_index, .. } => {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetField {
+                        field_index: *field_index,
+                    });
+                    self.emit(Opcode::StoreLocal(current_slot));
+                }
+                TypedLensSegment::Tuple { field_index } => {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: *field_index,
+                    });
+                    self.emit(Opcode::StoreLocal(current_slot));
+                }
+                TypedLensSegment::Variant {
+                    enum_name,
+                    variant_name,
+                    variant_tag,
+                    payload_arity,
+                } => {
+                    let Some(end_label) = mismatch_end else {
+                        return Err(CodegenError {
+                            message:
+                                "Internal invariant broken: variant lens segment in plain context"
+                                    .into(),
+                            span: span.clone(),
+                        });
+                    };
+
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetTag);
+                    let expected_tag = self.add_constant(Constant::Tag(*variant_tag));
+                    self.emit(Opcode::LoadConst(expected_tag));
+                    self.emit(Opcode::EqTag);
+
+                    let mismatch_label = self.fresh_label();
+                    let continue_label = self.fresh_label();
+                    self.emit_jump_if_false(mismatch_label);
+
+                    self.emit_variant_payload_extract_to_local(current_slot, *payload_arity);
+                    self.emit_jump(continue_label);
+
+                    self.patch_label(mismatch_label);
+                    let detail = format!(
+                        "Expected variant {}::{}, but got a different variant",
+                        enum_name, variant_name
+                    );
+                    self.emit_variant_mismatch_result(&detail, span);
+                    self.emit_jump(end_label);
+
+                    self.patch_label(continue_label);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_variant_payload_extract_to_local(&mut self, current_slot: u32, payload_arity: u32) {
+        match payload_arity {
+            0 => {
+                let unit_idx = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit_idx));
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            1 => {
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetField { field_index: 1 });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            n => {
+                for index in 0..n {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetField {
+                        field_index: index + 1,
+                    });
+                }
+                self.emit(Opcode::TupleNew { len: n });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+        }
+    }
+
+    fn emit_variant_mismatch_result(&mut self, detail: &str, span: &Span) {
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit_error_value("VariantMismatch", detail, span);
+        self.emit(Opcode::StructNew { field_count: 1 });
     }
 
     fn emit_safebind(&mut self, pat: &TypedPattern, rhs: &TypedNode) -> Result<(), CodegenError> {
@@ -2917,6 +3104,12 @@ impl Codegen {
                 }
             }
         }
+
+        self.state.next_fun_idx =
+            u32::try_from(self.state.functions.len()).map_err(|_| CodegenError {
+                message: "function table length exceeds u32".into(),
+                span: Span { start: 0, end: 0 },
+            })?;
 
         Ok(())
     }

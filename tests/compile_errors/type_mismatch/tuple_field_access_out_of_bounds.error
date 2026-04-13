@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Tuple index .2 is out of bounds
+contains: Tuple index ._2 is out of bounds

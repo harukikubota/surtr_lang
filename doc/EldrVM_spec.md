@@ -190,11 +190,12 @@ Opcode は以下のカテゴリを持つ。
 - 組込み関数メタデータは単一テーブルで管理する
 - `Bootstrap` module の `@@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
+- `Lens::view` / `Lens::compose` は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `Float` の厳密契約は `doc/float.md` を参照する
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Lens, Float] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.1 TypeRegistry
 

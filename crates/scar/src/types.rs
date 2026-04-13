@@ -22,6 +22,9 @@ pub enum Ty {
     /// method parameter positions such as `From<$To>::from(_, TypeRef<$To>)`.
     TypeRef(Box<Ty>),
 
+    /// Compiler-managed lens path capability: `Lens<S, A>`
+    Lens(Box<Ty>, Box<Ty>),
+
     /// Built-in function with a known name (for codegen dispatch)
     BuiltinFunc {
         name: String,

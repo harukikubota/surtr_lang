@@ -203,6 +203,18 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "(List<$A>, List<$B>) -> List<($A, $B)>",
     },
+    BuiltinMeta {
+        name: "view",
+        builtin_id: 30,
+        arity: 2,
+        sig_str: "(Lens<$S, $A>, $S) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "compose",
+        builtin_id: 31,
+        arity: 2,
+        sig_str: "(Lens<$S, $A>, Lens<$A, $B>) -> Lens<$S, $B>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.
@@ -245,6 +257,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     BuiltinTypeMeta {
         name: "TypeRef",
         params: &["$T"],
+    },
+    BuiltinTypeMeta {
+        name: "Lens",
+        params: &["$S", "$A"],
     },
 ];
 

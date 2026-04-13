@@ -74,6 +74,7 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         include_str!("../../../lib/result.srt"),
         "Result",
     ),
+    ("lens.srt", include_str!("../../../lib/lens.srt"), "Lens"),
     ("float.srt", include_str!("../../../lib/float.srt"), "Float"),
 ];
 const REPL_MODULE_NAME: &str = "REPL";
@@ -708,7 +709,7 @@ mod tests {
             std_paths,
             vec![
                 "Kernel", "Numeric", "Show", "Eq", "Ordering", "Compare", "Ord", "Concat", "From",
-                "TryFrom", "Int", "String", "Boolean", "Error", "List", "Result", "Float",
+                "TryFrom", "Int", "String", "Boolean", "Error", "List", "Result", "Lens", "Float",
             ]
         );
     }
@@ -800,7 +801,7 @@ mod tests {
             std_paths,
             vec![
                 "Kernel", "Numeric", "Show", "Eq", "Ordering", "Compare", "Ord", "Concat", "From",
-                "TryFrom", "Int", "String", "Boolean", "Error", "List", "Result", "Float",
+                "TryFrom", "Int", "String", "Boolean", "Error", "List", "Result", "Lens", "Float",
             ]
         );
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");

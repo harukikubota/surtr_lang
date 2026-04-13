@@ -37,6 +37,18 @@ impl Checker {
                         }
                         _ => self.resolve_ty(&stored_ty),
                     };
+                    if matches!(ty, Ty::Lens(_, _)) {
+                        return Err(TypeError {
+                            message:
+                                "Lens values are compile-time only in Stage1 and cannot be used as runtime values"
+                                    .into(),
+                            span: span.clone(),
+                            hint: Some(
+                                "Use Lens::view(...) immediately instead of binding or passing Lens values."
+                                    .into(),
+                            ),
+                        });
+                    }
                     return Ok(TypedNode {
                         ty,
                         span: span.clone(),
@@ -110,6 +122,15 @@ impl Checker {
                 } else {
                     self.check_node(rhs)?
                 };
+                if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
+                    return Err(TypeError {
+                        message:
+                            "Lens values are compile-time only in Stage1 and cannot be bound with `=`"
+                                .into(),
+                        span: typed_rhs.span.clone(),
+                        hint: Some("Call Lens::view(...) directly at the usage site.".into()),
+                    });
+                }
                 if matches!(typed_rhs.ty, Ty::Error) {
                     return Err(TypeError {
                         message: "Error values must be wrapped with Err(...)".into(),
@@ -263,6 +284,15 @@ impl Checker {
         rhs: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
+        if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message:
+                    "Lens values are compile-time only in Stage1 and cannot be bound with `=?`"
+                        .into(),
+                span: typed_rhs.span.clone(),
+                hint: Some("Call Lens::view(...) directly at the usage site.".into()),
+            });
+        }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
         let pattern_can_nomatch = !Self::is_total_bind_pattern(pat);
         let (ok_ty, mut propagated_err_tys) = match rhs_ty {
@@ -521,6 +551,7 @@ impl Checker {
                 });
             }
         }
+        self.ensure_no_runtime_lens_args(&args, span, "Function application")?;
         Ok(TypedNode {
             ty: self.resolve_ty(&ret),
             span: span.clone(),
@@ -724,6 +755,7 @@ impl Checker {
                 ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
             })
             .collect::<Result<Vec<_>, _>>()?;
+        self.ensure_no_runtime_lens_args(&typed_args, span, "Trait method call")?;
 
         for (idx, (expected, arg)) in param_tys.iter().zip(&typed_args).enumerate() {
             if !self.types_compatible(expected, &arg.ty) {
@@ -901,6 +933,7 @@ impl Checker {
                 ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
             })
             .collect::<Result<Vec<_>, _>>()?;
+        self.ensure_no_runtime_lens_args(&typed_args, span, op_name)?;
 
         for (expected, arg) in params.iter().skip(1).zip(&typed_args) {
             if !self.types_compatible(expected, &arg.ty) {
@@ -1560,12 +1593,234 @@ impl Checker {
         Ok(typed_args)
     }
 
+    fn lens_intrinsic_kind(&self, func: &Resolved) -> Option<&'static str> {
+        let Resolved::Var(_, id) = func else {
+            return None;
+        };
+        match id
+            .qualified_name
+            .as_deref()
+            .or(Some(id.name.as_str()))
+            .unwrap_or_default()
+        {
+            "Lens::view" => Some("view"),
+            "Lens::compose" => Some("compose"),
+            _ => None,
+        }
+    }
+
+    fn resolve_lens_path_from_node(
+        &self,
+        typed: TypedNode,
+        span: &Span,
+    ) -> Result<TypedLensPath, TypeError> {
+        if !matches!(typed.ty, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message: format!("Expected Lens<...> value, got {}", self.ty_name(&typed.ty)),
+                span: typed.span.clone(),
+                hint: None,
+            });
+        }
+        match typed.node {
+            TypedInner::LensPath(path) => Ok(TypedLensPath {
+                source_ty: self.resolve_ty(&path.source_ty),
+                focus_ty: self.resolve_ty(&path.focus_ty),
+                may_fail: path.may_fail,
+                segments: path.segments,
+            }),
+            _ => Err(TypeError {
+                message:
+                    "Lens values are compile-time only in Stage1 and cannot be stored or passed around"
+                        .into(),
+                span: span.clone(),
+                hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
+            }),
+        }
+    }
+
+    fn check_lens_compose_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args.len() != 2 {
+            return Err(TypeError {
+                message: format!("Lens::compose expects 2 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: "Lens::compose does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let ResolvedRecordLitArg::Positional(left_expr) = &args[0] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(right_expr) = &args[1] else {
+            unreachable!("validated argument form above")
+        };
+
+        let left = self.check_node(left_expr)?;
+        let right = self.check_node(right_expr)?;
+        let left_path = self.resolve_lens_path_from_node(left, span)?;
+        let right_path = self.resolve_lens_path_from_node(right, span)?;
+
+        if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Lens::compose source/focus mismatch: left focus is {}, right source is {}",
+                    self.ty_name(&left_path.focus_ty),
+                    self.ty_name(&right_path.source_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let source_ty = self.resolve_ty(&left_path.source_ty);
+        let focus_ty = self.resolve_ty(&right_path.focus_ty);
+        let mut segments = left_path.segments;
+        segments.extend(right_path.segments);
+        let path = TypedLensPath {
+            source_ty: source_ty.clone(),
+            focus_ty: focus_ty.clone(),
+            may_fail: left_path.may_fail || right_path.may_fail,
+            segments,
+        };
+        Ok(TypedNode {
+            ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+            span: span.clone(),
+            node: TypedInner::LensPath(path),
+        })
+    }
+
+    fn check_lens_view_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args.len() != 2 {
+            return Err(TypeError {
+                message: format!("Lens::view expects 2 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: "Lens::view does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
+            unreachable!("validated argument form above")
+        };
+
+        let path_node = self.check_node(path_expr)?;
+        let path = self.resolve_lens_path_from_node(path_node, span)?;
+
+        let typed_source = self.check_node(source_expr)?;
+        if matches!(typed_source.ty, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message: "Lens::view source value cannot be a Lens".into(),
+                span: typed_source.span.clone(),
+                hint: None,
+            });
+        }
+
+        let (source_is_result, source_value_ty) = match self.resolve_ty(&typed_source.ty) {
+            Ty::Result(ok, _) => (true, ok.as_ref().clone()),
+            other => (false, other),
+        };
+
+        if !self.types_compatible(&path.source_ty, &source_value_ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Lens::view source type mismatch: lens expects {}, got {}",
+                    self.ty_name(&path.source_ty),
+                    self.ty_name(&typed_source.ty)
+                ),
+                span: typed_source.span.clone(),
+                hint: None,
+            });
+        }
+
+        let focus_ty = self.resolve_ty(&path.focus_ty);
+        let out_ty = if source_is_result || path.may_fail {
+            Ty::Result(Box::new(focus_ty.clone()), Box::new(Ty::Error))
+        } else {
+            focus_ty
+        };
+
+        Ok(TypedNode {
+            ty: out_ty,
+            span: span.clone(),
+            node: TypedInner::LensView {
+                source: Box::new(typed_source),
+                path,
+                source_is_result,
+            },
+        })
+    }
+
+    fn try_check_lens_intrinsic_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        match self.lens_intrinsic_kind(func) {
+            Some("view") => Ok(Some(self.check_lens_view_intrinsic(span, args)?)),
+            Some("compose") => Ok(Some(self.check_lens_compose_intrinsic(span, args)?)),
+            _ => Ok(None),
+        }
+    }
+
+    fn ensure_no_runtime_lens_args(
+        &self,
+        args: &[TypedNode],
+        span: &Span,
+        callee: &str,
+    ) -> Result<(), TypeError> {
+        if args.iter().any(|arg| matches!(arg.ty, Ty::Lens(_, _))) {
+            return Err(TypeError {
+                message: format!(
+                    "{} cannot accept Lens values in Stage1 (Lens is compile-time only)",
+                    callee
+                ),
+                span: span.clone(),
+                hint: Some("Apply Lens::view(...) before passing the value.".into()),
+            });
+        }
+        Ok(())
+    }
+
     pub(super) fn check_app(
         &mut self,
         span: &Span,
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
+        if let Some(typed) = self.try_check_lens_intrinsic_app(span, func, args)? {
+            return Ok(typed);
+        }
+
         if let Some((_id, trait_name, method_name)) = self.trait_method_ref(func) {
             return self.check_trait_method_call(span, &trait_name, &method_name, args);
         }
@@ -1621,6 +1876,7 @@ impl Checker {
                         });
                     }
                 }
+                self.ensure_no_runtime_lens_args(&typed_args, span, name)?;
 
                 if name == "set_exit_code" {
                     match self.source_rules.set_exit_code_policy {
@@ -1693,6 +1949,7 @@ impl Checker {
                 };
                 let typed_args =
                     self.typecheck_user_function_args(span, callee_uid, params, args)?;
+                self.ensure_no_runtime_lens_args(&typed_args, span, "Function call")?;
 
                 Ok(TypedNode {
                     ty: self.resolve_ty(ret),
@@ -1746,6 +2003,7 @@ impl Checker {
                         });
                     }
                 }
+                self.ensure_no_runtime_lens_args(&typed_args, span, "Function call")?;
 
                 Ok(TypedNode {
                     ty: self.resolve_ty(ret),
@@ -1835,6 +2093,17 @@ impl Checker {
 
         for capture in captures {
             if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
+                if matches!(ty, Ty::Lens(_, _)) {
+                    return Err(TypeError {
+                        message:
+                            "Lens is compile-time only in Stage1 and cannot be captured by closures"
+                                .into(),
+                        span: capture.span.clone(),
+                        hint: Some(
+                            "Apply Lens::view(...) before building the closure value.".into(),
+                        ),
+                    });
+                }
                 body_checker
                     .env
                     .bind_var(capture.unique_id, body_checker.resolve_ty(&ty));
@@ -1845,6 +2114,14 @@ impl Checker {
             body_checker.function_return_ty = Some(expected_ret.as_ref().clone());
         }
         let typed_body = body_checker.check_node(body)?;
+        if matches!(typed_body.ty, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message: "Lens is compile-time only in Stage1 and cannot be returned from closures"
+                    .into(),
+                span: typed_body.span.clone(),
+                hint: Some("Use Lens::view(...) inside the closure instead.".into()),
+            });
+        }
         let typed_body = body_checker.resolve_typed_node(typed_body);
         self.absorb_child_progress(&body_checker);
 
@@ -1921,6 +2198,7 @@ impl Checker {
                 });
             }
         }
+        self.ensure_no_runtime_lens_args(&typed_args, span, "Partial application")?;
 
         let remaining = params[typed_args.len()..].to_vec();
         Ok(TypedNode {
@@ -2461,34 +2739,46 @@ impl Checker {
         })
     }
 
-    pub(super) fn check_field_access(
+    fn resolve_lens_segment_for_source_ty(
         &mut self,
-        span: &Span,
-        expr: &Resolved,
+        source_ty: &Ty,
         field: &str,
-    ) -> Result<TypedNode, TypeError> {
-        let typed_expr = self.check_node(expr)?;
-
-        let (idx, field_ty) = match &typed_expr.ty {
+        span: &Span,
+    ) -> Result<(TypedLensSegment, Ty, bool), TypeError> {
+        match self.resolve_ty(source_ty) {
             Ty::Tuple(items) => {
-                let index = field.parse::<usize>().map_err(|_| TypeError {
-                    message: "Tuple elements are accessed with .0, .1, ...".into(),
-                    span: span.clone(),
-                    hint: None,
-                })?;
+                let index = field
+                    .strip_prefix('_')
+                    .ok_or_else(|| TypeError {
+                        message: "Tuple elements are accessed with ._0, ._1, ...".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?
+                    .parse::<usize>()
+                    .map_err(|_| TypeError {
+                        message: "Tuple elements are accessed with ._0, ._1, ...".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
                 let field_ty = items.get(index).cloned().ok_or_else(|| TypeError {
                     message: format!(
-                        "Tuple index .{} is out of bounds for {}",
+                        "Tuple index ._{} is out of bounds for {}",
                         index,
-                        self.ty_name(&typed_expr.ty)
+                        self.ty_name(source_ty)
                     ),
                     span: span.clone(),
                     hint: None,
                 })?;
-                (index as u32, field_ty)
+                Ok((
+                    TypedLensSegment::Tuple {
+                        field_index: index as u32,
+                    },
+                    field_ty,
+                    false,
+                ))
             }
             Ty::Struct(name, fields) | Ty::Record(name, fields) => {
-                if self.env.is_private_field(name, field)
+                if self.env.is_private_field(&name, field)
                     && self.current_impl_struct_target.as_deref() != Some(name.as_str())
                 {
                     return Err(TypeError {
@@ -2500,43 +2790,178 @@ impl Checker {
                         )),
                     });
                 }
-                fields
+                let (field_index, field_ty) = fields
                     .iter()
                     .enumerate()
                     .find(|(_, (field_name, _))| field_name == field)
                     .map(|(i, (_, ty))| (i as u32, ty.clone()))
                     .ok_or_else(|| TypeError {
+                        message: format!("No field '{}' on {}", field, self.ty_name(source_ty)),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                Ok((
+                    TypedLensSegment::Field {
+                        field_name: field.to_string(),
+                        field_index,
+                    },
+                    field_ty,
+                    false,
+                ))
+            }
+            Ty::Enum(enum_name, _) => {
+                let variants = self
+                    .env
+                    .enum_variants_of(&enum_name)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        message: format!("No variants found for enum {}", enum_name),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let variant = variants
+                    .iter()
+                    .find(|candidate| candidate.short_name == field)
+                    .cloned();
+                let Some(variant) = variant else {
+                    return Err(TypeError {
                         message: format!(
-                            "No field '{}' on {}",
-                            field,
-                            self.ty_name(&typed_expr.ty)
+                            "No variant selector '{}' on {} (use PascalCase constructor names)",
+                            field, enum_name
                         ),
                         span: span.clone(),
                         hint: None,
-                    })?
+                    });
+                };
+                let variant = self.instantiate_enum_variant(&variant);
+                if !self.types_compatible(&variant.enum_ty, source_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Variant selector {}.{} does not match {}",
+                            enum_name,
+                            field,
+                            self.ty_name(source_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let payload_arity = variant.payload.len() as u32;
+                let focus_ty = match variant.payload.len() {
+                    0 => Ty::Unit,
+                    1 => variant.payload[0].clone(),
+                    _ => Ty::Tuple(variant.payload.clone()),
+                };
+                Ok((
+                    TypedLensSegment::Variant {
+                        enum_name,
+                        variant_name: variant.short_name,
+                        variant_tag: variant.tag,
+                        payload_arity,
+                    },
+                    focus_ty,
+                    true,
+                ))
             }
-            _ => {
-                let message = if field.chars().all(|ch| ch.is_ascii_digit()) {
+            other => {
+                let message = if field.starts_with('_')
+                    && field
+                        .strip_prefix('_')
+                        .is_some_and(|suffix| suffix.chars().all(|ch| ch.is_ascii_digit()))
+                {
                     format!(
                         "Tuple-style access .{} is only available on tuples, got {}",
                         field,
-                        self.ty_name(&typed_expr.ty)
+                        self.ty_name(&other)
                     )
                 } else {
-                    format!("Cannot access field on {}", self.ty_name(&typed_expr.ty))
+                    format!("Cannot access field on {}", self.ty_name(&other))
                 };
-                return Err(TypeError {
+                Err(TypeError {
                     message,
                     span: span.clone(),
                     hint: None,
+                })
+            }
+        }
+    }
+
+    pub(super) fn check_field_access(
+        &mut self,
+        span: &Span,
+        expr: &Resolved,
+        field: &str,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_expr = self.check_node(expr)?;
+
+        if matches!(typed_expr.ty, Ty::Lens(_, _)) {
+            let path = self.resolve_lens_path_from_node(typed_expr, span)?;
+            let (segment, focus_ty, may_fail) =
+                self.resolve_lens_segment_for_source_ty(&path.focus_ty, field, span)?;
+            let source_ty = self.resolve_ty(&path.source_ty);
+            let focus_ty = self.resolve_ty(&focus_ty);
+            let mut segments = path.segments;
+            segments.push(segment);
+            let combined = TypedLensPath {
+                source_ty: source_ty.clone(),
+                focus_ty: focus_ty.clone(),
+                may_fail: path.may_fail || may_fail,
+                segments,
+            };
+            return Ok(TypedNode {
+                ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+                span: span.clone(),
+                node: TypedInner::LensPath(combined),
+            });
+        }
+
+        if let TypedInner::Var(id) = &typed_expr.node {
+            if self.env.is_type_constructor_id(id.unique_id) {
+                let source_ty = self.resolve_ty(&typed_expr.ty);
+                let (segment, focus_ty, may_fail) =
+                    self.resolve_lens_segment_for_source_ty(&source_ty, field, span)?;
+                let focus_ty = self.resolve_ty(&focus_ty);
+                let path = TypedLensPath {
+                    source_ty: source_ty.clone(),
+                    focus_ty: focus_ty.clone(),
+                    may_fail,
+                    segments: vec![segment],
+                };
+                return Ok(TypedNode {
+                    ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+                    span: span.clone(),
+                    node: TypedInner::LensPath(path),
                 });
             }
+        }
+
+        let (source_is_result, source_focus_ty) = match self.resolve_ty(&typed_expr.ty) {
+            Ty::Result(ok, _) => (true, ok.as_ref().clone()),
+            other => (false, other),
+        };
+        let (segment, focus_ty, may_fail) =
+            self.resolve_lens_segment_for_source_ty(&source_focus_ty, field, span)?;
+        let focus_ty = self.resolve_ty(&focus_ty);
+        let path = TypedLensPath {
+            source_ty: source_focus_ty,
+            focus_ty: focus_ty.clone(),
+            may_fail,
+            segments: vec![segment],
+        };
+        let out_ty = if source_is_result || path.may_fail {
+            Ty::Result(Box::new(focus_ty), Box::new(Ty::Error))
+        } else {
+            focus_ty
         };
 
         Ok(TypedNode {
-            ty: field_ty,
+            ty: out_ty,
             span: span.clone(),
-            node: TypedInner::FieldAccess(Box::new(typed_expr), idx),
+            node: TypedInner::LensView {
+                source: Box::new(typed_expr),
+                path,
+                source_is_result,
+            },
         })
     }
 }

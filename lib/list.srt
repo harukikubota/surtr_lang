@@ -120,8 +120,8 @@ defmod List {
         rest = _partition_go(tail, pred)
         if(
           pred(head),
-          (cons(head, rest.0), rest.1),
-          (rest.0, cons(head, rest.1)),
+          (cons(head, rest._0), rest._1),
+          (rest._0, cons(head, rest._1)),
         )
       },
     }

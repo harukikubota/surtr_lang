@@ -101,6 +101,12 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_list_zip,
     },
+    BuiltinImpl {
+        func: builtin_lens_view,
+    },
+    BuiltinImpl {
+        func: builtin_lens_compose,
+    },
 ];
 
 const _: () = {
@@ -584,6 +590,18 @@ fn builtin_list_zip(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     Ok(Value::List(ListHandle::from_items(items)))
 }
 
+fn builtin_lens_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Lens::view should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_lens_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Lens::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     if let Value::Callable(callable) = value {
         if let Some(display) = inspect_callable(vm, callable) {
@@ -919,6 +937,7 @@ mod tests {
             include_str!("../../../lib/int.srt"),
             include_str!("../../../lib/list.srt"),
             include_str!("../../../lib/result.srt"),
+            include_str!("../../../lib/lens.srt"),
             include_str!("../../../lib/string.srt"),
         ];
 

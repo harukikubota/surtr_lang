@@ -32,7 +32,8 @@ fn private_visibility_module_spec_fixture_passes() {
     let fixture = module_spec_fixtures()
         .into_iter()
         .find(|fixture| {
-            fixture.case.case_dir == repo_root().join("tests/spec/modules/private_visibility_basics")
+            fixture.case.case_dir
+                == repo_root().join("tests/spec/modules/private_visibility_basics")
         })
         .expect("private visibility spec fixture should exist");
 
@@ -49,13 +50,19 @@ fn private_visibility_compile_error_fixtures_pass() {
         .into_iter()
         .filter(|fixture| {
             let case_dir = &fixture.case.case_dir;
-            case_dir == &repo_root().join("tests/compile_errors/modules/private_field_access_forbidden")
+            case_dir
+                == &repo_root().join("tests/compile_errors/modules/private_field_access_forbidden")
                 || case_dir
-                    == &repo_root().join("tests/compile_errors/modules/private_def_import_forbidden")
+                    == &repo_root()
+                        .join("tests/compile_errors/modules/private_def_import_forbidden")
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(cases.len(), 2, "private visibility compile fixtures should exist");
+    assert_eq!(
+        cases.len(),
+        2,
+        "private visibility compile fixtures should exist"
+    );
 
     for fixture in cases {
         let expected = parse_compile_error_expectation(&fixture.error_path);

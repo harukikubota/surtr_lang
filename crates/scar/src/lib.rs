@@ -11,8 +11,8 @@ pub use checker::{
 #[cfg(test)]
 mod tests {
     use super::{typecheck, typecheck_with_context, ScarSession, TypecheckContext};
-    use crate::typed::TypedInner;
     use crate::typed::TypedNode;
+    use crate::typed::{TypedInner, TypedLensSegment};
     use spire::ast::Ast;
     use spire::{EntryPoint, SetExitCodePolicy, SourceRules};
 
@@ -33,6 +33,7 @@ mod tests {
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
+    const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
 
     fn strip_test_annotations(source: &str) -> String {
@@ -176,6 +177,7 @@ mod tests {
                     "Result",
                     pick_override("Result", RESULT_MODULE_SOURCE, overrides),
                 ),
+                ("Lens", pick_override("Lens", LENS_MODULE_SOURCE, overrides)),
                 (
                     "Float",
                     pick_override("Float", FLOAT_MODULE_SOURCE, overrides),
@@ -292,16 +294,28 @@ age = user.age"#,
         );
 
         let typed = typecheck(resolved).expect("typecheck should succeed");
-        let field_index = typed.iter().find_map(|node| {
+        let lens_view = typed.iter().find_map(|node| {
             if let TypedInner::Bind(_, rhs) = &node.node {
-                if let TypedInner::FieldAccess(_, idx) = &rhs.node {
-                    return Some(*idx);
+                if let TypedInner::LensView {
+                    path,
+                    source_is_result,
+                    ..
+                } = &rhs.node
+                {
+                    return Some((path.clone(), *source_is_result));
                 }
             }
             None
         });
 
-        assert_eq!(field_index, Some(1));
+        let (path, source_is_result) = lens_view.expect("expected bind rhs to be LensView");
+        assert!(!source_is_result);
+        assert!(!path.may_fail);
+        assert_eq!(path.segments.len(), 1);
+        match &path.segments[0] {
+            TypedLensSegment::Field { field_index, .. } => assert_eq!(*field_index, 1),
+            other => panic!("expected field segment, got {other:?}"),
+        }
     }
 
     #[test]
@@ -434,8 +448,8 @@ print(match value {
     fn tuple_literal_and_field_access_typecheck() {
         let resolved = resolve_with_builtin_prelude(
             r#"pair = (1, "two")
-first = pair.0
-second = pair.1"#,
+first = pair._0
+second = pair._1"#,
         );
         let typed = typecheck(resolved).expect("tuple access should typecheck");
         assert!(
@@ -458,6 +472,128 @@ second = pair.1"#,
             typed.last().map(|node| &node.node),
             Some(TypedInner::Bind(_, _))
         ));
+    }
+
+    #[test]
+    fn lens_view_on_plain_value_returns_plain_focus() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+user = User("alice")
+user.name"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+    }
+
+    #[test]
+    fn lens_view_on_result_value_returns_result_focus() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+result_user: Result<User> = Ok(User("alice"))
+result_user.name"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(
+            &last.ty,
+            crate::types::Ty::Result(ok, err)
+                if matches!(ok.as_ref(), crate::types::Ty::Str)
+                    && matches!(err.as_ref(), crate::types::Ty::Error)
+        ));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+    }
+
+    #[test]
+    fn lens_variant_selector_returns_result_and_requires_pascal_case() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defenum Expr {
+  Add(Int, Int),
+  Halt,
+}
+expr = Expr::Add(1, 2)
+expr.Add"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(
+            &last.ty,
+            crate::types::Ty::Result(ok, err)
+                if matches!(ok.as_ref(), crate::types::Ty::Tuple(items) if items.len() == 2)
+                    && matches!(err.as_ref(), crate::types::Ty::Error)
+        ));
+
+        let err = typecheck_with_rules(
+            r#"defenum Expr {
+  Add(Int, Int),
+  Halt,
+}
+expr = Expr::Add(1, 2)
+expr.add"#,
+            SourceRules::script(),
+        )
+        .expect_err("lowercase variant selector should fail");
+        assert!(err.message.contains("No variant selector 'add'"));
+    }
+
+    #[test]
+    fn lens_compose_typecheck_success_and_mismatch() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord Profile(name: String)
+defrecord User(profile: Profile)
+user = User(Profile("alice"))
+Lens::view(Lens::compose(User.profile, Profile.name), user)"#,
+        );
+        assert!(matches!(
+            typed.last().map(|node| &node.ty),
+            Some(crate::types::Ty::Str)
+        ));
+
+        let err = typecheck_with_rules(
+            r#"defrecord Profile(name: String)
+defrecord User(profile: Profile)
+Lens::compose(Profile.name, User.profile)"#,
+            SourceRules::script(),
+        )
+        .expect_err("mismatched compose should fail");
+        assert!(err.message.contains("Lens::compose source/focus mismatch"));
+    }
+
+    #[test]
+    fn lens_is_not_first_class_in_stage1() {
+        let bind_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+lens = User.name"#,
+            SourceRules::script(),
+        )
+        .expect_err("binding Lens value should fail");
+        assert!(bind_err.message.contains("cannot be bound with `=`"));
+
+        let arg_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+print(to_string(User.name))"#,
+            SourceRules::script(),
+        )
+        .expect_err("passing Lens value as argument should fail");
+        assert!(arg_err.message.contains("cannot accept Lens values"));
+
+        let return_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+def bad() -> Lens<User, String> {
+  User.name
+}"#,
+            SourceRules::script(),
+        )
+        .expect_err("returning Lens value should fail");
+        assert!(return_err
+            .message
+            .contains("cannot be used as a function return type"));
+
+        let capture_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+captured = &Lens::compose(User.name)"#,
+            SourceRules::script(),
+        )
+        .expect_err("capturing Lens value should fail");
+        assert!(capture_err.message.contains("Partial application"));
     }
 
     #[test]
@@ -630,7 +766,8 @@ deferror NotFound(code: String) {
             "def add1(x: Int) -> Int { x + 1 }\nprint(to_string(add1(41)))",
         );
         assert!(
-            typed.iter()
+            typed
+                .iter()
                 .any(|node| matches!(node.node, TypedInner::Def(..))),
             "expected user function definition to survive typechecking"
         );
@@ -645,7 +782,8 @@ print(to_string(id(1)))
 print(id("ok"))"#,
         );
         assert!(
-            typed.iter()
+            typed
+                .iter()
                 .filter(|node| matches!(node.node, TypedInner::App(_, _)))
                 .count()
                 >= 2,
@@ -663,7 +801,8 @@ print(to_string(add(y: 2, x: 1)))
 print(to_string(add3(z: 3, y: 2, x: 1)))"#,
         );
         assert!(
-            typed.iter()
+            typed
+                .iter()
                 .filter(|node| matches!(node.node, TypedInner::Def(..)))
                 .count()
                 >= 2,
@@ -684,7 +823,8 @@ v = if_then(True) { print("x") }
 print(to_string(v))"#,
         );
         assert!(
-            typed.iter()
+            typed
+                .iter()
                 .filter(|node| matches!(node.node, TypedInner::App(_, _)))
                 .count()
                 >= 2,
@@ -1147,7 +1287,9 @@ up: Direction = Direction::Up
 x = up.idx"#,
         );
         let err = typecheck(resolved).expect_err("enum field access must fail");
-        assert!(err.message.contains("Cannot access field on Direction"));
+        assert!(err
+            .message
+            .contains("No variant selector 'idx' on Direction"));
     }
 
     #[test]
@@ -1391,6 +1533,8 @@ largest = Numeric::max(1.5, 2.5)"#,
                 | TypedInner::SafeBind(_, rhs)
                 | TypedInner::Semi(rhs)
                 | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+                TypedInner::LensPath(_) => false,
+                TypedInner::LensView { source, .. } => has_pending_trait_call(source),
                 TypedInner::BinOp(_, left, right)
                 | TypedInner::Pipe(left, right)
                 | TypedInner::ResultMap(left, right)

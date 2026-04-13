@@ -522,6 +522,23 @@ impl Checker {
                 )?),
                 index,
             ),
+            TypedInner::LensPath(path) => TypedInner::LensPath(path),
+            TypedInner::LensView {
+                source,
+                path,
+                source_is_result,
+            } => TypedInner::LensView {
+                source: Box::new(self.rewrite_specializations_in_node(
+                    *source,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                path,
+                source_is_result,
+            },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
                 fields
@@ -952,6 +969,15 @@ impl Checker {
             TypedInner::FieldAccess(expr, _) => {
                 self.collect_bound_tyvars_in_node(expr, ordered, seen);
             }
+            TypedInner::LensPath(path) => {
+                self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
+            }
+            TypedInner::LensView { source, path, .. } => {
+                self.collect_bound_tyvars_in_node(source, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
+            }
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
                 for field in fields {
                     self.collect_bound_tyvars_in_node(field, ordered, seen);
@@ -986,6 +1012,10 @@ impl Checker {
             }
             Ty::List(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
             Ty::TypeRef(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
+            Ty::Lens(source, focus) => {
+                self.collect_bound_tyvars_in_ty(&source, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&focus, ordered, seen);
+            }
             Ty::Tuple(items) => {
                 for item in items {
                     self.collect_bound_tyvars_in_ty(&item, ordered, seen);
@@ -1154,6 +1184,26 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*expr, mapping)),
                 index,
             ),
+            TypedInner::LensPath(path) => TypedInner::LensPath(TypedLensPath {
+                source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
+                focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                may_fail: path.may_fail,
+                segments: path.segments,
+            }),
+            TypedInner::LensView {
+                source,
+                path,
+                source_is_result,
+            } => TypedInner::LensView {
+                source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
+                path: TypedLensPath {
+                    source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
+                    focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    may_fail: path.may_fail,
+                    segments: path.segments,
+                },
+                source_is_result,
+            },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
                 fields
@@ -1415,6 +1465,10 @@ impl Checker {
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
+            Ty::Lens(source, focus) => Ty::Lens(
+                Box::new(self.substitute_ty_with_mapping(source, mapping)),
+                Box::new(self.substitute_ty_with_mapping(focus, mapping)),
+            ),
             Ty::Tuple(items) => Ty::Tuple(
                 items
                     .iter()
@@ -1546,6 +1600,8 @@ impl Checker {
                         .any(|(_, body)| Self::typed_node_has_pending_trait_call(body))
             }
             TypedInner::FieldAccess(expr, _) => Self::typed_node_has_pending_trait_call(expr),
+            TypedInner::LensPath(_) => false,
+            TypedInner::LensView { source, .. } => Self::typed_node_has_pending_trait_call(source),
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
                 fields.iter().any(Self::typed_node_has_pending_trait_call)
             }

@@ -245,6 +245,31 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
                 ret: Box::new(Ty::List(Box::new(Ty::Tuple(vec![a, b])))),
             }
         }
+        "view" => {
+            let source = env.fresh_tyvar();
+            let focus = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Lens(Box::new(source.clone()), Box::new(focus.clone())),
+                    source,
+                ],
+                ret: Box::new(Ty::Result(Box::new(focus), Box::new(Ty::Error))),
+            }
+        }
+        "compose" => {
+            let source = env.fresh_tyvar();
+            let middle = env.fresh_tyvar();
+            let focus = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Lens(Box::new(source.clone()), Box::new(middle.clone())),
+                    Ty::Lens(Box::new(middle), Box::new(focus.clone())),
+                ],
+                ret: Box::new(Ty::Lens(Box::new(source), Box::new(focus))),
+            }
+        }
         _ => Ty::BuiltinFunc {
             name: meta.name.into(),
             params: vec![Ty::Unit; meta.arity as usize],
@@ -377,7 +402,10 @@ impl ScarSession {
     }
 
     pub fn ensure_next_fun_idx_at_least(&mut self, next_fun_idx: u32) {
-        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+        // REPL runtime is the source of truth for currently materialized
+        // function indices. Keep Scar aligned exactly so newly inferred
+        // callable indices continue to match VM function entries.
+        self.env.next_fun_idx = next_fun_idx;
     }
 }
 

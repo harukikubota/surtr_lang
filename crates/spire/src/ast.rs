@@ -264,7 +264,7 @@ pub enum Ast {
     /// Match expression
     Match(Span, Box<Ast>, Vec<(AstPattern, Ast)>),
 
-    /// Field access: `user.name`, `pair.0`
+    /// Field access: `user.name`, `pair._0`
     FieldAccess(Span, Box<Ast>, Symbol),
 
     /// Struct definition: `defstruct User { name: String, age: Int }`

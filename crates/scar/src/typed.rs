@@ -47,6 +47,31 @@ pub enum TraitDispatchTarget {
     UserFunction { name: String, fun_idx: u32 },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypedLensSegment {
+    Field {
+        field_name: String,
+        field_index: u32,
+    },
+    Tuple {
+        field_index: u32,
+    },
+    Variant {
+        enum_name: String,
+        variant_name: String,
+        variant_tag: u32,
+        payload_arity: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedLensPath {
+    pub source_ty: Ty,
+    pub focus_ty: Ty,
+    pub may_fail: bool,
+    pub segments: Vec<TypedLensSegment>,
+}
+
 /// Inner structure of a typed node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedInner {
@@ -82,6 +107,17 @@ pub enum TypedInner {
 
     /// Field access — field name resolved to index by Scar
     FieldAccess(Box<TypedNode>, u32),
+
+    /// Compile-time lens constant path value. Stage 1 does not allow
+    /// first-class runtime transport of lens values.
+    LensPath(TypedLensPath),
+
+    /// Lens view application with compile-time path metadata.
+    LensView {
+        source: Box<TypedNode>,
+        path: TypedLensPath,
+        source_is_result: bool,
+    },
 
     /// Struct literal — tag + field values (in definition order)
     StructLit(u32, Vec<TypedNode>),

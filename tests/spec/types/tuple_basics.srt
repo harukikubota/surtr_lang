@@ -1,8 +1,8 @@
 pair = (1, "two")
 
 print(inspect(pair))
-print(to_string(pair.0))
-print(pair.1)
+print(to_string(pair._0))
+print(pair._1)
 
 (left, right) = pair
 print(to_string(left))

@@ -445,6 +445,15 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
+            if matches!(param_ty, Ty::Lens(_, _)) {
+                return Err(TypeError {
+                    message:
+                        "Lens is compile-time only in Stage1 and cannot be used as a function parameter type"
+                            .into(),
+                    span: param.id.span.clone(),
+                    hint: None,
+                });
+            }
             fun_env.bind_var(param.id.unique_id, param_ty.clone());
             typed_params.push(TypedFunParam {
                 id: param.id.clone(),
@@ -460,6 +469,15 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
+        if matches!(expected_ret, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message:
+                    "Lens is compile-time only in Stage1 and cannot be used as a function return type"
+                        .into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
         let is_entrypoint = self
@@ -602,6 +620,15 @@ impl Checker {
             )?,
             None => self.env.fresh_tyvar(),
         };
+        if matches!(param_ty, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message:
+                    "Lens is compile-time only in Stage1 and cannot be used as an extractor parameter type"
+                        .into(),
+                span: param.id.span.clone(),
+                hint: None,
+            });
+        }
         fun_env.bind_var(param.id.unique_id, param_ty.clone());
         let typed_param = TypedFunParam {
             id: param.id.clone(),
@@ -613,6 +640,15 @@ impl Checker {
             TypeSyntaxContext::FunctionReturn,
             &mut tyvars,
         )?;
+        if matches!(expected_ret, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message:
+                    "Lens is compile-time only in Stage1 and cannot be used as an extractor return type"
+                        .into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
         self.require_match_result_seq_ty(
             &expected_ret,
             &param.id.span,

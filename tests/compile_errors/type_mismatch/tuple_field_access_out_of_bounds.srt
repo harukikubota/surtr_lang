@@ -1,2 +1,2 @@
 pair = (1, 2)
-print(to_string(pair.2))
+print(to_string(pair._2))
