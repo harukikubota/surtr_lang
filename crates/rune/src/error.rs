@@ -7,7 +7,7 @@ pub(crate) const USAGE_TEXT: &str = "\
 Usage:\n\
   surtr --version\n\
   surtr check <file.srt> [--format json]\n\
-  surtr run <file.srt|file.eldr> [--entry <name>]\n\
+  surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always]\n\
   surtr test <lib-relative-name>\n\
   surtr repl [--quiet] [--banner] [--version]\n\
   surtr build <file.srt> [output.eldr]\n\

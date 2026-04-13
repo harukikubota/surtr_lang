@@ -359,6 +359,18 @@ impl VM {
         self.exit_code
     }
 
+    pub fn pc(&self) -> usize {
+        self.pc
+    }
+
+    pub fn stack_depth(&self) -> usize {
+        self.stack.len()
+    }
+
+    pub fn frame_depth(&self) -> usize {
+        self.frames.len()
+    }
+
     pub fn set_exit_code(&mut self, exit_code: i32) {
         self.exit_code = exit_code;
     }

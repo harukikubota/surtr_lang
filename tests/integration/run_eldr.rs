@@ -1,5 +1,8 @@
 use std::fs;
 use std::process::Command;
+
+use serde_json::Value;
+
 mod common;
 use common::{surtr_bin, unique_temp_dir, write_source};
 
@@ -61,6 +64,117 @@ fn run_eldr_matches_run_srt_output() {
         String::from_utf8_lossy(&run_eldr.stdout),
         "stdout mismatch between run <.srt> and run <.eldr>"
     );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_vm_dump_writes_json_on_success_when_always_enabled() {
+    let temp = unique_temp_dir("surtr_vm_dump_success");
+    let source_path = temp.join("sample.srt");
+    let dump_path = temp.join("vm-dump.json");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let output = Command::new(surtr_bin())
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-dump",
+            dump_path.to_str().expect("dump path must be utf-8"),
+            "--vm-dump-on",
+            "always",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dump_path.exists(), "vm dump file should exist");
+
+    let dump: Value =
+        serde_json::from_slice(&fs::read(&dump_path).expect("vm dump file should be readable"))
+            .expect("vm dump should be valid json");
+    assert_eq!(dump["result"]["status"], "ok");
+    assert_eq!(dump["result"]["exit_code"], 0);
+    assert_eq!(dump["vm"]["last_opcode"], "Halt");
+    assert!(
+        dump["stats"]["executed_opcodes"].as_u64().unwrap_or(0) > 0,
+        "expected opcode stats in vm dump: {dump}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_vm_dump_skips_success_when_error_mode_is_default() {
+    let temp = unique_temp_dir("surtr_vm_dump_skip_success");
+    let source_path = temp.join("sample.srt");
+    let dump_path = temp.join("vm-dump.json");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let output = Command::new(surtr_bin())
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-dump",
+            dump_path.to_str().expect("dump path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !dump_path.exists(),
+        "vm dump should not be written for successful run in default error mode"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_vm_dump_writes_json_for_err_result_in_error_mode() {
+    let temp = unique_temp_dir("surtr_vm_dump_err_result");
+    let source_path = temp.join("sample.srt");
+    let dump_path = temp.join("vm-dump.json");
+    write_source(&source_path, "safe_div(1, 0)\n");
+
+    let output = Command::new(surtr_bin())
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-dump",
+            dump_path.to_str().expect("dump path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dump_path.exists(), "vm dump file should exist");
+
+    let dump: Value =
+        serde_json::from_slice(&fs::read(&dump_path).expect("vm dump file should be readable"))
+            .expect("vm dump should be valid json");
+    assert_eq!(dump["result"]["status"], "result_err");
+    assert_eq!(dump["result"]["exit_code"], 0);
+    assert_eq!(
+        dump["result"]["last_value"],
+        "Err(ZeroDivisionError(\"division by zero\"))"
+    );
+    assert!(dump["result"]["runtime_error"].is_null());
 
     let _ = fs::remove_dir_all(temp);
 }
