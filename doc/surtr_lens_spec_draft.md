@@ -24,7 +24,7 @@ Surtr の Lens は一般 optics ライブラリではなく、**compiler-managed
 本書の目的は次の 2 点。
 
 - Stage1: 既存実装と一致した外部契約を固定する
-- Stage2: `set/over`・first-class Lens を実装可能な粒度で確定する
+- Stage2: `set/over` と **Lens非運搬（スコープ内消費）モデル** を確定する
 
 ---
 
@@ -76,17 +76,12 @@ defmod Lens {
 
 ### 2.4 Stage1 制約
 
-Stage1 起点では Lens は first-class 非対応としていたが、現行コードでは次の先行実装を含む。
+Stage1 はコード優先だが、運用方針として次を採用する。
 
-- 束縛可（静的 path 限定）: `lens = User.name`
-- capture 可（静的 path 限定）: `getter = {|u| Lens::view(lens, u)}`
+- Lens は compile-time capability であり runtime 値として運搬しない
+- Lens は **同一スコープ内で消費** する
+- 関数境界を越える受け渡しは Lens ではなく、`view` 済みの `A` / `Result<A>` で行う
 - standalone `_0` は未対応（`pair._0` のみ可）
-
-一方で、次は未対応のまま維持する。
-
-- 引数受け渡し不可: `f(User.name)`
-- 戻り値化不可: `def x() -> Lens<...> { ... }`
-- `=?` での Lens 束縛は不可
 
 ### 2.5 Lowering / runtime 契約
 
@@ -132,25 +127,19 @@ defmod Lens {
   - path 中の variant mismatch
   - `update_fun` が `Err(...)` を返す（`over` のみ）
 
-### 3.3 first-class Lens（compile-time 値モデル）
+### 3.3 Lens 非運搬（スコープ内消費）モデル
 
-Stage2 では Lens を言語表面で first-class として許可する。
+Stage2 では Lens を first-class 化しない。採用するのは次のモデル。
 
-- 束縛可
-- 引数受け渡し可
-- 戻り値化可
-- capture 可
+- Lens は compile-time capability としてのみ存在する
+- Lens 自体をスコープ内外へ運搬しない（arg / return / export / container 格納を不許可）
+- Lens は生成されたスコープで `view/set/over` により消費する
+- 関数に渡すのは Lens ではなく `A` または `Result<A>` のみ
 
-進捗メモ（コード先行実装）:
+補足:
 
-- 束縛 / capture は「静的 path が解決可能な場合」に限り先行導入済み
-- 引数受け渡し / 戻り値化は未実装
-
-ただし実体モデルは compile-time 値のままとする。
-
-- IR/VM 上で Lens を runtime データとして運搬しない
-- Forge は Lens 値を解析し、`view/set/over/compose` を静的 path に展開して lowering する
-- 静的解決できない Lens 値（runtime でしか確定しない経路）は compile error とする
+- Forge は Lens capability を静的 path へ展開して消去する
+- runtime に Lens 実体は現れない
 - lowering 漏れで runtime builtin 到達が起きた場合は防御的 `RuntimeError` とする
 
 ### 3.4 tuple index `_N` の扱い
@@ -166,7 +155,7 @@ Stage2 でも `_N` は path segment 専用とし、standalone root は導入し�
 - variant mismatch は `VariantMismatch` で統一する
 - `set/over` の失敗は `Result` 経由で伝播する
 - 診断メッセージは「どの segment で失敗したか」を含める
-- Stage2 で first-class 化しても private capability の境界規則は維持する
+- private capability の境界規則は厳格に維持する
 
 ---
 
@@ -174,8 +163,18 @@ Stage2 でも `_N` は path segment 専用とし、standalone root は導入し�
 
 - field 可視性は対応 Lens capability の可視性として扱う
 - private capability の参照許可範囲は `impl T` と `impl Trait for T`
-- private capability を外部公開 API へ escape させる形は不許可
-- Stage2 の first-class 化後も、この境界規則は緩めない
+- private capability の scope 外 escape は不許可
+- 持ち出し検査は「Lens を消費するスコープ」で完結させる
+
+### 4.1 判定例
+
+- `user.name`: OK（Lens を消費して値 `A` を得る）
+- `User.name`: OK（public field の capability 参照）
+- `{|user| user.name}`: OK（public field）
+- `return {|| user.name}`: OK（public field）
+- `return {|| user.password}`: NG（private capability の持ち出し）
+- `return user.password`: 仕様上は許可（値持ち出し）。必要に応じて warning を出してよい
+- `return User.password`: NG（private capability の明示的持ち出し）
 
 ---
 
@@ -207,23 +206,27 @@ Stage2 でも `_N` は path segment 専用とし、standalone root は導入し�
   - variant mismatch による `Err(VariantMismatch(...))`
   - `over` の `update_fun` 失敗伝播
   - source が `Err(...)` のときの短絡伝播
-- first-class Lens
-  - bind / arg / return / capture の成功
-  - 静的解決不能 path の compile error
+- Lens 非運搬モデル
+  - Lens arg / return / export / container 格納が禁止されること
+  - `view` 済み値（`A` / `Result<A>`）は関数受け渡し可能なこと
   - lowering 漏れ時の runtime 防御エラー
 - tuple index `._N`
   - `pair._0` / `Tuple._0` 成功
   - `_0` 単体は失敗
+- private capability
+  - `return {|| user.password}` が拒否されること
+  - `return User.password` が拒否されること
+  - `return user.password` は許可（任意 warning）
 
 ---
 
 ## 7. 実装メモ（Stage2）
 
 - Scar
-  - first-class Lens の型フローを許可しつつ、静的 path 解決可能性を判定する
+  - Lens 非運搬モデルを前提に scope 境界で escape を検査する
   - `_N` は segment 専用（`._N` のみ）を維持する
 - Forge
-  - first-class Lens 値を runtime 表現に変換せず、compile-time 展開で消去する
+  - Lens capability を runtime 表現に変換せず compile-time 展開で消去する
   - `set/over` を path segment 単位で更新 lowering する
 - Eldr
   - `view/set/over/compose` の runtime 直接呼び出しは防御的 `RuntimeError` を維持する
@@ -232,6 +235,6 @@ Stage2 でも `_N` は path segment 専用とし、standalone root は導入し�
 
 ## 8. まとめ
 
-Surtr Lens は Stage1 ではコード実装準拠の compile-time path 機構として運用し、Stage2 では `set/over` と first-class Lens を導入する。
-ただし first-class 化後も runtime 値化は行わず、compile-time 展開モデルを維持する。
+Surtr Lens は compile-time path capability として運用し、Lens 自体はスコープ内で消費する。
+関数境界で運ぶのは Lens ではなく `view` 後の値（`A` / `Result<A>`）とする。
 `_N` は standalone では導入せず、`._N` 形式のみを維持する。
