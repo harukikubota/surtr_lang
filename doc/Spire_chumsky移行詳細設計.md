@@ -14,7 +14,7 @@
 - `spire` は `sindr` のみへ依存する
 - `Span` などの共有葉型は `sindr` 側へ整理済み、または移行途中でも `Spire` 外部契約は固定されている
 - `forge` / `diagnostics` / `eldr` は `spire` の内部 parser 実装へ依存しない
-- `Spire` の外部契約は `Ast`, `ParseError`, `parse`, `parse_with_context`, `ParserContext`, `SourceRules` に集約される
+- `Spire` の外部契約は `Ast`, `ParseError`, `parse`, `parse_with_context`, `ParserContext`, `ParseRules` に集約される
 
 本設計のゴールは「文法実装を `chumsky` へ置き換えること」であり、言語 surface の追加や構文仕様の変更は目的に含めない。
 
@@ -24,9 +24,9 @@
 
 現行 `Spire` は以下の構造的負債を持つ。
 
-- [crates/spire/src/parser.rs](/Users/haruca/work/rust/surtr/crates/spire/src/parser.rs) が約 6,700 行あり、字句補助・文法・文脈検証・AST span 補正・テストが同居している
+- [crates/spire/src/parser/mod.rs](/Users/haruca/work/rust/surtr/crates/spire/src/parser/mod.rs) が依然として巨大（3,000+ 行）で、字句補助・文法・文脈検証・AST span 補正が同居している
 - 再帰下降 parser が token cursor 操作と手書き precedence 制御に強く依存しており、局所変更でも広範囲に影響する
-- `ParserContext` / `SourceRules` による文脈制約と、純粋な構文規則が混在している
+- `ParserContext` / `ParseRules` による文脈制約と、純粋な構文規則が混在している
 - `>>` を type 文脈で `>` `>` として扱うために token stream を途中で書き換える実装がある
 - string interpolation, trailing block sugar, builtin decl などの特殊規則が個別関数に散在している
 
@@ -43,7 +43,7 @@
 - `parse(source: &str) -> Result<Vec<Ast>, ParseError>`
 - `parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError>`
 - `ParseError::{Incomplete, SyntaxError}`
-- `ParserContext`, `SourceRules`, `TopLevelDeclPolicy`, `TopLevelDeclKind`
+- `ParserContext`, `ParseRules`, `TopLevelDeclPolicy`, `TopLevelDeclKind`
 
 互換方針:
 
@@ -54,7 +54,7 @@
 
 ### 3.2 parser と policy validation を分離する
 
-`chumsky` で担う範囲は「syntax を AST に落とすこと」に集中させる。`SourceRules` に基づく compile-unit 制約は post-parse validation へ寄せる。
+`chumsky` で担う範囲は「syntax を AST に落とすこと」に集中させる。`ParseRules` に基づく compile-unit 制約は post-parse validation へ寄せる。
 
 分離後の責務:
 
@@ -65,11 +65,11 @@
 - validator:
   - script / module / repl / project の top-level 制約を検査する
   - builtin decl 許可有無、top-level expr 許可有無を検査する
-  - 既存 `SourceRules` と `ParserContext` 契約を維持する
+  - 既存 `ParseRules` と `ParserContext` 契約を維持する
 
 ### 3.3 巨大ファイルへ戻さない
 
-`parser.rs` 単一実装へ戻るのを防ぐため、移行後の責務分割を先に固定する。
+`parser/mod.rs` 単一実装へ戻るのを防ぐため、移行後の責務分割を先に固定する。
 
 ---
 
@@ -82,7 +82,7 @@ source: &str
   -> lexer::tokenize()                  // 既存 public lexer。外部互換のため維持
   -> syntax_token::adapt()              // parser 専用の内部 token 列へ正規化
   -> grammar::program(surface_kind)     // chumsky parser
-  -> validate::apply_source_rules()     // SourceRules / ParserContext 検証
+  -> validate::apply_source_rules()     // ParseRules / ParserContext 検証
   -> Vec<Ast>
 ```
 
@@ -90,7 +90,7 @@ source: &str
 
 - public lexer を直接 `chumsky` 入力にしない
 - parser 専用の内部 token へ正規化することで、`Token` public API を壊さずに文法都合の token 形を得る
-- `SourceRules` は grammar に埋め込まず、AST 後検証に寄せる
+- `ParseRules` は grammar に埋め込まず、AST 後検証に寄せる
 
 ### 4.2 想定 module 構成
 
@@ -102,22 +102,25 @@ crates/spire/src/
 ├── token.rs                // 既存 public token。互換維持
 ├── parser/
 │   ├── mod.rs              // parse / parse_with_context の public entry
-│   ├── context.rs          // ParserContext / SourceRules / surface enum
+│   ├── context.rs          // ParserContext / ParseRules / surface enum
 │   ├── syntax_token.rs     // chumsky 用の内部 token と adapter
-│   ├── common.rs           // span helper, parser utility
-│   ├── expr.rs             // 式 parser
-│   ├── pattern.rs          // bind / match pattern parser
-│   ├── ty.rs               // type parser
-│   ├── decl.rs             // def / import / impl / builtin decl parser
-│   ├── stmt.rs             // statement / separator parser
+│   ├── error_map.rs        // Rich -> ParseError 正規化
+│   ├── completion.rs       // 部分入力 / 補完コンテキスト抽出
+│   ├── diagnostic.rs       // ParseDiagnostic / LSP DTO 変換
+│   ├── ty.rs               // type parser（現行 recursive-descent 分離済み）
+│   ├── pattern.rs          // bind / match pattern（現行 recursive-descent 分離済み）
 │   ├── interpolate.rs      // string interpolation 専用 helper
-│   └── validate.rs         // SourceRules / top-level policy validation
+│   ├── validate.rs         // ParseRules / top-level policy validation
+│   ├── expr.rs             // 式 parser（planned）
+│   ├── decl.rs             // def / import / impl / builtin decl parser（planned）
+│   ├── stmt.rs             // statement / separator parser（planned）
+│   └── tests.rs            // parser unit tests
 └── parser_legacy.rs        // 移行期間のみ。最終的に削除
 ```
 
 補足:
 
-- `parser.rs` は削除し、`parser/mod.rs` 起点へ分割する
+- 旧 `parser.rs` は削除し、`parser/mod.rs` 起点へ分割する
 - `ParserContext` 群は public 契約なので `parser/context.rs` に移して re-export する
 - legacy parser は移行期間のみ残し、AST parity test が揃った時点で削除する
 
@@ -395,12 +398,12 @@ validator で扱うもの:
 
 - `Ast` enum とその variant 構造
 - `ParseError` variant
-- `ParserContext` / `SourceRules` の public constructor
-- `parse` / `parse_with_context`
+- `ParserContext` / `ParseRules` の public constructor
+- `parse` / `parse_with_context` / `parse_with_context_diagnostic`
 
 ### 9.2 実装都合で変えてよいもの
 
-- `parser.rs` の内部関数構成
+- `parser/mod.rs` の内部関数構成
 - token cursor ベースの helper 群
 - `expect_type_gt()` のような stream 書き換え実装
 - `allow_trailing_call_block` の mutable state
@@ -427,7 +430,7 @@ validator で扱うもの:
 
 ### Step 1. parser 境界の前処理
 
-- `ParserContext` / `SourceRules` 群を `parser/context.rs` へ分離する
+- `ParserContext` / `ParseRules` 群を `parser/context.rs` へ分離する
 - `validate_stmt_by_context` 相当を `validate.rs` へ抽出する
 - 既存 parser を動かしたまま責務だけ切り分ける
 
@@ -476,7 +479,7 @@ validator で扱うもの:
 
 ### 11.1 parser 単体テスト
 
-既存 [crates/spire/src/parser.rs](/Users/haruca/work/rust/surtr/crates/spire/src/parser.rs) の test 群は分割して維持する。
+既存 parser test 群は [crates/spire/src/parser/tests.rs](/Users/haruca/work/rust/surtr/crates/spire/src/parser/tests.rs) を起点に分割維持する。
 
 配置方針:
 
@@ -535,7 +538,7 @@ message 文字列の完全一致は必須にしない。
 
 対策:
 
-- `SyntaxSurface` と `SourceRules validator` を分ける
+- `SyntaxSurface` と `ParseRules validator` を分ける
 - compile-unit policy は validator 側に限定する
 
 ### リスク 4. 置き換え中に parser が二重化して保守負債になる
@@ -553,9 +556,9 @@ message 文字列の完全一致は必須にしない。
 
 - `parse` / `parse_with_context` が `chumsky` 実装だけを使う
 - legacy parser が削除されている
-- `parser.rs` 1 枚物ではなく、責務別 module 構成へ分割されている
+- `parser/mod.rs` 1 枚物ではなく、責務別 module 構成へ分割されている
 - `expect_type_gt()` のような token stream 破壊的補正が消えている
-- `SourceRules` 検証が `validate.rs` に分離されている
+- `ParseRules` 検証が `validate.rs` に分離されている
 - parser unit test, spec test, compile error test, integration test が通る
 - public AST / `ParseError` / `ParserContext` 契約が維持される
 

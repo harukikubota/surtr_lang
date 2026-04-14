@@ -164,7 +164,10 @@ mod tests {
         assert!(!diag.expected_tokens.is_empty());
 
         let lsp = diag.to_lsp("def foo(");
-        assert!(matches!(lsp.code.as_str(), "parse.incomplete" | "parse.syntax"));
+        assert!(matches!(
+            lsp.code.as_str(),
+            "parse.incomplete" | "parse.syntax"
+        ));
         assert_eq!(lsp.severity, LspDiagnosticSeverity::Error);
         assert!(!lsp.related_information.is_empty());
     }

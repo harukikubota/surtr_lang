@@ -14,11 +14,12 @@
 - `Spire` の parse 制約は `ParseRules` へ集約済み（旧 `SourceRules` は廃止）
 - runtime 制約（`CompileUnitKind` / `EntryPoint` / `RuntimeSourcePolicy`）は `sindr::policy` へ移設済み
 - `lexer` / `token` は `spire` 内部実装へ閉じ、外部は `strip_test_annotations()` / `collect_entrypoint_annotations()` を利用する
-- `parser` は `mod.rs + context.rs + validate.rs + syntax_token.rs + error_map.rs + completion.rs` に分割済み
+- `parser` は `mod.rs + context.rs + validate.rs + syntax_token.rs + error_map.rs + completion.rs + diagnostic.rs + ty.rs + pattern.rs + interpolate.rs` に分割済み
 - `Rich -> ParseError` 正規化を `error_map.rs` に集約済み（`Incomplete` 判定含む）
 - `parse_incomplete_expr` / `parse_incomplete_stmt` と `CompletionContext` を公開済み
+- `parse_with_context_diagnostic` と `LSP` 互換 DTO (`LspDiagnostic*`) を公開済み
 - `cargo test -p spire --lib`, `cargo test -p rune --test repl`, `cargo test -p rune --test run_srt`, `cargo test --workspace` は通過済み
-- 未着手: `type/expr/decl/pattern` の本体 `chumsky` 化、legacy parser の完全撤去、LSP DTO 変換
+- 未着手: `expr/decl` 本体の `chumsky` 化、legacy recursive-descent 本体の完全撤去
 
 ---
 
@@ -133,7 +134,7 @@
 
 ### T3-3 診断情報の LSP 互換 DTO 変換
 
-- 変更対象: `xldr` または将来の LSP 層
+- 変更対象: `parser/diagnostic.rs`（必要に応じて `xldr` 側 adapter 追加）
 - 内容:
   - `ParseError` + `Rich` 情報を LSP Diagnostic へ変換する adapter 追加
   - primary span と secondary hint の最小構成を返す
@@ -147,10 +148,10 @@
 
 - 変更対象: 旧 recursive-descent 関連関数
 - 内容:
-  - 置換済み関数を順次削除
-  - dead code / helper を掃除
+- 置換済み関数を順次削除
+- dead code / helper を掃除
 - DoD:
-  - `parser.rs` の巨大単一構成が解消される
+  - `parser/mod.rs` の巨大単一構成が解消される
   - `cargo test --workspace` 通過
 
 ### T4-2 ドキュメント・運用更新
