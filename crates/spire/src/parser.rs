@@ -1655,23 +1655,7 @@ impl Parser {
             }
 
             // Block expression: { stmt; stmt; expr }
-            Token::LBrace => {
-                self.advance();
-                self.skip_newlines();
-                if matches!(self.peek(), Token::Pipe) {
-                    self.parse_closure_literal(sp)
-                } else {
-                    let stmts = self.parse_block_stmts()?;
-                    let end = self.expect(&Token::RBrace)?;
-                    Ok(Ast::Block(
-                        Span {
-                            start: sp.start,
-                            end: end.end,
-                        },
-                        stmts,
-                    ))
-                }
-            }
+            Token::LBrace => self.parse_trailing_block_expr_from_lbrace(sp),
 
             // Capture / partial application: &foo, &foo(1)
             Token::Amp => self.parse_capture_expr(sp),
@@ -1759,29 +1743,39 @@ impl Parser {
                 let args = self.parse_call_args()?;
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
+                if path_last_is_uppercase {
+                    self.reject_constructor_trailing_block()?;
+                    let span = Span {
+                        start: name_span.start,
+                        end: end_span.end,
+                    };
+                    return Ok(Ast::ConstructorCall(span, path_name, args));
+                }
                 let (args, call_end) =
                     self.attach_trailing_block_arg(&path_expr, args, end_span.end)?;
                 let span = Span {
                     start: name_span.start,
                     end: call_end,
                 };
-                if path_last_is_uppercase {
-                    return Ok(Ast::ConstructorCall(span, path_name, args));
-                }
                 return Ok(Ast::App(span, Box::new(path_expr), args));
             }
 
             if matches!(self.peek(), Token::Unit) {
                 let end_span = self.advance().span.clone();
+                if path_last_is_uppercase {
+                    self.reject_constructor_trailing_block()?;
+                    let span = Span {
+                        start: name_span.start,
+                        end: end_span.end,
+                    };
+                    return Ok(Ast::ConstructorCall(span, path_name, Vec::new()));
+                }
                 let (args, call_end) =
                     self.attach_trailing_block_arg(&path_expr, Vec::new(), end_span.end)?;
                 let span = Span {
                     start: name_span.start,
                     end: call_end,
                 };
-                if path_last_is_uppercase {
-                    return Ok(Ast::ConstructorCall(span, path_name, args));
-                }
                 return Ok(Ast::App(span, Box::new(path_expr), args));
             }
 
@@ -1870,16 +1864,21 @@ impl Parser {
             self.skip_newlines();
             let end_span = self.expect(&Token::RParen)?;
             let func = Ast::Var(name_span.clone(), name.clone());
-            let (args, call_end) = self.attach_trailing_block_arg(&func, args, end_span.end)?;
-            let span = Span {
-                start: name_span.start,
-                end: call_end,
-            };
 
             if is_uppercase {
+                self.reject_constructor_trailing_block()?;
+                let span = Span {
+                    start: name_span.start,
+                    end: end_span.end,
+                };
                 // Constructor call: Name(val, ...) or Name(field: val, ...)
                 return Ok(Ast::ConstructorCall(span, name, args));
             } else {
+                let (args, call_end) = self.attach_trailing_block_arg(&func, args, end_span.end)?;
+                let span = Span {
+                    start: name_span.start,
+                    end: call_end,
+                };
                 // Normal function call
                 return Ok(Ast::App(span, Box::new(func), args));
             }
@@ -1890,15 +1889,20 @@ impl Parser {
         if matches!(self.peek(), Token::Unit) {
             let end_span = self.advance().span.clone();
             let func = Ast::Var(name_span.clone(), name.clone());
+            if is_uppercase {
+                self.reject_constructor_trailing_block()?;
+                let span = Span {
+                    start: name_span.start,
+                    end: end_span.end,
+                };
+                return Ok(Ast::ConstructorCall(span, name, Vec::new()));
+            }
             let (args, call_end) =
                 self.attach_trailing_block_arg(&func, Vec::new(), end_span.end)?;
             let span = Span {
                 start: name_span.start,
                 end: call_end,
             };
-            if is_uppercase {
-                return Ok(Ast::ConstructorCall(span, name, args));
-            }
             return Ok(Ast::App(span, Box::new(func), args));
         }
 
@@ -2004,6 +2008,35 @@ impl Parser {
         Ok(args)
     }
 
+    fn parse_trailing_block_expr_from_lbrace(&mut self, sp: Span) -> Result<Ast, ParseError> {
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        if matches!(self.peek(), Token::Pipe) {
+            return self.parse_closure_literal(sp);
+        }
+
+        let stmts = self.parse_block_stmts()?;
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::Block(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            stmts,
+        ))
+    }
+
+    fn reject_constructor_trailing_block(&self) -> Result<(), ParseError> {
+        if self.allow_trailing_call_block && matches!(self.peek(), Token::LBrace) {
+            return Err(ParseError::syntax(
+                "Trailing block sugar is not supported for constructor calls",
+                self.peek_span(),
+            ));
+        }
+        Ok(())
+    }
+
     fn trailing_block_uses_closure_sugar(callee: &Ast) -> bool {
         fn is_test_dsl_name(name: &str) -> bool {
             matches!(name, "test" | "describe" | "it")
@@ -2039,7 +2072,7 @@ impl Parser {
             ));
         }
 
-        let trailing = self.parse_primary()?;
+        let trailing = self.parse_trailing_block_expr_from_lbrace(self.peek_span())?;
         call_end = trailing.span().end;
         let trailing = match trailing {
             Ast::Block(span, stmts) if Self::trailing_block_uses_closure_sugar(callee) => {
@@ -4724,6 +4757,21 @@ mod tests {
         assert!(err
             .message()
             .contains("Trailing block sugar cannot follow named arguments"));
+    }
+
+    #[test]
+    fn test_constructor_call_rejects_trailing_block_arg() {
+        let err =
+            parse("Foo(1) { 2 }").expect_err("constructor call with trailing block should fail");
+        assert!(err
+            .message()
+            .contains("Trailing block sugar is not supported for constructor calls"));
+
+        let err = parse("Foo() { 2 }")
+            .expect_err("zero-arg constructor call with trailing block should fail");
+        assert!(err
+            .message()
+            .contains("Trailing block sugar is not supported for constructor calls"));
     }
 
     #[test]
