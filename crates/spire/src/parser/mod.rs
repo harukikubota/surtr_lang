@@ -8,11 +8,11 @@ mod completion;
 mod context;
 mod decl;
 mod diagnostic;
-mod expr;
 mod error_map;
-mod stmt;
+mod expr;
 mod interpolate;
 mod pattern;
+mod stmt;
 mod syntax_token;
 mod ty;
 mod validate;
@@ -303,7 +303,6 @@ impl Parser {
         self.advance();
         Ok(Span { start, end })
     }
-
 }
 
 fn shift_span(span: Span, delta: usize) -> Span {

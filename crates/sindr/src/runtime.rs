@@ -626,7 +626,10 @@ mod tests {
         let with_overwrite = with_ab.insert("a".into(), Value::Int(int(3)));
 
         assert_eq!(with_overwrite.len(), 2);
-        assert_eq!(with_overwrite.keys(), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            with_overwrite.keys(),
+            vec!["a".to_string(), "b".to_string()]
+        );
         assert_eq!(
             with_overwrite.values(),
             vec![Value::Int(int(3)), Value::Int(int(2))]

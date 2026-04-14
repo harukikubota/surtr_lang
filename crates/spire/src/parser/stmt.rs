@@ -6,7 +6,6 @@ use super::context::{DeclLevel, ParseUnitKind, TopLevelDeclKind};
 use super::{validate, ParseRules, Parser};
 
 impl Parser {
-
     pub(super) fn parse_stmt(&mut self) -> Result<Ast, ParseError> {
         self.skip_newlines();
 

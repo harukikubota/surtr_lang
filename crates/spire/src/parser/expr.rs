@@ -127,7 +127,12 @@ impl Parser {
         Ast::BinOp(span, op, Box::new(left), Box::new(right))
     }
 
-    pub(super) fn lower_func_literal_call(left: Ast, func_span: Span, name: Symbol, right: Ast) -> Ast {
+    pub(super) fn lower_func_literal_call(
+        left: Ast,
+        func_span: Span,
+        name: Symbol,
+        right: Ast,
+    ) -> Ast {
         let span = Span {
             start: left.span().start,
             end: right.span().end,
@@ -715,7 +720,10 @@ impl Parser {
         Ok(args)
     }
 
-    pub(super) fn parse_trailing_block_expr_from_lbrace(&mut self, sp: Span) -> Result<Ast, ParseError> {
+    pub(super) fn parse_trailing_block_expr_from_lbrace(
+        &mut self,
+        sp: Span,
+    ) -> Result<Ast, ParseError> {
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 

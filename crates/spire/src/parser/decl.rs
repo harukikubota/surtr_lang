@@ -588,7 +588,6 @@ impl Parser {
         Ok(FunParam { name, ty, span })
     }
 
-
     // ── Data definitions (step 7, 9) ──
 
     /// `defstruct Name { field: Type, ... }`
@@ -840,7 +839,9 @@ impl Parser {
         Ok(params)
     }
 
-    pub(super) fn parse_enum_discriminant(&mut self) -> Result<sindr::primitives::SurtrInt, ParseError> {
+    pub(super) fn parse_enum_discriminant(
+        &mut self,
+    ) -> Result<sindr::primitives::SurtrInt, ParseError> {
         let span = self.peek_span();
         if matches!(self.peek(), Token::Minus) {
             self.advance();
@@ -1214,7 +1215,11 @@ impl Parser {
         }
     }
 
-    pub(super) fn parse_builtin_decl(&mut self, start: usize, attrs: DeclAttrs) -> Result<Ast, ParseError> {
+    pub(super) fn parse_builtin_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
         let (_def_span, name, _type_params, params, ret_ty, _visibility) =
             self.parse_def_signature_with_name_mode(true)?;
 

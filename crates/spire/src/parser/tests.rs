@@ -1,5 +1,5 @@
-use super::*;
 use super::context::ParseUnitKind;
+use super::*;
 use sindr::primitives::int;
 
 #[test]
