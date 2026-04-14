@@ -24,7 +24,7 @@
 
 現行 `Spire` は以下の構造的負債を持つ。
 
-- [crates/spire/src/parser/mod.rs](/Users/haruca/work/rust/surtr/crates/spire/src/parser/mod.rs) が依然として巨大（3,000+ 行）で、字句補助・文法・文脈検証・AST span 補正が同居している
+- [crates/spire/src/parser/mod.rs](/Users/haruca/work/rust/surtr/crates/spire/src/parser/mod.rs) は分割を進めたものの、依然として cursor / helper / span 補正の集約点であり、責務の最終整理が必要
 - 再帰下降 parser が token cursor 操作と手書き precedence 制御に強く依存しており、局所変更でも広範囲に影響する
 - `ParserContext` / `ParseRules` による文脈制約と、純粋な構文規則が混在している
 - `>>` を type 文脈で `>` `>` として扱うために token stream を途中で書き換える実装がある
@@ -111,9 +111,9 @@ crates/spire/src/
 │   ├── pattern.rs          // bind / match pattern（現行 recursive-descent 分離済み）
 │   ├── interpolate.rs      // string interpolation 専用 helper
 │   ├── validate.rs         // ParseRules / top-level policy validation
-│   ├── expr.rs             // 式 parser（planned）
-│   ├── decl.rs             // def / import / impl / builtin decl parser（planned）
-│   ├── stmt.rs             // statement / separator parser（planned）
+│   ├── expr.rs             // 式 parser（legacy recursive-descent 分離済み）
+│   ├── decl.rs             // def / import / impl / builtin decl parser（legacy recursive-descent 分離済み）
+│   ├── stmt.rs             // statement / separator parser（legacy recursive-descent 分離済み）
 │   └── tests.rs            // parser unit tests
 └── parser_legacy.rs        // 移行期間のみ。最終的に削除
 ```

@@ -14,12 +14,12 @@
 - `Spire` の parse 制約は `ParseRules` へ集約済み（旧 `SourceRules` は廃止）
 - runtime 制約（`CompileUnitKind` / `EntryPoint` / `RuntimeSourcePolicy`）は `sindr::policy` へ移設済み
 - `lexer` / `token` は `spire` 内部実装へ閉じ、外部は `strip_test_annotations()` / `collect_entrypoint_annotations()` を利用する
-- `parser` は `mod.rs + context.rs + validate.rs + syntax_token.rs + error_map.rs + completion.rs + diagnostic.rs + ty.rs + pattern.rs + interpolate.rs` に分割済み
+- `parser` は `mod.rs + context.rs + validate.rs + syntax_token.rs + error_map.rs + completion.rs + diagnostic.rs + ty.rs + pattern.rs + interpolate.rs + stmt.rs + decl.rs + expr.rs` に分割済み
 - `Rich -> ParseError` 正規化を `error_map.rs` に集約済み（`Incomplete` 判定含む）
 - `parse_incomplete_expr` / `parse_incomplete_stmt` と `CompletionContext` を公開済み
 - `parse_with_context_diagnostic` と `LSP` 互換 DTO (`LspDiagnostic*`) を公開済み
 - `cargo test -p spire --lib`, `cargo test -p rune --test repl`, `cargo test -p rune --test run_srt`, `cargo test --workspace` は通過済み
-- 未着手: `expr/decl` 本体の `chumsky` 化、legacy recursive-descent 本体の完全撤去
+- 未着手: `expr/decl` 本体の `chumsky` 化、legacy recursive-descent 本体の完全撤去（`mod.rs` 巨大単一構成の解消は完了）
 
 ---
 
