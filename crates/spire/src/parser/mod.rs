@@ -6,6 +6,7 @@ use crate::token::{Spanned, Token};
 mod chumsky_program;
 mod completion;
 mod context;
+mod diagnostic;
 mod error_map;
 mod pattern;
 mod syntax_token;
@@ -17,6 +18,10 @@ pub use completion::{
 };
 use context::{DeclLevel, ParseUnitKind, TopLevelDeclKind};
 pub use context::{ParseRules, ParserContext};
+pub use diagnostic::{
+    LspDiagnostic, LspDiagnosticSeverity, LspPosition, LspRange, LspRelatedInformation,
+    ParseDiagnostic,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryAnnotation {
@@ -33,6 +38,16 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
 pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
     chumsky_program::parse_program_with_chumsky(&tokens, context)
+}
+
+/// Parse Surtr source with parser diagnostic metadata for editor tooling.
+pub fn parse_with_context_diagnostic(
+    source: &str,
+    context: ParserContext,
+) -> Result<Vec<Ast>, ParseDiagnostic> {
+    let tokens = tokenize(source).map_err(ParseDiagnostic::from)?;
+    chumsky_program::parse_program_with_chumsky_diagnostic(&tokens, context)
+        .map_err(ParseDiagnostic::from)
 }
 
 /// Strip `@@test <expr>` annotations while preserving source span offsets.
