@@ -3,6 +3,8 @@ use crate::error::ParseError;
 use crate::lexer::tokenize;
 use crate::token::{Spanned, Token};
 
+mod chumsky_program;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclLevel {
     Top,
@@ -304,8 +306,7 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
 /// Parse Surtr source text with explicit compile-unit context.
 pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
-    let mut parser = Parser::new(tokens, context);
-    parser.parse_program()
+    chumsky_program::parse_program_with_chumsky(&tokens, context)
 }
 
 struct Parser {
@@ -468,23 +469,6 @@ impl Parser {
         let end = self.peek_span().end;
         self.advance();
         Ok(Span { start, end })
-    }
-
-    // ── Program ──
-
-    fn parse_program(&mut self) -> Result<Vec<Ast>, ParseError> {
-        self.context.level = DeclLevel::Top;
-        let mut stmts = Vec::new();
-        self.skip_newlines();
-        while !matches!(self.peek(), Token::Eof) {
-            let stmt = self.parse_stmt()?;
-            self.ensure_stmt_boundary(&stmt, false)?;
-            stmts.push(stmt);
-            while matches!(self.peek(), Token::Newline) {
-                self.advance();
-            }
-        }
-        Ok(stmts)
     }
 
     // ── Statement ──
