@@ -1,0 +1,35 @@
+gen_iter = Generator::iterate(1, 5, {|x| x * 2})
+print(to_string(Generator::to_list(gen_iter)))
+
+gen_range = Generator::range(3, 6)
+print(to_string(Generator::to_list(gen_range)))
+
+gen_step =? Generator::range_step(7, 1, -2)
+print(to_string(Generator::to_list(gen_step)))
+print(to_string(Generator::range_step(1, 5, 0)))
+
+g0 = Generator::range(10, 12)
+r1 = Generator::next(g0)
+print(to_string(r1))
+(item1, g1) =? r1
+print(to_string(item1))
+print(to_string(Generator::idx(g1)))
+print(to_string(Generator::next(g1)))
+
+indexed = Generator::with_index(Generator::range(5, 7))
+print(to_string(Generator::to_list(indexed)))
+
+mapped = Generator::map(Generator::range(1, 4), {|x| "n=" ++ to_string(x) })
+print(to_string(Generator::to_list(mapped)))
+
+print(to_string(Generator::take(Generator::iterate(1, 10, {|x| x * 2}), 4)))
+print(to_string(Generator::take(Generator::range(1, 3), 0)))
+
+chars_up =? Generator::range_char_step("a", "g", 2)
+print(to_string(Generator::to_list(chars_up)))
+
+chars_down =? Generator::range_char_step("g", "a", -2)
+print(to_string(Generator::to_list(chars_down)))
+
+print(to_string(Generator::range_char("ab", "d")))
+print(to_string(Generator::range_char("a", "d")))

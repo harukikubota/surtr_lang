@@ -73,6 +73,21 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(List<$A>) -> Int",
     },
     BuiltinMeta {
+        name: "gen_make",
+        arity: 2,
+        sig_str: "(Int, List<$Item>) -> Generator<$State, $Item>",
+    },
+    BuiltinMeta {
+        name: "gen_idx",
+        arity: 1,
+        sig_str: "(Generator<$State, $Item>) -> Int",
+    },
+    BuiltinMeta {
+        name: "gen_items",
+        arity: 1,
+        sig_str: "(Generator<$State, $Item>) -> List<$Item>",
+    },
+    BuiltinMeta {
         name: "bit_and",
         arity: 2,
         sig_str: "(Int, Int) -> Int",
@@ -382,6 +397,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     BuiltinTypeMeta {
         name: "HashMap",
         params: &["$V"],
+    },
+    BuiltinTypeMeta {
+        name: "Generator",
+        params: &["$State", "$Item"],
     },
     BuiltinTypeMeta {
         name: "Result",

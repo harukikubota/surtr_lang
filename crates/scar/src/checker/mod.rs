@@ -228,6 +228,33 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
                 ret: Box::new(Ty::Int),
             }
         }
+        "gen_make" => {
+            let state = env.fresh_tyvar();
+            let item = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Int, Ty::List(Box::new(item.clone()))],
+                ret: Box::new(Ty::Enum("Generator".into(), vec![state, item])),
+            }
+        }
+        "gen_idx" => {
+            let state = env.fresh_tyvar();
+            let item = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("Generator".into(), vec![state, item])],
+                ret: Box::new(Ty::Int),
+            }
+        }
+        "gen_items" => {
+            let state = env.fresh_tyvar();
+            let item = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("Generator".into(), vec![state, item.clone()])],
+                ret: Box::new(Ty::List(Box::new(item))),
+            }
+        }
         "group_count" => {
             let a = env.fresh_tyvar();
             Ty::BuiltinFunc {

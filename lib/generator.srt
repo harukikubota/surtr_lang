@@ -1,0 +1,245 @@
+@@doc """
+Standard `Generator` type declaration.
+`Generator<$State, $Item>` models a finite pull-based sequence whose cursor is
+tracked by `idx`.
+The concrete runtime representation is intentionally opaque to user code.
+"""
+@@builtin type Generator<$State, $Item>
+
+@@doc """
+Concrete generator-module error for invalid step values.
+"""
+deferror InvalidRangeStep(message: String) {
+  "#{message}"
+}
+
+@@doc """
+Concrete generator-module error for invalid character range inputs.
+"""
+deferror InvalidCharRange(message: String) {
+  "#{message}"
+}
+
+@@doc """
+Generator module.
+Provides finite sequence construction helpers and cursor-aware consumption
+operations.
+"""
+defmod Generator {
+  @@doc """
+  Internal runtime bridge: construct an opaque `Generator` from `(idx, items)`.
+  """
+  @@builtin def gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+
+  @@doc """
+  Internal runtime bridge: read the cursor (`idx`) from a generator handle.
+  """
+  @@builtin def gen_idx(gen: Generator<$State, $Item>) -> Int
+
+  @@doc """
+  Internal runtime bridge: read remaining items from a generator handle.
+  """
+  @@builtin def gen_items(gen: Generator<$State, $Item>) -> List<$Item>
+
+  defp _unfold_rev(
+    state: $UState,
+    next_idx: Int,
+    step: ($UState, Int -> Result<($UItem, $UState)>),
+    acc_rev: List<$UItem>,
+  ) -> List<$UItem> {
+    step_result = step(state, next_idx)
+    match step_result {
+      Ok(pair) => _unfold_rev(pair._1, next_idx + 1, step, [pair._0, ..acc_rev]),
+      Err(_) => acc_rev,
+    }
+  }
+
+  defp _with_index_rev(
+    values: List<$Item>,
+    next_idx: Int,
+    acc: List<(Int, $Item)>,
+  ) -> List<(Int, $Item)> {
+    match values {
+      [] => acc,
+      [head, ..tail] => _with_index_rev(tail, next_idx + 1, [(next_idx, head), ..acc]),
+    }
+  }
+
+  defp _reverse_indexed(values: List<(Int, $Item)>, acc: List<(Int, $Item)>) -> List<(Int, $Item)> {
+    match values {
+      [] => acc,
+      [head, ..tail] => _reverse_indexed(tail, [head, ..acc]),
+    }
+  }
+
+  defp _single_ascii_codepoint(value: String, label: String) -> Result<Int, InvalidCharRange> {
+    match String::codepoints(value, StringEncoding::Ascii) {
+      Ok(codepoints) => match codepoints {
+        [cp, ..tail] => match tail {
+          [] => Ok(cp),
+          [_, .._] => Err(InvalidCharRange("#{label} must be a single char")),
+        },
+        [] => Err(InvalidCharRange("#{label} must be a single char")),
+      },
+      Err(_) => Err(InvalidCharRange("#{label} must be a single ASCII char")),
+    }
+  }
+
+  defp _ascii_codepoint_to_char(cp: Int) -> Result<String, InvalidCharRange> {
+    match String::from_codepoints([cp], StringEncoding::Ascii) {
+      Ok(value) => Ok(value),
+      Err(_) => Err(InvalidCharRange("codepoint out of ASCII range")),
+    }
+  }
+
+  defp _codepoints_to_chars(values: List<Int>) -> Result<List<String>, InvalidCharRange> {
+    match values {
+      [] => Ok([]),
+      [head, ..tail] => {
+        head_char =? _ascii_codepoint_to_char(head)
+        tail_chars =? _codepoints_to_chars(tail)
+        Ok([head_char, ..tail_chars])
+      },
+    }
+  }
+
+  @@doc """
+  Build a generator from an initial state and step function.
+  `step(state, idx)` returns:
+  - `Ok((item, next_state))` to emit one value and continue
+  - `Err(NoneError)` to stop
+  """
+  def unfold<$UState, $UItem>(
+    state: $UState,
+    step: ($UState, Int -> Result<($UItem, $UState)>),
+  ) -> Generator<$UState, $UItem> {
+    gen_make(0, List::reverse(_unfold_rev(state, 0, step, [])))
+  }
+
+  @@doc """
+  Consume one item and return `(item, next_generator)`.
+  """
+  def next<$State, $Item>(
+    gen: Generator<$State, $Item>,
+  ) -> Result<($Item, Generator<$State, $Item>), NoneError> {
+    current_idx = idx(gen)
+    match to_list(gen) {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok((head, gen_make(current_idx + 1, tail))),
+    }
+  }
+
+  @@doc """
+  Return the index of the next element to be emitted.
+  """
+  def idx<$State, $Item>(gen: Generator<$State, $Item>) -> Int {
+    gen_idx(gen)
+  }
+
+  @@doc """
+  Attach an index to each remaining element.
+  """
+  def with_index<$State, $Item>(
+    gen: Generator<$State, $Item>,
+  ) -> Generator<$State, (Int, $Item)> {
+    start_idx = idx(gen)
+    indexed_rev = _with_index_rev(to_list(gen), start_idx, [])
+    gen_make(start_idx, _reverse_indexed(indexed_rev, []))
+  }
+
+  @@doc """
+  Transform only the item values while preserving generator progress.
+  """
+  def map<$State, $A, $B>(
+    gen: Generator<$State, $A>,
+    f: ($A -> $B),
+  ) -> Generator<$State, $B> {
+    gen_make(idx(gen), List::map(to_list(gen), f))
+  }
+
+  @@doc """
+  Take up to `count` items from the current generator position.
+  `count <= 0` returns `[]`.
+  """
+  def take<$State, $Item>(gen: Generator<$State, $Item>, count: Int) -> List<$Item> {
+    List::take(to_list(gen), count)
+  }
+
+  @@doc """
+  Materialize all remaining items as a list.
+  """
+  def to_list<$State, $Item>(gen: Generator<$State, $Item>) -> List<$Item> {
+    gen_items(gen)
+  }
+
+  @@doc """
+  Build a finite generator by repeatedly applying `step` to the previous value.
+  The first emitted value is `seed`.
+  """
+  def iterate<$A>(seed: $A, count: Int, step: ($A -> $A)) -> Generator<$A, $A> {
+    unfold(seed, {|current, emitted|
+      if(emitted < count, Ok((current, step(current))), Err(NoneError))
+    })
+  }
+
+  @@doc """
+  Inclusive ascending integer range with unit step.
+  """
+  def range(start: Int, stop: Int) -> Generator<Int, Int> {
+    unfold(start, {|current, _idx|
+      if(current <= stop, Ok((current, current + 1)), Err(NoneError))
+    })
+  }
+
+  @@doc """
+  Inclusive integer range with explicit step.
+  - `step > 0`: ascending
+  - `step < 0`: descending
+  - `step == 0`: `Err(InvalidRangeStep(...))`
+  """
+  def range_step(start: Int, stop: Int, step: Int) -> Result<Generator<Int, Int>, Error> {
+    if(
+      step == 0,
+      Err(InvalidRangeStep("step must not be 0")),
+      Ok(
+        unfold(start, {|current, _idx|
+          if(
+            step > 0,
+            if(current <= stop, Ok((current, current + step)), Err(NoneError)),
+            if(current >= stop, Ok((current, current + step)), Err(NoneError)),
+          )
+        }),
+      ),
+    )
+  }
+
+  @@doc """
+  Inclusive character range helper.
+  Characters are validated as single ASCII chars for now.
+  """
+  def range_char(start: String, stop: String) -> Result<Generator<String, String>, Error> {
+    range_char_step(start, stop, 1)
+  }
+
+  @@doc """
+  Inclusive character range with explicit step.
+  `step == 0` returns `Err(InvalidRangeStep(...))`.
+  """
+  def range_char_step(
+    start: String,
+    stop: String,
+    step: Int,
+  ) -> Result<Generator<String, String>, Error> {
+    if(
+      step == 0,
+      Err(InvalidRangeStep("step must not be 0")),
+      {
+        start_cp =? _single_ascii_codepoint(start, "start")
+        stop_cp =? _single_ascii_codepoint(stop, "stop")
+        base =? range_step(start_cp, stop_cp, step)
+        chars =? _codepoints_to_chars(to_list(base))
+        Ok(gen_make(idx(base), chars))
+      },
+    )
+  }
+}

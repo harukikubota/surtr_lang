@@ -47,6 +47,15 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_list_len,
     },
     BuiltinImpl {
+        func: builtin_gen_make,
+    },
+    BuiltinImpl {
+        func: builtin_gen_idx,
+    },
+    BuiltinImpl {
+        func: builtin_gen_items,
+    },
+    BuiltinImpl {
         func: builtin_bit_and,
     },
     BuiltinImpl {
@@ -383,6 +392,32 @@ fn builtin_list_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
         return Err(RuntimeError::new("len expects List as first argument"));
     };
     Ok(Value::Int(list.len.into()))
+}
+
+fn builtin_gen_make(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Int(idx) = &args[0] else {
+        return Err(RuntimeError::new("gen_make expects Int as first argument"));
+    };
+    let Value::List(items) = &args[1] else {
+        return Err(RuntimeError::new(
+            "gen_make expects List as second argument",
+        ));
+    };
+
+    Ok(Value::Tuple(vec![
+        Value::Int(idx.clone()),
+        Value::List(items.clone()),
+    ]))
+}
+
+fn builtin_gen_idx(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (idx, _) = decode_generator_arg(&args[0], "gen_idx", "gen")?;
+    Ok(Value::Int(idx.clone()))
+}
+
+fn builtin_gen_items(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (_, items) = decode_generator_arg(&args[0], "gen_items", "gen")?;
+    Ok(Value::List(items.clone()))
 }
 
 fn builtin_bit_and(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1252,6 +1287,41 @@ fn decode_hash_map_arg<'a>(
     }
 }
 
+fn decode_generator_arg<'a>(
+    value: &'a Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<(&'a SurtrInt, &'a ListHandle), RuntimeError> {
+    let Value::Tuple(items) = value else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects Generator as {arg_name}, got {:?}",
+            value
+        )));
+    };
+
+    let [idx, tail] = items.as_slice() else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects Generator tuple payload as {arg_name}, got arity {}",
+            items.len()
+        )));
+    };
+
+    let Value::Int(idx) = idx else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects Generator idx as Int for {arg_name}, got {:?}",
+            idx
+        )));
+    };
+    let Value::List(tail) = tail else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects Generator items as List for {arg_name}, got {:?}",
+            tail
+        )));
+    };
+
+    Ok((idx, tail))
+}
+
 fn decode_string_arg<'a>(
     value: &'a Value,
     builtin_name: &str,
@@ -1573,6 +1643,7 @@ mod tests {
             include_str!("../../../lib/kernel.srt"),
             include_str!("../../../lib/int.srt"),
             include_str!("../../../lib/list.srt"),
+            include_str!("../../../lib/generator.srt"),
             include_str!("../../../lib/hash_map.srt"),
             include_str!("../../../lib/result.srt"),
             include_str!("../../../lib/lens.srt"),
@@ -1780,8 +1851,12 @@ mod tests {
     #[test]
     fn safe_mod_returns_zero_division_error_result() {
         let mut vm = test_vm();
-        let value = call_builtin(&mut vm, 4, vec![Value::Int(int(10)), Value::Int(int(0))])
-            .expect("safe_mod should return Result");
+        let value = call_builtin(
+            &mut vm,
+            builtin_id("safe_mod"),
+            vec![Value::Int(int(10)), Value::Int(int(0))],
+        )
+        .expect("safe_mod should return Result");
         match value {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
@@ -1797,16 +1872,24 @@ mod tests {
     #[test]
     fn safe_mod_rejects_non_int_arguments() {
         let mut vm = test_vm();
-        let err = call_builtin(&mut vm, 4, vec![Value::Bool(true), Value::Int(int(1))])
-            .expect_err("safe_mod must reject non-int inputs");
+        let err = call_builtin(
+            &mut vm,
+            builtin_id("safe_mod"),
+            vec![Value::Bool(true), Value::Int(int(1))],
+        )
+        .expect_err("safe_mod must reject non-int inputs");
         assert!(err.message.contains("safe_mod expects (Int, Int)"));
     }
 
     #[test]
     fn shl_returns_result_and_negative_shift_error() {
         let mut vm = test_vm();
-        let ok = call_builtin(&mut vm, 7, vec![Value::Int(int(2)), Value::Int(int(3))])
-            .expect("shl should return Result");
+        let ok = call_builtin(
+            &mut vm,
+            builtin_id("shl"),
+            vec![Value::Int(int(2)), Value::Int(int(3))],
+        )
+        .expect("shl should return Result");
         match ok {
             Value::Tagged { tag: 0, fields } => {
                 assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(16)));
@@ -1814,8 +1897,12 @@ mod tests {
             other => panic!("expected Ok result, got {:?}", other),
         }
 
-        let err = call_builtin(&mut vm, 7, vec![Value::Int(int(2)), Value::Int(int(-1))])
-            .expect("negative shl should still return Result");
+        let err = call_builtin(
+            &mut vm,
+            builtin_id("shl"),
+            vec![Value::Int(int(2)), Value::Int(int(-1))],
+        )
+        .expect("negative shl should still return Result");
         match err {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
@@ -1831,8 +1918,12 @@ mod tests {
     #[test]
     fn shr_returns_result_and_negative_shift_error() {
         let mut vm = test_vm();
-        let ok = call_builtin(&mut vm, 8, vec![Value::Int(int(16)), Value::Int(int(2))])
-            .expect("shr should return Result");
+        let ok = call_builtin(
+            &mut vm,
+            builtin_id("shr"),
+            vec![Value::Int(int(16)), Value::Int(int(2))],
+        )
+        .expect("shr should return Result");
         match ok {
             Value::Tagged { tag: 0, fields } => {
                 assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(4)));
@@ -1840,8 +1931,12 @@ mod tests {
             other => panic!("expected Ok result, got {:?}", other),
         }
 
-        let err = call_builtin(&mut vm, 8, vec![Value::Int(int(2)), Value::Int(int(-1))])
-            .expect("negative shr should still return Result");
+        let err = call_builtin(
+            &mut vm,
+            builtin_id("shr"),
+            vec![Value::Int(int(2)), Value::Int(int(-1))],
+        )
+        .expect("negative shr should still return Result");
         match err {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
@@ -1858,20 +1953,32 @@ mod tests {
     fn bitwise_builtins_execute_on_ints() {
         let mut vm = test_vm();
 
-        let bit_and = call_builtin(&mut vm, 10, vec![Value::Int(int(6)), Value::Int(int(3))])
-            .expect("bit_and should succeed");
+        let bit_and = call_builtin(
+            &mut vm,
+            builtin_id("bit_and"),
+            vec![Value::Int(int(6)), Value::Int(int(3))],
+        )
+        .expect("bit_and should succeed");
         assert_eq!(bit_and, Value::Int(int(2)));
 
-        let bit_or = call_builtin(&mut vm, 11, vec![Value::Int(int(6)), Value::Int(int(3))])
-            .expect("bit_or should succeed");
+        let bit_or = call_builtin(
+            &mut vm,
+            builtin_id("bit_or"),
+            vec![Value::Int(int(6)), Value::Int(int(3))],
+        )
+        .expect("bit_or should succeed");
         assert_eq!(bit_or, Value::Int(int(7)));
 
-        let bit_xor = call_builtin(&mut vm, 12, vec![Value::Int(int(6)), Value::Int(int(3))])
-            .expect("bit_xor should succeed");
+        let bit_xor = call_builtin(
+            &mut vm,
+            builtin_id("bit_xor"),
+            vec![Value::Int(int(6)), Value::Int(int(3))],
+        )
+        .expect("bit_xor should succeed");
         assert_eq!(bit_xor, Value::Int(int(5)));
 
-        let bit_not =
-            call_builtin(&mut vm, 13, vec![Value::Int(int(6))]).expect("bit_not should succeed");
+        let bit_not = call_builtin(&mut vm, builtin_id("bit_not"), vec![Value::Int(int(6))])
+            .expect("bit_not should succeed");
         assert_eq!(bit_not, Value::Int(int(-7)));
     }
 
@@ -1879,8 +1986,12 @@ mod tests {
     fn bit_index_helpers_return_results_and_negative_index_errors() {
         let mut vm = test_vm();
 
-        let tested = call_builtin(&mut vm, 14, vec![Value::Int(int(5)), Value::Int(int(2))])
-            .expect("test_bit should return Result");
+        let tested = call_builtin(
+            &mut vm,
+            builtin_id("test_bit"),
+            vec![Value::Int(int(5)), Value::Int(int(2))],
+        )
+        .expect("test_bit should return Result");
         match tested {
             Value::Tagged { tag: 0, fields } => {
                 assert!(matches!(fields.first(), Some(Value::Bool(true))));
@@ -1888,8 +1999,12 @@ mod tests {
             other => panic!("expected Ok result, got {:?}", other),
         }
 
-        let negative = call_builtin(&mut vm, 14, vec![Value::Int(int(5)), Value::Int(int(-1))])
-            .expect("negative test_bit should still return Result");
+        let negative = call_builtin(
+            &mut vm,
+            builtin_id("test_bit"),
+            vec![Value::Int(int(5)), Value::Int(int(-1))],
+        )
+        .expect("negative test_bit should still return Result");
         match negative {
             Value::Tagged { tag: 1, fields } => match fields.first() {
                 Some(Value::Error(rich)) => {
@@ -1901,8 +2016,12 @@ mod tests {
             other => panic!("expected Err result, got {:?}", other),
         }
 
-        let set = call_builtin(&mut vm, 15, vec![Value::Int(int(0)), Value::Int(int(1))])
-            .expect("set_bit should return Result");
+        let set = call_builtin(
+            &mut vm,
+            builtin_id("set_bit"),
+            vec![Value::Int(int(0)), Value::Int(int(1))],
+        )
+        .expect("set_bit should return Result");
         match set {
             Value::Tagged { tag: 0, fields } => {
                 assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(2)));
@@ -1910,8 +2029,12 @@ mod tests {
             other => panic!("expected Ok result, got {:?}", other),
         }
 
-        let cleared = call_builtin(&mut vm, 16, vec![Value::Int(int(7)), Value::Int(int(1))])
-            .expect("clear_bit should return Result");
+        let cleared = call_builtin(
+            &mut vm,
+            builtin_id("clear_bit"),
+            vec![Value::Int(int(7)), Value::Int(int(1))],
+        )
+        .expect("clear_bit should return Result");
         match cleared {
             Value::Tagged { tag: 0, fields } => {
                 assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(5)));
@@ -1919,8 +2042,12 @@ mod tests {
             other => panic!("expected Ok result, got {:?}", other),
         }
 
-        let toggled = call_builtin(&mut vm, 17, vec![Value::Int(int(5)), Value::Int(int(0))])
-            .expect("toggle_bit should return Result");
+        let toggled = call_builtin(
+            &mut vm,
+            builtin_id("toggle_bit"),
+            vec![Value::Int(int(5)), Value::Int(int(0))],
+        )
+        .expect("toggle_bit should return Result");
         match toggled {
             Value::Tagged { tag: 0, fields } => {
                 assert!(matches!(fields.first(), Some(Value::Int(value)) if *value == int(4)));
@@ -1939,7 +2066,7 @@ mod tests {
         }]);
         let value = call_builtin(
             &mut vm,
-            18,
+            builtin_id("codepoints"),
             vec![
                 Value::Str("Aあ".into()),
                 Value::Tagged {
@@ -1977,7 +2104,7 @@ mod tests {
         }]);
         let value = call_builtin(
             &mut vm,
-            19,
+            builtin_id("from_codepoints"),
             vec![
                 Value::List(ListHandle::from_items(vec![Value::Int(int(128))])),
                 Value::Tagged {
@@ -2004,7 +2131,7 @@ mod tests {
         let mut vm = test_vm();
         let value = call_builtin(
             &mut vm,
-            28,
+            builtin_id("group_count"),
             vec![Value::List(ListHandle::from_items(vec![
                 Value::Str("a".into()),
                 Value::Str("b".into()),
@@ -2040,7 +2167,7 @@ mod tests {
         let mut vm = test_vm();
         let value = call_builtin(
             &mut vm,
-            29,
+            builtin_id("zip"),
             vec![
                 Value::List(ListHandle::from_items(vec![
                     Value::Int(int(1)),

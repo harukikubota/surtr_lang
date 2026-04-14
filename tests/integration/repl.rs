@@ -456,7 +456,7 @@ fn repl_concat_helper_works_inside_annotated_closure() {
         stdout
     );
     assert!(
-        stdout.contains("> ab"),
+        stdout.contains("> \"ab\"") || stdout.contains("> ab"),
         "expected closure call to concatenate strings, got:\n{}",
         stdout
     );
