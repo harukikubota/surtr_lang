@@ -52,7 +52,7 @@ mod tests {
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             &strip_test_annotations(source),
-            spire::ParserContext::module(0, None).with_rules(spire::SourceRules::std_module()),
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
         .unwrap_or_else(|err| panic!("std module {fallback_module_path} should parse: {err:?}"));
 

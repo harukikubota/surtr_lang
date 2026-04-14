@@ -5,8 +5,8 @@ use sindr::builtin::{
     builtin_meta_by_name, builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS,
     BUILTIN_TYPE_METAS,
 };
+use sindr::policy::{ExitCodePolicy, RuntimeSourcePolicy};
 use spire::ast::{AstTy, BinOp, Lit, Span};
-use spire::{SetExitCodePolicy, SourceRules};
 
 use crate::env::{TypeEnv, TypeKind};
 use crate::error::TypeError;
@@ -85,14 +85,14 @@ pub fn typecheck_with_context(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckContext {
-    pub source_rules: SourceRules,
+    pub runtime_policy: RuntimeSourcePolicy,
     pub enforce_builtin_type_contracts: bool,
 }
 
 impl Default for TypecheckContext {
     fn default() -> Self {
         Self {
-            source_rules: SourceRules::script(),
+            runtime_policy: RuntimeSourcePolicy::script(),
             enforce_builtin_type_contracts: false,
         }
     }
@@ -543,7 +543,7 @@ struct Checker {
     function_ids_by_name: HashMap<String, ResolvedId>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
-    source_rules: SourceRules,
+    runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     traits: HashMap<String, TraitInfo>,
@@ -565,7 +565,7 @@ impl Checker {
             function_ids_by_name: HashMap::new(),
             substitutions: HashMap::new(),
             tyvar_bounds: HashMap::new(),
-            source_rules: context.source_rules,
+            runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             seen_builtin_type_decls: HashMap::new(),
             traits: HashMap::new(),
@@ -597,7 +597,7 @@ impl Checker {
             function_ids_by_name,
             substitutions: HashMap::new(),
             tyvar_bounds,
-            source_rules: context.source_rules,
+            runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             seen_builtin_type_decls: HashMap::new(),
             traits,
@@ -617,7 +617,7 @@ impl Checker {
             self.trait_methods_by_qualified_name.clone(),
             self.tyvar_bounds.clone(),
             TypecheckContext {
-                source_rules: self.source_rules.clone(),
+                runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
             },
         );

@@ -2,13 +2,8 @@ use super::*;
 use sindr::primitives::int;
 use spire::ast::{AstTy, BinOp, Lit};
 
-fn permissive_module_rules() -> spire::SourceRules {
-    spire::SourceRules {
-        allow_top_level_expr: false,
-        allowed_top_level_decl_kinds: spire::TopLevelDeclPolicy::Any,
-        set_exit_code_policy: spire::SetExitCodePolicy::Forbidden,
-        normalized_entrypoint: None,
-    }
+fn permissive_module_rules() -> spire::ParseRules {
+    spire::ParseRules::permissive_for_tests()
 }
 
 fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
@@ -526,7 +521,7 @@ fn test_builtin_decl_resolution() {
     let ast = spire::parse_with_context(
         "@@builtin def print(a: String) -> Unit",
         spire::ParserContext::module(0, Some("Bootstrap".into()))
-            .with_rules(spire::SourceRules::std_module()),
+            .with_rules(spire::ParseRules::std_module()),
     )
     .expect("std module should parse builtin declarations");
     let mut resolver = Resolver::new();
@@ -553,7 +548,7 @@ fn test_builtin_type_decl_resolution() {
     let ast = spire::parse_with_context(
         "@@builtin type Int",
         spire::ParserContext::module(0, Some("Bootstrap".into()))
-            .with_rules(spire::SourceRules::std_module()),
+            .with_rules(spire::ParseRules::std_module()),
     )
     .expect("std module should parse builtin type declarations");
     let mut resolver = Resolver::new();

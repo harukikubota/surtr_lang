@@ -161,7 +161,7 @@ Surtr では、「何を読むか」と「どういう実行単位か」を分�
 - `Project`
 - `Repl`
 
-これを分けている理由は、同じ parser でも source の性質によって許可したい構文が違うためです。
+これを分けている理由は、parse 制約と runtime 制約の責務を分離するためです。
 
 例:
 
@@ -180,7 +180,12 @@ Surtr では、「何を読むか」と「どういう実行単位か」を分�
 
 つまり script / REPL は「module なし特例」ではなく、`defmod` を省略した実行形です。
 
-この方針を `SourceRules` に閉じ込めることで、個別の crate に ad-hoc な分岐を書き散らさずに済みます。
+この方針は次の2層へ分離して保持します。
+
+- `Spire::ParseRules`: `@@builtin` の許可範囲や top-level 構文許可を管理
+- `sindr::policy::RuntimeSourcePolicy`: `set_exit_code` の実行時制約（Anywhere / Forbidden / EntryOnly）を管理
+
+これにより parser 実装（`chumsky` 含む）を差し替えても、runtime policy を巻き込まずに保守できます。
 
 ## 6. builtin の設計
 

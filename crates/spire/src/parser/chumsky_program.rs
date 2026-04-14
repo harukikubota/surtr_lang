@@ -31,7 +31,10 @@ fn program_parser<'src>(
             let remaining: &[Spanned<Token>] = inp.slice_from(&before..);
 
             if remaining.is_empty() {
-                return Err(Rich::custom(inp.span_since(&before), "unexpected end of input"));
+                return Err(Rich::custom(
+                    inp.span_since(&before),
+                    "unexpected end of input",
+                ));
             }
 
             match &remaining[0].token {
@@ -43,10 +46,8 @@ fn program_parser<'src>(
                     break;
                 }
                 _ => {
-                    let (stmt, consumed) =
-                        parse_stmt_prefix(remaining, context.clone()).map_err(|err| {
-                            Rich::custom(inp.span_since(&before), err.message())
-                        })?;
+                    let (stmt, consumed) = parse_stmt_prefix(remaining, context.clone())
+                        .map_err(|err| Rich::custom(inp.span_since(&before), err.message()))?;
 
                     for _ in 0..consumed {
                         let _ = inp.next_ref();
@@ -79,7 +80,10 @@ fn parse_stmt_prefix(
     Ok((stmt, parser.pos.saturating_sub(synthetic_tokens)))
 }
 
-fn map_chumsky_error(tokens: &[Spanned<Token>], mut errs: Vec<Rich<'_, Spanned<Token>>>) -> ParseError {
+fn map_chumsky_error(
+    tokens: &[Spanned<Token>],
+    mut errs: Vec<Rich<'_, Spanned<Token>>>,
+) -> ParseError {
     let Some(err) = errs.pop() else {
         return ParseError::syntax("unknown parse error", fallback_span(tokens));
     };
@@ -105,7 +109,10 @@ fn map_input_span(tokens: &[Spanned<Token>], span: &SimpleSpan<usize>) -> Span {
     }
 
     let start_idx = span.start.min(tokens.len().saturating_sub(1));
-    let end_idx = span.end.saturating_sub(1).min(tokens.len().saturating_sub(1));
+    let end_idx = span
+        .end
+        .saturating_sub(1)
+        .min(tokens.len().saturating_sub(1));
 
     let start = tokens[start_idx].span.start;
     let end = if span.end == 0 {

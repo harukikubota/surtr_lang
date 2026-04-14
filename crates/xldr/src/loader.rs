@@ -325,12 +325,12 @@ pub fn derive_primary_module_path(source: &str) -> Option<String> {
     let stripped = crate::strip_test_annotations(source);
     let ast = spire::parse_with_context(
         &stripped,
-        spire::ParserContext::module(0, None).with_rules(spire::SourceRules::module()),
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
     )
     .or_else(|_| {
         spire::parse_with_context(
             &stripped,
-            spire::ParserContext::module(0, None).with_rules(spire::SourceRules::std_module()),
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
     })
     .ok()?;

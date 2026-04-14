@@ -481,7 +481,7 @@ impl Checker {
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
         let is_entrypoint = self
-            .source_rules
+            .runtime_policy
             .normalized_entrypoint
             .as_deref()
             .is_some_and(|entry| entry == current_symbol);
@@ -499,7 +499,7 @@ impl Checker {
             if !Self::is_main_result_unit_ty(&expected_ret) {
                 let legacy_main = current_symbol == "main"
                     && self
-                        .source_rules
+                        .runtime_policy
                         .normalized_entrypoint
                         .as_deref()
                         .is_some_and(|entry| entry == "main");

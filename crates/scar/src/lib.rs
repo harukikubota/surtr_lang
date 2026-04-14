@@ -13,8 +13,8 @@ mod tests {
     use super::{typecheck, typecheck_with_context, ScarSession, TypecheckContext};
     use crate::typed::TypedNode;
     use crate::typed::{TypedInner, TypedLensSegment};
+    use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
     use spire::ast::Ast;
-    use spire::{EntryPoint, SetExitCodePolicy, SourceRules};
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
@@ -51,7 +51,7 @@ mod tests {
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             &strip_test_annotations(source),
-            spire::ParserContext::module(0, None).with_rules(SourceRules::std_module()),
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
         .expect("std module should parse");
 
@@ -238,13 +238,13 @@ mod tests {
 
     fn typecheck_with_rules(
         source: &str,
-        source_rules: SourceRules,
+        runtime_policy: RuntimeSourcePolicy,
     ) -> Result<Vec<TypedNode>, crate::error::TypeError> {
         let resolved = resolve_with_builtin_prelude(source);
         typecheck_with_context(
             resolved,
             TypecheckContext {
-                source_rules,
+                runtime_policy,
                 enforce_builtin_type_contracts: false,
             },
         )
@@ -262,7 +262,7 @@ mod tests {
         typecheck_with_context(
             resolved,
             TypecheckContext {
-                source_rules: SourceRules::std_module(),
+                runtime_policy: RuntimeSourcePolicy::std_module(),
                 enforce_builtin_type_contracts: true,
             },
         )
@@ -533,7 +533,7 @@ expr.Add"#,
 }
 expr = Expr::Add(1, 2)
 expr.add"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("lowercase variant selector should fail");
         assert!(err.message.contains("No variant selector 'add'"));
@@ -556,7 +556,7 @@ Lens::view(Lens::compose(User.profile, Profile.name), user)"#,
             r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
 Lens::compose(Profile.name, User.profile)"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("mismatched compose should fail");
         assert!(err.message.contains("Lens::compose source/focus mismatch"));
@@ -599,7 +599,7 @@ Lens::over(User.name, user, {|name| Ok(name)})"#,
             r#"defrecord User(name: String)
 user = User("alice")
 Lens::over(User.name, user, {|name| name})"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("non-Result update function should fail");
         assert!(err
@@ -654,7 +654,7 @@ Lens::view(Lens::compose(User.pair, Tuple._0), user)"#,
 
     #[test]
     fn lens_tuple_type_root_without_context_is_rejected() {
-        let err = typecheck_with_rules("Tuple._0", SourceRules::script())
+        let err = typecheck_with_rules("Tuple._0", RuntimeSourcePolicy::script())
             .expect_err("Tuple._0 without context should fail");
         assert!(err.message.contains("requires Lens type context"));
     }
@@ -666,7 +666,7 @@ Lens::view(Lens::compose(User.pair, Tuple._0), user)"#,
 lens = User.name
 getter = {|user| Lens::view(lens, user)}
 getter(User("alice"))"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("capturing Lens value should fail");
         assert!(err.message.contains("cannot be captured by closures"));
@@ -677,7 +677,7 @@ getter(User("alice"))"#,
         let tuple_err = typecheck_with_rules(
             r#"defrecord User(name: String)
 (User.name, 1)"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("tuple literal should reject lens");
         assert!(tuple_err
@@ -687,7 +687,7 @@ getter(User("alice"))"#,
         let list_err = typecheck_with_rules(
             r#"defrecord User(name: String)
 [User.name, User.name]"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("list literal should reject lens");
         assert!(list_err
@@ -697,7 +697,7 @@ getter(User("alice"))"#,
         let ok_err = typecheck_with_rules(
             r#"defrecord User(name: String)
 Ok(User.name)"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("result constructors should reject lens");
         assert!(ok_err
@@ -710,7 +710,7 @@ Ok(User.name)"#,
         let param_err = typecheck_with_rules(
             r#"defrecord User(name: String)
 def bad(values: List<Lens<User, String>>) -> Unit { () }"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("nested lens in parameter type should fail");
         assert!(param_err
@@ -720,7 +720,7 @@ def bad(values: List<Lens<User, String>>) -> Unit { () }"#,
         let ret_err = typecheck_with_rules(
             r#"defrecord User(name: String)
 def bad() -> List<Lens<User, String>> { [] }"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("nested lens in return type should fail");
         assert!(ret_err
@@ -758,7 +758,7 @@ impl User {
   }
 }
 User.password"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("private capability root should fail");
         assert!(err.message.contains("Field 'User.password' is private"));
@@ -778,7 +778,7 @@ impl User {
 }
 user = User("alice", "s3cr3t")
 {|| user.password}"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("private value access inside closure should fail");
         assert!(err
@@ -844,7 +844,7 @@ impl User {
 reader = {|user: User| user.password}
 user = User("alice", "s3cr3t")
 reader(user)"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("private value access inside closure parameter should fail");
         assert!(
@@ -868,7 +868,7 @@ impl User {
 }
 user = User("alice", "s3cr3t")
 Lens::view(User.password, user)"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("private capability root in Lens::view should fail");
         assert!(err.message.contains("Field 'User.password' is private"));
@@ -893,7 +893,7 @@ reader()"#,
         let arg_err = typecheck_with_rules(
             r#"defrecord User(name: String)
 print(to_string(User.name))"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("passing Lens value as argument should fail");
         assert!(arg_err.message.contains("cannot accept Lens values"));
@@ -903,7 +903,7 @@ print(to_string(User.name))"#,
 def bad() -> Lens<User, String> {
   User.name
 }"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("returning Lens value should fail");
         assert!(return_err
@@ -917,7 +917,7 @@ def consume(value: String) -> String {
 }
 lens = User.name
 consume(lens)"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("passing Lens binding as runtime function argument should fail");
         assert!(
@@ -1165,8 +1165,8 @@ print(to_string(v))"#,
 
     #[test]
     fn set_exit_code_is_allowed_in_script_rules() {
-        let typed =
-            typecheck_with_rules("set_exit_code(9)", SourceRules::script()).expect("must pass");
+        let typed = typecheck_with_rules("set_exit_code(9)", RuntimeSourcePolicy::script())
+            .expect("must pass");
         assert!(matches!(
             typed.last().map(|node| &node.node),
             Some(TypedInner::App(_, _))
@@ -1175,7 +1175,7 @@ print(to_string(v))"#,
 
     #[test]
     fn set_exit_code_is_forbidden_in_repl_chunk_rules() {
-        let err = typecheck_with_rules("set_exit_code(9)", SourceRules::repl_chunk())
+        let err = typecheck_with_rules("set_exit_code(9)", RuntimeSourcePolicy::repl_chunk())
             .expect_err("must fail");
         assert!(err.message.contains("forbidden by source policy"));
     }
@@ -1183,8 +1183,8 @@ print(to_string(v))"#,
     #[test]
     fn set_exit_code_entry_only_policy_allows_only_entrypoint_function() {
         let entrypoint = EntryPoint::qualified("main");
-        let rules = SourceRules::module()
-            .with_set_exit_code_policy(SetExitCodePolicy::EntryOnly, Some(&entrypoint));
+        let rules = RuntimeSourcePolicy::module()
+            .with_exit_code_policy(ExitCodePolicy::EntryOnly, Some(&entrypoint));
 
         let ok = typecheck_with_rules(
             r#"def main() -> Result<()> {
@@ -1407,7 +1407,7 @@ guard = ensure(4, &is_even, NoneError)"#,
         let err = typecheck_with_rules(
             r#"def is_even() -> (Int -> Boolean) { {|n| Int::is_even(n) } }
 guard = ensure(4, is_even(), NoneError)"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("call expression predicate must fail");
         assert!(err.message.contains("ensure requires a closure or capture"));
@@ -1424,7 +1424,7 @@ def make_error(flag: Boolean) -> Error {
 }
 
 guard = assert(False, make_error(True))"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("plain Error expression must fail");
         assert!(err
@@ -1955,7 +1955,7 @@ b = double(1.5)"#,
             .typecheck_with_context(
                 std_resolved,
                 TypecheckContext {
-                    source_rules: SourceRules::std_module(),
+                    runtime_policy: RuntimeSourcePolicy::std_module(),
                     enforce_builtin_type_contracts: true,
                 },
             )

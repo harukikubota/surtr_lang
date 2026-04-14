@@ -1,5 +1,6 @@
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use forge::bytecode::line_column_for_offset;
+use sindr::policy::CompileUnitKind;
 
 pub(crate) type RuneResult<T> = Result<T, RuneError>;
 
@@ -39,10 +40,10 @@ impl ExecutionEnv {
         }
     }
 
-    pub(crate) fn compile_unit_kind(self) -> spire::CompileUnitKind {
+    pub(crate) fn compile_unit_kind(self) -> CompileUnitKind {
         match self {
-            Self::Repl => spire::CompileUnitKind::Repl,
-            _ => spire::CompileUnitKind::Script,
+            Self::Repl => CompileUnitKind::Repl,
+            _ => CompileUnitKind::Script,
         }
     }
 

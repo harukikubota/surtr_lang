@@ -2,8 +2,8 @@ use diagnostics::SourceRegistry;
 use forge::bytecode::{
     populate_error_template_lines, stable_hash_hex, synthesize_source_map, SourceFileEntry,
 };
+use sindr::policy::EntryPoint;
 use spire::ast::{Ast, Span};
-use spire::token::Token;
 
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
@@ -11,7 +11,7 @@ use crate::error::{ExecutionEnv, RuneError, RuneResult};
 pub(crate) struct ScriptCompilePlan {
     pub(crate) source_for_parse: String,
     pub(crate) selected_entry_name: Option<String>,
-    pub(crate) normalized_entrypoint: Option<spire::EntryPoint>,
+    pub(crate) normalized_entrypoint: Option<EntryPoint>,
 }
 
 impl ScriptCompilePlan {
@@ -22,12 +22,6 @@ impl ScriptCompilePlan {
             normalized_entrypoint: None,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct EntryAnnotation {
-    pub(crate) name: String,
-    pub(crate) span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,7 +91,6 @@ pub(crate) fn collect_default_script_compile_sources(
 fn parse_program_with_module_sources(
     env: ExecutionEnv,
     compile_sources: &xldr::CompileSources,
-    entrypoint: Option<&spire::EntryPoint>,
 ) -> RuneResult<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>)> {
     let compile_unit_kind = env.compile_unit_kind();
     let source_kind = env.source_kind();
@@ -118,11 +111,8 @@ fn parse_program_with_module_sources(
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = match spire::parse_with_context(
         user_source,
-        spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
-            compile_unit_kind,
-            source_kind,
-            entrypoint,
-        )),
+        spire::ParserContext::script(user_source_id.0)
+            .with_rules(xldr::derive_parse_rules(source_kind)),
     ) {
         Ok(ast) => ast,
         Err(script_err) => {
@@ -143,13 +133,8 @@ fn parse_program_with_module_sources(
 
             spire::parse_with_context(
                 user_source,
-                spire::ParserContext::module(user_source_id.0, None).with_rules(
-                    xldr::derive_source_rules(
-                        compile_unit_kind,
-                        xldr::SourceKind::Module,
-                        entrypoint,
-                    ),
-                ),
+                spire::ParserContext::module(user_source_id.0, None)
+                    .with_rules(xldr::derive_parse_rules(xldr::SourceKind::Module)),
             )
             .map_err(|e| {
                 RuneError::diagnostic(
@@ -221,11 +206,7 @@ pub(crate) fn compile_source(
     let user_source_id = compile_sources.user_source_id;
     let user_source = sources.source(user_source_id).unwrap_or("");
 
-    let (module_stages, mut user_ast) = parse_program_with_module_sources(
-        env,
-        compile_sources,
-        compile_plan.normalized_entrypoint.as_ref(),
-    )?;
+    let (module_stages, mut user_ast) = parse_program_with_module_sources(env, compile_sources)?;
     if let Some(entry_name) = compile_plan.selected_entry_name.as_deref() {
         user_ast = rewrite_script_ast_for_entry(user_ast, entry_name);
     }
@@ -264,7 +245,7 @@ pub(crate) fn compile_source(
     let typed = scar::typecheck_with_context(
         resolved,
         scar::TypecheckContext {
-            source_rules: xldr::derive_source_rules(
+            runtime_policy: xldr::derive_runtime_policy(
                 compile_unit_kind,
                 source_kind,
                 compile_plan.normalized_entrypoint.as_ref(),
@@ -345,7 +326,7 @@ pub(crate) fn prepare_script_compile_plan(
     source: &str,
     cli_entry: Option<&str>,
 ) -> Result<ScriptCompilePlan, ScriptPlanError> {
-    let source_without_tests = xldr::strip_test_annotations(source);
+    let source_without_tests = spire::strip_test_annotations(source);
     let (source_for_parse, annotations) = collect_entrypoint_annotations(&source_without_tests)?;
 
     if annotations.len() > 1 {
@@ -365,7 +346,7 @@ pub(crate) fn prepare_script_compile_plan(
     };
 
     let normalized_entrypoint = selected_entry_name.as_ref().map(|name| {
-        spire::EntryPoint::script_short_name(name, xldr::script_pseudo_module_path(file_path))
+        EntryPoint::script_short_name(name, xldr::script_pseudo_module_path(file_path))
     });
 
     Ok(ScriptCompilePlan {
@@ -377,59 +358,9 @@ pub(crate) fn prepare_script_compile_plan(
 
 pub(crate) fn collect_entrypoint_annotations(
     source: &str,
-) -> Result<(String, Vec<EntryAnnotation>), ScriptPlanError> {
-    let tokens = spire::lexer::tokenize(source)
-        .map_err(|e| ScriptPlanError::new(e.message().to_string(), e.span().clone()))?;
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut annotations = Vec::new();
-
-    let mut i = 0usize;
-    while i < tokens.len() {
-        let token = &tokens[i];
-        if let Token::Annotator(name) = &token.token {
-            if name == "entrypoint" {
-                erase_span(&mut chars, &token.span);
-                let mut j = i + 1;
-                while j < tokens.len() && matches!(tokens[j].token, Token::Newline) {
-                    j += 1;
-                }
-                if j >= tokens.len() || !matches!(tokens[j].token, Token::Def) {
-                    return Err(ScriptPlanError::new(
-                        "@@entrypoint must annotate a function definition (`def`)",
-                        token.span.clone(),
-                    ));
-                }
-                let mut k = j + 1;
-                while k < tokens.len() && matches!(tokens[k].token, Token::Newline) {
-                    k += 1;
-                }
-                let def_name = match tokens.get(k).map(|sp| &sp.token) {
-                    Some(Token::Ident(name)) => name.clone(),
-                    _ => {
-                        return Err(ScriptPlanError::new(
-                            "@@entrypoint must target `def <name>(...)`",
-                            tokens[j].span.clone(),
-                        ));
-                    }
-                };
-                annotations.push(EntryAnnotation {
-                    name: def_name,
-                    span: token.span.clone(),
-                });
-            }
-        }
-        i += 1;
-    }
-
-    Ok((chars.into_iter().collect::<String>(), annotations))
-}
-
-fn erase_span(chars: &mut [char], span: &Span) {
-    for ch in chars.iter_mut().take(span.end).skip(span.start) {
-        if *ch != '\n' {
-            *ch = ' ';
-        }
-    }
+) -> Result<(String, Vec<spire::EntryAnnotation>), ScriptPlanError> {
+    spire::collect_entrypoint_annotations(source)
+        .map_err(|e| ScriptPlanError::new(e.message().to_string(), e.span().clone()))
 }
 
 fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast> {
@@ -501,7 +432,7 @@ mod tests {
     x + y
   }
 }"#,
-            spire::ParserContext::module(0, None).with_rules(spire::SourceRules::module()),
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
         )
         .expect("module source should parse");
 

@@ -2224,13 +2224,13 @@ impl Checker {
                 self.ensure_no_runtime_lens_args(&typed_args, span, name)?;
 
                 if name == "set_exit_code" {
-                    match self.source_rules.set_exit_code_policy {
-                        SetExitCodePolicy::Anywhere => {}
-                        SetExitCodePolicy::Forbidden => {
+                    match self.runtime_policy.exit_code_policy {
+                        ExitCodePolicy::Anywhere => {}
+                        ExitCodePolicy::Forbidden => {
                             return Err(TypeError {
                                 message: format!(
                                     "set_exit_code is forbidden by source policy ({})",
-                                    self.source_rules.set_exit_code_policy.as_str()
+                                    self.runtime_policy.exit_code_policy.as_str()
                                 ),
                                 span: span.clone(),
                                 hint: Some(
@@ -2239,8 +2239,9 @@ impl Checker {
                                 ),
                             });
                         }
-                        SetExitCodePolicy::EntryOnly => {
-                            let Some(entrypoint) = self.source_rules.normalized_entrypoint.as_ref()
+                        ExitCodePolicy::EntryOnly => {
+                            let Some(entrypoint) =
+                                self.runtime_policy.normalized_entrypoint.as_ref()
                             else {
                                 return Err(TypeError {
                                     message:
@@ -2258,7 +2259,7 @@ impl Checker {
                                     message: format!(
                                         "set_exit_code is only allowed inside entrypoint `{}` (policy: {})",
                                         entrypoint,
-                                        self.source_rules.set_exit_code_policy.as_str()
+                                        self.runtime_policy.exit_code_policy.as_str()
                                     ),
                                     span: span.clone(),
                                     hint: Some(

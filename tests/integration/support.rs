@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use forge::bytecode::{populate_error_template_lines, Bytecode};
-use spire::CompileUnitKind;
+use sindr::policy::{CompileUnitKind, RuntimeSourcePolicy};
 use xldr::{CompileSources, ModuleInput, ModuleSources, SourceKind};
 
 #[derive(Clone, Copy)]
@@ -108,11 +108,11 @@ fn compile_unit_kind_for_mode(mode: TestCompileMode) -> CompileUnitKind {
 
 fn typecheck_context_for_mode(mode: TestCompileMode) -> scar::TypecheckContext {
     scar::TypecheckContext {
-        source_rules: match mode {
+        runtime_policy: match mode {
             TestCompileMode::Script => {
-                xldr::derive_source_rules(CompileUnitKind::Script, SourceKind::Script, None)
+                xldr::derive_runtime_policy(CompileUnitKind::Script, SourceKind::Script, None)
             }
-            TestCompileMode::Project => spire::SourceRules::project(),
+            TestCompileMode::Project => RuntimeSourcePolicy::project(),
         },
         enforce_builtin_type_contracts: true,
     }
@@ -126,11 +126,8 @@ fn parse_user_source(
     let user_ast = match mode {
         TestCompileMode::Script => spire::parse_with_context(
             source,
-            spire::ParserContext::script(0).with_rules(xldr::derive_source_rules(
-                CompileUnitKind::Script,
-                SourceKind::Script,
-                None,
-            )),
+            spire::ParserContext::script(0)
+                .with_rules(xldr::derive_parse_rules(SourceKind::Script)),
         ),
         TestCompileMode::Project => {
             spire::parse_with_context(source, spire::ParserContext::project(0))

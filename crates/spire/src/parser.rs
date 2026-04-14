@@ -6,62 +6,21 @@ use crate::token::{Spanned, Token};
 mod chumsky_program;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeclLevel {
+enum DeclLevel {
     Top,
     Expr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompileUnitKind {
+enum ParseUnitKind {
     Script,
     Module,
     Project,
     Repl,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntryPoint {
-    pub qualified_symbol: String,
-}
-
-impl EntryPoint {
-    pub fn qualified(qualified_symbol: impl Into<String>) -> Self {
-        Self {
-            qualified_symbol: qualified_symbol.into(),
-        }
-    }
-
-    pub fn script_short_name(
-        short_name: impl AsRef<str>,
-        pseudo_module_path: impl AsRef<str>,
-    ) -> Self {
-        Self::qualified(format!(
-            "{}::{}",
-            pseudo_module_path.as_ref(),
-            short_name.as_ref()
-        ))
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetExitCodePolicy {
-    Forbidden,
-    Anywhere,
-    EntryOnly,
-}
-
-impl SetExitCodePolicy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Forbidden => "Forbidden",
-            Self::Anywhere => "Anywhere",
-            Self::EntryOnly => "EntryOnly",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TopLevelDeclKind {
+enum TopLevelDeclKind {
     Def,
     ExtractorDef,
     Defmod,
@@ -79,7 +38,7 @@ pub enum TopLevelDeclKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TopLevelDeclPolicy {
+enum TopLevelDeclPolicy {
     Any,
     Only(Vec<TopLevelDeclKind>),
 }
@@ -94,14 +53,12 @@ impl TopLevelDeclPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceRules {
-    pub allow_top_level_expr: bool,
-    pub allowed_top_level_decl_kinds: TopLevelDeclPolicy,
-    pub set_exit_code_policy: SetExitCodePolicy,
-    pub normalized_entrypoint: Option<String>,
+pub struct ParseRules {
+    allow_top_level_expr: bool,
+    allowed_top_level_decl_kinds: TopLevelDeclPolicy,
 }
 
-impl SourceRules {
+impl ParseRules {
     pub fn script() -> Self {
         Self {
             allow_top_level_expr: true,
@@ -109,8 +66,6 @@ impl SourceRules {
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::Import,
             ]),
-            set_exit_code_policy: SetExitCodePolicy::Anywhere,
-            normalized_entrypoint: Some("main".to_string()),
         }
     }
 
@@ -136,8 +91,6 @@ impl SourceRules {
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
             ]),
-            set_exit_code_policy: SetExitCodePolicy::Forbidden,
-            normalized_entrypoint: None,
         }
     }
 
@@ -157,8 +110,6 @@ impl SourceRules {
                 TopLevelDeclKind::BuiltinDecl,
                 TopLevelDeclKind::BuiltinTypeDecl,
             ]),
-            set_exit_code_policy: SetExitCodePolicy::Forbidden,
-            normalized_entrypoint: None,
         }
     }
 
@@ -171,8 +122,6 @@ impl SourceRules {
                 TopLevelDeclKind::TraitDef,
                 TopLevelDeclKind::TraitImplDef,
             ]),
-            set_exit_code_policy: SetExitCodePolicy::Forbidden,
-            normalized_entrypoint: None,
         }
     }
 
@@ -188,8 +137,6 @@ impl SourceRules {
                 TopLevelDeclKind::BuiltinExtractorDecl,
                 TopLevelDeclKind::BuiltinTypeDecl,
             ]),
-            set_exit_code_policy: SetExitCodePolicy::Forbidden,
-            normalized_entrypoint: None,
         }
     }
 
@@ -200,8 +147,6 @@ impl SourceRules {
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::Import,
             ]),
-            set_exit_code_policy: SetExitCodePolicy::Forbidden,
-            normalized_entrypoint: None,
         }
     }
 
@@ -220,29 +165,24 @@ impl SourceRules {
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
             ]),
-            set_exit_code_policy: SetExitCodePolicy::Forbidden,
-            normalized_entrypoint: None,
         }
     }
 
-    pub fn with_set_exit_code_policy(
-        mut self,
-        policy: SetExitCodePolicy,
-        entrypoint: Option<&EntryPoint>,
-    ) -> Self {
-        self.set_exit_code_policy = policy;
-        self.normalized_entrypoint = entrypoint.map(|entry| entry.qualified_symbol.clone());
-        self
+    pub fn permissive_for_tests() -> Self {
+        Self {
+            allow_top_level_expr: false,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParserContext {
-    pub level: DeclLevel,
-    pub unit_kind: CompileUnitKind,
-    pub source_id: u32,
-    pub module_path: Option<String>,
-    pub source_rules: SourceRules,
+    level: DeclLevel,
+    unit_kind: ParseUnitKind,
+    source_id: u32,
+    module_path: Option<String>,
+    parse_rules: ParseRules,
 }
 
 impl Default for ParserContext {
@@ -255,47 +195,53 @@ impl ParserContext {
     pub fn script(source_id: u32) -> Self {
         Self {
             level: DeclLevel::Top,
-            unit_kind: CompileUnitKind::Script,
+            unit_kind: ParseUnitKind::Script,
             source_id,
             module_path: None,
-            source_rules: SourceRules::script(),
+            parse_rules: ParseRules::script(),
         }
     }
 
     pub fn module(source_id: u32, module_path: Option<String>) -> Self {
         Self {
             level: DeclLevel::Top,
-            unit_kind: CompileUnitKind::Module,
+            unit_kind: ParseUnitKind::Module,
             source_id,
             module_path,
-            source_rules: SourceRules::module_source(),
+            parse_rules: ParseRules::module_source(),
         }
     }
 
     pub fn repl(source_id: u32) -> Self {
         Self {
             level: DeclLevel::Top,
-            unit_kind: CompileUnitKind::Repl,
+            unit_kind: ParseUnitKind::Repl,
             source_id,
             module_path: None,
-            source_rules: SourceRules::repl_chunk(),
+            parse_rules: ParseRules::repl_chunk(),
         }
     }
 
     pub fn project(source_id: u32) -> Self {
         Self {
             level: DeclLevel::Top,
-            unit_kind: CompileUnitKind::Project,
+            unit_kind: ParseUnitKind::Project,
             source_id,
             module_path: None,
-            source_rules: SourceRules::project(),
+            parse_rules: ParseRules::project(),
         }
     }
 
-    pub fn with_rules(mut self, source_rules: SourceRules) -> Self {
-        self.source_rules = source_rules;
+    pub fn with_rules(mut self, parse_rules: ParseRules) -> Self {
+        self.parse_rules = parse_rules;
         self
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryAnnotation {
+    pub name: String,
+    pub span: Span,
 }
 
 /// Parse Surtr source text into an abstract syntax tree.
@@ -307,6 +253,95 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
 pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
     chumsky_program::parse_program_with_chumsky(&tokens, context)
+}
+
+/// Strip `@@test <expr>` annotations while preserving source span offsets.
+pub fn strip_test_annotations(source: &str) -> String {
+    let tokens = match tokenize(source) {
+        Ok(tokens) => tokens,
+        Err(_) => return source.to_string(),
+    };
+
+    let mut chars = source.chars().collect::<Vec<_>>();
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if let Token::Annotator(name) = &tokens[i].token {
+            if name == "test" {
+                let mut j = i + 1;
+                while j < tokens.len() && !matches!(tokens[j].token, Token::Newline | Token::Eof) {
+                    j += 1;
+                }
+                let end = if j > i + 1 {
+                    tokens[j - 1].span.end
+                } else {
+                    tokens[i].span.end
+                };
+                for ch in chars.iter_mut().take(end).skip(tokens[i].span.start) {
+                    if *ch != '\n' {
+                        *ch = ' ';
+                    }
+                }
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    chars.into_iter().collect::<String>()
+}
+
+/// Collect `@@entrypoint` annotations and return source with annotation tokens stripped.
+pub fn collect_entrypoint_annotations(
+    source: &str,
+) -> Result<(String, Vec<EntryAnnotation>), ParseError> {
+    let tokens = tokenize(source)?;
+    let mut chars = source.chars().collect::<Vec<_>>();
+    let mut annotations = Vec::new();
+
+    let mut i = 0usize;
+    while i < tokens.len() {
+        let token = &tokens[i];
+        if let Token::Annotator(name) = &token.token {
+            if name == "entrypoint" {
+                for ch in chars.iter_mut().take(token.span.end).skip(token.span.start) {
+                    if *ch != '\n' {
+                        *ch = ' ';
+                    }
+                }
+                let mut j = i + 1;
+                while j < tokens.len() && matches!(tokens[j].token, Token::Newline) {
+                    j += 1;
+                }
+                if j >= tokens.len() || !matches!(tokens[j].token, Token::Def) {
+                    return Err(ParseError::syntax(
+                        "@@entrypoint must annotate a function definition (`def`)",
+                        token.span.clone(),
+                    ));
+                }
+                let mut k = j + 1;
+                while k < tokens.len() && matches!(tokens[k].token, Token::Newline) {
+                    k += 1;
+                }
+                let def_name = match tokens.get(k).map(|sp| &sp.token) {
+                    Some(Token::Ident(name)) => name.clone(),
+                    _ => {
+                        return Err(ParseError::syntax(
+                            "@@entrypoint must target `def <name>(...)`",
+                            tokens[j].span.clone(),
+                        ));
+                    }
+                };
+                annotations.push(EntryAnnotation {
+                    name: def_name,
+                    span: token.span.clone(),
+                });
+            }
+        }
+        i += 1;
+    }
+
+    Ok((chars.into_iter().collect::<String>(), annotations))
 }
 
 struct Parser {
@@ -568,7 +603,7 @@ impl Parser {
             if let Some(kind) = Self::top_level_decl_kind(stmt) {
                 if !self
                     .context
-                    .source_rules
+                    .parse_rules
                     .allowed_top_level_decl_kinds
                     .allows(kind)
                 {
@@ -577,8 +612,8 @@ impl Parser {
                         stmt.span().clone(),
                     ));
                 }
-            } else if !self.context.source_rules.allow_top_level_expr {
-                let message = if self.context.unit_kind == CompileUnitKind::Module {
+            } else if !self.context.parse_rules.allow_top_level_expr {
+                let message = if self.context.unit_kind == ParseUnitKind::Module {
                     "Top-level expressions are not allowed in module compile units"
                 } else {
                     "Top-level expressions are not allowed in this source context"
@@ -618,16 +653,16 @@ impl Parser {
     ) -> Result<Vec<Ast>, ParseError> {
         let prev_context = self.context.clone();
         self.context.level = DeclLevel::Top;
-        self.context.unit_kind = CompileUnitKind::Module;
+        self.context.unit_kind = ParseUnitKind::Module;
         self.context.module_path = module_path;
-        self.context.source_rules = if prev_context
-            .source_rules
+        self.context.parse_rules = if prev_context
+            .parse_rules
             .allowed_top_level_decl_kinds
             .allows(TopLevelDeclKind::BuiltinDecl)
         {
-            SourceRules::std_module_member()
+            ParseRules::std_module_member()
         } else {
-            SourceRules::module_member()
+            ParseRules::module_member()
         };
 
         let result = (|| {
@@ -3680,7 +3715,7 @@ impl Parser {
         }
         if !self
             .context
-            .source_rules
+            .parse_rules
             .allowed_top_level_decl_kinds
             .allows(TopLevelDeclKind::BuiltinDecl)
         {
@@ -5118,8 +5153,7 @@ impl User {
     fn test_builtin_decl() {
         let ast = parse_with_context(
             "@@builtin def to_string(a: $A) -> String",
-            ParserContext::module(1, Some("Bootstrap".into()))
-                .with_rules(SourceRules::std_module()),
+            ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
         )
         .expect("std module should accept builtin declarations");
         match &ast[0] {
@@ -5141,8 +5175,7 @@ impl User {
     fn test_builtin_type_decl() {
         let ast = parse_with_context(
             "@@builtin\ntype Int",
-            ParserContext::module(1, Some("Bootstrap".into()))
-                .with_rules(SourceRules::std_module()),
+            ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
         )
         .expect("std module should accept builtin type declarations");
         assert!(matches!(
@@ -5156,8 +5189,7 @@ impl User {
     fn test_doc_annotates_builtin_type_decl() {
         let ast = parse_with_context(
             "@@doc \"\"\"\nBuiltin Int.\n\"\"\"\n@@builtin type Int",
-            ParserContext::module(1, Some("Bootstrap".into()))
-                .with_rules(SourceRules::std_module()),
+            ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
         )
         .expect("doc + builtin type should parse");
 
@@ -5223,8 +5255,7 @@ impl User {
     fn test_builtin_type_decl_preserves_generic_head() {
         let ast = parse_with_context(
             "@@builtin type Result<$T>",
-            ParserContext::module(1, Some("Bootstrap".into()))
-                .with_rules(SourceRules::std_module()),
+            ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
         )
         .expect("generic builtin type should parse");
         assert!(matches!(
@@ -5246,7 +5277,7 @@ def Ok($T) -> Result<$T>
 Construct the error branch.
 """
 def Err(Error) -> Result<$T>"#,
-            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+            ParserContext::module(1, None).with_rules(ParseRules::std_module()),
         )
         .expect("result constructor declarations should parse in std modules");
 
@@ -5275,7 +5306,7 @@ Construct the success branch.
 Construct the error branch.
 """
 @@builtin type Err(Error) -> Result<$T>"#,
-            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+            ParserContext::module(1, None).with_rules(ParseRules::std_module()),
         )
         .expect("result constructor builtin contracts should parse in std modules");
 
@@ -5310,7 +5341,7 @@ Construct the error branch.
             r#"defmod Kernel {
   @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
 }"#,
-            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+            ParserContext::module(1, None).with_rules(ParseRules::std_module()),
         )
         .expect("builtin if declaration should parse");
 
@@ -6668,7 +6699,7 @@ y = KeyInput::Arrow(Direction::Down)"#,
     fn test_std_module_compile_unit_accepts_builtin_decl() {
         let ast = parse_with_context(
             "defmod Bootstrap { @@builtin def print(a: String) -> Unit }",
-            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+            ParserContext::module(1, None).with_rules(ParseRules::std_module()),
         )
         .expect("std module compile unit should accept builtin declarations");
         assert!(
@@ -6681,7 +6712,7 @@ y = KeyInput::Arrow(Direction::Down)"#,
     fn test_std_module_compile_unit_accepts_builtin_type_decl() {
         let ast = parse_with_context(
             "defmod Bootstrap { @@builtin type Int }",
-            ParserContext::module(1, None).with_rules(SourceRules::std_module()),
+            ParserContext::module(1, None).with_rules(ParseRules::std_module()),
         )
         .expect("std module compile unit should accept builtin type declarations");
         assert!(
@@ -6728,7 +6759,7 @@ y = KeyInput::Arrow(Direction::Down)"#,
     #[test]
     fn test_project_parser_context_sets_unit_kind() {
         let context = ParserContext::project(7);
-        assert_eq!(context.unit_kind, CompileUnitKind::Project);
+        assert_eq!(context.unit_kind, ParseUnitKind::Project);
         assert_eq!(context.source_id, 7);
         assert_eq!(context.module_path, None);
     }
