@@ -24,9 +24,17 @@
 - `List::all(values, pred) -> Boolean`
 - `List::count(values, pred) -> Int`
 - `List::sum(values: List<Int>) -> Int`
+- `List::max(values: List<Int>) -> Result<Int, NoneError>`
+- `List::min(values: List<Int>) -> Result<Int, NoneError>`
+- `List::max_by(values, cmp) -> Result<$A, NoneError>`
+- `List::min_by(values, cmp) -> Result<$A, NoneError>`
 - `List::take(values, count) -> List<$A>`
 - `List::drop(values, count) -> List<$A>`
+- `List::take_while(values, pred) -> List<$A>`
+- `List::drop_while(values, pred) -> List<$A>`
+- `List::span(values, pred) -> (List<$A>, List<$A>)`
 - `List::partition(values, pred) -> (List<$A>, List<$A>)`
+- `List::dedup(values) -> List<$A>`
 - `List::group_count(values: List<$A>) -> List<($A, Int)>` (`$A: Eq`)
 - `List::zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>`
 
@@ -36,9 +44,15 @@
 - `List::at(values, index)` は負 index と範囲外 access で `Err(IndexOutOfBounds(...))` を返します。
 - `List::at` のメッセージは `index #{index} out of bounds for len #{List::len(values)}` に固定します。
 - `List::sum([])` は `0` を返します。
+- `List::max([])` / `List::min([])` は `Err(NoneError)` を返します。
+- `List::max_by([])` / `List::min_by([])` は `Err(NoneError)` を返します。
 - `List::take(values, count)` は `count <= 0` で `[]` を返します。
 - `List::drop(values, count)` は `count <= 0` で入力をそのまま返します。
+- `List::take_while(values, pred)` は最長 prefix を返します。
+- `List::drop_while(values, pred)` は最長 prefix を落とした suffix を返します。
+- `List::span(values, pred)` は `(take_while(values, pred), drop_while(values, pred))` を返します。
 - `List::partition(values, pred)` は `(matched, rest)` を返し、両側とも元の順序を保ちます。
+- `List::dedup(values)` は最初の出現順を保ちながら重複を除きます。
 - `List::group_count(values)` は最初の出現順を保ったまま `(value, count)` を並べます。
 - `List::zip(left, right)` は短い方の list 長で打ち切ります。
 
@@ -50,7 +64,15 @@ print(to_string(List::concat([[1], [2, 3], []])))
 print(to_string(List::flat_map([1, 2], {|n| [n, n + 10]})))
 print(to_string(List::last([1, 2, 3])))
 print(to_string(List::at([10, 20, 30], 1)))
+print(to_string(List::max([1, 5, 3, 2])))
+print(to_string(List::min([1, 5, 3, 2])))
+print(to_string(List::max_by(["a", "abcd", "xy"], {|left, right| Compare::compare(String::len(left), String::len(right)) })))
+print(to_string(List::min_by(["a", "abcd", "xy"], {|left, right| Compare::compare(String::len(left), String::len(right)) })))
+print(to_string(List::take_while([2, 4, 6, 7, 8], {|n| Int::is_even(n) })))
+print(to_string(List::drop_while([2, 4, 6, 7, 8], {|n| Int::is_even(n) })))
+print(to_string(List::span([2, 4, 6, 7, 8], {|n| Int::is_even(n) })))
 print(to_string(List::partition([1, 2, 3, 4], {|n| Int::is_even(n) })))
+print(to_string(List::dedup(["a", "b", "a", "c", "b", "a"])))
 print(to_string(List::group_count(["a", "b", "a", "c", "b", "a"])))
 print(to_string(List::zip([1, 2, 3], ["x", "y"])))
 ```
@@ -66,18 +88,10 @@ print(to_string(List::zip([1, 2, 3], ["x", "y"])))
 
 優先度が高い候補:
 
-- `List::max(values: List<Int>) -> Result<Int, NoneError>`
-- `List::min(values: List<Int>) -> Result<Int, NoneError>`
-- `List::max_by(values, cmp) -> Result<$A, NoneError>`
-- `List::min_by(values, cmp) -> Result<$A, NoneError>`
 - `List::enumerate(values) -> List<(Int, $A)>`
-- `List::take_while(values, pred) -> List<$A>`
-- `List::drop_while(values, pred) -> List<$A>`
-- `List::span(values, pred) -> (List<$A>, List<$A>)`
 
 牌計算や parser 以外でも便利な候補:
 
-- `List::dedup(values) -> List<$A>`
 - `List::sort(values) -> List<$A>`
 - `List::sort_by(values, cmp) -> List<$A>`
 

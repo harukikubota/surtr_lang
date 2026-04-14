@@ -131,6 +131,30 @@ defmod String {
     }
   }
 
+  defp _replace_go(value: String, from: String, to: String) -> String {
+    match split_once(value, from) {
+      Ok(StringSplit::Split(before, after)) => before ++ to ++ _replace_go(after, from, to),
+      Err(_) => value,
+    }
+  }
+
+  defp _strip_trailing_cr(value: String) -> String {
+    match strip_suffix(value, "\r") {
+      Ok(stripped) => stripped,
+      Err(_) => value,
+    }
+  }
+
+  defp _drop_last(values: List<$A>) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => match tail {
+        [] => [],
+        _ => [head, .._drop_last(tail)],
+      },
+    }
+  }
+
   defp _decimal_digit_value(ch: String, input: String) -> Result<Int, InvalidIntegerLiteral> {
     if(
       ch == "0",
@@ -303,6 +327,45 @@ defmod String {
   """
   def contains(value: String, needle: String) -> Boolean {
     Result::is_ok(String::split_once(value, needle))
+  }
+
+  @@doc """
+  Replace every non-overlapping occurrence of `from` with `to`.
+  The empty `from` string leaves `value` unchanged.
+  """
+  def replace(value: String, from: String, to: String) -> String {
+    if(from == "", value, _replace_go(value, from, to))
+  }
+
+  @@doc """
+  Split `value` at every occurrence of `separator`.
+  An empty `separator` returns `chars(value)`.
+  """
+  def split(value: String, separator: String) -> List<String> {
+    if(
+      separator == "",
+      chars(value),
+      match split_once(value, separator) {
+        Ok(StringSplit::Split(before, after)) => [before, ..split(after, separator)],
+        Err(_) => [value],
+      },
+    )
+  }
+
+  @@doc """
+  Split `value` into lines.
+  Lines are separated by `\n`, and a trailing `\r` in each line is removed.
+  A final empty line produced by a trailing newline is omitted.
+  """
+  def lines(value: String) -> List<String> {
+    if(
+      value == "",
+      [],
+      {
+        stripped = List::map(split(value, "\n"), {|line| _strip_trailing_cr(line) })
+        if(ends_with(value, "\n"), _drop_last(stripped), stripped)
+      },
+    )
   }
 
   @@doc """

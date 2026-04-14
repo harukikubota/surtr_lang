@@ -16,6 +16,9 @@
 - `String::strip_suffix(value, suffix) -> Result<String, NoneError>`
 - `String::split_once(value, separator) -> Result<StringSplit, NoneError>`
 - `String::contains(value, needle) -> Boolean`
+- `String::replace(value, from, to) -> String`
+- `String::split(value, separator) -> List<String>`
+- `String::lines(value) -> List<String>`
 - `String::chars(value) -> List<String>`
 - `String::from_chars(chars) -> Result<String, InvalidCharList>`
 - `String::codepoints(value, encoding) -> Result<List<Int>, InvalidStringEncoding>`
@@ -53,6 +56,10 @@ print(to_string(String::repeat("na", 2)))
 print(to_string(String::repeat("na", -1)))
 print(to_string(String::strip_prefix("surtr", "sur")))
 print(to_string(String::split_once("key=value", "=")))
+print(String::replace("banana", "na", "NA"))
+print(to_string(String::split("a,,b,", ",")))
+print(to_string(String::split("surtr", "")))
+print(to_string(String::lines("a\r\nb\r\n")))
 print(to_string(String::from_chars(["あ", "b"])))
 print(to_string(String::codepoints("Aあ", StringEncoding::Utf8)))
 print(to_string(String::from_codepoints([65, 227, 129, 130], StringEncoding::Utf8)))
@@ -65,6 +72,10 @@ print(String::trim(" \ncore\t "))
 - `join` と `repeat` は pure Surtr の再帰で実装します。
 - `repeat` は trap ではなく `Result` で失敗を返し、関数型らしく合成しやすい surface を優先します。
 - `split_once("", value)` ではなく `split_once(value, "")` を呼んだ場合、先頭で一致したものとして `Ok(StringSplit::Split("", value))` を返します。
+- `replace(value, "", to)` は `value` をそのまま返します。
+- `split(value, "")` は `chars(value)` と同じ結果を返します。
+- `split` は空要素を保持します。たとえば `split("a,,b,", ",")` は `["a", "", "b", ""]` です。
+- `lines` は `\n` で分割し、各行末の `\r` を取り除きます。末尾改行だけで生じる最後の空行は落とします。
 - `codepoints` / `from_codepoints` の `Utf8` は Unicode scalar value ではなく UTF-8 byte 列を扱います。
 - `Ascii` は 7-bit ASCII だけを受け付け、範囲外は `Err(InvalidStringEncoding(...))` で返します。
 - `trim_start` / `trim_end` / `trim` は現状 space / newline / tab / carriage return の ASCII whitespace のみを対象にします。
@@ -72,14 +83,8 @@ print(String::trim(" \ncore\t "))
 
 ## Next candidates
 
-優先度が高い候補:
-
-- `String::replace(value, from, to) -> String`
-- `String::lines(value) -> List<String>`
-
 あると便利な候補:
 
-- `String::split(value, separator) -> List<String>`
 - `String::pad_start(value, width, fill) -> Result<String, InvalidCharList>`
 - `String::pad_end(value, width, fill) -> Result<String, InvalidCharList>`
 
