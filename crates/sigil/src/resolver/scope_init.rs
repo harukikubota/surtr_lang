@@ -13,9 +13,9 @@ fn initialize_base_scope() -> Scope {
 
 pub(super) fn initialize_scope() -> Scope {
     let mut scope = initialize_base_scope();
-    for meta in BUILTIN_METAS {
+    for (idx, meta) in BUILTIN_METAS.iter().enumerate() {
         if is_global_runtime_builtin(meta.name) {
-            scope.define_with_id(meta.name, builtin_uid(meta.builtin_id));
+            scope.define_with_id(meta.name, builtin_uid(idx as u16));
         }
     }
     scope

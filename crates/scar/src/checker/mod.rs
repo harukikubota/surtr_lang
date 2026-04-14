@@ -124,8 +124,8 @@ fn initialize_env() -> TypeEnv {
         },
     );
 
-    for meta in BUILTIN_METAS {
-        let uid = builtin_uid(meta.builtin_id);
+    for (idx, meta) in BUILTIN_METAS.iter().enumerate() {
+        let uid = builtin_uid(idx as u16);
         let ty = builtin_ty_from_meta(meta, &mut env);
         env.bind_var(uid, ty);
     }

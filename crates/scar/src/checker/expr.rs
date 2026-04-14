@@ -1084,9 +1084,8 @@ impl Checker {
         match helper.ty {
             Ty::UserFunc { fun_idx, .. } => Ok(ListHelperRef::User(fun_idx)),
             Ty::BuiltinFunc { ref name, .. } => {
-                let builtin_id = builtin_meta_by_name(name)
-                    .map(|meta| meta.builtin_id)
-                    .ok_or_else(|| TypeError {
+                let builtin_id =
+                    sindr::builtin::builtin_id_by_name(name).ok_or_else(|| TypeError {
                         message: format!("Unknown builtin helper: {}", helper_name),
                         span: span.clone(),
                         hint: None,

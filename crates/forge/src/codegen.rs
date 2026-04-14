@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
-use sindr::builtin::builtin_meta_by_name;
+use sindr::builtin::builtin_id_by_name;
 use sindr::ir::{CompileInfo, DocEntry, FunctionFlags};
 use sindr::primitives::int;
 use spire::ast::{BinOp, Lit, Span, Visibility};
@@ -319,14 +319,15 @@ mod tests {
             .expect("match emission should succeed");
 
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let eprint_id = Codegen::builtin_id("eprint").expect("eprint builtin must exist");
         assert!(opcodes.iter().any(|opcode| {
             matches!(
                 opcode,
                 Opcode::CallBuiltin {
-                    builtin_id: 5,
+                    builtin_id,
                     arity: 1,
                     ..
-                }
+                } if *builtin_id == eprint_id
             )
         }));
         assert!(matches!(opcodes.last(), Some(Opcode::Halt)));
@@ -755,7 +756,7 @@ impl Codegen {
 
     fn builtin_id(name: &str) -> Option<u16> {
         let short_name = name.rsplit("::").next().unwrap_or(name);
-        builtin_meta_by_name(short_name).map(|meta| meta.builtin_id)
+        builtin_id_by_name(short_name)
     }
 
     fn direct_builtin_opcode(name: &str, arity: usize) -> Option<Opcode> {

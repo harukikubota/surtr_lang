@@ -14,7 +14,7 @@ mod tests {
     use crate::bytecode::Constant;
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
-    use sindr::builtin::builtin_meta_by_name;
+    use sindr::builtin::builtin_id_by_name;
     use spire::ast::Ast;
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
@@ -285,18 +285,13 @@ right = Int::bit_xor(6, 3)"#,
             .iter()
             .any(|op| matches!(op, Opcode::BitXorInt)));
 
-        let bit_not_id = builtin_meta_by_name("bit_not")
-            .expect("bit_not builtin metadata must exist")
-            .builtin_id;
-        let bit_and_id = builtin_meta_by_name("bit_and")
-            .expect("bit_and builtin metadata must exist")
-            .builtin_id;
-        let bit_or_id = builtin_meta_by_name("bit_or")
-            .expect("bit_or builtin metadata must exist")
-            .builtin_id;
-        let bit_xor_id = builtin_meta_by_name("bit_xor")
-            .expect("bit_xor builtin metadata must exist")
-            .builtin_id;
+        let bit_not_id =
+            builtin_id_by_name("bit_not").expect("bit_not builtin metadata must exist");
+        let bit_and_id =
+            builtin_id_by_name("bit_and").expect("bit_and builtin metadata must exist");
+        let bit_or_id = builtin_id_by_name("bit_or").expect("bit_or builtin metadata must exist");
+        let bit_xor_id =
+            builtin_id_by_name("bit_xor").expect("bit_xor builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
             matches!(
@@ -322,9 +317,8 @@ toggled = Int::toggle_bit(5, 0)"#,
         );
 
         for name in ["test_bit", "set_bit", "clear_bit", "toggle_bit"] {
-            let builtin_id = builtin_meta_by_name(name)
-                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"))
-                .builtin_id;
+            let builtin_id = builtin_id_by_name(name)
+                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
             assert!(bytecode.opcodes.iter().any(|op| {
                 matches!(
                     op,
@@ -346,9 +340,8 @@ quot = Numeric::safe_div(8, 2)
 largest = Numeric::max(1.5, 2.5)"#,
         );
 
-        let safe_div_id = builtin_meta_by_name("safe_div")
-            .expect("safe_div builtin metadata must exist")
-            .builtin_id;
+        let safe_div_id =
+            builtin_id_by_name("safe_div").expect("safe_div builtin metadata must exist");
 
         assert!(bytecode
             .opcodes
@@ -379,12 +372,8 @@ user2 = Lens::set(User.name, user, "bob")
 user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
         );
 
-        let lens_set_id = builtin_meta_by_name("set")
-            .expect("set builtin metadata must exist")
-            .builtin_id;
-        let lens_over_id = builtin_meta_by_name("over")
-            .expect("over builtin metadata must exist")
-            .builtin_id;
+        let lens_set_id = builtin_id_by_name("set").expect("set builtin metadata must exist");
+        let lens_over_id = builtin_id_by_name("over").expect("over builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
             matches!(
@@ -411,12 +400,9 @@ getter = {|| name}
 result = getter()"#,
         );
 
-        let lens_view_id = builtin_meta_by_name("view")
-            .expect("view builtin metadata must exist")
-            .builtin_id;
-        let lens_compose_id = builtin_meta_by_name("compose")
-            .expect("compose builtin metadata must exist")
-            .builtin_id;
+        let lens_view_id = builtin_id_by_name("view").expect("view builtin metadata must exist");
+        let lens_compose_id =
+            builtin_id_by_name("compose").expect("compose builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
             matches!(

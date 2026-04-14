@@ -605,7 +605,7 @@ fn first_source_id(sources: &[SourceFileEntry]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::builtin::BUILTIN_METAS;
+    use crate::builtin::builtin_id_by_name;
     use crate::ir::{
         Bytecode, CompileInfo, Constant, DocEntry, DocKind, EldrChunkInfo, EldrHeader, EldrInspect,
         ErrTemplate, FunctionEntry, FunctionFlags, LabelEntry, Opcode, OpcodeSource,
@@ -617,12 +617,13 @@ mod tests {
 
     #[test]
     fn viewer_model_contains_core_sections() {
+        let print_id = builtin_id_by_name("print").expect("print builtin must exist");
         let bytecode = Bytecode {
             opcodes: vec![
                 Opcode::LoadConst(0),
-                Opcode::LoadBuiltinRef(BUILTIN_METAS[0].builtin_id),
+                Opcode::LoadBuiltinRef(print_id),
                 Opcode::CallBuiltin {
-                    builtin_id: BUILTIN_METAS[0].builtin_id,
+                    builtin_id: print_id,
                     arity: 1,
                     span_start: 0,
                     span_end: 5,

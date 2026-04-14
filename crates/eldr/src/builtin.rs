@@ -1182,7 +1182,7 @@ fn none_result(vm: &VM) -> Value {
 mod tests {
     use super::{call_builtin, err_result_from_rich_error, inspect_value};
     use crate::vm::VM;
-    use sindr::builtin::builtin_meta_by_name;
+    use sindr::builtin::{builtin_id_by_name, builtin_meta_by_name};
     use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
     use sindr::primitives::int;
     use sindr::runtime::{
@@ -1231,9 +1231,7 @@ mod tests {
     }
 
     fn builtin_id(name: &str) -> u16 {
-        builtin_meta_by_name(name)
-            .unwrap_or_else(|| panic!("missing builtin metadata for {name}"))
-            .builtin_id
+        builtin_id_by_name(name).unwrap_or_else(|| panic!("missing builtin metadata for {name}"))
     }
 
     /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
@@ -1821,9 +1819,7 @@ mod tests {
     #[test]
     fn map_err_replaces_error_without_preserving_previous_cause() {
         let mut vm = test_vm();
-        let builtin_id = builtin_meta_by_name("map_err")
-            .expect("map_err metadata")
-            .builtin_id;
+        let builtin_id = builtin_id_by_name("map_err").expect("map_err metadata");
         let value = call_builtin(
             &mut vm,
             builtin_id,
@@ -1850,9 +1846,7 @@ mod tests {
     #[test]
     fn cause_wraps_existing_error_under_new_domain_error() {
         let mut vm = test_vm();
-        let builtin_id = builtin_meta_by_name("cause")
-            .expect("cause metadata")
-            .builtin_id;
+        let builtin_id = builtin_id_by_name("cause").expect("cause metadata");
         let value = call_builtin(
             &mut vm,
             builtin_id,
@@ -1880,9 +1874,7 @@ mod tests {
     #[test]
     fn chain_appends_left_error_to_tail_of_right_error_chain() {
         let mut vm = test_vm();
-        let builtin_id = builtin_meta_by_name("chain")
-            .expect("chain metadata")
-            .builtin_id;
+        let builtin_id = builtin_id_by_name("chain").expect("chain metadata");
         let mut right = sample_error("Higher", "higher");
         right.append_cause_tail(sample_error("Middle", "middle"));
         let value = call_builtin(
