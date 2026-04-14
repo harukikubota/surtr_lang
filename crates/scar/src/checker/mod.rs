@@ -245,6 +245,82 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
                 ret: Box::new(Ty::List(Box::new(Ty::Tuple(vec![a, b])))),
             }
         }
+        "empty_map" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: Vec::new(),
+                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
+            }
+        }
+        "map_from_entries" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::List(Box::new(Ty::Tuple(vec![Ty::Str, value.clone()])))],
+                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
+            }
+        }
+        "map_len" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value])],
+                ret: Box::new(Ty::Int),
+            }
+        }
+        "map_contains_key" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value]), Ty::Str],
+                ret: Box::new(Ty::Bool),
+            }
+        }
+        "map_get" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value.clone()]), Ty::Str],
+                ret: Box::new(Ty::Result(Box::new(value), Box::new(Ty::Error))),
+            }
+        }
+        "map_insert" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Enum("HashMap".into(), vec![value.clone()]),
+                    Ty::Str,
+                    value.clone(),
+                ],
+                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
+            }
+        }
+        "map_remove" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value.clone()]), Ty::Str],
+                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
+            }
+        }
+        "map_keys" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value])],
+                ret: Box::new(Ty::List(Box::new(Ty::Str))),
+            }
+        }
+        "map_values" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value.clone()])],
+                ret: Box::new(Ty::List(Box::new(value))),
+            }
+        }
         "view" => {
             let source = env.fresh_tyvar();
             let focus = env.fresh_tyvar();

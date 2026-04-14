@@ -6,8 +6,8 @@ use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
 use sindr::ir::DocKind;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
-    Callable, CallableTarget, ListHandle, Location, RegexCapturesHandle, RegexHandle,
-    RegexMatchHandle, RichError,
+    Callable, CallableTarget, HashMapHandle, ListHandle, Location, RegexCapturesHandle,
+    RegexHandle, RegexMatchHandle, RichError,
 };
 use std::collections::HashMap;
 
@@ -105,6 +105,33 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         func: builtin_list_zip,
+    },
+    BuiltinImpl {
+        func: builtin_empty_map,
+    },
+    BuiltinImpl {
+        func: builtin_map_from_entries,
+    },
+    BuiltinImpl {
+        func: builtin_map_len,
+    },
+    BuiltinImpl {
+        func: builtin_map_contains_key,
+    },
+    BuiltinImpl {
+        func: builtin_map_get,
+    },
+    BuiltinImpl {
+        func: builtin_map_insert,
+    },
+    BuiltinImpl {
+        func: builtin_map_remove,
+    },
+    BuiltinImpl {
+        func: builtin_map_keys,
+    },
+    BuiltinImpl {
+        func: builtin_map_values,
     },
     BuiltinImpl {
         func: builtin_lens_view,
@@ -672,6 +699,86 @@ fn builtin_list_zip(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     Ok(Value::List(ListHandle::from_items(items)))
 }
 
+fn builtin_empty_map(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Ok(Value::HashMap(HashMapHandle::empty()))
+}
+
+fn builtin_map_from_entries(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(entries) = &args[0] else {
+        return Err(RuntimeError::new("map_from_entries expects List<(String, V)>"));
+    };
+
+    let mut map = HashMapHandle::empty();
+    for (index, entry) in entries.iter().enumerate() {
+        let Value::Tuple(items) = entry else {
+            return Err(RuntimeError::new(format!(
+                "map_from_entries expects tuple entries at index {}, got {:?}",
+                index, entry
+            )));
+        };
+        let [key, value] = items.as_slice() else {
+            return Err(RuntimeError::new(format!(
+                "map_from_entries expects (String, V) tuples at index {}, got arity {}",
+                index,
+                items.len()
+            )));
+        };
+        let Value::Str(key) = key else {
+            return Err(RuntimeError::new(format!(
+                "map_from_entries expects String key at index {}, got {:?}",
+                index, key
+            )));
+        };
+        map = map.insert(key.clone(), value.clone());
+    }
+
+    Ok(Value::HashMap(map))
+}
+
+fn builtin_map_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "map_len", "map")?;
+    Ok(Value::Int(int(map.len() as u64)))
+}
+
+fn builtin_map_contains_key(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "map_contains_key", "map")?;
+    let key = decode_string_arg(&args[1], "map_contains_key", "key")?;
+    Ok(Value::Bool(map.contains_key(key)))
+}
+
+fn builtin_map_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "map_get", "map")?;
+    let key = decode_string_arg(&args[1], "map_get", "key")?;
+    Ok(match map.get(key) {
+        Some(value) => ok_result(value),
+        None => none_result(vm),
+    })
+}
+
+fn builtin_map_insert(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "map_insert", "map")?;
+    let key = decode_string_arg(&args[1], "map_insert", "key")?;
+    let value = args[2].clone();
+    Ok(Value::HashMap(map.insert(key.to_string(), value)))
+}
+
+fn builtin_map_remove(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "map_remove", "map")?;
+    let key = decode_string_arg(&args[1], "map_remove", "key")?;
+    Ok(Value::HashMap(map.remove(key)))
+}
+
+fn builtin_map_keys(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "map_keys", "map")?;
+    let items = map.keys().into_iter().map(Value::Str).collect::<Vec<_>>();
+    Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_map_values(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "map_values", "map")?;
+    Ok(Value::List(ListHandle::from_items(map.values())))
+}
+
 fn builtin_lens_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Lens::view should be lowered in Forge (runtime builtin call indicates lowering bug)",
@@ -916,7 +1023,127 @@ pub fn inspect_value(vm: &VM, value: &Value) -> String {
         }
     }
 
-    value.to_display_string(vm.type_registry())
+    inspect_non_callable_value(vm, value)
+}
+
+fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
+    match value {
+        Value::Str(text) => quote_surtr_string_literal(text),
+        Value::List(handle) => {
+            let inner = handle
+                .iter()
+                .map(|item| inspect_non_callable_value(vm, &item))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{inner}]")
+        }
+        Value::HashMap(handle) => {
+            if handle.entries.is_empty() {
+                return "HashMap()".to_string();
+            }
+
+            let inner = handle
+                .entries
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{} => {}",
+                        quote_surtr_string_literal(key),
+                        inspect_non_callable_value(vm, value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("HashMap({inner})")
+        }
+        Value::Tuple(items) => {
+            let inner = items
+                .iter()
+                .map(|item| inspect_non_callable_value(vm, item))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
+        }
+        Value::Tagged { tag, fields } => inspect_tagged_value(vm, *tag, fields),
+        _ => value.to_display_string(vm.type_registry()),
+    }
+}
+
+fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
+    if let Some(entry) = vm.type_registry().lookup(tag) {
+        return match entry.kind {
+            sindr::runtime::TypeKind::Struct => {
+                let pairs = entry
+                    .field_names
+                    .iter()
+                    .zip(fields.iter())
+                    .map(|(name, val)| format!("{name}: {}", inspect_non_callable_value(vm, val)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{} {{ {} }}", entry.name, pairs)
+            }
+            sindr::runtime::TypeKind::Record => {
+                let pairs = entry
+                    .field_names
+                    .iter()
+                    .zip(fields.iter())
+                    .map(|(name, val)| format!("{name}: {}", inspect_non_callable_value(vm, val)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}({pairs})", entry.name)
+            }
+            sindr::runtime::TypeKind::EnumVariant => {
+                let payload = fields
+                    .iter()
+                    .skip(1)
+                    .map(|val| inspect_non_callable_value(vm, val))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if payload.is_empty() {
+                    entry.name.clone()
+                } else {
+                    format!("{}({payload})", entry.name)
+                }
+            }
+        };
+    }
+
+    match tag {
+        0 => format!(
+            "Ok({})",
+            fields
+                .first()
+                .map(|v| inspect_non_callable_value(vm, v))
+                .unwrap_or_default()
+        ),
+        1 => format!(
+            "{}",
+            fields
+                .first()
+                .map(|v| match v {
+                    Value::Error(rich) => rich.to_result_display_string(),
+                    _ => format!("Err({})", inspect_non_callable_value(vm, v)),
+                })
+                .unwrap_or_default()
+        ),
+        _ => format!("Tagged({}, {:?})", tag, fields),
+    }
+}
+
+fn quote_surtr_string_literal(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 2);
+    out.push('"');
+    for ch in input.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn inspect_callable(vm: &VM, callable: &Callable) -> Option<String> {
@@ -1004,6 +1231,34 @@ fn decode_regex_match_arg<'a>(
         Value::RegexMatch(handle) => Ok(handle),
         other => Err(RuntimeError::new(format!(
             "{builtin_name} expects RegexMatch as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_hash_map_arg<'a>(
+    value: &'a Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<&'a HashMapHandle, RuntimeError> {
+    match value {
+        Value::HashMap(handle) => Ok(handle),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects HashMap as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_string_arg<'a>(
+    value: &'a Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<&'a str, RuntimeError> {
+    match value {
+        Value::Str(text) => Ok(text),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects String as {arg_name}, got {:?}",
             other
         ))),
     }
@@ -1186,8 +1441,8 @@ mod tests {
     use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
     use sindr::primitives::int;
     use sindr::runtime::{
-        Callable, CallableTarget, ListHandle, Location, RichError, TypeEntry, TypeKind,
-        TypeRegistry, Value,
+        Callable, CallableTarget, HashMapHandle, ListHandle, Location, RichError, TypeEntry,
+        TypeKind, TypeRegistry, Value,
     };
 
     fn test_vm() -> VM {
@@ -1316,6 +1571,7 @@ mod tests {
             include_str!("../../../lib/kernel.srt"),
             include_str!("../../../lib/int.srt"),
             include_str!("../../../lib/list.srt"),
+            include_str!("../../../lib/hash_map.srt"),
             include_str!("../../../lib/result.srt"),
             include_str!("../../../lib/lens.srt"),
             include_str!("../../../lib/string.srt"),
@@ -1814,6 +2070,122 @@ mod tests {
             }
             other => panic!("expected List result, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn hash_map_builtins_preserve_order_and_overwrite_semantics() {
+        let mut vm = test_vm();
+        let entries = Value::List(ListHandle::from_items(vec![
+            Value::Tuple(vec![Value::Str("a".into()), Value::Int(int(1))]),
+            Value::Tuple(vec![Value::Str("b".into()), Value::Int(int(2))]),
+            Value::Tuple(vec![Value::Str("a".into()), Value::Int(int(3))]),
+        ]));
+        let map = call_builtin(&mut vm, builtin_id("map_from_entries"), vec![entries])
+            .expect("map_from_entries should succeed");
+
+        let keys = call_builtin(&mut vm, builtin_id("map_keys"), vec![map.clone()])
+            .expect("map_keys should succeed");
+        match keys {
+            Value::List(list) => {
+                let rendered = list
+                    .iter()
+                    .map(|value| match value {
+                        Value::Str(text) => text,
+                        other => panic!("expected String key, got {:?}", other),
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(rendered, vec!["a", "b"]);
+            }
+            other => panic!("expected List<String>, got {:?}", other),
+        }
+
+        let values = call_builtin(&mut vm, builtin_id("map_values"), vec![map.clone()])
+            .expect("map_values should succeed");
+        match values {
+            Value::List(list) => {
+                let rendered = list
+                    .iter()
+                    .map(|value| match value {
+                        Value::Int(n) => n.to_string(),
+                        other => panic!("expected Int value, got {:?}", other),
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(rendered, vec!["3", "2"]);
+            }
+            other => panic!("expected List<Int>, got {:?}", other),
+        }
+
+        let got = call_builtin(
+            &mut vm,
+            builtin_id("map_get"),
+            vec![map.clone(), Value::Str("a".into())],
+        )
+        .expect("map_get should return Result");
+        assert!(matches!(
+            got,
+            Value::Tagged { tag: 0, fields } if matches!(fields.first(), Some(Value::Int(value)) if *value == int(3))
+        ));
+
+        let miss = call_builtin(
+            &mut vm,
+            builtin_id("map_get"),
+            vec![map.clone(), Value::Str("missing".into())],
+        )
+        .expect("map_get should return Result");
+        assert!(matches!(
+            miss,
+            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "NoneError")
+        ));
+
+        let removed = call_builtin(
+            &mut vm,
+            builtin_id("map_remove"),
+            vec![map.clone(), Value::Str("b".into())],
+        )
+        .expect("map_remove should succeed");
+        let removed_keys = call_builtin(&mut vm, builtin_id("map_keys"), vec![removed])
+            .expect("map_keys after remove should succeed");
+        match removed_keys {
+            Value::List(list) => {
+                let rendered = list
+                    .iter()
+                    .map(|value| match value {
+                        Value::Str(text) => text,
+                        other => panic!("expected String key, got {:?}", other),
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(rendered, vec!["a"]);
+            }
+            other => panic!("expected List<String>, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn inspect_formats_hash_map_named_style() {
+        let vm = test_vm();
+        let value = Value::HashMap(HashMapHandle::from_entries(vec![
+            ("line\nfeed".into(), Value::Int(int(1))),
+            ("path\\to".into(), Value::Int(int(2))),
+        ]));
+        assert_eq!(
+            inspect_value(&vm, &value),
+            "HashMap(\"line\\nfeed\" => 1, \"path\\\\to\" => 2)"
+        );
+    }
+
+    #[test]
+    fn inspect_quotes_strings_recursively() {
+        let vm = test_vm();
+        let value = Value::Tuple(vec![
+            Value::Str("hello".into()),
+            Value::List(ListHandle::from_items(vec![Value::Str("line\nfeed".into())])),
+            ok_result(Value::Str("world".into())),
+        ]);
+
+        assert_eq!(
+            inspect_value(&vm, &value),
+            "(\"hello\", [\"line\\nfeed\"], Ok(\"world\"))"
+        );
     }
 
     #[test]

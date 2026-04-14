@@ -53,6 +53,7 @@ pub enum Value {
     Bool(bool),
     Unit,
     List(ListHandle),
+    HashMap(HashMapHandle),
     Tuple(Vec<Value>),
     Tagged { tag: u32, fields: Vec<Value> },
     Callable(Callable),
@@ -79,6 +80,12 @@ pub struct RegexMatchHandle {
     pub input: String,
     pub start: usize,
     pub end: usize,
+}
+
+/// Shared runtime handle for immutable insertion-ordered string-keyed maps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HashMapHandle {
+    pub entries: Vec<(String, Value)>,
 }
 
 pub type ListRef = Option<Rc<ListNode>>;
@@ -141,6 +148,24 @@ impl Value {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", inner)
+            }
+            Value::HashMap(handle) => {
+                if handle.entries.is_empty() {
+                    return "HashMap()".to_string();
+                }
+                let inner = handle
+                    .entries
+                    .iter()
+                    .map(|(key, value)| {
+                        format!(
+                            "{} => {}",
+                            quote_surtr_string_literal(key),
+                            value.to_display_string(registry)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("HashMap({inner})")
             }
             Value::Tuple(items) => {
                 let inner = items
@@ -218,6 +243,99 @@ impl Value {
             }
             Value::RegexMatch(handle) => format!("RegexMatch({}..{})", handle.start, handle.end),
         }
+    }
+}
+
+fn quote_surtr_string_literal(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 2);
+    out.push('"');
+    for ch in input.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+impl HashMapHandle {
+    pub fn empty() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn from_entries(entries: Vec<(String, Value)>) -> Self {
+        let mut map = Self::empty();
+        for (key, value) in entries {
+            map = map.insert(key, value);
+        }
+        map
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.entries.iter().any(|(existing, _)| existing == key)
+    }
+
+    pub fn get(&self, key: &str) -> Option<Value> {
+        self.entries
+            .iter()
+            .find_map(|(existing, value)| (existing == key).then(|| value.clone()))
+    }
+
+    pub fn insert(&self, key: String, value: Value) -> Self {
+        let mut entries = self.entries.clone();
+        if let Some((_, existing_value)) = entries.iter_mut().find(|(existing, _)| existing == &key)
+        {
+            *existing_value = value;
+        } else {
+            entries.push((key, value));
+        }
+        Self { entries }
+    }
+
+    pub fn remove(&self, key: &str) -> Self {
+        let mut removed = false;
+        let entries = self
+            .entries
+            .iter()
+            .filter_map(|(existing_key, existing_value)| {
+                if !removed && existing_key == key {
+                    removed = true;
+                    None
+                } else {
+                    Some((existing_key.clone(), existing_value.clone()))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        if removed {
+            Self { entries }
+        } else {
+            self.clone()
+        }
+    }
+
+    pub fn keys(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>()
+    }
+
+    pub fn values(&self) -> Vec<Value> {
+        self.entries
+            .iter()
+            .map(|(_, value)| value.clone())
+            .collect::<Vec<_>>()
     }
 }
 
@@ -368,8 +486,8 @@ pub struct Location {
 #[cfg(test)]
 mod tests {
     use super::{
-        Callable, CallableTarget, ListHandle, Location, RichError, TypeEntry, TypeKind,
-        TypeRegistry, Value,
+        Callable, CallableTarget, HashMapHandle, ListHandle, Location, RichError, TypeEntry,
+        TypeKind, TypeRegistry, Value,
     };
     use crate::primitives::int;
 
@@ -498,6 +616,42 @@ mod tests {
             Value::Int(int(3)),
         ]));
         assert_eq!(value.to_display_string(&registry), "[1, 2, 3]");
+    }
+
+    #[test]
+    fn hash_map_handle_insert_overwrite_and_remove_keep_order() {
+        let empty = HashMapHandle::empty();
+        let with_a = empty.insert("a".into(), Value::Int(int(1)));
+        let with_ab = with_a.insert("b".into(), Value::Int(int(2)));
+        let with_overwrite = with_ab.insert("a".into(), Value::Int(int(3)));
+
+        assert_eq!(with_overwrite.len(), 2);
+        assert_eq!(with_overwrite.keys(), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            with_overwrite.values(),
+            vec![Value::Int(int(3)), Value::Int(int(2))]
+        );
+        assert_eq!(with_overwrite.get("a"), Some(Value::Int(int(3))));
+
+        let removed = with_overwrite.remove("b");
+        assert_eq!(removed.keys(), vec!["a".to_string()]);
+        let no_op = removed.remove("missing");
+        assert_eq!(no_op, removed);
+    }
+
+    #[test]
+    fn hash_map_display_uses_named_shape_and_key_escaping() {
+        let registry = TypeRegistry::new();
+        let value = Value::HashMap(HashMapHandle::from_entries(vec![
+            ("line\nfeed".into(), Value::Int(int(1))),
+            ("path\\to".into(), Value::Int(int(2))),
+            ("say\"hi".into(), Value::Int(int(3))),
+            ("tab\tchar".into(), Value::Int(int(4))),
+        ]));
+        assert_eq!(
+            value.to_display_string(&registry),
+            "HashMap(\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4)"
+        );
     }
 
     #[test]

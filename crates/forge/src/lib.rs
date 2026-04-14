@@ -34,6 +34,7 @@ mod tests {
     const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/ordering.srt");
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
+    const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
@@ -143,6 +144,7 @@ mod tests {
                 ("Boolean", BOOLEAN_MODULE_SOURCE),
                 ("Error", ERROR_MODULE_SOURCE),
                 ("List", LIST_MODULE_SOURCE),
+                ("HashMap", HASH_MAP_MODULE_SOURCE),
                 ("Result", RESULT_MODULE_SOURCE),
                 ("Lens", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),

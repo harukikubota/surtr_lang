@@ -1,0 +1,13 @@
+HashMap()
+HashMap("a" => 1, "b" => 2)
+2
+True
+False
+Ok(1)
+Err(NoneError("None Value."))
+HashMap("a" => 3, "b" => 2)
+HashMap("a" => 3)
+HashMap("a" => 3)
+["a", "b"]
+[3, 2]
+HashMap("line\nfeed" => 1, "path\\to" => 2, "say\"hi" => 3, "tab\tchar" => 4)

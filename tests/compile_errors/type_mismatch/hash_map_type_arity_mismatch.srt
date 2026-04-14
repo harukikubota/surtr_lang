@@ -1,0 +1,2 @@
+value: HashMap<String, Int> = HashMap::empty()
+print(to_string(value))

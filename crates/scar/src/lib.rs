@@ -33,6 +33,7 @@ mod tests {
     const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/ordering.srt");
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
+    const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
@@ -178,6 +179,10 @@ mod tests {
                     pick_override("Error", ERROR_MODULE_SOURCE, overrides),
                 ),
                 ("List", pick_override("List", LIST_MODULE_SOURCE, overrides)),
+                (
+                    "HashMap",
+                    pick_override("HashMap", HASH_MAP_MODULE_SOURCE, overrides),
+                ),
                 (
                     "Result",
                     pick_override("Result", RESULT_MODULE_SOURCE, overrides),

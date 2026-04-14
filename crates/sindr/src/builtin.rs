@@ -173,6 +173,51 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(List<$A>, List<$B>) -> List<($A, $B)>",
     },
     BuiltinMeta {
+        name: "empty_map",
+        arity: 0,
+        sig_str: "() -> HashMap<$V>",
+    },
+    BuiltinMeta {
+        name: "map_from_entries",
+        arity: 1,
+        sig_str: "(List<(String, $V)>) -> HashMap<$V>",
+    },
+    BuiltinMeta {
+        name: "map_len",
+        arity: 1,
+        sig_str: "(HashMap<$V>) -> Int",
+    },
+    BuiltinMeta {
+        name: "map_contains_key",
+        arity: 2,
+        sig_str: "(HashMap<$V>, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "map_get",
+        arity: 2,
+        sig_str: "(HashMap<$V>, String) -> Result<$V, NoneError>",
+    },
+    BuiltinMeta {
+        name: "map_insert",
+        arity: 3,
+        sig_str: "(HashMap<$V>, String, $V) -> HashMap<$V>",
+    },
+    BuiltinMeta {
+        name: "map_remove",
+        arity: 2,
+        sig_str: "(HashMap<$V>, String) -> HashMap<$V>",
+    },
+    BuiltinMeta {
+        name: "map_keys",
+        arity: 1,
+        sig_str: "(HashMap<$V>) -> List<String>",
+    },
+    BuiltinMeta {
+        name: "map_values",
+        arity: 1,
+        sig_str: "(HashMap<$V>) -> List<$V>",
+    },
+    BuiltinMeta {
         name: "view",
         arity: 2,
         sig_str: "(Lens<$S, $A>, $S) -> Result<$A>",
@@ -333,6 +378,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     BuiltinTypeMeta {
         name: "List",
         params: &["$A"],
+    },
+    BuiltinTypeMeta {
+        name: "HashMap",
+        params: &["$V"],
     },
     BuiltinTypeMeta {
         name: "Result",

@@ -118,23 +118,23 @@ defmod HashMap {
 
 ## 4. Display / Inspect Contract
 
-`HashMap` の `inspect` / `to_string` は、できるだけ token に近い形式で表示する。
+`HashMap` の `inspect` / `to_string` は、`HashMap(...)` 形式で表示する。
 
 v1 の表示形式は次で固定する。
 
 ```text
-hash!["name" => 1, "age" => 2]
+HashMap("name" => 1, "age" => 2)
 ```
 
 契約:
 
-- 先頭は `hash![`、末尾は `]`
+- 先頭は `HashMap(`、末尾は `)`
 - entry 区切りは `, `
 - key と value の区切りは ` => `
 - key は必ず quoted string とする
 - key の quoting は Surtr の string literal に準じる
 - value は既存の `inspect` 表示をそのまま埋め込む
-- 空 map は `hash![]`
+- 空 map は `HashMap()`
 
 ### 4.1 key の quoting
 
@@ -143,9 +143,9 @@ key は常に `String` なので、表示では常に quoted にする。
 例:
 
 ```text
-hash!["a" => 1]
-hash!["first-name" => "haruca"]
-hash!["line\nfeed" => 1]
+HashMap("a" => 1)
+HashMap("first-name" => "haruca")
+HashMap("line\nfeed" => 1)
 ```
 
 最小 escaping 契約:
@@ -167,14 +167,14 @@ hash!["line\nfeed" => 1]
 m = HashMap::empty()
 m = HashMap::insert(m, "a", 1)
 m = HashMap::insert(m, "b", 2)
-inspect(m) == 'hash!["a" => 1, "b" => 2]'
+inspect(m) == 'HashMap("a" => 1, "b" => 2)'
 ```
 
 また duplicate key 更新でも順序は維持する。
 
 ```surtr
 m = HashMap::from_entries([("a", 1), ("b", 2), ("a", 3)])
-inspect(m) == 'hash!["a" => 3, "b" => 2]'
+inspect(m) == 'HashMap("a" => 3, "b" => 2)'
 ```
 
 ---
@@ -428,7 +428,7 @@ v1 `HashMap` は次で固定するのが最も安全である。
 - type: `HashMap<$V>`
 - key: `String` 固定
 - semantics: immutable
-- display: `hash!["key" => value]`
+- display: `HashMap("key" => value)`
 - future literal: `hash![...]`
 - v1 lowering base: `HashMap::from_entries(...)`
 

@@ -243,6 +243,18 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::List(Box::new(inner_ty)))
                 }
+                "HashMap" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "HashMap<V> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let value_ty =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    Ok(Ty::Enum("HashMap".into(), vec![value_ty]))
+                }
                 "Lens" => {
                     if args.len() != 2 {
                         return Err(TypeError {
@@ -417,6 +429,21 @@ impl Checker {
                     tyvars,
                 )?;
                 Ok(Ty::List(Box::new(inner)))
+            }
+            AstTy::Generic(span, name, args) if name == "HashMap" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "HashMap<V> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let value = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("HashMap".into(), vec![value]))
             }
             AstTy::Generic(span, name, args) if name == "Lens" => {
                 if args.len() != 2 {
@@ -652,6 +679,22 @@ impl Checker {
                     tyvars,
                 )?;
                 Ok(Ty::List(Box::new(inner)))
+            }
+            AstTy::Generic(span, name, args) if name == "HashMap" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "HashMap<V> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let value = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("HashMap".into(), vec![value]))
             }
             AstTy::Generic(span, name, args) if name == "Lens" => {
                 if args.len() != 2 {
@@ -900,6 +943,21 @@ impl Checker {
                         tyvars,
                     )?;
                     Ok(Ty::List(Box::new(inner_ty)))
+                }
+                "HashMap" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "HashMap<V> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let value_ty = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    Ok(Ty::Enum("HashMap".into(), vec![value_ty]))
                 }
                 "Lens" => {
                     if args.len() != 2 {
