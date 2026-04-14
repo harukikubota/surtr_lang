@@ -3,7 +3,7 @@
 > 目的: `LSP/補完` 利用を見据えて、`Spire` parser を段階的に `chumsky` へ移行する。
 > 前提: `doc/依存整理詳細設計.md` と `doc/Spire_chumsky移行詳細設計.md` を正本とする。
 
-最終更新日: 2026-04-14
+最終更新日: 2026-04-14（実装更新）
 
 ---
 
@@ -14,8 +14,11 @@
 - `Spire` の parse 制約は `ParseRules` へ集約済み（旧 `SourceRules` は廃止）
 - runtime 制約（`CompileUnitKind` / `EntryPoint` / `RuntimeSourcePolicy`）は `sindr::policy` へ移設済み
 - `lexer` / `token` は `spire` 内部実装へ閉じ、外部は `strip_test_annotations()` / `collect_entrypoint_annotations()` を利用する
-- `cargo test --workspace` は通過済み
-- 未着手: `type/expr/decl/pattern` の本体 `chumsky` 化、LSP 向け補完入口
+- `parser` は `mod.rs + context.rs + validate.rs + syntax_token.rs + error_map.rs + completion.rs` に分割済み
+- `Rich -> ParseError` 正規化を `error_map.rs` に集約済み（`Incomplete` 判定含む）
+- `parse_incomplete_expr` / `parse_incomplete_stmt` と `CompletionContext` を公開済み
+- `cargo test -p spire --lib`, `cargo test -p rune --test repl`, `cargo test -p rune --test run_srt`, `cargo test --workspace` は通過済み
+- 未着手: `type/expr/decl/pattern` の本体 `chumsky` 化、legacy parser の完全撤去、LSP DTO 変換
 
 ---
 
