@@ -9,7 +9,7 @@ test("String") {
 
   describe("repeat") {
     it("repeats a string") {
-      assert_eq("Ok(nanana)", inspect(repeat("na", 3)))
+      assert_eq("Ok(\"nanana\")", inspect(repeat("na", 3)))
     }
 
     it("rejects negative counts") {
@@ -32,7 +32,7 @@ test("String") {
 
   describe("strip_prefix") {
     it("removes a matching prefix") {
-      assert_eq("Ok(tr)", inspect(strip_prefix("surtr", "sur")))
+      assert_eq("Ok(\"tr\")", inspect(strip_prefix("surtr", "sur")))
     }
 
     it("returns NoneError for a missing prefix") {
@@ -45,7 +45,7 @@ test("String") {
 
   describe("strip_suffix") {
     it("removes a matching suffix") {
-      assert_eq("Ok(sur)", inspect(strip_suffix("surtr", "tr")))
+      assert_eq("Ok(\"sur\")", inspect(strip_suffix("surtr", "tr")))
     }
 
     it("returns NoneError for a missing suffix") {
@@ -59,14 +59,14 @@ test("String") {
   describe("split_once") {
     it("splits on the first match") {
       assert_eq(
-        "Ok(StringSplit::Split(key, value))",
+        "Ok(StringSplit::Split(\"key\", \"value\"))",
         inspect(split_once("key=value", "=")),
       )
     }
 
     it("accepts an empty separator") {
       assert_eq(
-        "Ok(StringSplit::Split(, surtr))",
+        "Ok(StringSplit::Split(\"\", \"surtr\"))",
         inspect(split_once("surtr", "")),
       )
     }
@@ -86,13 +86,13 @@ test("String") {
 
   describe("chars") {
     it("splits into single-character strings") {
-      assert_eq("[あ, b]", inspect(chars("あb")))
+      assert_eq("[\"あ\", \"b\"]", inspect(chars("あb")))
     }
   }
 
   describe("from_chars") {
     it("rebuilds a valid character list") {
-      assert_eq("Ok(あb)", inspect(from_chars(["あ", "b"])))
+      assert_eq("Ok(\"あb\")", inspect(from_chars(["あ", "b"])))
     }
 
     it("rejects multi-character items") {
@@ -129,14 +129,14 @@ test("String") {
   describe("from_codepoints") {
     it("restores utf8 text") {
       assert_eq(
-        "Ok(Aあ)",
+        "Ok(\"Aあ\")",
         inspect(from_codepoints([65, 227, 129, 130], StringEncoding::Utf8)),
       )
     }
 
     it("restores ascii text") {
       assert_eq(
-        "Ok(AZ)",
+        "Ok(\"AZ\")",
         inspect(from_codepoints([65, 90], StringEncoding::Ascii)),
       )
     }

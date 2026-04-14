@@ -21,7 +21,7 @@ True
 False
 [あ, b]
 Ok(あb)
-Err(InvalidCharList("expected single-character string at index 0, got ab"))
+Err(InvalidCharList("expected single-character string at index 0, got \"ab\""))
 Ok([65, 227, 129, 130])
 Ok(Aあ)
 Ok([65, 90])

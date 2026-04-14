@@ -43,17 +43,24 @@ print(to_string(unit_val))"#,
 }
 
 #[test]
-fn inspect_builtin_renders_like_current_display() {
+fn inspect_builtin_quotes_strings_and_preserves_error_rendering() {
     assert_output(
-        r#"nums = [1, 2, 3]
-print(inspect(nums))
-print(inspect(Ok(10)))
+        r#"text = "hello"
+pair = (1, "two", 3)
+print(inspect(text))
+print(inspect(pair))
+print(inspect(Ok("value")))
 
 deferror MyError {
   "error message."
 }
 print(inspect(Err(MyError)))"#,
-        &["[1, 2, 3]", "Ok(10)", "Err(MyError(\"error message.\"))"],
+        &[
+            "\"hello\"",
+            "(1, \"two\", 3)",
+            "Ok(\"value\")",
+            "Err(MyError(\"error message.\"))",
+        ],
     );
 }
 

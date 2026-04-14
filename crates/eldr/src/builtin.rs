@@ -247,7 +247,7 @@ fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
 }
 
 fn builtin_to_string(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    Ok(Value::Str(inspect_value(vm, &args[0])))
+    Ok(Value::Str(args[0].to_display_string(vm.type_registry())))
 }
 
 fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -705,7 +705,9 @@ fn builtin_empty_map(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeEr
 
 fn builtin_map_from_entries(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Value::List(entries) = &args[0] else {
-        return Err(RuntimeError::new("map_from_entries expects List<(String, V)>"));
+        return Err(RuntimeError::new(
+            "map_from_entries expects List<(String, V)>",
+        ));
     };
 
     let mut map = HashMapHandle::empty();
@@ -2178,8 +2180,13 @@ mod tests {
         let vm = test_vm();
         let value = Value::Tuple(vec![
             Value::Str("hello".into()),
-            Value::List(ListHandle::from_items(vec![Value::Str("line\nfeed".into())])),
-            ok_result(Value::Str("world".into())),
+            Value::List(ListHandle::from_items(vec![Value::Str(
+                "line\nfeed".into(),
+            )])),
+            Value::Tagged {
+                tag: 0,
+                fields: vec![Value::Str("world".into())],
+            },
         ]);
 
         assert_eq!(
