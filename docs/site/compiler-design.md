@@ -95,7 +95,7 @@ Surtr では、標準モジュールも source として扱います。
 ロード順は固定です。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> ユーザ拡張
 ```
 
 ### `Bootstrap`

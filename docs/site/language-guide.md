@@ -633,7 +633,7 @@ f = &`+`   # 未実装
 現在の Surtr では、標準モジュールを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。

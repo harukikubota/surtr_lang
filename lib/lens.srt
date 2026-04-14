@@ -3,6 +3,28 @@ Standard `Lens` type declaration.
 `Lens<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
 Lens values are consumed in the same scope via `Lens::view/set/over` and are not
 transported as runtime values across function boundaries.
+
+Use `Lens` when you want to describe "where" inside a value the compiler should
+look or update.
+
+- `Type.segment` builds a path itself
+- `value.segment` is sugar for applying the corresponding path to `value`
+
+Common path forms:
+
+- struct / record field: `User.name`
+- tuple field: `Tuple._0`, `Tuple._1`, ...
+- nested path: `Lens::compose(User.profile, Profile.name)`
+- enum variant selector: `Expr.Add`
+
+`Lens` is compile-time only in Stage1.
+You may bind it in the same scope:
+
+`lens = User.name`
+
+but you may not pass it as a function argument, return it, capture it in a
+closure, or store it inside runtime containers such as `List`, tuples, `Ok(...)`
+or `Err(...)`.
 """
 @@builtin type Lens<$S, $A>
 
@@ -10,6 +32,31 @@ transported as runtime values across function boundaries.
 Lens module.
 Provides compiler-managed path access/update intrinsics:
 `view`, `set`, `over`, `compose`.
+
+Typical workflow:
+
+1. Build a path with `Type.segment` or `Lens::compose(...)`
+2. Read with `Lens::view(...)` or `value.segment`
+3. Update with `Lens::set(...)` or `Lens::over(...)`
+
+Examples:
+
+```surtr
+defstruct Profile {
+  name: String
+}
+
+defstruct User {
+  profile: Profile,
+  pair: (String, Int)
+}
+
+user = User(Profile("alice"), ("admin", 3))
+
+name = Lens::view(Lens::compose(User.profile, Profile.name), user)
+first = Lens::view(Tuple._0, user.pair)
+updated =? Lens::set(Lens::compose(User.profile, Profile.name), user, "bob")
+```
 """
 @@autoimport
 defmod Lens {
@@ -17,24 +64,107 @@ defmod Lens {
   View the focus at `lens` from `source`.
   The declared contract is `Result`-shaped; the compiler refines this in
   Stage1 based on path context.
+
+How to read the return type:
+
+- plain field / tuple paths on plain values return plain `A`
+- if `source` is already `Result<S>`, the result stays `Result<A>`
+- if the path contains an enum variant selector such as `Expr.Add`, the result
+  is promoted to `Result<A>`
+
+Examples:
+
+```surtr
+name = Lens::view(User.name, user)
+first = Lens::view(Tuple._0, pair)
+value = Lens::view(Lens::compose(User.profile, Profile.name), user)
+```
+
+`value.segment` is shorthand for the same read:
+
+```surtr
+name = user.name
+first = pair._0
+```
+
+Variant paths are fallible because the runtime value may be a different
+variant:
+
+```surtr
+match Lens::view(Expr.Add, expr) {
+  Ok(add) => ...,
+  Err(err) => ...,
+}
+```
+
+When the selector does not match, the result is `Err(VariantMismatch(...))`.
   """
   @@builtin def view(lens: Lens<$S, $A>, source: $S) -> Result<$A>
 
   @@doc """
   Replace the focus at `lens` in `source` with `value`.
   Returns the updated source wrapped in `Result`.
+
+Use `set` when you already have the replacement value.
+
+```surtr
+updated =? Lens::set(User.name, user, "bob")
+pair2 =? Lens::set(Tuple._1, pair, 4)
+```
+
+For nested updates, compose the path first:
+
+```surtr
+name_lens = Lens::compose(User.profile, Profile.name)
+updated =? Lens::set(name_lens, user, "bob")
+```
+
+If the path contains a variant selector, `set` fails with
+`Err(VariantMismatch(...))` when the current value is not on that variant.
   """
   @@builtin def set(lens: Lens<$S, $A>, source: $S, value: $A) -> Result<$S>
 
   @@doc """
   Update the focus at `lens` in `source` with `update_fun`.
   `update_fun` receives the current focus and returns `Result<$A>`.
+
+Use `over` when the new value depends on the current focused value.
+
+```surtr
+user2 =? Lens::over(User.name, user, {|name|
+  Ok(name ++ "!")
+})
+
+pair2 =? Lens::over(Tuple._1, pair, {|n|
+  Ok(n + 1)
+})
+```
+
+`update_fun` must return `Result`.
+If `update_fun` returns `Err(...)`, that error is propagated as-is.
   """
   @@builtin def over(lens: Lens<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
 
   @@doc """
   Compose two lens paths in sequence.
   `compose(outer, inner)` focuses from `S` to `B` via `A`.
+
+Use this for nested access and updates.
+
+```surtr
+profile_name = Lens::compose(User.profile, Profile.name)
+
+name = Lens::view(profile_name, user)
+user2 =? Lens::set(profile_name, user, "bob")
+```
+
+The types must line up:
+
+- `outer: Lens<S, A>`
+- `inner: Lens<A, B>`
+- result: `Lens<S, B>`
+
+This is the canonical path-composition API.
   """
   @@builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
 }

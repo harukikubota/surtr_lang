@@ -429,7 +429,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 現在の標準モジュール層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> ユーザ拡張
 ```
 
 ### auto import
@@ -457,6 +457,9 @@ Bootstrap -> [Kernel, Numeric, Int, String, Boolean, Error, List, Result, Float]
 
 // list.srt
 @@builtin type List<$A>
+
+// hash_map.srt
+@@builtin type HashMap<$V>
 
 // result.srt
 @@builtin type Result<$T>
