@@ -106,6 +106,14 @@ pub enum AstPattern {
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
 }
 
+/// Match arm: `pattern [when guard] => body`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AstMatchArm {
+    pub pattern: AstPattern,
+    pub guard: Option<Ast>,
+    pub body: Ast,
+}
+
 // ── Struct / Record fields ──
 
 #[derive(Debug, Clone, PartialEq)]
@@ -262,7 +270,7 @@ pub enum Ast {
     InterpolatedStr(Span, Vec<InterpolatedPart>),
 
     /// Match expression
-    Match(Span, Box<Ast>, Vec<(AstPattern, Ast)>),
+    Match(Span, Box<Ast>, Vec<AstMatchArm>),
 
     /// Field access: `user.name`, `pair._0`
     FieldAccess(Span, Box<Ast>, Symbol),

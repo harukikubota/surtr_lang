@@ -133,10 +133,13 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::Match(_, scrutinee, arms) => {
             collect_captures_inner(scrutinee, bound, free);
-            for (pat, body) in arms {
+            for arm in arms {
                 let mut arm_bound = bound.clone();
-                collect_bind_pattern_bindings(pat, &mut arm_bound);
-                collect_captures_inner(body, &mut arm_bound, free);
+                collect_bind_pattern_bindings(&arm.pattern, &mut arm_bound);
+                if let Some(guard) = &arm.guard {
+                    collect_captures_inner(guard, &mut arm_bound, free);
+                }
+                collect_captures_inner(&arm.body, &mut arm_bound, free);
             }
         }
         Resolved::FieldAccess(_, expr, _) => collect_captures_inner(expr, bound, free),

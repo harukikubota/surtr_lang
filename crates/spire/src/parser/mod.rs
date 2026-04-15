@@ -584,7 +584,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             shift_span(span, delta),
             Box::new(shift_ast_span(*expr, delta)),
             arms.into_iter()
-                .map(|(pat, body)| (shift_match_pattern(pat, delta), shift_ast_span(body, delta)))
+                .map(|arm| AstMatchArm {
+                    pattern: shift_match_pattern(arm.pattern, delta),
+                    guard: arm.guard.map(|guard| shift_ast_span(guard, delta)),
+                    body: shift_ast_span(arm.body, delta),
+                })
                 .collect(),
         ),
         Ast::FieldAccess(span, expr, field) => Ast::FieldAccess(

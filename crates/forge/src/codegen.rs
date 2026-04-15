@@ -283,7 +283,7 @@ fn localize_chunk_indices(
 mod tests {
     use super::Codegen;
     use crate::opcode::Opcode;
-    use scar::typed::{TypedInner, TypedMatchPattern, TypedNode};
+    use scar::typed::{TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode};
     use scar::types::Ty;
     use spire::ast::{BinOp, Lit, Span};
 
@@ -315,8 +315,15 @@ mod tests {
         let scrutinee = lit_node(Ty::Bool, Lit::Bool(false), span(1, 6));
         let body = lit_node(Ty::Bool, Lit::Bool(true), span(10, 14));
 
-        gene.emit_match(&scrutinee, &[(TypedMatchPattern::BoolLit(true), body)])
-            .expect("match emission should succeed");
+        gene.emit_match(
+            &scrutinee,
+            &[TypedMatchArm {
+                pattern: TypedMatchPattern::BoolLit(true),
+                guard: None,
+                body,
+            }],
+        )
+        .expect("match emission should succeed");
 
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
         let eprint_id = Codegen::builtin_id("eprint").expect("eprint builtin must exist");
@@ -3609,16 +3616,21 @@ impl Codegen {
                     arm_labels.push(self.fresh_label());
                 }
 
-                for (i, (pat, body)) in arms.iter().enumerate() {
+                for (i, arm) in arms.iter().enumerate() {
                     let next_arm = if i + 1 < arms.len() {
                         arm_labels[i + 1]
                     } else {
                         mismatch_label
                     };
 
+                    let pat = &arm.pattern;
                     self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
                     self.emit_match_pattern_bind(pat, scrut_slot)?;
-                    self.emit_tail_node(body)?;
+                    if let Some(guard) = &arm.guard {
+                        self.emit_node(guard)?;
+                        self.emit_jump_if_false(next_arm);
+                    }
+                    self.emit_tail_node(&arm.body)?;
 
                     if i + 1 < arms.len() {
                         self.patch_label(arm_labels[i + 1]);
@@ -3813,7 +3825,7 @@ impl Codegen {
     fn emit_match(
         &mut self,
         scrutinee: &TypedNode,
-        arms: &[(TypedMatchPattern, TypedNode)],
+        arms: &[TypedMatchArm],
     ) -> Result<(), CodegenError> {
         if arms.is_empty() {
             return self.emit_pattern_mismatch_failure(scrutinee.span.clone());
@@ -3833,18 +3845,23 @@ impl Codegen {
             arm_labels.push(self.fresh_label());
         }
 
-        for (i, (pat, body)) in arms.iter().enumerate() {
+        for (i, arm) in arms.iter().enumerate() {
             let next_arm = if i + 1 < arms.len() {
                 arm_labels[i + 1]
             } else {
                 mismatch_label
             };
 
+            let pat = &arm.pattern;
             self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
             self.emit_match_pattern_bind(pat, scrut_slot)?;
+            if let Some(guard) = &arm.guard {
+                self.emit_node(guard)?;
+                self.emit_jump_if_false(next_arm);
+            }
 
             // Emit body
-            self.emit_node(body)?;
+            self.emit_node(&arm.body)?;
             self.emit_jump(end_label);
 
             // Patch next arm label

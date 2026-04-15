@@ -1,0 +1,3 @@
+x = match True {
+  flag when flag => 1,
+}

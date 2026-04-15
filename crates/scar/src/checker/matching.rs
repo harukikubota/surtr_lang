@@ -5,14 +5,15 @@ impl Checker {
         &mut self,
         span: &Span,
         scrutinee: &Resolved,
-        arms: &[(ResolvedPattern, Resolved)],
+        arms: &[ResolvedMatchArm],
     ) -> Result<TypedNode, TypeError> {
         let typed_scrut = self.check_node(scrutinee)?;
         let mut typed_arms = Vec::new();
         let mut result_ty: Option<Ty> = None;
 
-        for (pat, body) in arms {
-            let (typed_pat, body_node) = self.check_match_arm(pat, body, &typed_scrut.ty, span)?;
+        for arm in arms {
+            let typed_arm = self.check_match_arm(arm, &typed_scrut.ty, span)?;
+            let body_node = &typed_arm.body;
             if let Some(ref rt) = result_ty {
                 if !self.types_compatible(rt, &body_node.ty) {
                     return Err(TypeError {
@@ -28,7 +29,7 @@ impl Checker {
             } else {
                 result_ty = Some(body_node.ty.clone());
             }
-            typed_arms.push((typed_pat, body_node));
+            typed_arms.push(typed_arm);
             self.normalize_env_bindings();
         }
 
@@ -46,20 +47,23 @@ impl Checker {
         &self,
         span: &Span,
         scrut_ty: &Ty,
-        arms: &[(TypedMatchPattern, TypedNode)],
+        arms: &[TypedMatchArm],
     ) -> Result<(), TypeError> {
-        if arms.iter().any(|(pat, _)| self.is_match_catch_all(pat)) {
+        if arms
+            .iter()
+            .any(|arm| arm.guard.is_none() && self.is_match_catch_all(&arm.pattern))
+        {
             return Ok(());
         }
 
         match scrut_ty {
             Ty::Bool => {
-                let has_true = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::BoolLit(true)));
-                let has_false = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::BoolLit(false)));
+                let has_true = arms.iter().any(|arm| {
+                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::BoolLit(true))
+                });
+                let has_false = arms.iter().any(|arm| {
+                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::BoolLit(false))
+                });
 
                 if has_true && has_false {
                     Ok(())
@@ -79,12 +83,14 @@ impl Checker {
                 }
             }
             Ty::Result(_, _) => {
-                let has_ok = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor { tag: 0, .. }));
-                let has_err = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor { tag: 1, .. }));
+                let has_ok = arms.iter().any(|arm| {
+                    arm.guard.is_none()
+                        && matches!(&arm.pattern, TypedMatchPattern::Constructor { tag: 0, .. })
+                });
+                let has_err = arms.iter().any(|arm| {
+                    arm.guard.is_none()
+                        && matches!(&arm.pattern, TypedMatchPattern::Constructor { tag: 1, .. })
+                });
 
                 if has_ok && has_err {
                     Ok(())
@@ -111,9 +117,12 @@ impl Checker {
                     .unwrap_or_default();
                 let mut missing = Vec::new();
                 for variant in variants {
-                    let covered = arms.iter().any(|(pat, _)| {
+                    let covered = arms.iter().any(|arm| {
+                        if arm.guard.is_some() {
+                            return false;
+                        }
                         matches!(
-                            pat,
+                            &arm.pattern,
                             TypedMatchPattern::Constructor { tag, .. } if *tag == variant.tag
                         )
                     });
@@ -132,12 +141,12 @@ impl Checker {
                 }
             }
             Ty::List(_) => {
-                let has_nil = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::ListNil));
-                let has_cons = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::ListCons(_, _)));
+                let has_nil = arms.iter().any(|arm| {
+                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::ListNil)
+                });
+                let has_cons = arms.iter().any(|arm| {
+                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::ListCons(_, _))
+                });
                 if has_nil && has_cons {
                     Ok(())
                 } else {
@@ -156,19 +165,21 @@ impl Checker {
                 }
             }
             Ty::Str => {
-                let has_empty = arms.iter().any(
-                    |(pat, _)| matches!(pat, TypedMatchPattern::StrLit(value) if value.is_empty()),
-                );
-                let has_cons = arms.iter().any(|(pat, _)| {
-                    matches!(
-                        pat,
-                        TypedMatchPattern::Extractor {
-                            input_ty,
-                            extractor,
-                            ..
-                        } if extractor.name == "uncons"
-                            && matches!(self.resolve_ty(input_ty), Ty::Str)
-                    )
+                let has_empty = arms.iter().any(|arm| {
+                    arm.guard.is_none()
+                        && matches!(&arm.pattern, TypedMatchPattern::StrLit(value) if value.is_empty())
+                });
+                let has_cons = arms.iter().any(|arm| {
+                    arm.guard.is_none()
+                        && matches!(
+                            &arm.pattern,
+                            TypedMatchPattern::Extractor {
+                                input_ty,
+                                extractor,
+                                ..
+                            } if extractor.name == "uncons"
+                                && matches!(self.resolve_ty(input_ty), Ty::Str)
+                        )
                 });
                 if has_empty && has_cons {
                     Ok(())
@@ -197,18 +208,37 @@ impl Checker {
 
     pub(super) fn check_match_arm(
         &mut self,
-        pat: &ResolvedPattern,
-        body: &Resolved,
+        arm: &ResolvedMatchArm,
         scrut_ty: &Ty,
         _span: &Span,
-    ) -> Result<(TypedMatchPattern, TypedNode), TypeError> {
+    ) -> Result<TypedMatchArm, TypeError> {
         let mut arm_checker = self.spawn_child_checker(self.env.clone());
-        let typed_pat = arm_checker.check_match_subpattern(pat, scrut_ty)?;
-        let typed_body = arm_checker.check_node(body)?;
+        let typed_pat = arm_checker.check_match_subpattern(&arm.pattern, scrut_ty)?;
+        let typed_guard = if let Some(guard) = &arm.guard {
+            let typed_guard = arm_checker.check_node(guard)?;
+            if !arm_checker.types_compatible(&Ty::Bool, &typed_guard.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "match guard must be Boolean, got {}",
+                        arm_checker.ty_name(&typed_guard.ty)
+                    ),
+                    span: typed_guard.span.clone(),
+                    hint: None,
+                });
+            }
+            Some(arm_checker.resolve_typed_node(typed_guard))
+        } else {
+            None
+        };
+        let typed_body = arm_checker.check_node(&arm.body)?;
         arm_checker.normalize_env_bindings();
         let typed_body = arm_checker.resolve_typed_node(typed_body);
         self.absorb_child_progress(&arm_checker);
-        Ok((typed_pat, typed_body))
+        Ok(TypedMatchArm {
+            pattern: typed_pat,
+            guard: typed_guard,
+            body: typed_body,
+        })
     }
 
     pub(super) fn check_match_subpattern(

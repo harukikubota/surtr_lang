@@ -1123,10 +1123,7 @@ impl Resolver {
                 let resolved_scrut = self.resolve_node(*scrutinee)?;
                 let resolved_arms = arms
                     .into_iter()
-                    .map(|(pat, body)| {
-                        let (rpat, body) = self.resolve_match_arm(pat, body)?;
-                        Ok((rpat, body))
-                    })
+                    .map(|arm| self.resolve_match_arm(arm))
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 Ok(Resolved::Match(
                     span,

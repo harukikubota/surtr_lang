@@ -200,13 +200,20 @@ impl Resolver {
 
     pub(super) fn resolve_match_arm(
         &mut self,
-        pat: AstPattern,
-        body: Ast,
-    ) -> Result<(ResolvedPattern, Resolved), ResolveError> {
+        arm: AstMatchArm,
+    ) -> Result<ResolvedMatchArm, ResolveError> {
         self.with_child_scope(|child| {
-            let resolved_pat = child.resolve_pattern(pat)?;
-            let resolved_body = child.resolve_node(body)?;
-            Ok((resolved_pat, resolved_body))
+            let resolved_pat = child.resolve_pattern(arm.pattern)?;
+            let resolved_guard = match arm.guard {
+                Some(guard) => Some(child.resolve_node(guard)?),
+                None => None,
+            };
+            let resolved_body = child.resolve_node(arm.body)?;
+            Ok(ResolvedMatchArm {
+                pattern: resolved_pat,
+                guard: resolved_guard,
+                body: resolved_body,
+            })
         })
     }
 }

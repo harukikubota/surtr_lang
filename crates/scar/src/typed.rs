@@ -105,7 +105,7 @@ pub enum TypedInner {
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Assert(Box<TypedNode>, Box<TypedNode>),
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
-    Match(Box<TypedNode>, Vec<(TypedMatchPattern, TypedNode)>),
+    Match(Box<TypedNode>, Vec<TypedMatchArm>),
 
     /// Field access — field name resolved to index by Scar
     FieldAccess(Box<TypedNode>, u32),
@@ -264,6 +264,13 @@ pub enum TypedMatchPattern {
         seq_tys: Vec<Ty>,
         items: Vec<TypedMatchPattern>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedMatchArm {
+    pub pattern: TypedMatchPattern,
+    pub guard: Option<TypedNode>,
+    pub body: TypedNode,
 }
 
 /// Function parameter (typed).

@@ -496,18 +496,31 @@ impl Checker {
                     generated_defs,
                 )?),
                 arms.into_iter()
-                    .map(|(pat, body)| {
-                        Ok((
-                            pat,
-                            self.rewrite_specializations_in_node(
-                                body,
+                    .map(|arm| {
+                        Ok(TypedMatchArm {
+                            pattern: arm.pattern,
+                            guard: arm
+                                .guard
+                                .map(|guard| {
+                                    self.rewrite_specializations_in_node(
+                                        guard,
+                                        defs_by_fun_idx,
+                                        bound_tyvars_by_fun_idx,
+                                        needs_specialization,
+                                        specialization_fun_idxs,
+                                        generated_defs,
+                                    )
+                                })
+                                .transpose()?,
+                            body: self.rewrite_specializations_in_node(
+                                arm.body,
                                 defs_by_fun_idx,
                                 bound_tyvars_by_fun_idx,
                                 needs_specialization,
                                 specialization_fun_idxs,
                                 generated_defs,
                             )?,
-                        ))
+                        })
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
@@ -1012,8 +1025,11 @@ impl Checker {
             }
             TypedInner::Match(scrutinee, arms) => {
                 self.collect_bound_tyvars_in_node(scrutinee, ordered, seen);
-                for (_, body) in arms {
-                    self.collect_bound_tyvars_in_node(body, ordered, seen);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_bound_tyvars_in_node(guard, ordered, seen);
+                    }
+                    self.collect_bound_tyvars_in_node(&arm.body, ordered, seen);
                 }
             }
             TypedInner::FieldAccess(expr, _) => {
@@ -1244,11 +1260,13 @@ impl Checker {
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.substitute_typed_node_with_mapping(*scrutinee, mapping)),
                 arms.into_iter()
-                    .map(|(pat, body)| {
-                        (
-                            self.substitute_typed_match_pattern_with_mapping(pat, mapping),
-                            self.substitute_typed_node_with_mapping(body, mapping),
-                        )
+                    .map(|arm| TypedMatchArm {
+                        pattern: self
+                            .substitute_typed_match_pattern_with_mapping(arm.pattern, mapping),
+                        guard: arm
+                            .guard
+                            .map(|guard| self.substitute_typed_node_with_mapping(guard, mapping)),
+                        body: self.substitute_typed_node_with_mapping(arm.body, mapping),
                     })
                     .collect(),
             ),
@@ -1699,9 +1717,12 @@ impl Checker {
             }
             TypedInner::Match(scrutinee, arms) => {
                 Self::typed_node_has_pending_trait_call(scrutinee)
-                    || arms
-                        .iter()
-                        .any(|(_, body)| Self::typed_node_has_pending_trait_call(body))
+                    || arms.iter().any(|arm| {
+                        arm.guard
+                            .as_ref()
+                            .is_some_and(Self::typed_node_has_pending_trait_call)
+                            || Self::typed_node_has_pending_trait_call(&arm.body)
+                    })
             }
             TypedInner::FieldAccess(expr, _) => Self::typed_node_has_pending_trait_call(expr),
             TypedInner::LensPath(_) => false,

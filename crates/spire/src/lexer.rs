@@ -261,6 +261,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "impl" => Token::Impl,
                 "for" => Token::For,
                 "match" => Token::Match,
+                "when" => Token::When,
                 "cond" => Token::Cond,
                 "private" => Token::Private,
                 "type" => Token::Type,
@@ -502,6 +503,12 @@ mod tests {
     fn test_cond_keyword() {
         let tokens = tokenize("cond { True => 1 }").unwrap();
         assert!(matches!(tokens[0].token, Token::Cond));
+    }
+
+    #[test]
+    fn test_when_keyword() {
+        let tokens = tokenize("when").unwrap();
+        assert!(matches!(tokens[0].token, Token::When));
     }
 
     #[test]

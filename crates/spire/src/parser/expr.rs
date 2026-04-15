@@ -1074,10 +1074,28 @@ impl Parser {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
-            let pat = self.parse_match_pattern()?;
+            let mut patterns = vec![self.parse_match_pattern()?];
+            while matches!(self.peek(), Token::Pipe) {
+                self.advance();
+                self.skip_newlines();
+                patterns.push(self.parse_match_pattern()?);
+            }
+            let guard = if matches!(self.peek(), Token::When) {
+                self.advance();
+                self.skip_newlines();
+                Some(self.parse_non_assignment_expr()?)
+            } else {
+                None
+            };
             self.expect(&Token::FatArrow)?;
             let body = self.parse_expr()?;
-            arms.push((pat, body));
+            for pattern in patterns {
+                arms.push(AstMatchArm {
+                    pattern,
+                    guard: guard.clone(),
+                    body: body.clone(),
+                });
+            }
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
                 self.advance();

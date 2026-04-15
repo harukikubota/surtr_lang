@@ -1666,6 +1666,31 @@ answer = match pair {
     }
 
     #[test]
+    fn match_guard_must_be_boolean() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"answer = match 1 {
+  n when 1 => n,
+  _ => 0,
+}"#,
+        );
+        let err = typecheck(resolved).expect_err("non-boolean guard must fail");
+        assert!(err.message.contains("match guard must be Boolean, got Int"));
+    }
+
+    #[test]
+    fn guarded_match_arm_does_not_satisfy_exhaustiveness() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"answer = match True {
+  flag when flag => 1,
+}"#,
+        );
+        let err = typecheck(resolved).expect_err("guarded-only arm must be non-exhaustive");
+        assert!(err
+            .message
+            .contains("Non-exhaustive match. Missing: True, False"));
+    }
+
+    #[test]
     fn struct_literal_rejects_extra_fields() {
         let resolved = resolve_with_builtin_prelude(
             r#"defstruct User {
@@ -1911,7 +1936,10 @@ largest = Numeric::max(1.5, 2.5)"#,
                 }
                 TypedInner::Match(scrutinee, arms) => {
                     has_pending_trait_call(scrutinee)
-                        || arms.iter().any(|(_, arm)| has_pending_trait_call(arm))
+                        || arms.iter().any(|arm| {
+                            arm.guard.as_ref().is_some_and(has_pending_trait_call)
+                                || has_pending_trait_call(&arm.body)
+                        })
                 }
                 TypedInner::InterpolatedStr(parts) => parts.iter().any(|part| match part {
                     crate::typed::TypedInterpolatedPart::Text(_) => false,

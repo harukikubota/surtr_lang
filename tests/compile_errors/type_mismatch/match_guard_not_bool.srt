@@ -1,0 +1,4 @@
+x = match 1 {
+  num when 1 => num,
+  _ => 0,
+}

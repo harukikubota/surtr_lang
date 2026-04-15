@@ -1335,9 +1335,15 @@ x = match s {
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Match(_, _, arms) => {
-                assert!(matches!(&arms[0].0, ResolvedPattern::StrLit(_, s) if s == "a"));
-                assert!(matches!(&arms[1].0, ResolvedPattern::IntLit(_, n) if n == &int(2)));
-                assert!(matches!(&arms[2].0, ResolvedPattern::Wildcard(_)));
+                assert!(matches!(
+                    &arms[0].pattern,
+                    ResolvedPattern::StrLit(_, s) if s == "a"
+                ));
+                assert!(matches!(
+                    &arms[1].pattern,
+                    ResolvedPattern::IntLit(_, n) if n == &int(2)
+                ));
+                assert!(matches!(&arms[2].pattern, ResolvedPattern::Wildcard(_)));
             }
             _ => panic!("Expected Match"),
         },
@@ -2233,29 +2239,31 @@ result = match value {
 
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Match(_, _, arms) => {
-                match &arms[0] {
-                    (ResolvedPattern::Constructor(ctor_id, inner), body) => {
-                        assert_eq!(ctor_id.name, "Ok");
-                        let binding_id = match inner.as_slice() {
-                            [ResolvedPattern::Var(binding_id)] => binding_id,
-                            _ => panic!("Expected constructor inner var binding"),
-                        };
-                        assert_eq!(binding_id.name, "x");
-                        // The arm body `x` must refer to the same uid as the pattern binding
-                        match body {
-                            Resolved::Var(_, var_id) => {
-                                assert_eq!(
-                                    var_id.unique_id, binding_id.unique_id,
-                                    "body var uid must match pattern binding uid"
-                                );
-                            }
-                            _ => panic!("Expected Var as match arm body"),
+            Resolved::Match(_, _, arms) => match &arms[0] {
+                ResolvedMatchArm {
+                    pattern: ResolvedPattern::Constructor(ctor_id, inner),
+                    guard: None,
+                    body,
+                } => {
+                    assert_eq!(ctor_id.name, "Ok");
+                    let binding_id = match inner.as_slice() {
+                        [ResolvedPattern::Var(binding_id)] => binding_id,
+                        _ => panic!("Expected constructor inner var binding"),
+                    };
+                    assert_eq!(binding_id.name, "x");
+                    // The arm body `x` must refer to the same uid as the pattern binding
+                    match body {
+                        Resolved::Var(_, var_id) => {
+                            assert_eq!(
+                                var_id.unique_id, binding_id.unique_id,
+                                "body var uid must match pattern binding uid"
+                            );
                         }
+                        _ => panic!("Expected Var as match arm body"),
                     }
-                    _ => panic!("Expected Constructor arm pattern with binding"),
                 }
-            }
+                _ => panic!("Expected Constructor arm pattern with binding"),
+            },
             _ => panic!("Expected Match"),
         },
         _ => panic!("Expected Bind"),
@@ -2275,7 +2283,11 @@ fn test_match_first_binding_pattern_binds_and_is_visible_in_body() {
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Match(_, _, arms) => match &arms[0] {
-                (ResolvedPattern::Var(binding_id), Resolved::Var(_, body_id)) => {
+                ResolvedMatchArm {
+                    pattern: ResolvedPattern::Var(binding_id),
+                    guard: None,
+                    body: Resolved::Var(_, body_id),
+                } => {
                     assert_eq!(binding_id.name, "fallback");
                     assert_eq!(binding_id.unique_id, body_id.unique_id);
                 }
@@ -2301,10 +2313,12 @@ result = match value {
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Match(_, _, arms) => match &arms[0] {
-                (
-                    ResolvedPattern::As(inner, alias, Some(AstTy::Generic(_, ty_name, ty_args))),
+                ResolvedMatchArm {
+                    pattern:
+                        ResolvedPattern::As(inner, alias, Some(AstTy::Generic(_, ty_name, ty_args))),
+                    guard: None,
                     body,
-                ) => {
+                } => {
                     assert_eq!(alias.name, "whole");
                     assert_eq!(ty_name, "List");
                     assert_eq!(ty_args.len(), 1);
@@ -2312,6 +2326,38 @@ result = match value {
                     assert!(matches!(body, Resolved::Var(_, id) if id.name == "head"));
                 }
                 _ => panic!("Expected as-pattern with generic annotation"),
+            },
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_match_guard_can_reference_pattern_binding() {
+    let resolved = parse_and_resolve(
+        r#"result = match 5 {
+  num when num `==` 5 => num,
+  _ => 0,
+}"#,
+    )
+    .unwrap();
+
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => match &arms[0] {
+                ResolvedMatchArm {
+                    pattern: ResolvedPattern::Var(binding_id),
+                    guard: Some(Resolved::BinOp(_, _, left, _)),
+                    body: Resolved::Var(_, body_id),
+                } => {
+                    let Resolved::Var(_, guard_left_id) = left.as_ref() else {
+                        panic!("Expected guard left operand to be bound variable");
+                    };
+                    assert_eq!(binding_id.unique_id, guard_left_id.unique_id);
+                    assert_eq!(binding_id.unique_id, body_id.unique_id);
+                }
+                _ => panic!("Expected guarded variable arm"),
             },
             _ => panic!("Expected Match"),
         },

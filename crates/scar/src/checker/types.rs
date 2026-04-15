@@ -1688,11 +1688,10 @@ impl Checker {
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.resolve_typed_node(*scrutinee)),
                 arms.into_iter()
-                    .map(|(pat, body)| {
-                        (
-                            self.resolve_typed_match_pattern(pat),
-                            self.resolve_typed_node(body),
-                        )
+                    .map(|arm| TypedMatchArm {
+                        pattern: self.resolve_typed_match_pattern(arm.pattern),
+                        guard: arm.guard.map(|guard| self.resolve_typed_node(guard)),
+                        body: self.resolve_typed_node(arm.body),
                     })
                     .collect(),
             ),

@@ -1646,8 +1646,8 @@ fn test_match_wildcard_and_int_pattern() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
-                assert!(matches!(&arms[0].0, AstPattern::IntLit(_, n) if n == &int(1)));
-                assert!(matches!(&arms[1].0, AstPattern::Wildcard(_)));
+                assert!(matches!(&arms[0].pattern, AstPattern::IntLit(_, n) if n == &int(1)));
+                assert!(matches!(&arms[1].pattern, AstPattern::Wildcard(_)));
             }
             _ => panic!("Expected Match"),
         },
@@ -1667,7 +1667,7 @@ fn test_match_string_pattern() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
-                assert!(matches!(&arms[0].0, AstPattern::StrLit(_, s) if s == "a"));
+                assert!(matches!(&arms[0].pattern, AstPattern::StrLit(_, s) if s == "a"));
             }
             _ => panic!("Expected Match"),
         },
@@ -1688,7 +1688,7 @@ fn test_match_negative_int_in_list_pattern() {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
-                    &arms[0].0,
+                    &arms[0].pattern,
                     AstPattern::ListCons(_, head, tail)
                         if matches!(head.as_ref(), AstPattern::IntLit(_, n) if n == &int(-1))
                             && matches!(tail.as_ref(), AstPattern::ListNil(_))
@@ -1814,7 +1814,7 @@ fn test_match_constructor_pattern_is_accepted() {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
-                    &arms[0].0,
+                    &arms[0].pattern,
                     AstPattern::Call(_, name, inner)
                         if name == "Some"
                             && matches!(inner.as_slice(), [AstPattern::Var(_, bound)] if bound == "y")
@@ -1839,7 +1839,7 @@ fn test_match_bare_uppercase_identifier_is_constructor_pattern() {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
-                    &arms[0].0,
+                    &arms[0].pattern,
                     AstPattern::Constructor(_, name, args) if name == "ParseError" && args.is_empty()
                 ));
             }
@@ -1863,13 +1863,67 @@ fn test_match_as_and_annotated_pattern_is_accepted() {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
-                    &arms[0].0,
+                    &arms[0].pattern,
                     AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, ty_name, ty_args)))
                         if alias == "whole"
                             && ty_name == "List"
                             && ty_args.len() == 1
                             && matches!(inner.as_ref(), AstPattern::ListCons(_, _, _))
                 ));
+            }
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_match_or_pattern_expands_into_multiple_arms() {
+    let ast = parse(
+        r#"x = match value {
+  "a" | "b" => 1,
+  _ => 0,
+}"#,
+    )
+    .expect("or pattern should parse");
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Match(_, _, arms) => {
+                assert_eq!(arms.len(), 3);
+                assert!(matches!(
+                    &arms[0].pattern,
+                    AstPattern::StrLit(_, s) if s == "a"
+                ));
+                assert!(matches!(
+                    &arms[1].pattern,
+                    AstPattern::StrLit(_, s) if s == "b"
+                ));
+                assert!(matches!(&arms[2].pattern, AstPattern::Wildcard(_)));
+            }
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_match_guard_is_parsed_on_each_expanded_or_arm() {
+    let ast = parse(
+        r#"x = match n {
+  1 | 2 when (0 < n) `and` (n < 10) => n,
+  _ => 0,
+}"#,
+    )
+    .expect("guarded or pattern should parse");
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Match(_, _, arms) => {
+                assert_eq!(arms.len(), 3);
+                assert!(arms[0].guard.is_some());
+                assert!(arms[1].guard.is_some());
+                assert!(arms[2].guard.is_none());
             }
             _ => panic!("Expected Match"),
         },

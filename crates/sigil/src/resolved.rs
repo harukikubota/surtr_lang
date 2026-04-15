@@ -80,7 +80,7 @@ pub enum Resolved {
     Ensure(Span, Box<Resolved>, Box<Resolved>, Box<Resolved>),
 
     /// Match expression
-    Match(Span, Box<Resolved>, Vec<(ResolvedPattern, Resolved)>),
+    Match(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
 
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
@@ -192,6 +192,13 @@ pub enum Resolved {
 
     /// Semicolon — explicit Unit coercion
     Semi(Span, Box<Resolved>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedMatchArm {
+    pub pattern: ResolvedPattern,
+    pub guard: Option<Resolved>,
+    pub body: Resolved,
 }
 
 /// Interpolated string fragment (resolved).

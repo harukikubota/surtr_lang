@@ -269,11 +269,10 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             span,
             Box::new(rewrite_self_ast(*scrutinee, target)),
             arms.into_iter()
-                .map(|(pat, body)| {
-                    (
-                        rewrite_self_pattern(pat, target),
-                        rewrite_self_ast(body, target),
-                    )
+                .map(|arm| AstMatchArm {
+                    pattern: rewrite_self_pattern(arm.pattern, target),
+                    guard: arm.guard.map(|guard| rewrite_self_ast(guard, target)),
+                    body: rewrite_self_ast(arm.body, target),
                 })
                 .collect(),
         ),
