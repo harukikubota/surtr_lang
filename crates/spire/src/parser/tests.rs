@@ -1201,6 +1201,38 @@ fn test_pipe_rhs_call_stays_as_app() {
 }
 
 #[test]
+fn test_flow_operators_allow_elixir_style_line_breaks() {
+    let ast = parse(
+        "out = value\n|> trim()\n|*> normalize()\npipeline = &parse\n|=> &render\nplain = &inc >>\n&inc",
+    )
+    .expect("flow operators should continue across newlines");
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::ContextMap(_, left, _) => {
+                assert!(matches!(left.as_ref(), Ast::Pipe(_, _, _)));
+            }
+            other => panic!("Expected multiline pipe/map chain, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Ast::KleisliCompose(_, _, _)));
+        }
+        other => panic!("Expected multiline kleisli compose, got {:?}", other),
+    }
+
+    match &ast[2] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Ast::Compose(_, _, _)));
+        }
+        other => panic!("Expected multiline compose, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_nested_generic_type_closes_without_confusing_compose() {
     let ast = parse("value: Result<List<Int>> = Ok([])").expect("nested generic type should parse");
     match &ast[0] {

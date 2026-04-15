@@ -5,6 +5,29 @@ use crate::token::Token;
 use super::Parser;
 
 impl Parser {
+    fn flow_op_kind(tok: &Token) -> Option<u8> {
+        match tok {
+            Token::PipeApply => Some(0),
+            Token::PipeMap => Some(1),
+            Token::PipeBind => Some(2),
+            Token::Compose => Some(3),
+            Token::PipeCompose => Some(4),
+            _ => None,
+        }
+    }
+
+    fn skip_newlines_before_flow_op(&mut self) {
+        if !matches!(self.peek(), Token::Newline) {
+            return;
+        }
+
+        let save = self.pos;
+        self.skip_newlines();
+        if Self::flow_op_kind(self.peek()).is_none() {
+            self.pos = save;
+        }
+    }
+
     pub(super) fn parse_expr(&mut self) -> Result<Ast, ParseError> {
         self.parse_flow_expr()
     }
@@ -12,15 +35,14 @@ impl Parser {
     pub(super) fn parse_flow_expr(&mut self) -> Result<Ast, ParseError> {
         let mut left = self.parse_logical_expr()?;
         loop {
-            let next = match self.peek() {
-                Token::PipeApply => 0,
-                Token::PipeMap => 1,
-                Token::PipeBind => 2,
-                Token::Compose => 3,
-                Token::PipeCompose => 4,
-                _ => break,
+            self.skip_newlines_before_flow_op();
+
+            let next = match Self::flow_op_kind(self.peek()) {
+                Some(kind) => kind,
+                None => break,
             };
             self.advance();
+            self.skip_newlines();
             let right = self.parse_logical_expr()?;
             let span = Span {
                 start: left.span().start,

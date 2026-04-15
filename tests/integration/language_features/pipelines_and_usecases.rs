@@ -39,6 +39,45 @@ print(user |> User::get_name())"#,
 }
 
 #[test]
+fn flow_operators_allow_multiline_elixir_style_layout() {
+    assert_output(
+        r#"def parse(text: String) -> Result<Int> {
+  Ok(2)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x + 3))
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def double(x: Int) -> Int {
+  x * 2
+}
+
+value = 4
+  |> inc()
+  |> double()
+
+pipeline = &parse
+  |=> &render
+
+plain = &inc
+  >> &double
+
+print(to_string(value))
+match pipeline("x") {
+  Ok(v) => print(v),
+  Err(e) => print("err"),
+}
+print(to_string(plain(4)))"#,
+        &["10", "5", "10"],
+    );
+}
+
+#[test]
 fn result_pipeline_map_and_bind_work() {
     assert_output(
         r#"def inc(x: Int) -> Int {
