@@ -1,0 +1,171 @@
+import String;
+import Test;
+
+test("String") {
+  describe("len") {
+    it("counts ascii characters") { assert_eq(5, len("surtr")) }
+    it("counts unicode surface characters") { assert_eq(2, len("あい")) }
+  }
+
+  describe("repeat") {
+    it("repeats a string") {
+      assert_eq("Ok(\"nanana\")", inspect(repeat("na", 3)))
+    }
+
+    it("rejects negative counts") {
+      assert_eq(
+        "Err(NegativeRepeatCount(\"repeat count must be non-negative: -1\"))",
+        inspect(repeat("na", -1)),
+      )
+    }
+  }
+
+  describe("starts_with") {
+    it("matches a valid prefix") { assert_true(starts_with("surtr", "sur")) }
+    it("rejects a missing prefix") { assert_false(starts_with("surtr", "urt")) }
+  }
+
+  describe("ends_with") {
+    it("matches a valid suffix") { assert_true(ends_with("surtr", "tr")) }
+    it("rejects a missing suffix") { assert_false(ends_with("surtr", "su")) }
+  }
+
+  describe("strip_prefix") {
+    it("removes a matching prefix") {
+      assert_eq("Ok(\"tr\")", inspect(strip_prefix("surtr", "sur")))
+    }
+
+    it("returns NoneError for a missing prefix") {
+      assert_eq(
+        "Err(NoneError(\"None Value.\"))",
+        inspect(strip_prefix("surtr", "ur")),
+      )
+    }
+  }
+
+  describe("strip_suffix") {
+    it("removes a matching suffix") {
+      assert_eq("Ok(\"sur\")", inspect(strip_suffix("surtr", "tr")))
+    }
+
+    it("returns NoneError for a missing suffix") {
+      assert_eq(
+        "Err(NoneError(\"None Value.\"))",
+        inspect(strip_suffix("surtr", "su")),
+      )
+    }
+  }
+
+  describe("split_once") {
+    it("splits on the first match") {
+      assert_eq(
+        "Ok(StringSplit::Split(\"key\", \"value\"))",
+        inspect(split_once("key=value", "=")),
+      )
+    }
+
+    it("accepts an empty separator") {
+      assert_eq(
+        "Ok(StringSplit::Split(\"\", \"surtr\"))",
+        inspect(split_once("surtr", "")),
+      )
+    }
+
+    it("returns NoneError when not found") {
+      assert_eq(
+        "Err(NoneError(\"None Value.\"))",
+        inspect(split_once("surtr", "/")),
+      )
+    }
+  }
+
+  describe("contains") {
+    it("matches an inner substring") { assert_true(contains("surtr", "urt")) }
+    it("rejects a missing substring") { assert_false(contains("surtr", "zzz")) }
+  }
+
+  describe("chars") {
+    it("splits into single-character strings") {
+      assert_eq("[\"あ\", \"b\"]", inspect(chars("あb")))
+    }
+  }
+
+  describe("from_chars") {
+    it("rebuilds a valid character list") {
+      assert_eq("Ok(\"あb\")", inspect(from_chars(["あ", "b"])))
+    }
+
+    it("rejects multi-character items") {
+      assert_eq(
+        "Err(InvalidCharList(\"expected single-character string at index 0, got ab\"))",
+        inspect(from_chars(["ab"])),
+      )
+    }
+  }
+
+  describe("codepoints") {
+    it("encodes utf8 bytes") {
+      assert_eq(
+        "Ok([65, 227, 129, 130])",
+        inspect(codepoints("Aあ", StringEncoding::Utf8)),
+      )
+    }
+
+    it("encodes ascii bytes") {
+      assert_eq(
+        "Ok([65, 90])",
+        inspect(codepoints("AZ", StringEncoding::Ascii)),
+      )
+    }
+
+    it("rejects non-ascii characters in ascii mode") {
+      assert_eq(
+        "Err(InvalidStringEncoding(\"ASCII encoding does not support character at index 0: あ\"))",
+        inspect(codepoints("あ", StringEncoding::Ascii)),
+      )
+    }
+  }
+
+  describe("from_codepoints") {
+    it("restores utf8 text") {
+      assert_eq(
+        "Ok(\"Aあ\")",
+        inspect(from_codepoints([65, 227, 129, 130], StringEncoding::Utf8)),
+      )
+    }
+
+    it("restores ascii text") {
+      assert_eq(
+        "Ok(\"AZ\")",
+        inspect(from_codepoints([65, 90], StringEncoding::Ascii)),
+      )
+    }
+
+    it("rejects out-of-range ascii codes") {
+      assert_eq(
+        "Err(InvalidStringEncoding(\"ASCII code out of range at index 0: 128\"))",
+        inspect(from_codepoints([128], StringEncoding::Ascii)),
+      )
+    }
+  }
+
+  describe("trim") {
+    it("trims leading whitespace") { assert_eq("core", trim_start(" \n\tcore")) }
+    it("trims trailing whitespace") { assert_eq("core", trim_end("core \n\t")) }
+    it("trims both sides") { assert_eq("core", trim(" \ncore\t ")) }
+  }
+
+  describe("TryFrom") {
+    it("supports result pipeline assertions") {
+      try_from("1", Int) |>= assert_eq(1)
+    }
+
+    it("reports invalid integer text") {
+      assert_err_contains("invalid integer literal", try_from("bad", Int))
+    }
+
+    it("parses booleans") {
+      try_from("true", Boolean) |>= assert_eq(True)
+    }
+  }
+}

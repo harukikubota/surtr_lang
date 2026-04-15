@@ -10,10 +10,19 @@ pub struct Span {
 /// A plain identifier string. Kept as its own type for readability.
 pub type Symbol = String;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Visibility {
+    #[default]
+    Public,
+    Private,
+}
+
 /// Attributes attached to a declaration.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeclAttrs {
     pub doc: Option<String>,
+    pub auto_import: bool,
+    pub visibility: Visibility,
 }
 
 /// Surface builtin type head declaration: `List<$A>`, `Result<$T>`, `Int`, ...
@@ -57,8 +66,12 @@ pub enum BinOp {
 pub enum AstTy {
     /// `Int`, `String`, `Boolean`, `Unit`, `User`, ...
     Named(Span, Symbol),
+    /// `impl Numeric`
+    ImplTrait(Span, Symbol),
     /// `List<T>`, `Result<T, E>`, user-defined generic types, ...
     Generic(Span, Symbol, Vec<AstTy>),
+    /// `(A, B, C)`
+    Tuple(Span, Vec<AstTy>),
     /// `(-> T)`, `(A -> B)`, `(A, B -> C)`
     Func(Span, Vec<AstTy>, Box<AstTy>),
 }
@@ -87,6 +100,8 @@ pub enum AstPattern {
     Constructor(Span, Symbol, Vec<AstPattern>),
     /// `uncons(head, tail)` / `User(name, age)` in MatchBlock position.
     Call(Span, Symbol, Vec<AstPattern>),
+    /// `(head, tail, ...)`
+    Tuple(Span, Vec<AstPattern>),
     /// `inner @ alias` / `inner @ alias: Ty`
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
 }
@@ -98,6 +113,7 @@ pub struct StructField {
     pub name: Symbol,
     pub ty: AstTy,
     pub span: Span,
+    pub visibility: Visibility,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +121,7 @@ pub struct RecordField {
     pub name: Symbol,
     pub ty: AstTy,
     pub span: Span,
+    pub visibility: Visibility,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +135,7 @@ pub struct EnumVariant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeParam {
     pub name: Symbol,
+    pub bound: Option<Symbol>,
     pub span: Span,
 }
 
@@ -126,6 +144,15 @@ pub struct TypeParam {
 pub struct FunParam {
     pub name: Symbol,
     pub ty: AstTy,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitMethodSig {
+    pub name: Symbol,
+    pub type_params: Vec<TypeParam>,
+    pub params: Vec<FunParam>,
+    pub ret_ty: AstTy,
     pub span: Span,
 }
 
@@ -228,13 +255,16 @@ pub enum Ast {
     /// Fixed list literal: `[1, 2, 3]`
     ListLiteral(Span, Vec<Ast>),
 
+    /// Tuple literal: `(1, 2, 3)`
+    TupleLiteral(Span, Vec<Ast>),
+
     /// Interpolated string: `"hi #{name}"`
     InterpolatedStr(Span, Vec<InterpolatedPart>),
 
     /// Match expression
     Match(Span, Box<Ast>, Vec<(AstPattern, Ast)>),
 
-    /// Field access: `user.name`
+    /// Field access: `user.name`, `pair._0`
     FieldAccess(Span, Box<Ast>, Symbol),
 
     /// Struct definition: `defstruct User { name: String, age: Int }`
@@ -259,13 +289,22 @@ pub enum Ast {
     Def(
         Span,
         Symbol,
+        Vec<TypeParam>,
         Vec<FunParam>,
         Option<AstTy>,
         Box<Ast>,
         DeclAttrs,
     ),
 
-    ExtractorDef(Span, Symbol, ExtractorParam, AstTy, Box<Ast>, DeclAttrs),
+    ExtractorDef(
+        Span,
+        Symbol,
+        Vec<TypeParam>,
+        ExtractorParam,
+        AstTy,
+        Box<Ast>,
+        DeclAttrs,
+    ),
 
     /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
@@ -290,6 +329,14 @@ pub enum Ast {
 
     /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
     ImplDef(Span, Symbol, Vec<Ast>),
+
+    /// Trait definition: `deftrait Numeric<$T> { def add(self: Self, rhs: Self) -> Self }`
+    TraitDef(Span, Symbol, Vec<TypeParam>, Vec<TraitMethodSig>, DeclAttrs),
+
+    /// Trait impl definition:
+    /// `impl Numeric for Int { ... }`
+    /// `impl From<String> for Int { ... }`
+    TraitImplDef(Span, Symbol, Vec<AstTy>, AstTy, Vec<Ast>),
 
     /// Import declaration
     Import(Span, AstPath, ImportSpec),

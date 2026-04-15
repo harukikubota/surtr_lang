@@ -12,6 +12,40 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::builtin::call_builtin;
 use crate::error::{RuntimeError, RuntimeErrorContext};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VmTestEventKind {
+    Passed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VmCapturedIo {
+    pub stdout: Vec<String>,
+    pub stderr: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmTestEvent {
+    pub path: Vec<String>,
+    pub detail: Option<String>,
+    pub kind: VmTestEventKind,
+    pub io: Option<VmCapturedIo>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IoMode {
+    #[default]
+    Passthrough,
+    Capture,
+    Tee,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct VmIoPolicy {
+    pub stdout: IoMode,
+    pub stderr: IoMode,
+}
+
 #[derive(Debug, Clone)]
 struct CallFrame {
     return_pc: usize,
@@ -29,6 +63,10 @@ struct VmCheckpoint {
     last_result: Option<Value>,
     output_len: Option<usize>,
     error_output_len: Option<usize>,
+    test_scope_len: usize,
+    test_event_len: usize,
+    test_stdout_cursor: usize,
+    test_stderr_cursor: usize,
     opcode_len: usize,
     constant_len: usize,
     type_entry_len: usize,
@@ -161,12 +199,21 @@ pub struct VM {
     pub output: Option<Vec<String>>,
     /// Captured stderr (for testing). `None` = print to real stderr.
     pub error_output: Option<Vec<String>>,
+    /// Runtime I/O policy for stdout/stderr.
+    io_policy: VmIoPolicy,
     /// Process exit code requested by the running program.
     exit_code: i32,
     /// Last value produced by full-program or chunk execution.
     last_result: Option<Value>,
     /// Optional developer-facing execution observer.
     observer: Option<VmObserver>,
+    /// Current nested test/describe scope names.
+    test_scope: Vec<String>,
+    /// Collected test events emitted by the test DSL runtime helpers.
+    test_events: Vec<VmTestEvent>,
+    /// Cursor tracking for test-event I/O slices.
+    test_stdout_cursor: usize,
+    test_stderr_cursor: usize,
 }
 
 impl VM {
@@ -186,9 +233,14 @@ impl VM {
             source_file: None,
             output: None,
             error_output: None,
+            io_policy: VmIoPolicy::default(),
             exit_code: 0,
             last_result: None,
             observer: None,
+            test_scope: Vec::new(),
+            test_events: Vec::new(),
+            test_stdout_cursor: 0,
+            test_stderr_cursor: 0,
         }
     }
 
@@ -301,14 +353,190 @@ impl VM {
 
     /// Enable stdout capture (for testing).
     pub fn with_output_capture(mut self) -> Self {
-        self.output = Some(Vec::new());
+        self.io_policy.stdout = IoMode::Capture;
+        self.configure_io_buffers();
         self
     }
 
     /// Enable stderr capture (for testing).
     pub fn with_error_capture(mut self) -> Self {
-        self.error_output = Some(Vec::new());
+        self.io_policy.stderr = IoMode::Capture;
+        self.configure_io_buffers();
         self
+    }
+
+    /// Replace stdout/stderr handling policy.
+    pub fn with_io_policy(mut self, policy: VmIoPolicy) -> Self {
+        self.io_policy = policy;
+        self.configure_io_buffers();
+        self
+    }
+
+    /// Update stdout/stderr handling policy.
+    pub fn set_io_policy(&mut self, policy: VmIoPolicy) {
+        self.io_policy = policy;
+        self.configure_io_buffers();
+    }
+
+    pub fn io_policy(&self) -> VmIoPolicy {
+        self.io_policy
+    }
+
+    pub fn stdout_mode(&self) -> IoMode {
+        self.io_policy.stdout
+    }
+
+    pub fn stderr_mode(&self) -> IoMode {
+        self.io_policy.stderr
+    }
+
+    pub fn is_stdout_captured(&self) -> bool {
+        matches!(self.io_policy.stdout, IoMode::Capture | IoMode::Tee)
+    }
+
+    pub fn is_stderr_captured(&self) -> bool {
+        matches!(self.io_policy.stderr, IoMode::Capture | IoMode::Tee)
+    }
+
+    pub fn is_any_io_captured(&self) -> bool {
+        self.is_stdout_captured() || self.is_stderr_captured()
+    }
+
+    pub fn captured_stdout(&self) -> Option<&[String]> {
+        self.output.as_deref()
+    }
+
+    pub fn captured_stderr(&self) -> Option<&[String]> {
+        self.error_output.as_deref()
+    }
+
+    pub fn captured_io_snapshot(&self) -> VmCapturedIo {
+        VmCapturedIo {
+            stdout: self.output.clone().unwrap_or_default(),
+            stderr: self.error_output.clone().unwrap_or_default(),
+        }
+    }
+
+    /// Drain captured stdout lines and keep capture active.
+    pub fn take_stdout(&mut self) -> Vec<String> {
+        match self.output.as_mut() {
+            Some(buffer) => std::mem::take(buffer),
+            None => Vec::new(),
+        }
+    }
+
+    /// Drain captured stderr lines and keep capture active.
+    pub fn take_stderr(&mut self) -> Vec<String> {
+        match self.error_output.as_mut() {
+            Some(buffer) => std::mem::take(buffer),
+            None => Vec::new(),
+        }
+    }
+
+    pub fn reset_captured_io(&mut self) {
+        if let Some(stdout) = self.output.as_mut() {
+            stdout.clear();
+        }
+        if let Some(stderr) = self.error_output.as_mut() {
+            stderr.clear();
+        }
+        self.test_stdout_cursor = 0;
+        self.test_stderr_cursor = 0;
+    }
+
+    pub(crate) fn emit_stdout_line(&mut self, line: String) {
+        match self.io_policy.stdout {
+            IoMode::Passthrough => println!("{}", line),
+            IoMode::Capture => {
+                if let Some(buffer) = self.output.as_mut() {
+                    buffer.push(line);
+                } else {
+                    println!("{}", line);
+                }
+            }
+            IoMode::Tee => {
+                println!("{}", line);
+                if let Some(buffer) = self.output.as_mut() {
+                    buffer.push(line);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn emit_stderr_line(&mut self, line: String) {
+        match self.io_policy.stderr {
+            IoMode::Passthrough => eprintln!("{}", line),
+            IoMode::Capture => {
+                if let Some(buffer) = self.error_output.as_mut() {
+                    buffer.push(line);
+                } else {
+                    eprintln!("{}", line);
+                }
+            }
+            IoMode::Tee => {
+                eprintln!("{}", line);
+                if let Some(buffer) = self.error_output.as_mut() {
+                    buffer.push(line);
+                }
+            }
+        }
+    }
+
+    fn configure_io_buffers(&mut self) {
+        if matches!(self.io_policy.stdout, IoMode::Capture | IoMode::Tee) {
+            if self.output.is_none() {
+                self.output = Some(Vec::new());
+            }
+        } else {
+            self.output = None;
+        }
+
+        if matches!(self.io_policy.stderr, IoMode::Capture | IoMode::Tee) {
+            if self.error_output.is_none() {
+                self.error_output = Some(Vec::new());
+            }
+        } else {
+            self.error_output = None;
+        }
+    }
+
+    fn current_output_len(&self) -> usize {
+        self.output.as_ref().map(Vec::len).unwrap_or(0)
+    }
+
+    fn current_error_output_len(&self) -> usize {
+        self.error_output.as_ref().map(Vec::len).unwrap_or(0)
+    }
+
+    fn next_test_event_io(&mut self) -> Option<VmCapturedIo> {
+        if self.output.is_none() && self.error_output.is_none() {
+            return None;
+        }
+
+        let stdout_len = self.current_output_len();
+        let stderr_len = self.current_error_output_len();
+
+        let stdout = self
+            .output
+            .as_ref()
+            .map(|buffer| {
+                let start = self.test_stdout_cursor.min(buffer.len());
+                buffer[start..].to_vec()
+            })
+            .unwrap_or_default();
+        let stderr = self
+            .error_output
+            .as_ref()
+            .map(|buffer| {
+                let start = self.test_stderr_cursor.min(buffer.len());
+                buffer[start..].to_vec()
+            })
+            .unwrap_or_default();
+
+        self.test_stdout_cursor = stdout_len;
+        self.test_stderr_cursor = stderr_len;
+
+        Some(VmCapturedIo { stdout, stderr })
     }
 
     /// Access the type registry (used by builtins).
@@ -338,12 +566,77 @@ impl VM {
         self.exit_code
     }
 
+    pub fn pc(&self) -> usize {
+        self.pc
+    }
+
+    pub fn stack_depth(&self) -> usize {
+        self.stack.len()
+    }
+
+    pub fn frame_depth(&self) -> usize {
+        self.frames.len()
+    }
+
     pub fn set_exit_code(&mut self, exit_code: i32) {
         self.exit_code = exit_code;
     }
 
     pub fn last_value(&self) -> Option<&Value> {
         self.last_result.as_ref()
+    }
+
+    pub fn test_events(&self) -> &[VmTestEvent] {
+        &self.test_events
+    }
+
+    pub(crate) fn push_test_scope(&mut self, _kind: &str, name: String) {
+        if self.test_scope.is_empty() {
+            self.test_stdout_cursor = self.current_output_len();
+            self.test_stderr_cursor = self.current_error_output_len();
+        }
+        self.test_scope.push(name);
+    }
+
+    pub(crate) fn pop_test_scope(&mut self) -> Result<(), RuntimeError> {
+        self.test_scope
+            .pop()
+            .map(|_| ())
+            .ok_or_else(|| RuntimeError::new("test scope stack underflow"))
+    }
+
+    pub(crate) fn record_test_pass(&mut self, name: String) {
+        let mut path = self.test_scope.clone();
+        path.push(name);
+        let io = self.next_test_event_io();
+        self.test_events.push(VmTestEvent {
+            path,
+            detail: None,
+            kind: VmTestEventKind::Passed,
+            io,
+        });
+    }
+
+    pub(crate) fn record_test_fail(&mut self, name: String, detail: String) {
+        let mut path = self.test_scope.clone();
+        path.push(name);
+        let io = self.next_test_event_io();
+        self.test_events.push(VmTestEvent {
+            path,
+            detail: Some(detail),
+            kind: VmTestEventKind::Failed,
+            io,
+        });
+    }
+
+    pub(crate) fn record_current_scope_fail(&mut self, detail: String) {
+        let io = self.next_test_event_io();
+        self.test_events.push(VmTestEvent {
+            path: self.test_scope.clone(),
+            detail: Some(detail),
+            kind: VmTestEventKind::Failed,
+            io,
+        });
     }
 
     pub fn enable_observation(&mut self, options: VmObservationOptions) {
@@ -365,6 +658,10 @@ impl VM {
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         self.verify_loaded_bytecode()?;
         self.last_result = None;
+        self.test_scope.clear();
+        self.test_events.clear();
+        self.test_stdout_cursor = self.current_output_len();
+        self.test_stderr_cursor = self.current_error_output_len();
         loop {
             if self.pc >= self.bytecode.opcodes.len() {
                 return Err(RuntimeError::new("PC out of bounds"));
@@ -520,6 +817,10 @@ impl VM {
             last_result: self.last_result.clone(),
             output_len: self.output.as_ref().map(Vec::len),
             error_output_len: self.error_output.as_ref().map(Vec::len),
+            test_scope_len: self.test_scope.len(),
+            test_event_len: self.test_events.len(),
+            test_stdout_cursor: self.test_stdout_cursor,
+            test_stderr_cursor: self.test_stderr_cursor,
             opcode_len: self.bytecode.opcodes.len(),
             constant_len: self.bytecode.constants.len(),
             type_entry_len: self.bytecode.type_registry.entries.len(),
@@ -548,6 +849,10 @@ impl VM {
         if let (Some(buf), Some(len)) = (self.error_output.as_mut(), checkpoint.error_output_len) {
             buf.truncate(len);
         }
+        self.test_scope.truncate(checkpoint.test_scope_len);
+        self.test_events.truncate(checkpoint.test_event_len);
+        self.test_stdout_cursor = checkpoint.test_stdout_cursor;
+        self.test_stderr_cursor = checkpoint.test_stderr_cursor;
 
         self.bytecode.opcodes.truncate(checkpoint.opcode_len);
         self.bytecode.constants.truncate(checkpoint.constant_len);
@@ -1207,6 +1512,33 @@ impl VM {
                 self.stack.push(Value::List(ListHandle::from_items(elems)));
             }
 
+            // Tuple
+            Opcode::TupleNew { len } => {
+                let mut elems = Vec::with_capacity(len as usize);
+                for _ in 0..len {
+                    elems.push(self.pop_stack()?);
+                }
+                elems.reverse();
+                self.stack.push(Value::Tuple(elems));
+            }
+            Opcode::GetTupleField { field_index } => {
+                let tuple = self.pop_stack()?;
+                match tuple {
+                    Value::Tuple(items) => {
+                        let field = items.get(field_index as usize).cloned().ok_or_else(|| {
+                            RuntimeError::new(format!("Tuple index {} out of bounds", field_index))
+                        })?;
+                        self.stack.push(field);
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "GetTupleField expects Tuple, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+
             // Struct / Tagged
             Opcode::StructNew { field_count } => {
                 let mut fields = Vec::with_capacity(field_count as usize);
@@ -1390,6 +1722,7 @@ impl VM {
                     kind: template.kind.clone(),
                     message,
                     location,
+                    cause: None,
                 })));
             }
             Opcode::MakeErrorLiteral {
@@ -1444,6 +1777,7 @@ impl VM {
                         span_start: 0,
                         span_end: 0,
                     },
+                    cause: None,
                 })));
             }
 

@@ -1,2 +1,2 @@
-phase: resolve
-contains: concat does not accept named argument
+phase: typecheck
+contains: Concat::concat does not accept named arguments

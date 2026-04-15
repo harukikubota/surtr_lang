@@ -36,3 +36,105 @@ defmod Float {
     if(a >= b, a, b)
   }
 }
+
+impl Numeric for Float {
+  def add(self: Self, rhs: Self) -> Self {
+    self + rhs
+  }
+
+  def sub(self: Self, rhs: Self) -> Self {
+    self - rhs
+  }
+
+  def mul(self: Self, rhs: Self) -> Self {
+    self * rhs
+  }
+
+  def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
+    safe_div(self, rhs)
+  }
+
+  def abs(self: Self) -> Self {
+    Float::abs(self)
+  }
+
+  def min(self: Self, rhs: Self) -> Self {
+    Float::min(self, rhs)
+  }
+
+  def max(self: Self, rhs: Self) -> Self {
+    Float::max(self, rhs)
+  }
+}
+
+impl Show for Float {
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<Float> for Float {
+  def from(self: Self, to: TypeRef<Float>) -> Float {
+    self
+  }
+}
+
+impl From<String> for Float {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}
+
+impl Eq for Float {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self == rhs
+  }
+
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self != rhs
+  }
+}
+
+impl Compare for Float {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    if(
+      self < rhs,
+      Ordering::Less,
+      if(self > rhs, Ordering::Greater, Ordering::Equal),
+    )
+  }
+}
+
+impl Ord for Float {
+  def lt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal => False,
+      Ordering::Greater => False,
+    }
+  }
+
+  def lte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal => True,
+      Ordering::Greater => False,
+    }
+  }
+
+  def gt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal => False,
+      Ordering::Greater => True,
+    }
+  }
+
+  def gte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal => True,
+      Ordering::Greater => True,
+    }
+  }
+}

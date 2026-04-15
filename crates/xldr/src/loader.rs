@@ -10,13 +10,59 @@ const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
 const KERNEL_PRELUDE_FILE: &str = "kernel.srt";
 const KERNEL_PRELUDE_MODULE_PATH: &str = "Kernel";
 const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
-const TYPE_STD_MODULES: &[(&str, &str, &str)] = &[
+const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
+    (
+        "trait/numeric.srt",
+        include_str!("../../../lib/trait/numeric.srt"),
+        "Numeric",
+    ),
+    (
+        "trait/show.srt",
+        include_str!("../../../lib/trait/show.srt"),
+        "Show",
+    ),
+    (
+        "trait/eq.srt",
+        include_str!("../../../lib/trait/eq.srt"),
+        "Eq",
+    ),
+    (
+        "ordering.srt",
+        include_str!("../../../lib/ordering.srt"),
+        "Ordering",
+    ),
+    (
+        "trait/compare.srt",
+        include_str!("../../../lib/trait/compare.srt"),
+        "Compare",
+    ),
+    (
+        "trait/ord.srt",
+        include_str!("../../../lib/trait/ord.srt"),
+        "Ord",
+    ),
+    (
+        "trait/concat.srt",
+        include_str!("../../../lib/trait/concat.srt"),
+        "Concat",
+    ),
+    (
+        "trait/from.srt",
+        include_str!("../../../lib/trait/from.srt"),
+        "From",
+    ),
+    (
+        "trait/try_from.srt",
+        include_str!("../../../lib/trait/try_from.srt"),
+        "TryFrom",
+    ),
     ("int.srt", include_str!("../../../lib/int.srt"), "Int"),
     (
         "string.srt",
         include_str!("../../../lib/string.srt"),
         "String",
     ),
+    ("regex.srt", include_str!("../../../lib/regex.srt"), "Regex"),
     (
         "boolean.srt",
         include_str!("../../../lib/boolean.srt"),
@@ -25,10 +71,16 @@ const TYPE_STD_MODULES: &[(&str, &str, &str)] = &[
     ("error.srt", include_str!("../../../lib/error.srt"), "Error"),
     ("list.srt", include_str!("../../../lib/list.srt"), "List"),
     (
+        "hash_map.srt",
+        include_str!("../../../lib/hash_map.srt"),
+        "HashMap",
+    ),
+    (
         "result.srt",
         include_str!("../../../lib/result.srt"),
         "Result",
     ),
+    ("lens.srt", include_str!("../../../lib/lens.srt"), "Lens"),
     ("float.srt", include_str!("../../../lib/float.srt"), "Float"),
 ];
 const REPL_MODULE_NAME: &str = "REPL";
@@ -278,12 +330,12 @@ pub fn derive_primary_module_path(source: &str) -> Option<String> {
     let stripped = crate::strip_test_annotations(source);
     let ast = spire::parse_with_context(
         &stripped,
-        spire::ParserContext::module(0, None).with_rules(spire::SourceRules::module()),
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
     )
     .or_else(|_| {
         spire::parse_with_context(
             &stripped,
-            spire::ParserContext::module(0, None).with_rules(spire::SourceRules::std_module()),
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
     })
     .ok()?;
@@ -439,7 +491,7 @@ pub fn collect_module_sources_with_modules(
 pub fn is_default_std_module_path(module_path: &str) -> bool {
     module_path == BUILTIN_PRELUDE_MODULE_PATH
         || module_path == KERNEL_PRELUDE_MODULE_PATH
-        || TYPE_STD_MODULES
+        || DEFAULT_STD_MODULES
             .iter()
             .any(|(_, _, builtin_module_path)| *builtin_module_path == module_path)
 }
@@ -447,12 +499,13 @@ pub fn is_default_std_module_path(module_path: &str) -> bool {
 pub fn is_default_std_module_file_name(file_name: &str) -> bool {
     file_name == BUILTIN_PRELUDE_FILE
         || file_name == KERNEL_PRELUDE_FILE
-        || TYPE_STD_MODULES
+        || DEFAULT_STD_MODULES
             .iter()
             .any(|(builtin_file_name, _, _)| *builtin_file_name == file_name)
 }
 
-pub fn collect_module_sources_with_module_stages(
+pub fn collect_module_sources_with_extra_std_sources(
+    extra_std_sources: &[SourceDescriptor],
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
     // Stage 0/1 are reserved for the built-in standard layers. User-provided
@@ -470,7 +523,7 @@ pub fn collect_module_sources_with_module_stages(
             KERNEL_PRELUDE_MODULE_PATH,
         ))
         .chain(
-            TYPE_STD_MODULES
+            DEFAULT_STD_MODULES
                 .iter()
                 .map(|(file_name, source, module_path)| {
                     SourceDescriptor::std_module(*file_name, *source, *module_path)
@@ -479,7 +532,14 @@ pub fn collect_module_sources_with_module_stages(
         .collect(),
     ];
 
+    if !extra_std_sources.is_empty() {
+        stage_specs.push(extra_std_sources.to_vec());
+    }
+
     for stage in module_input_stages {
+        if stage.is_empty() {
+            continue;
+        }
         let mut specs = Vec::with_capacity(stage.len());
         for module in stage {
             specs.push(SourceDescriptor::module(
@@ -493,42 +553,10 @@ pub fn collect_module_sources_with_module_stages(
     build_module_sources_from_stage_specs(stage_specs)
 }
 
-pub fn collect_module_sources_with_std_module_stages(
+pub fn collect_module_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
-    let mut stage_specs = vec![
-        vec![SourceDescriptor::std_module(
-            BUILTIN_PRELUDE_FILE,
-            BUILTIN_PRELUDE_SOURCE,
-            BUILTIN_PRELUDE_MODULE_PATH,
-        )],
-        std::iter::once(SourceDescriptor::std_module(
-            KERNEL_PRELUDE_FILE,
-            KERNEL_PRELUDE_SOURCE,
-            KERNEL_PRELUDE_MODULE_PATH,
-        ))
-        .chain(
-            TYPE_STD_MODULES
-                .iter()
-                .map(|(file_name, source, module_path)| {
-                    SourceDescriptor::std_module(*file_name, *source, *module_path)
-                }),
-        )
-        .collect(),
-    ];
-
-    for stage in module_input_stages {
-        let mut specs = Vec::with_capacity(stage.len());
-        for module in stage {
-            specs.push(SourceDescriptor::std_module(
-                module.file_name.clone(),
-                module.source.clone(),
-                module.module_path.clone(),
-            ));
-        }
-        stage_specs.push(specs);
-    }
-    build_module_sources_from_stage_specs(stage_specs)
+    collect_module_sources_with_extra_std_sources(&[], module_input_stages)
 }
 
 pub fn compose_script_compile_sources(
@@ -604,14 +632,10 @@ pub(crate) struct ReplSources {
     pub(crate) repl_module_path: String,
 }
 
-pub(crate) fn collect_repl_sources_with_std_module_stages(
+pub(crate) fn collect_repl_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ReplSources, LoadError> {
-    let mut module_sources = if module_input_stages.is_empty() {
-        collect_module_sources_with_module_stages(&[])?
-    } else {
-        collect_module_sources_with_std_module_stages(module_input_stages)?
-    };
+    let mut module_sources = collect_module_sources_with_module_stages(module_input_stages)?;
     let repl_source_id = module_sources.sources.register(REPL_MODULE_NAME, "");
 
     Ok(ReplSources {
@@ -621,10 +645,6 @@ pub(crate) fn collect_repl_sources_with_std_module_stages(
         repl_source_id,
         repl_module_path: REPL_PSEUDO_MODULE_PATH.to_string(),
     })
-}
-
-pub(crate) fn collect_repl_sources() -> Result<ReplSources, LoadError> {
-    collect_repl_sources_with_std_module_stages(&[])
 }
 
 #[cfg(test)]
@@ -679,14 +699,26 @@ mod tests {
             loaded.builtin_module_path.as_deref(),
             Some(BUILTIN_PRELUDE_MODULE_PATH)
         );
-        assert_eq!(loaded.module_source_ids.len(), 2 + TYPE_STD_MODULES.len());
+        assert_eq!(
+            loaded.module_source_ids.len(),
+            2 + DEFAULT_STD_MODULES.len()
+        );
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
-        assert_eq!(loaded.module_stages[1].len(), 1 + TYPE_STD_MODULES.len());
-        assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
-        assert_eq!(loaded.module_stages[1][1].module_path, "Int");
-        assert_eq!(loaded.module_stages[1][2].module_path, "String");
+        assert_eq!(loaded.module_stages[1].len(), 1 + DEFAULT_STD_MODULES.len());
+        let std_paths = loaded.module_stages[1]
+            .iter()
+            .map(|module| module.module_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            std_paths,
+            vec![
+                "Kernel", "Numeric", "Show", "Eq", "Ordering", "Compare", "Ord", "Concat", "From",
+                "TryFrom", "Int", "String", "Regex", "Boolean", "Error", "List", "HashMap",
+                "Result", "Lens", "Float",
+            ]
+        );
     }
 
     #[test]
@@ -746,7 +778,7 @@ mod tests {
 
         assert_eq!(loaded.module_stages.len(), 4);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap
-        assert_eq!(loaded.module_stages[1].len(), 1 + TYPE_STD_MODULES.len()); // kernel + other std modules
+        assert_eq!(loaded.module_stages[1].len(), 1 + DEFAULT_STD_MODULES.len()); // kernel + other std modules
         assert_eq!(loaded.module_stages[2].len(), 1);
         assert_eq!(loaded.module_stages[3].len(), 2);
         assert_eq!(
@@ -768,8 +800,18 @@ mod tests {
         assert_eq!(loaded.module_stages[2][0].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[3][0].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
-        assert_eq!(loaded.module_stages[1][0].module_path, "Kernel");
-        assert_eq!(loaded.module_stages[1][1].module_path, "Int");
+        let std_paths = loaded.module_stages[1]
+            .iter()
+            .map(|module| module.module_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            std_paths,
+            vec![
+                "Kernel", "Numeric", "Show", "Eq", "Ordering", "Compare", "Ord", "Concat", "From",
+                "TryFrom", "Int", "String", "Regex", "Boolean", "Error", "List", "HashMap",
+                "Result", "Lens", "Float",
+            ]
+        );
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
         assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
         assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");

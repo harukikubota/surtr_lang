@@ -1,30 +1,9 @@
-use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn surtr_bin() -> String {
-    if let Ok(path) = env::var("CARGO_BIN_EXE_surtr") {
-        return path;
-    }
-
-    let mut path = env::current_exe().expect("failed to locate current test executable");
-    // .../target/debug/deps/<test-binary> -> .../target/debug/surtr
-    path.pop(); // <test-binary>
-    path.pop(); // deps
-    path.push("surtr");
-    if cfg!(windows) {
-        path.set_extension("exe");
-    }
-    assert!(
-        path.exists(),
-        "surtr binary not found at {}",
-        path.display()
-    );
-    path.to_string_lossy().into_owned()
-}
+mod common;
+use common::{surtr_bin, unique_temp_dir};
 
 fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
     run_repl_session_with_args_in_dir(args, input, None)
@@ -78,16 +57,6 @@ fn strip_ansi(input: &str) -> String {
     out
 }
 
-fn temp_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be after unix epoch")
-        .as_nanos();
-    let dir = env::temp_dir().join(format!("surtr-{prefix}-{nanos}"));
-    fs::create_dir_all(&dir).expect("failed to create temp dir");
-    dir
-}
-
 #[test]
 fn repl_quit_exits_cleanly() {
     let output = run_repl_session(":quit\n");
@@ -101,7 +70,7 @@ fn repl_quit_exits_cleanly() {
 
 #[test]
 fn repl_fails_fast_when_additional_stdlib_bootstrap_fails() {
-    let dir = temp_dir("repl-bootstrap-failure");
+    let dir = unique_temp_dir("repl-bootstrap-failure");
     let lib_dir = dir.join("lib");
     fs::create_dir_all(&lib_dir).expect("failed to create lib dir");
     fs::write(lib_dir.join("bad.srt"), "defmod Broken { def nope( }")
@@ -267,6 +236,24 @@ fn repl_infers_closure_argument_type_from_add_constraint() {
 }
 
 #[test]
+fn repl_auto_imports_concat_trait_helper() {
+    let output = run_repl_session("concat(\"q\", \"q\")\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("qq"),
+        "expected concat helper result in repl output, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_accepts_top_level_function_definition() {
     let output = run_repl_session("def add(x: Int, y: Int) -> Int { x + y }\nadd(1, 2)\n:quit\n");
     assert!(
@@ -424,6 +411,58 @@ fn repl_displays_bare_std_callable_refs_with_named_inspect_format() {
 }
 
 #[test]
+fn repl_rejects_bare_trait_helper_callable_refs() {
+    let output = run_repl_session("&concat\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&combined);
+    assert!(
+        combined.contains("Trait helper `concat` cannot be referenced directly"),
+        "expected bare trait helper ref to be rejected, got:\n{}",
+        combined
+    );
+    assert!(
+        !combined.contains("FnCapture(module: Result, name: chain"),
+        "bare trait helper ref must not reuse an unrelated function id, got:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn repl_concat_helper_works_inside_annotated_closure() {
+    let output =
+        run_repl_session("f = {|x: String, y: String| concat(x,y)}\nf(\"a\",\"b\")\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("f: (String, String -> String)"),
+        "expected closure to infer String concat signature, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("> ab"),
+        "expected closure call to concatenate strings, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_displays_local_function_refs_with_named_inspect_format() {
     let output = run_repl_session(
         "def add(x: Int, y: Int) -> Int { x + y }\n&add\nprint(inspect(&add))\n:quit\n",
@@ -450,7 +489,7 @@ fn repl_displays_local_function_refs_with_named_inspect_format() {
 
 #[test]
 fn repl_save_command_writes_decodable_eldr_snapshot() {
-    let dir = temp_dir("repl-save");
+    let dir = unique_temp_dir("repl-save");
     let save_base = dir.join("session");
     let input = format!("x = 1\n:save {}\n:quit\n", save_base.to_string_lossy());
     let output = run_repl_session(&input);
@@ -723,6 +762,34 @@ fn repl_duplicate_function_name_is_rejected() {
     assert!(
         stderr.contains("Duplicate top-level definition: f"),
         "expected duplicate definition error in stderr, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn repl_numeric_trait_errors_list_available_implementations() {
+    let output = run_repl_session("Numeric::add(1,False)\nNumeric::add(False, True)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("Numeric::add expects argument 2 to match receiver type Int, got Boolean"),
+        "expected Numeric mismatch detail in stderr, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Numeric::add requires a receiver type implementing Numeric, got Boolean"),
+        "expected missing receiver impl detail in stderr, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Numeric is implemented for: Float, Int"),
+        "expected trait implementation list in stderr, got:\n{}",
         stderr
     );
 }

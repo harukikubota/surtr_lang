@@ -18,6 +18,14 @@ name =? expr
 def name(args...) -> Ty { expr }
 ```
 
+Surtr では、関数はすべて明示または暗黙の namespace に属します。
+
+- 通常の module 関数は `defmod Name { ... }` に置く
+- 型付属関数は `impl Type { ... }` に置く
+- trait 契約は `deftrait Name { ... }` に置く
+- trait 実装は `impl Trait for Type { ... }` に置く
+- script / REPL の top-level `def` は暗黙の擬似 module に属する
+
 ### データ定義
 
 ```surtr
@@ -31,8 +39,16 @@ deferror Name(field: Ty, ...) { "message" }
 
 defenum Name { Variant, Variant(Ty), Variant = Int, ... }
 
+deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}
+
 impl Type {
   def method(...) -> ... { ... }
+}
+
+impl Numeric for Int {
+  def add(self: Self, rhs: Self) -> Self { self + rhs }
 }
 ```
 
@@ -76,16 +92,40 @@ match expr {
 ### `impl` / `Self` / `self`
 
 - `impl` 対象は `defstruct` / `defenum` のみ
+- `impl Type` は型専用の module-like namespace であり、`self` / `Self` が使える `defmod` 相当として読む
 - `Self` は `impl` 内の型位置でのみ使用可能
 - `self` は `impl` メソッド第一引数専用（再束縛不可）
 - メソッド呼び出しの正規形は `Type::method(...)`
+
+### trait (V1)
+
+- trait 宣言は `deftrait Name { ... }`
+- trait 宣言は `deftrait Name<$T, ...> { ... }` のように型引数を取ってよい
+- trait 実装は `impl Trait for Type { ... }`
+- trait 実装は `impl Trait<Concrete, ...> for Type { ... }` の形も取れる
+- trait は method のみを持つ
+- `impl Trait` は parameter 位置のみで使える
+- `-> impl Trait` は未対応
+- `where` clause は未対応
+- `+`, `-`, `*` は `Numeric::{add, sub, mul}` へ resolve される
+- `TypeRef<$T>` は compiler-reserved な target type witness
+- `TypeRef<$T>` は trait head で宣言された型引数に対応するときだけ、trait method parameter 型として使える
+- `TypeRef<$T>` は通常関数の引数型、戻り値型、field、local binding には使えない
+
+### `from` / `try_from`
+
+- source 上の呼び出しは `from(value, TargetTy)` / `try_from(value, TargetTy)`
+- 第2引数 `TargetTy` は ordinary expression ではなく型指定スロット
+- 内部的には `TypeRef<TargetTy>` witness として扱う
+- `From<$To>` / `TryFrom<$To>` trait が impl coherence を担う
 
 ### `Result<T>`
 
 - 成功値: `Ok(value)`
 - 失敗値: `Err(error)`
 
-現時点では、`match` で主に `Ok(...)` / `Err(...)` を扱います。  
+現時点では、`match` を中心に `Ok(...)` / `Err(...)` を扱います。  
+variant 判定だけなら `Result::is_ok(...)` / `Result::is_err(...)` も使えます。  
 考え方としては `Either<Err, Ok>` に近く、失敗も値として明示的に運びます。
 内部表現は enum-like ですが、language surface では `defenum` と区別された専用 abstraction です。
 
@@ -371,12 +411,25 @@ deferror IndexOutOfBounds(detail: String) { detail }
 
 ## 9. モジュールと import
 
+### 関数の所属
+
+Surtr では「module の外に生の関数がぶら下がる」モデルを取りません。
+
+- `defmod Name` は通常 module を作る
+- `impl Type` は型専用の module-like namespace を作る
+- `deftrait Name` は trait method の契約 namespace を作る
+- `impl Trait for Type` は trait 実装 namespace を作る
+- script / REPL の top-level `def` は暗黙の擬似 module に入る
+
+一方で `defstruct` / `defrecord` / `deferror` / `defenum` / `@@builtin type` は
+関数 namespace の内側ではなく、top-level 宣言名として直接見えます。
+
 ### 標準モジュール
 
 現在の標準モジュール層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> ユーザ拡張
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> ユーザ拡張
 ```
 
 ### auto import
@@ -384,6 +437,12 @@ Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> ユ�
 - `Bootstrap` と `Kernel` は auto import 対象
 - `Bootstrap` / `Kernel` の明示 `import` は compile error
 - それ以外の標準モジュールは auto import しない
+
+### import の意味
+
+- `import Mod` は、その module の import 可能 member を現在 scope に unqualified で入れる
+- `import Mod::fun` は単一 member だけを入れる
+- `Struct` 名や `new` のように import 不可の宣言もある
 
 ### builtin type の置き場所
 
@@ -399,11 +458,15 @@ Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> ユ�
 // list.srt
 @@builtin type List<$A>
 
+// hash_map.srt
+@@builtin type HashMap<$V>
+
 // result.srt
 @@builtin type Result<$T>
 ```
 
 `unit.srt` は意図的に作らず、`Unit` だけは `kernel.srt` に置きます。
+`Numeric` trait 宣言は `numeric.srt` のトップレベルに置きます。
 
 ### import の重複
 
@@ -450,7 +513,12 @@ import Kernel::print;
 
 このリファレンスでは扱わないもの:
 
-- trait
+- associated types / associated consts
+- default method body
+- trait inheritance
+- multi-trait bounds
+- return-position `impl Trait`
+- `where` clauses
 - 型エイリアス / NewType
 - マクロシステム拡張
 - 並列コンパイル

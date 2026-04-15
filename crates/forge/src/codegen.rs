@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
-use sindr::builtin::builtin_meta_by_name;
+use sindr::builtin::builtin_id_by_name;
 use sindr::ir::{CompileInfo, DocEntry, FunctionFlags};
 use sindr::primitives::int;
-use spire::ast::{BinOp, Lit, Span};
+use spire::ast::{BinOp, Lit, Span, Visibility};
 
 use crate::bytecode::*;
 use crate::error::CodegenError;
@@ -319,14 +319,15 @@ mod tests {
             .expect("match emission should succeed");
 
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let eprint_id = Codegen::builtin_id("eprint").expect("eprint builtin must exist");
         assert!(opcodes.iter().any(|opcode| {
             matches!(
                 opcode,
                 Opcode::CallBuiltin {
-                    builtin_id: 5,
+                    builtin_id,
                     arity: 1,
                     ..
-                }
+                } if *builtin_id == eprint_id
             )
         }));
         assert!(matches!(opcodes.last(), Some(Opcode::Halt)));
@@ -521,10 +522,10 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::Def(_, id, _, _, _) => {
+        TypedInner::Def(_, id, _, _, _, _, _) => {
             function_defs.push(id.name.clone());
         }
-        TypedInner::ExtractorDef(_, id, _, _, _) => {
+        TypedInner::ExtractorDef(_, id, _, _, _, _, _) => {
             function_defs.push(id.name.clone());
         }
         // `;` keeps Unit as expression result, but for REPL metadata we still
@@ -566,6 +567,11 @@ fn collect_pattern_binding_infos(
         | TypedPattern::IntLit(_, _)
         | TypedPattern::StrLit(_, _)
         | TypedPattern::BoolLit(_, _) => {}
+        TypedPattern::Tuple(_, items) => {
+            for item in items {
+                collect_pattern_binding_infos(item, slot_map, out);
+            }
+        }
         TypedPattern::ListCons(_, head, tail) => {
             collect_pattern_binding_infos(head, slot_map, out);
             collect_pattern_binding_infos(tail, slot_map, out);
@@ -589,8 +595,12 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
-        Ty::Seq(items) => format!(
-            "Seq<{}>",
+        Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
+        Ty::Lens(source, focus) => {
+            format!("Lens<{}, {}>", ty_to_string(source), ty_to_string(focus))
+        }
+        Ty::Tuple(items) => format!(
+            "({})",
             items
                 .iter()
                 .map(ty_to_string)
@@ -675,6 +685,12 @@ struct PendingInjectCall {
     span: Span,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum LensUpdateLeaf {
+    Set { value_slot: u32 },
+    Over { update_fun_slot: u32 },
+}
+
 struct Codegen {
     ir: Vec<IrOp>,
     state: CodegenState,
@@ -740,7 +756,7 @@ impl Codegen {
 
     fn builtin_id(name: &str) -> Option<u16> {
         let short_name = name.rsplit("::").next().unwrap_or(name);
-        builtin_meta_by_name(short_name).map(|meta| meta.builtin_id)
+        builtin_id_by_name(short_name)
     }
 
     fn direct_builtin_opcode(name: &str, arity: usize) -> Option<Opcode> {
@@ -1146,8 +1162,8 @@ impl Codegen {
         let max_def_fun_idx = stmts
             .iter()
             .filter_map(|stmt| match &stmt.node {
-                TypedInner::Def(fun_idx, _, _, _, _) => Some(*fun_idx),
-                TypedInner::ExtractorDef(fun_idx, _, _, _, _) => Some(*fun_idx),
+                TypedInner::Def(fun_idx, _, _, _, _, _, _) => Some(*fun_idx),
+                TypedInner::ExtractorDef(fun_idx, _, _, _, _, _, _) => Some(*fun_idx),
                 TypedInner::DeferrorDef(_, fun_idx, _, _, _) => Some(*fun_idx),
                 _ => None,
             })
@@ -1182,8 +1198,8 @@ impl Codegen {
             }
         }
         defs.sort_by_key(|stmt| match &stmt.node {
-            TypedInner::Def(fun_idx, _, _, _, _) => *fun_idx,
-            TypedInner::ExtractorDef(fun_idx, _, _, _, _) => *fun_idx,
+            TypedInner::Def(fun_idx, _, _, _, _, _, _) => *fun_idx,
+            TypedInner::ExtractorDef(fun_idx, _, _, _, _, _, _) => *fun_idx,
             TypedInner::DeferrorDef(_, fun_idx, _, _, _) => *fun_idx,
             _ => u32::MAX,
         });
@@ -1213,9 +1229,9 @@ impl Codegen {
     }
 
     fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        let (fun_idx, id, params, ret_ty, body) = match &node.node {
-            TypedInner::Def(fun_idx, id, params, ret_ty, body) => {
-                (fun_idx, id, params, ret_ty, body)
+        let (fun_idx, id, params, ret_ty, body, visibility) = match &node.node {
+            TypedInner::Def(fun_idx, id, _type_params, params, ret_ty, body, visibility) => {
+                (fun_idx, id, params, ret_ty, body, visibility)
             }
             _ => {
                 return Err(CodegenError {
@@ -1254,7 +1270,7 @@ impl Codegen {
             span_start: node.span.start as u32,
             span_end: node.span.end as u32,
             flags: FunctionFlags {
-                public: true,
+                public: *visibility == Visibility::Public,
                 closure: false,
                 builtin_wrapper: false,
                 tail_entry: false,
@@ -1343,10 +1359,16 @@ impl Codegen {
     }
 
     fn emit_extractor_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        let (fun_idx, id, param, ret_ty, body) = match &node.node {
-            TypedInner::ExtractorDef(fun_idx, id, param, ret_ty, body) => {
-                (fun_idx, id, param, ret_ty, body)
-            }
+        let (fun_idx, id, param, ret_ty, body, visibility) = match &node.node {
+            TypedInner::ExtractorDef(
+                fun_idx,
+                id,
+                _type_params,
+                param,
+                ret_ty,
+                body,
+                visibility,
+            ) => (fun_idx, id, param, ret_ty, body, visibility),
             _ => {
                 return Err(CodegenError {
                     message: "expected extractor definition".into(),
@@ -1387,7 +1409,7 @@ impl Codegen {
             span_start: node.span.start as u32,
             span_end: node.span.end as u32,
             flags: FunctionFlags {
-                public: true,
+                public: *visibility == Visibility::Public,
                 closure: false,
                 builtin_wrapper: false,
                 tail_entry: false,
@@ -1420,6 +1442,11 @@ impl Codegen {
             }
 
             TypedInner::Bind(pat, rhs) => {
+                if matches!(rhs.ty, Ty::Lens(_, _)) {
+                    let unit_idx = self.add_constant(Constant::Unit);
+                    self.emit(Opcode::LoadConst(unit_idx));
+                    return Ok(());
+                }
                 self.emit_node(rhs)?;
                 let payload_slot = self.state.next_slot;
                 self.state.next_slot += 1;
@@ -1453,6 +1480,70 @@ impl Codegen {
             TypedInner::App(func, args) => {
                 self.emit_app(node.span.clone(), func, args)?;
             }
+
+            TypedInner::TraitCall {
+                dispatch,
+                receiver_ty,
+                args,
+                ..
+            } => match dispatch {
+                TraitDispatch::Pending => {
+                    return Err(CodegenError {
+                        message: "bounded trait call must be specialized before codegen".into(),
+                        span: node.span.clone(),
+                    });
+                }
+                TraitDispatch::Static(TraitDispatchTarget::BinOp(op)) => {
+                    if args.len() != 2 {
+                        return Err(CodegenError {
+                            message: format!(
+                                "trait binop dispatch expects 2 args, got {}",
+                                args.len()
+                            ),
+                            span: node.span.clone(),
+                        });
+                    }
+                    if matches!(op, BinOp::Eq | BinOp::Neq) && matches!(receiver_ty, Ty::Enum(_, _))
+                    {
+                        self.emit_enum_eq(op, &args[0], &args[1])?;
+                        return Ok(());
+                    }
+                    self.emit_node(&args[0])?;
+                    self.emit_node(&args[1])?;
+                    let opcode = self.binop_to_opcode(op, receiver_ty, &node.span)?;
+                    self.emit(opcode);
+                }
+                TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => {
+                    for arg in args {
+                        self.emit_node(arg)?;
+                    }
+                    if let Some(opcode) = Self::direct_builtin_opcode(name, args.len()) {
+                        self.emit(opcode);
+                    } else {
+                        let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                            message: format!("Unknown builtin: {}", name),
+                            span: node.span.clone(),
+                        })?;
+                        self.emit(Opcode::CallBuiltin {
+                            builtin_id,
+                            arity: args.len() as u8,
+                            span_start: node.span.start as u32,
+                            span_end: node.span.end as u32,
+                        });
+                    }
+                }
+                TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
+                    for arg in args {
+                        self.emit_node(arg)?;
+                    }
+                    self.emit(Opcode::Call {
+                        fun_idx: *fun_idx,
+                        arity: args.len() as u8,
+                        span_start: node.span.start as u32,
+                        span_end: node.span.end as u32,
+                    });
+                }
+            },
 
             TypedInner::InjectCall(func, args) => {
                 let fun_idx = self.reserve_fun_idx();
@@ -1582,6 +1673,14 @@ impl Codegen {
                     len: elems.len() as u32,
                 });
             }
+            TypedInner::TupleLiteral(elems) => {
+                for elem in elems {
+                    self.emit_node(elem)?;
+                }
+                self.emit(Opcode::TupleNew {
+                    len: elems.len() as u32,
+                });
+            }
 
             TypedInner::InterpolatedStr(parts) => {
                 self.emit_interpolated_str(parts)?;
@@ -1603,7 +1702,43 @@ impl Codegen {
 
             TypedInner::FieldAccess(expr, idx) => {
                 self.emit_node(expr)?;
-                self.emit(Opcode::GetField { field_index: *idx });
+                match &expr.ty {
+                    Ty::Tuple(_) => self.emit(Opcode::GetTupleField { field_index: *idx }),
+                    _ => self.emit(Opcode::GetField { field_index: *idx }),
+                }
+            }
+
+            TypedInner::LensPath(_) => {
+                return Err(CodegenError {
+                    message:
+                        "Lens path value leaked to codegen; Lens is compile-time only in Stage1"
+                            .into(),
+                    span: node.span.clone(),
+                });
+            }
+
+            TypedInner::LensView {
+                source,
+                path,
+                source_is_result,
+            } => {
+                self.emit_lens_view(node, source, path, *source_is_result)?;
+            }
+            TypedInner::LensSet {
+                source,
+                path,
+                value,
+                source_is_result,
+            } => {
+                self.emit_lens_set(node, source, path, value, *source_is_result)?;
+            }
+            TypedInner::LensOver {
+                source,
+                path,
+                update_fun,
+                source_is_result,
+            } => {
+                self.emit_lens_over(node, source, path, update_fun, *source_is_result)?;
             }
 
             TypedInner::StructLit(tag, fields) => {
@@ -1651,11 +1786,15 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::Def(_fun_idx, _id, _params, _ret_ty, _body) => {
+            TypedInner::Def(_fun_idx, _id, _type_params, _params, _ret_ty, _body, _) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
             TypedInner::ExtractorDef(..) | TypedInner::BuiltinExtractorDecl(..) => {
+                let unit_idx = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit_idx));
+            }
+            TypedInner::TraitDef(..) | TypedInner::TraitImplDef(..) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
@@ -1727,6 +1866,505 @@ impl Codegen {
             }
         }
         Ok(())
+    }
+
+    fn emit_lens_view(
+        &mut self,
+        node: &TypedNode,
+        source: &TypedNode,
+        path: &TypedLensPath,
+        source_is_result: bool,
+    ) -> Result<(), CodegenError> {
+        let returns_result = matches!(node.ty, Ty::Result(_, _));
+
+        if source_is_result {
+            self.emit_node(source)?;
+            let result_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(result_slot));
+
+            self.emit(Opcode::LoadLocal(result_slot));
+            self.emit(Opcode::GetTag);
+            let err_tag = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(err_tag));
+            self.emit(Opcode::EqTag);
+
+            let ok_label = self.fresh_label();
+            let end_label = self.fresh_label();
+            self.emit_jump_if_false(ok_label);
+            self.emit(Opcode::LoadLocal(result_slot));
+            self.emit_jump(end_label);
+
+            self.patch_label(ok_label);
+
+            self.emit(Opcode::LoadLocal(result_slot));
+            self.emit(Opcode::GetField { field_index: 0 });
+            let current_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(current_slot));
+
+            self.emit_lens_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+
+            let ok_tag = self.add_constant(Constant::Tag(0));
+            self.emit(Opcode::LoadConst(ok_tag));
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+
+            self.patch_label(end_label);
+            return Ok(());
+        }
+
+        self.emit_node(source)?;
+        let current_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(current_slot));
+
+        if returns_result {
+            let end_label = self.fresh_label();
+            self.emit_lens_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+
+            let ok_tag = self.add_constant(Constant::Tag(0));
+            self.emit(Opcode::LoadConst(ok_tag));
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+
+            self.patch_label(end_label);
+        } else {
+            self.emit_lens_segments_from_local(current_slot, path, &node.span, None)?;
+            self.emit(Opcode::LoadLocal(current_slot));
+        }
+
+        Ok(())
+    }
+
+    fn emit_lens_set(
+        &mut self,
+        node: &TypedNode,
+        source: &TypedNode,
+        path: &TypedLensPath,
+        value: &TypedNode,
+        source_is_result: bool,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(source)?;
+        let source_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(source_slot));
+
+        self.emit_node(value)?;
+        let value_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(value_slot));
+
+        self.emit_lens_update_from_source_slot(
+            node,
+            source_slot,
+            path,
+            source_is_result,
+            LensUpdateLeaf::Set { value_slot },
+        )
+    }
+
+    fn emit_lens_over(
+        &mut self,
+        node: &TypedNode,
+        source: &TypedNode,
+        path: &TypedLensPath,
+        update_fun: &TypedNode,
+        source_is_result: bool,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(source)?;
+        let source_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(source_slot));
+
+        self.emit_callable_ref(update_fun)?;
+        let update_fun_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(update_fun_slot));
+
+        self.emit_lens_update_from_source_slot(
+            node,
+            source_slot,
+            path,
+            source_is_result,
+            LensUpdateLeaf::Over { update_fun_slot },
+        )
+    }
+
+    fn emit_lens_update_from_source_slot(
+        &mut self,
+        node: &TypedNode,
+        source_slot: u32,
+        path: &TypedLensPath,
+        source_is_result: bool,
+        leaf: LensUpdateLeaf,
+    ) -> Result<(), CodegenError> {
+        if !matches!(node.ty, Ty::Result(_, _)) {
+            return Err(CodegenError {
+                message: "Internal invariant broken: Lens::set/over must return Result".into(),
+                span: node.span.clone(),
+            });
+        }
+
+        let end_label = self.fresh_label();
+        let root_slot = if source_is_result {
+            self.emit(Opcode::LoadLocal(source_slot));
+            self.emit(Opcode::GetTag);
+            let err_tag = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(err_tag));
+            self.emit(Opcode::EqTag);
+
+            let ok_label = self.fresh_label();
+            self.emit_jump_if_false(ok_label);
+            self.emit(Opcode::LoadLocal(source_slot));
+            self.emit_jump(end_label);
+            self.patch_label(ok_label);
+
+            let root_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(source_slot));
+            self.emit(Opcode::GetField { field_index: 0 });
+            self.emit(Opcode::StoreLocal(root_slot));
+            root_slot
+        } else {
+            source_slot
+        };
+
+        self.emit_lens_update_at_path(root_slot, path, 0, leaf, &node.span, end_label)?;
+
+        let ok_tag = self.add_constant(Constant::Tag(0));
+        self.emit(Opcode::LoadConst(ok_tag));
+        self.emit(Opcode::LoadLocal(root_slot));
+        self.emit(Opcode::StructNew { field_count: 1 });
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn emit_lens_update_at_path(
+        &mut self,
+        current_slot: u32,
+        path: &TypedLensPath,
+        segment_idx: usize,
+        leaf: LensUpdateLeaf,
+        span: &Span,
+        failure_end: Label,
+    ) -> Result<(), CodegenError> {
+        if segment_idx == path.segments.len() {
+            return self.emit_lens_leaf_update(current_slot, leaf, span, failure_end);
+        }
+
+        match &path.segments[segment_idx] {
+            TypedLensSegment::Field {
+                field_index,
+                container_field_count,
+                ..
+            } => {
+                let focus_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetField {
+                    field_index: *field_index,
+                });
+                self.emit(Opcode::StoreLocal(focus_slot));
+
+                self.emit_lens_update_at_path(
+                    focus_slot,
+                    path,
+                    segment_idx + 1,
+                    leaf,
+                    span,
+                    failure_end,
+                )?;
+
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetTag);
+                for index in 0..*container_field_count {
+                    if index == *field_index {
+                        self.emit(Opcode::LoadLocal(focus_slot));
+                    } else {
+                        self.emit(Opcode::LoadLocal(current_slot));
+                        self.emit(Opcode::GetField { field_index: index });
+                    }
+                }
+                self.emit(Opcode::StructNew {
+                    field_count: *container_field_count,
+                });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            TypedLensSegment::Tuple {
+                field_index,
+                tuple_len,
+            } => {
+                let focus_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetTupleField {
+                    field_index: *field_index,
+                });
+                self.emit(Opcode::StoreLocal(focus_slot));
+
+                self.emit_lens_update_at_path(
+                    focus_slot,
+                    path,
+                    segment_idx + 1,
+                    leaf,
+                    span,
+                    failure_end,
+                )?;
+
+                for index in 0..*tuple_len {
+                    if index == *field_index {
+                        self.emit(Opcode::LoadLocal(focus_slot));
+                    } else {
+                        self.emit(Opcode::LoadLocal(current_slot));
+                        self.emit(Opcode::GetTupleField { field_index: index });
+                    }
+                }
+                self.emit(Opcode::TupleNew { len: *tuple_len });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            TypedLensSegment::Variant {
+                enum_name,
+                variant_name,
+                variant_tag,
+                payload_arity,
+            } => {
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetTag);
+                let expected_tag = self.add_constant(Constant::Tag(*variant_tag));
+                self.emit(Opcode::LoadConst(expected_tag));
+                self.emit(Opcode::EqTag);
+
+                let mismatch_label = self.fresh_label();
+                let continue_label = self.fresh_label();
+                self.emit_jump_if_false(mismatch_label);
+
+                let focus_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                match *payload_arity {
+                    0 => {
+                        let unit_idx = self.add_constant(Constant::Unit);
+                        self.emit(Opcode::LoadConst(unit_idx));
+                        self.emit(Opcode::StoreLocal(focus_slot));
+                    }
+                    1 => {
+                        self.emit(Opcode::LoadLocal(current_slot));
+                        self.emit(Opcode::GetField { field_index: 1 });
+                        self.emit(Opcode::StoreLocal(focus_slot));
+                    }
+                    n => {
+                        for index in 0..n {
+                            self.emit(Opcode::LoadLocal(current_slot));
+                            self.emit(Opcode::GetField {
+                                field_index: index + 1,
+                            });
+                        }
+                        self.emit(Opcode::TupleNew { len: n });
+                        self.emit(Opcode::StoreLocal(focus_slot));
+                    }
+                }
+
+                self.emit_lens_update_at_path(
+                    focus_slot,
+                    path,
+                    segment_idx + 1,
+                    leaf,
+                    span,
+                    failure_end,
+                )?;
+
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetTag);
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetField { field_index: 0 });
+                match *payload_arity {
+                    0 => {
+                        self.emit(Opcode::StructNew { field_count: 1 });
+                    }
+                    1 => {
+                        self.emit(Opcode::LoadLocal(focus_slot));
+                        self.emit(Opcode::StructNew { field_count: 2 });
+                    }
+                    n => {
+                        for index in 0..n {
+                            self.emit(Opcode::LoadLocal(focus_slot));
+                            self.emit(Opcode::GetTupleField { field_index: index });
+                        }
+                        self.emit(Opcode::StructNew { field_count: n + 1 });
+                    }
+                }
+                self.emit(Opcode::StoreLocal(current_slot));
+                self.emit_jump(continue_label);
+
+                self.patch_label(mismatch_label);
+                let detail = format!(
+                    "Variant mismatch at segment {} ({}) in lens path: expected variant {}::{}, but got a different variant",
+                    segment_idx + 1,
+                    Self::lens_segment_display(&path.segments[segment_idx]),
+                    enum_name,
+                    variant_name
+                );
+                self.emit_variant_mismatch_result(&detail, span);
+                self.emit_jump(failure_end);
+
+                self.patch_label(continue_label);
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_lens_leaf_update(
+        &mut self,
+        current_slot: u32,
+        leaf: LensUpdateLeaf,
+        span: &Span,
+        failure_end: Label,
+    ) -> Result<(), CodegenError> {
+        match leaf {
+            LensUpdateLeaf::Set { value_slot } => {
+                self.emit(Opcode::LoadLocal(value_slot));
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            LensUpdateLeaf::Over { update_fun_slot } => {
+                self.emit(Opcode::LoadLocal(update_fun_slot));
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::CallClosure {
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                let update_result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(update_result_slot));
+
+                self.emit(Opcode::LoadLocal(update_result_slot));
+                self.emit(Opcode::GetTag);
+                let err_tag = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(err_tag));
+                self.emit(Opcode::EqTag);
+
+                let ok_label = self.fresh_label();
+                self.emit_jump_if_false(ok_label);
+                self.emit(Opcode::LoadLocal(update_result_slot));
+                self.emit_jump(failure_end);
+
+                self.patch_label(ok_label);
+                self.emit(Opcode::LoadLocal(update_result_slot));
+                self.emit(Opcode::GetField { field_index: 0 });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_lens_segments_from_local(
+        &mut self,
+        current_slot: u32,
+        path: &TypedLensPath,
+        span: &Span,
+        mismatch_end: Option<Label>,
+    ) -> Result<(), CodegenError> {
+        for (segment_idx, segment) in path.segments.iter().enumerate() {
+            match segment {
+                TypedLensSegment::Field { field_index, .. } => {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetField {
+                        field_index: *field_index,
+                    });
+                    self.emit(Opcode::StoreLocal(current_slot));
+                }
+                TypedLensSegment::Tuple { field_index, .. } => {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: *field_index,
+                    });
+                    self.emit(Opcode::StoreLocal(current_slot));
+                }
+                TypedLensSegment::Variant {
+                    enum_name,
+                    variant_name,
+                    variant_tag,
+                    payload_arity,
+                } => {
+                    let Some(end_label) = mismatch_end else {
+                        return Err(CodegenError {
+                            message:
+                                "Internal invariant broken: variant lens segment in plain context"
+                                    .into(),
+                            span: span.clone(),
+                        });
+                    };
+
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetTag);
+                    let expected_tag = self.add_constant(Constant::Tag(*variant_tag));
+                    self.emit(Opcode::LoadConst(expected_tag));
+                    self.emit(Opcode::EqTag);
+
+                    let mismatch_label = self.fresh_label();
+                    let continue_label = self.fresh_label();
+                    self.emit_jump_if_false(mismatch_label);
+
+                    self.emit_variant_payload_extract_to_local(current_slot, *payload_arity);
+                    self.emit_jump(continue_label);
+
+                    self.patch_label(mismatch_label);
+                    let detail = format!(
+                        "Variant mismatch at segment {} ({}) in lens path: expected variant {}::{}, but got a different variant",
+                        segment_idx + 1,
+                        Self::lens_segment_display(segment),
+                        enum_name,
+                        variant_name
+                    );
+                    self.emit_variant_mismatch_result(&detail, span);
+                    self.emit_jump(end_label);
+
+                    self.patch_label(continue_label);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_variant_payload_extract_to_local(&mut self, current_slot: u32, payload_arity: u32) {
+        match payload_arity {
+            0 => {
+                let unit_idx = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit_idx));
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            1 => {
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::GetField { field_index: 1 });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+            n => {
+                for index in 0..n {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetField {
+                        field_index: index + 1,
+                    });
+                }
+                self.emit(Opcode::TupleNew { len: n });
+                self.emit(Opcode::StoreLocal(current_slot));
+            }
+        }
+    }
+
+    fn lens_segment_display(segment: &TypedLensSegment) -> String {
+        match segment {
+            TypedLensSegment::Field { field_name, .. } => format!(".{}", field_name),
+            TypedLensSegment::Tuple { field_index, .. } => format!("._{}", field_index),
+            TypedLensSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
+        }
+    }
+
+    fn emit_variant_mismatch_result(&mut self, detail: &str, span: &Span) {
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit_error_value("VariantMismatch", detail, span);
+        self.emit(Opcode::StructNew { field_count: 1 });
     }
 
     fn emit_safebind(&mut self, pat: &TypedPattern, rhs: &TypedNode) -> Result<(), CodegenError> {
@@ -2278,6 +2916,28 @@ impl Codegen {
                 self.emit(Opcode::EqInt);
                 self.emit_jump_if_false(fail_label);
             }
+            TypedPattern::Tuple(_, items) => {
+                let mut item_slots = Vec::with_capacity(items.len());
+                for (index, item) in items.iter().enumerate() {
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    item_slots.push((item, item_slot));
+                }
+                for (item, item_slot) in item_slots {
+                    self.emit_pattern_test_from_local_with_mode(
+                        item,
+                        item_slot,
+                        fail_label,
+                        err_span,
+                        propagate_result_error,
+                    )?;
+                }
+            }
             TypedPattern::StrLit(_, s) => {
                 self.emit(Opcode::LoadLocal(slot));
                 let s_const = self.add_constant(Constant::Str(s.clone()));
@@ -2417,6 +3077,18 @@ impl Codegen {
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
             | TypedPattern::BoolLit(_, _) => {}
+            TypedPattern::Tuple(_, items) => {
+                for (index, item) in items.iter().enumerate() {
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    self.emit_pattern_bind_from_local(item, item_slot)?;
+                }
+            }
             TypedPattern::ListCons(_, head, tail) => {
                 let head_slot = self.state.next_slot;
                 self.state.next_slot += 1;
@@ -2538,53 +3210,23 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_extractor_contract_failure(&mut self, span: Span) -> Result<(), CodegenError> {
-        self.emit_pattern_failure(
-            "ExtractorContractViolation",
-            "Extractor returned malformed Seq.",
-            span,
-        )
-    }
-
     fn emit_unpack_seq_payload_from_local(
         &mut self,
-        seq_slot: u32,
+        tuple_slot: u32,
         arity: usize,
-        span: &Span,
+        _span: &Span,
     ) -> Result<Vec<u32>, CodegenError> {
-        let mut current_slot = seq_slot;
         let mut item_slots = Vec::with_capacity(arity);
 
         for index in 0..arity {
-            let non_empty = self.fresh_label();
-            self.emit(Opcode::LoadLocal(current_slot));
-            self.emit(Opcode::ListIsEmpty);
-            self.emit_jump_if_false(non_empty);
-            self.emit_extractor_contract_failure(span.clone())?;
-            self.patch_label(non_empty);
-
             let item_slot = self.state.next_slot;
             self.state.next_slot += 1;
-            self.emit(Opcode::LoadLocal(current_slot));
-            self.emit(Opcode::ListHead);
+            self.emit(Opcode::LoadLocal(tuple_slot));
+            self.emit(Opcode::GetTupleField {
+                field_index: index as u32,
+            });
             self.emit(Opcode::StoreLocal(item_slot));
             item_slots.push(item_slot);
-
-            let tail_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::LoadLocal(current_slot));
-            self.emit(Opcode::ListTail);
-            self.emit(Opcode::StoreLocal(tail_slot));
-            current_slot = tail_slot;
-
-            if index + 1 == arity {
-                let exact_len = self.fresh_label();
-                self.emit(Opcode::LoadLocal(current_slot));
-                self.emit(Opcode::ListIsEmpty);
-                self.emit_jump_if_true(exact_len);
-                self.emit_extractor_contract_failure(span.clone())?;
-                self.patch_label(exact_len);
-            }
         }
 
         Ok(item_slots)
@@ -2822,6 +3464,12 @@ impl Codegen {
                 }
             }
         }
+
+        self.state.next_fun_idx =
+            u32::try_from(self.state.functions.len()).map_err(|_| CodegenError {
+                message: "function table length exceeds u32".into(),
+                span: Span { start: 0, end: 0 },
+            })?;
 
         Ok(())
     }
@@ -3243,6 +3891,22 @@ impl Codegen {
                 self.emit(Opcode::EqStr);
                 self.emit_jump_if_false(fail_label);
             }
+            TypedMatchPattern::Tuple(items) => {
+                let mut item_slots = Vec::with_capacity(items.len());
+                for (index, item) in items.iter().enumerate() {
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    item_slots.push((item, item_slot));
+                }
+                for (item, item_slot) in item_slots {
+                    self.emit_match_pattern_test(item, item_slot, fail_label)?;
+                }
+            }
             TypedMatchPattern::Constructor {
                 tag,
                 fields,
@@ -3342,6 +4006,18 @@ impl Codegen {
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::ListNil => {}
+            TypedMatchPattern::Tuple(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    let item_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetTupleField {
+                        field_index: index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(item_slot));
+                    self.emit_match_pattern_bind(item, item_slot)?;
+                }
+            }
             TypedMatchPattern::Constructor {
                 fields,
                 field_offset,

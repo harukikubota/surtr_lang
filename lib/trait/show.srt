@@ -1,0 +1,11 @@
+@@doc """
+Standard `Show` trait declaration.
+`Show` is the user-facing textual conversion contract.
+Standard primitive/runtime-facing base types provide their canonical impls in
+source, and the compiler may lower those impls to optimized builtin/runtime
+paths.
+"""
+@@autoimport
+deftrait Show {
+  def to_string(self: Self) -> String
+}

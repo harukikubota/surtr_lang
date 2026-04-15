@@ -21,12 +21,6 @@ defenum MatchResult<$Value> {
 }
 
 @@doc """
-Extractor の分解結果を運ぶ compiler-special な型。
-一般の tuple 機能ではなく、MatchBlock 用の型付き値列を表す。
-"""
-@@builtin type Seq<$Type>
-
-@@doc """
 Construct the success branch of `Result`.
 This is a declaration-only surface contract for the constructor shape.
 The parser normalizes this special `@@builtin type` spelling into the internal
@@ -52,9 +46,62 @@ language keeps `Result` distinct from the future general `Enum` surface.
 `Result` is auto-imported. `Ok(...)` / `Err(...)` belong to the `Result` module,
 but they are available without an explicit `import Result`.
 """
+@@autoimport
 defmod Result {
   @@doc """
-  Placeholder entry that keeps the `Result` module present while the API grows.
+  Helper for matching on `Result` success vs failure.
+  This is not a general-purpose combinator, but it is a common enough pattern that it deserves a helper.
+  The `is_ok` name is a bit of a misnomer since it returns `True` for any `Ok(...)` value, even if the inner value is an error type.
+  It's really more of an `is_ok_variant` check, but the shorter name is more ergonomic for common use.
   """
-  def dummy() { () }
+  def is_ok(result: Result<$T>) -> Boolean {
+    match result {
+      Ok(_) => True,
+      Err(_) => False,
+    }
+  }
+
+  @@doc """
+  Helper for matching on `Result` success vs failure.
+  This is not a general-purpose combinator,
+  but it is a common enough pattern that it deserves a helper.
+  The `is_err` name is a bit of a misnomer since it returns `True` for any `Err(...)` value,
+  even if the inner error is an `Ok`-wrapped success type. It's really more of an `is_err_variant` check,
+  but the shorter name is more ergonomic for common use.
+  """
+  def is_err(result: Result<$T>) -> Boolean {
+    Boolean::not(is_ok(result))
+  }
+
+  @@doc """
+  Replace the error branch of a `Result` without preserving the previous cause.
+
+  - `Ok(value)` stays `Ok(value)`
+  - `Err(old)` becomes `Err(err)`
+
+  Use `cause(...)` when the previous error should remain in the chain.
+  """
+  @@builtin def map_err(result: Result<$T>, err: Error) -> Result<$T>
+
+  @@doc """
+  Add a higher-level domain error on top of an existing `Err(...)`.
+
+  - `Ok(value)` stays `Ok(value)`
+  - `Err(old)` becomes `Err(err)` and the previous error is appended to the new error's cause chain
+
+  This keeps `Error` runtime-managed and opaque while still allowing domain layering.
+  """
+  @@builtin def cause(result: Result<$T>, err: Error) -> Result<$T>
+
+  @@doc """
+  Sequence a `Result<$T>` with a later `Result<()>` operation.
+
+  - `chain(Ok(value), Ok(()))` returns `Ok(value)`
+  - `chain(Ok(_), Err(right))` returns `Err(right)`
+  - `chain(Err(left), Ok(()))` returns `Err(left)`
+  - `chain(Err(left), Err(right))` returns `Err(right)` and appends `left` to the tail of `right`
+
+  This keeps the success value on the left and uses the right side only for trailing error-capable work.
+  """
+  @@builtin def chain(head: Result<$T>, tail: Result<()>) -> Result<$T>
 }

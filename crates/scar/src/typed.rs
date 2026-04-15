@@ -1,6 +1,6 @@
 use sigil::resolved::ResolvedId;
 use sindr::primitives::SurtrInt;
-use spire::ast::{BinOp, Lit, Span};
+use spire::ast::{BinOp, Lit, Span, Visibility};
 
 use crate::types::Ty;
 
@@ -27,12 +27,66 @@ pub enum ComposeFlavor {
     ListBind { helper: ListHelperRef },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedTypeParam {
+    pub name: String,
+    pub ty_var: u32,
+    pub bound: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraitDispatch {
+    Pending,
+    Static(TraitDispatchTarget),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraitDispatchTarget {
+    BinOp(BinOp),
+    Builtin(String),
+    UserFunction { name: String, fun_idx: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypedLensSegment {
+    Field {
+        field_name: String,
+        field_index: u32,
+        container_field_count: u32,
+    },
+    Tuple {
+        field_index: u32,
+        tuple_len: u32,
+    },
+    Variant {
+        enum_name: String,
+        variant_name: String,
+        variant_tag: u32,
+        payload_arity: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedLensPath {
+    pub source_ty: Ty,
+    pub focus_ty: Ty,
+    pub may_fail: bool,
+    pub segments: Vec<TypedLensSegment>,
+}
+
 /// Inner structure of a typed node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedInner {
     Lit(Lit),
     Var(ResolvedId),
     App(Box<TypedNode>, Vec<TypedNode>),
+    TraitCall {
+        trait_name: String,
+        method_name: String,
+        receiver_ty: Ty,
+        dispatch: TraitDispatch,
+        args: Vec<TypedNode>,
+    },
     /// Unary callable synthesized from `f(...)` for apply-style operators.
     InjectCall(Box<TypedNode>, Vec<TypedNode>),
     Block(Vec<TypedNode>),
@@ -46,6 +100,7 @@ pub enum TypedInner {
     ListNil,
     ListCons(Box<TypedNode>, Box<TypedNode>),
     ListLiteral(Vec<TypedNode>),
+    TupleLiteral(Vec<TypedNode>),
     InterpolatedStr(Vec<TypedInterpolatedPart>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Assert(Box<TypedNode>, Box<TypedNode>),
@@ -54,6 +109,33 @@ pub enum TypedInner {
 
     /// Field access — field name resolved to index by Scar
     FieldAccess(Box<TypedNode>, u32),
+
+    /// Compile-time lens constant path value. Stage 1 does not allow
+    /// first-class runtime transport of lens values.
+    LensPath(TypedLensPath),
+
+    /// Lens view application with compile-time path metadata.
+    LensView {
+        source: Box<TypedNode>,
+        path: TypedLensPath,
+        source_is_result: bool,
+    },
+
+    /// Lens set application with compile-time path metadata.
+    LensSet {
+        source: Box<TypedNode>,
+        path: TypedLensPath,
+        value: Box<TypedNode>,
+        source_is_result: bool,
+    },
+
+    /// Lens over application with compile-time path metadata.
+    LensOver {
+        source: Box<TypedNode>,
+        path: TypedLensPath,
+        update_fun: Box<TypedNode>,
+        source_is_result: bool,
+    },
 
     /// Struct literal — tag + field values (in definition order)
     StructLit(u32, Vec<TypedNode>),
@@ -68,10 +150,32 @@ pub enum TypedInner {
     EnumDef(String, Vec<TypedEnumVariantDef>),
 
     /// Function definition — tag + name + params + return type + body
-    Def(u32, ResolvedId, Vec<TypedFunParam>, Ty, Box<TypedNode>),
+    Def(
+        u32,
+        ResolvedId,
+        Vec<TypedTypeParam>,
+        Vec<TypedFunParam>,
+        Ty,
+        Box<TypedNode>,
+        Visibility,
+    ),
 
     /// Extractor definition — function-shaped runtime entry with MatchResult return type.
-    ExtractorDef(u32, ResolvedId, TypedFunParam, Ty, Box<TypedNode>),
+    ExtractorDef(
+        u32,
+        ResolvedId,
+        Vec<TypedTypeParam>,
+        TypedFunParam,
+        Ty,
+        Box<TypedNode>,
+        Visibility,
+    ),
+
+    /// Trait definition metadata.
+    TraitDef(String, Vec<String>),
+
+    /// Trait impl metadata.
+    TraitImplDef(String, String),
 
     /// Builtin extractor declaration.
     BuiltinExtractorDecl(ResolvedId, Ty, Ty),
@@ -110,6 +214,7 @@ pub enum TypedPattern {
     IntLit(Ty, SurtrInt),
     StrLit(Ty, String),
     BoolLit(Ty, bool),
+    Tuple(Ty, Vec<TypedPattern>),
     /// `Ok(inner)` pattern node in safe-bind recursion.
     ResultOk(Ty, Box<TypedPattern>),
     Extractor {
@@ -138,6 +243,7 @@ pub enum TypedMatchPattern {
     IntLit(SurtrInt),
     /// String literal
     StrLit(String),
+    Tuple(Vec<TypedMatchPattern>),
     /// Constructor tag + field patterns + payload field offset.
     Constructor {
         tag: u32,

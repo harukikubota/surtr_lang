@@ -1,11 +1,73 @@
 use super::captures::collect_captures;
+use super::declarations::trait_instance_key;
 use super::scope_init::{
     initialize_scope, is_runtime_builtin_decl, is_special_form_builtin_decl, resolve_decl_attrs,
 };
-use super::special_forms::{CompareKind, IfKind, LogicKind};
+use super::special_forms::{IfKind, LogicKind};
 use super::*;
 
+const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
+
 impl Resolver {
+    fn conversion_call_head(func: &Ast) -> Option<&'static str> {
+        match func {
+            Ast::Var(_, name) if name == "from" => Some("from"),
+            Ast::Var(_, name) if name == "try_from" => Some("try_from"),
+            Ast::Path(_, path) if path.segments.len() >= 2 => {
+                let method = path.segments.last()?;
+                let owner = path.segments.get(path.segments.len() - 2)?;
+                match (owner.as_str(), method.as_str()) {
+                    ("From", "from") => Some("from"),
+                    ("TryFrom", "try_from") => Some("try_from"),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn type_witness_from_expr(expr: Ast) -> Result<AstTy, ResolveError> {
+        match expr {
+            Ast::ConstructorCall(span, name, args) => {
+                if args.is_empty() {
+                    return Ok(AstTy::Named(span, name));
+                }
+                let inner = args
+                    .into_iter()
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(expr) => Self::type_witness_from_expr(expr),
+                        RecordLitArg::Named(_, expr) => Err(ResolveError {
+                            message: "type witness arguments do not accept named type parameters"
+                                .into(),
+                            span: expr.span().clone(),
+                        }),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(AstTy::Generic(span, name, inner))
+            }
+            Ast::Path(span, path) => Ok(AstTy::Named(span, path.segments.join("::"))),
+            Ast::Var(span, name) if name == "Unit" => Ok(AstTy::Named(span, name)),
+            Ast::Var(span, name) if name.chars().next().is_some_and(|ch| ch.is_uppercase()) => {
+                Ok(AstTy::Named(span, name))
+            }
+            other => Err(ResolveError {
+                message: "conversion target must be a bare type name such as String or Result<Int>"
+                    .into(),
+                span: other.span().clone(),
+            }),
+        }
+    }
+
+    fn type_witness_span(ast_ty: &AstTy) -> &Span {
+        match ast_ty {
+            AstTy::Named(span, _)
+            | AstTy::Generic(span, _, _)
+            | AstTy::Tuple(span, _)
+            | AstTy::Func(span, _, _)
+            | AstTy::ImplTrait(span, _) => span,
+        }
+    }
+
     pub(super) fn new() -> Self {
         Self {
             scope: initialize_scope(),
@@ -109,6 +171,7 @@ impl Resolver {
             }
             resolved.push(self.resolve_node(stmt)?);
         }
+        self.validate_trait_impl_pairs(&resolved)?;
         self.predeclared_ids.clear();
         Ok(resolved)
     }
@@ -120,15 +183,28 @@ impl Resolver {
             Ast::Lit(span, lit) => Ok(Resolved::Lit(span, lit)),
 
             Ast::Var(span, name) => {
-                let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
-                    message: format!("Undefined variable: {}", name),
-                    span: span.clone(),
-                })?;
+                let uid = self
+                    .scope
+                    .lookup(&name)
+                    .or_else(|| {
+                        if name == "Tuple" {
+                            Some(TUPLE_TYPE_ROOT_UID)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| ResolveError {
+                        message: format!("Undefined variable: {}", name),
+                        span: span.clone(),
+                    })?;
+                let qualified_name = (uid != TUPLE_TYPE_ROOT_UID)
+                    .then(|| self.declaration_fq_name_for_uid(uid))
+                    .flatten();
                 Ok(Resolved::Var(
                     span.clone(),
                     ResolvedId {
                         name,
-                        qualified_name: None,
+                        qualified_name,
                         unique_id: uid,
                         span,
                     },
@@ -136,14 +212,32 @@ impl Resolver {
             }
             Ast::Path(span, path) => {
                 let name = path.segments.join("::");
-                let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
-                    message: format!("Undefined variable: {}", name),
-                    span: span.clone(),
-                })?;
+                let uid = self
+                    .scope
+                    .lookup(&name)
+                    .or_else(|| {
+                        if name == "Tuple" {
+                            Some(TUPLE_TYPE_ROOT_UID)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| ResolveError {
+                        message: format!("Undefined variable: {}", name),
+                        span: span.clone(),
+                    })?;
+                let qualified_name = if uid == TUPLE_TYPE_ROOT_UID {
+                    None
+                } else {
+                    Some(
+                        self.declaration_fq_name_for_uid(uid)
+                            .unwrap_or_else(|| name.clone()),
+                    )
+                };
                 Ok(Resolved::Var(
                     span.clone(),
                     ResolvedId {
-                        qualified_name: Some(name.clone()),
+                        qualified_name,
                         name,
                         unique_id: uid,
                         span,
@@ -172,27 +266,39 @@ impl Resolver {
                     if name == "or" {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
                     }
-                    if name == "eq" {
-                        return self.resolve_compare_call(span, args, CompareKind::Eq);
+                }
+
+                if Self::conversion_call_head(&func).is_some() {
+                    let resolved_func = self.resolve_node(*func)?;
+                    if args.len() != 2 {
+                        return Err(ResolveError {
+                            message: "from/try_from expects exactly 2 positional arguments".into(),
+                            span,
+                        });
                     }
-                    if name == "neq" {
-                        return self.resolve_compare_call(span, args, CompareKind::Neq);
+                    let mut resolved_args = Vec::with_capacity(2);
+                    for (idx, arg) in args.into_iter().enumerate() {
+                        match arg {
+                            RecordLitArg::Positional(expr) if idx == 1 => {
+                                let witness_ty = Self::type_witness_from_expr(expr)?;
+                                resolved_args.push(ResolvedRecordLitArg::Positional(
+                                    Resolved::TypeRefWitness(
+                                        Self::type_witness_span(&witness_ty).clone(),
+                                        witness_ty,
+                                    ),
+                                ));
+                            }
+                            RecordLitArg::Positional(expr) => resolved_args
+                                .push(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?)),
+                            RecordLitArg::Named(_, expr) => {
+                                return Err(ResolveError {
+                                    message: "from/try_from does not accept named arguments".into(),
+                                    span: expr.span().clone(),
+                                });
+                            }
+                        }
                     }
-                    if name == "lt" {
-                        return self.resolve_compare_call(span, args, CompareKind::Lt);
-                    }
-                    if name == "lte" {
-                        return self.resolve_compare_call(span, args, CompareKind::Lte);
-                    }
-                    if name == "gt" {
-                        return self.resolve_compare_call(span, args, CompareKind::Gt);
-                    }
-                    if name == "gte" {
-                        return self.resolve_compare_call(span, args, CompareKind::Gte);
-                    }
-                    if name == "concat" {
-                        return self.resolve_concat_call(span, args);
-                    }
+                    return Ok(Resolved::App(span, Box::new(resolved_func), resolved_args));
                 }
 
                 let resolved_func = self.resolve_node(*func)?;
@@ -280,6 +386,14 @@ impl Resolver {
                 Ok(Resolved::ListLiteral(span, resolved))
             }
 
+            Ast::TupleLiteral(span, elems) => {
+                let resolved = elems
+                    .into_iter()
+                    .map(|e| self.resolve_node(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Resolved::TupleLiteral(span, resolved))
+            }
+
             Ast::InterpolatedStr(span, parts) => {
                 let mut resolved_parts = Vec::new();
                 for part in parts {
@@ -333,13 +447,16 @@ impl Resolver {
                 };
                 let rfields = fields
                     .into_iter()
-                    .map(|f| ResolvedField {
-                        id: None,
-                        name: f.name,
-                        ty: f.ty,
-                        span: f.span,
+                    .map(|f| {
+                        Ok(ResolvedField {
+                            id: None,
+                            name: f.name,
+                            ty: self.resolve_type_annotation(f.ty)?,
+                            span: f.span,
+                            visibility: f.visibility,
+                        })
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
                 Ok(Resolved::StructDef(span, rid, rfields))
             }
 
@@ -358,13 +475,16 @@ impl Resolver {
                 };
                 let rfields = fields
                     .into_iter()
-                    .map(|f| ResolvedField {
-                        id: None,
-                        name: f.name,
-                        ty: f.ty,
-                        span: f.span,
+                    .map(|f| {
+                        Ok(ResolvedField {
+                            id: None,
+                            name: f.name,
+                            ty: self.resolve_type_annotation(f.ty)?,
+                            span: f.span,
+                            visibility: f.visibility,
+                        })
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
                 Ok(Resolved::RecordDef(span, rid, rfields))
             }
 
@@ -393,8 +513,9 @@ impl Resolver {
                             span: f.span.clone(),
                         }),
                         name: f.name,
-                        ty: f.ty,
+                        ty: self.resolve_type_annotation(f.ty)?,
                         span: f.span,
+                        visibility: f.visibility,
                     });
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);
@@ -423,11 +544,8 @@ impl Resolver {
                 };
                 let resolved_type_params = type_params
                     .into_iter()
-                    .map(|param| ResolvedTypeParam {
-                        name: param.name,
-                        span: param.span,
-                    })
-                    .collect::<Vec<_>>();
+                    .map(|param| self.resolve_type_param(param))
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
 
                 let mut resolved_variants = Vec::new();
                 for variant in variants {
@@ -445,7 +563,11 @@ impl Resolver {
                             unique_id: ctor_uid,
                             span: variant.span.clone(),
                         },
-                        payload: variant.payload,
+                        payload: variant
+                            .payload
+                            .into_iter()
+                            .map(|ty| self.resolve_type_annotation(ty))
+                            .collect::<Result<Vec<_>, ResolveError>>()?,
                         discriminant: variant.discriminant,
                         span: variant.span,
                     });
@@ -459,7 +581,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::Def(span, name, params, ret_ty, body, attrs) => {
+            Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => {
                 let fun_uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -469,6 +591,11 @@ impl Resolver {
                 // not to a newer same-name declaration predeclared later in the chunk.
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
+                body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                body_resolver.current_module_path = self.current_module_path.clone();
+                body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                let resolved_type_params = self.resolve_type_params(type_params)?;
                 let resolved_params = params
                     .into_iter()
                     .map(|param| body_resolver.resolve_fun_param(param))
@@ -488,13 +615,16 @@ impl Resolver {
                 Ok(Resolved::Def(
                     span,
                     rid,
+                    resolved_type_params,
                     resolved_params,
-                    ret_ty,
+                    ret_ty
+                        .map(|ty| self.resolve_type_annotation(ty))
+                        .transpose()?,
                     Box::new(resolved_body),
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::ExtractorDef(span, name, param, ret_ty, body, attrs) => {
+            Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
                 let fun_uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -506,6 +636,7 @@ impl Resolver {
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                let resolved_type_params = self.resolve_type_params(type_params)?;
                 let resolved_param = body_resolver.resolve_extractor_param(param)?;
                 let resolved_body = body_resolver.resolve_node(*body)?;
 
@@ -522,10 +653,199 @@ impl Resolver {
                 Ok(Resolved::ExtractorDef(
                     span,
                     rid,
+                    resolved_type_params,
                     resolved_param,
-                    ret_ty,
+                    self.resolve_type_annotation(ret_ty)?,
                     Box::new(resolved_body),
                     resolve_decl_attrs(&attrs),
+                ))
+            }
+            Ast::TraitDef(span, name, type_params, methods, attrs) => {
+                let qualified_trait_name = self.qualify_current_declaration_name(&name);
+                let trait_uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                self.scope.define_with_id(&name, trait_uid);
+                let rid = ResolvedId {
+                    name: name.clone(),
+                    qualified_name: Some(qualified_trait_name.clone()),
+                    unique_id: trait_uid,
+                    span: span.clone(),
+                };
+                let resolved_type_params = self.resolve_type_params(type_params)?;
+                let mut resolved_methods = Vec::new();
+                for method in methods {
+                    let spire::ast::TraitMethodSig {
+                        name: method_name,
+                        type_params,
+                        params,
+                        ret_ty,
+                        span: method_span,
+                    } = method;
+                    let method_alias = trait_method_qualified_name(&name, &method_name);
+                    let qualified_method =
+                        trait_method_qualified_name(&qualified_trait_name, &method_name);
+                    let method_uid = self
+                        .take_predeclared_id(&method_alias)
+                        .or_else(|| self.scope.lookup(&method_alias))
+                        .unwrap_or_else(|| self.scope.reserve_id());
+                    self.scope.define_with_id(&method_alias, method_uid);
+
+                    let mut method_resolver = Resolver::with_scope(self.scope.clone());
+                    method_resolver.declaration_uids = self.declaration_uids.clone();
+                    method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                    method_resolver.current_module_path = self.current_module_path.clone();
+                    method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                    let resolved_params = params
+                        .into_iter()
+                        .map(|param| method_resolver.resolve_fun_param(param))
+                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    self.scope
+                        .advance_next_id_to(method_resolver.scope.next_id());
+                    resolved_methods.push(ResolvedTraitMethodSig {
+                        id: ResolvedId {
+                            name: method_name,
+                            qualified_name: Some(qualified_method),
+                            unique_id: method_uid,
+                            span: method_span.clone(),
+                        },
+                        type_params: self.resolve_type_params(type_params)?,
+                        params: resolved_params,
+                        ret_ty: self.resolve_type_annotation(ret_ty)?,
+                        span: method_span,
+                    });
+                }
+                Ok(Resolved::TraitDef(
+                    span,
+                    rid,
+                    resolved_type_params,
+                    resolved_methods,
+                    resolve_decl_attrs(&attrs),
+                ))
+            }
+            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods) => {
+                let (trait_uid, qualified_trait_name) =
+                    self.resolve_trait_reference(&trait_name, &span)?;
+                let trait_id = ResolvedId {
+                    name: trait_name.clone(),
+                    qualified_name: Some(qualified_trait_name.clone()),
+                    unique_id: trait_uid,
+                    span: span.clone(),
+                };
+                let resolved_target_ty = self.resolve_type_annotation(target_ty)?;
+                let target_key = match &resolved_target_ty {
+                    AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
+                    AstTy::Generic(_, name, args) => format!(
+                        "{}<{}>",
+                        name,
+                        args.iter()
+                            .map(Self::ast_ty_symbol_key)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    AstTy::Tuple(_, items) => format!(
+                        "({})",
+                        items
+                            .iter()
+                            .map(Self::ast_ty_symbol_key)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    AstTy::Func(_, params, ret) => format!(
+                        "({} -> {})",
+                        params
+                            .iter()
+                            .map(Self::ast_ty_symbol_key)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        Self::ast_ty_symbol_key(ret)
+                    ),
+                };
+                let mut resolved_methods = Vec::new();
+                for method in methods {
+                    let Ast::Def(
+                        method_span,
+                        method_name,
+                        type_params,
+                        params,
+                        ret_ty,
+                        body,
+                        attrs,
+                    ) = method
+                    else {
+                        return Err(ResolveError {
+                            message: "trait impl body may only contain `def` declarations"
+                                .to_string(),
+                            span: span.clone(),
+                        });
+                    };
+
+                    let qualified_function_name = trait_impl_method_qualified_name(
+                        self.current_module_path.as_deref(),
+                        &trait_name,
+                        &trait_args,
+                        &resolved_target_ty,
+                        &method_name,
+                        method_span.start,
+                    );
+                    let method_uid = self
+                        .declaration_uids
+                        .get(&qualified_function_name)
+                        .copied()
+                        .unwrap_or_else(|| self.scope.reserve_id());
+                    let mut body_scope = self.scope.clone();
+                    body_scope.define_with_id(&method_name, method_uid);
+                    let mut body_resolver = Resolver::with_scope(body_scope);
+                    body_resolver.declaration_uids = self.declaration_uids.clone();
+                    body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                    body_resolver.current_module_path = self.current_module_path.clone();
+                    body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                    let resolved_params = params
+                        .into_iter()
+                        .map(|param| body_resolver.resolve_fun_param(param))
+                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    let resolved_body = body_resolver.resolve_node(*body)?;
+                    self.scope.advance_next_id_to(body_resolver.scope.next_id());
+                    let local_function_name = if trait_args.is_empty() {
+                        format!("{}::{}", target_key, method_name)
+                    } else {
+                        format!(
+                            "{}::{}::{}",
+                            trait_instance_key(&qualified_trait_name, &trait_args),
+                            target_key,
+                            method_name
+                        )
+                    };
+
+                    resolved_methods.push(ResolvedTraitImplMethod {
+                        method_name: method_name.clone(),
+                        function_id: ResolvedId {
+                            name: local_function_name,
+                            qualified_name: Some(qualified_function_name),
+                            unique_id: method_uid,
+                            span: method_span.clone(),
+                        },
+                        type_params: self.resolve_type_params(type_params)?,
+                        params: resolved_params,
+                        ret_ty: ret_ty
+                            .map(|ty| self.resolve_type_annotation(ty))
+                            .transpose()?,
+                        body: Box::new(resolved_body),
+                        attrs: resolve_decl_attrs(&attrs),
+                        span: method_span,
+                    });
+                }
+
+                Ok(Resolved::TraitImplDef(
+                    span,
+                    trait_id,
+                    trait_args
+                        .into_iter()
+                        .map(|arg| self.resolve_type_annotation(arg))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    resolved_target_ty,
+                    resolved_methods,
                 ))
             }
 
@@ -559,7 +879,9 @@ impl Resolver {
                     span,
                     rid,
                     resolved_params,
-                    ret_ty,
+                    ret_ty
+                        .map(|ty| self.resolve_type_annotation(ty))
+                        .transpose()?,
                     resolve_decl_attrs(&attrs),
                 ))
             }
@@ -581,7 +903,7 @@ impl Resolver {
                     span,
                     rid,
                     resolved_param,
-                    ret_ty,
+                    self.resolve_type_annotation(ret_ty)?,
                     resolve_decl_attrs(&attrs),
                 ))
             }
@@ -654,6 +976,10 @@ impl Resolver {
                 }
 
                 let mut body_resolver = Resolver::with_scope(closure_scope);
+                body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                body_resolver.current_module_path = self.current_module_path.clone();
+                body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_body = body_resolver.resolve_node(*body)?;
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
 
@@ -766,8 +1092,18 @@ impl Resolver {
                 unique_id: uid,
                 span: param.span,
             },
-            ty: param.ty,
+            ty: self.resolve_type_annotation(param.ty)?,
         })
+    }
+
+    pub(super) fn resolve_type_params(
+        &self,
+        type_params: Vec<spire::ast::TypeParam>,
+    ) -> Result<Vec<ResolvedTypeParam>, ResolveError> {
+        type_params
+            .into_iter()
+            .map(|param| self.resolve_type_param(param))
+            .collect()
     }
 
     pub(super) fn resolve_extractor_param(
@@ -782,7 +1118,144 @@ impl Resolver {
                 unique_id: uid,
                 span: param.span,
             },
-            ty: param.ty,
+            ty: param
+                .ty
+                .map(|ty| self.resolve_type_annotation(ty))
+                .transpose()?,
         })
+    }
+
+    fn resolve_type_param(
+        &self,
+        param: spire::ast::TypeParam,
+    ) -> Result<ResolvedTypeParam, ResolveError> {
+        Ok(ResolvedTypeParam {
+            name: param.name,
+            bound: param
+                .bound
+                .map(|bound| self.resolve_trait_bound_name(&bound, &param.span))
+                .transpose()?,
+            span: param.span,
+        })
+    }
+
+    fn resolve_type_annotation(&self, ty: AstTy) -> Result<AstTy, ResolveError> {
+        match ty {
+            AstTy::Named(span, name) => Ok(AstTy::Named(span, name)),
+            AstTy::ImplTrait(span, name) => Ok(AstTy::ImplTrait(
+                span.clone(),
+                self.resolve_trait_bound_name(&name, &span)?,
+            )),
+            AstTy::Generic(span, name, args) => Ok(AstTy::Generic(
+                span,
+                name,
+                args.into_iter()
+                    .map(|arg| self.resolve_type_annotation(arg))
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
+            AstTy::Tuple(span, items) => Ok(AstTy::Tuple(
+                span,
+                items
+                    .into_iter()
+                    .map(|item| self.resolve_type_annotation(item))
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
+            AstTy::Func(span, params, ret) => Ok(AstTy::Func(
+                span,
+                params
+                    .into_iter()
+                    .map(|param| self.resolve_type_annotation(param))
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+                Box::new(self.resolve_type_annotation(*ret)?),
+            )),
+        }
+    }
+
+    fn resolve_trait_reference(
+        &self,
+        trait_name: &str,
+        span: &Span,
+    ) -> Result<(u32, String), ResolveError> {
+        let trait_uid = self.scope.lookup(trait_name).ok_or_else(|| ResolveError {
+            message: format!("Undefined trait: {}", trait_name),
+            span: span.clone(),
+        })?;
+        match self.declaration_uid_kinds.get(&trait_uid) {
+            Some(DeclarationKind::Trait) => {}
+            _ => {
+                return Err(ResolveError {
+                    message: format!("{} is not a trait", trait_name),
+                    span: span.clone(),
+                });
+            }
+        }
+        let qualified_name = self
+            .declaration_fq_name_for_uid(trait_uid)
+            .unwrap_or_else(|| trait_name.to_string());
+        Ok((trait_uid, qualified_name))
+    }
+
+    fn resolve_trait_bound_name(
+        &self,
+        trait_name: &str,
+        span: &Span,
+    ) -> Result<String, ResolveError> {
+        self.resolve_trait_reference(trait_name, span)
+            .map(|(_, qualified_name)| qualified_name)
+    }
+
+    fn ast_ty_symbol_key(ty: &AstTy) -> String {
+        match ty {
+            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                name,
+                args.iter()
+                    .map(Self::ast_ty_symbol_key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(Self::ast_ty_symbol_key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Func(_, params, ret) => format!(
+                "({} -> {})",
+                params
+                    .iter()
+                    .map(Self::ast_ty_symbol_key)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Self::ast_ty_symbol_key(ret)
+            ),
+        }
+    }
+
+    fn validate_trait_impl_pairs(&self, resolved: &[Resolved]) -> Result<(), ResolveError> {
+        let mut seen_pairs = HashSet::new();
+        for node in resolved {
+            let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _) = node else {
+                continue;
+            };
+            let trait_name = trait_instance_key(
+                trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
+                trait_args,
+            );
+            let pair_key = format!("{} for {}", trait_name, Self::ast_ty_symbol_key(target_ty));
+            if !seen_pairs.insert(pair_key.clone()) {
+                return Err(ResolveError {
+                    message: format!(
+                        "Multiple trait impl blocks for `{}` are not allowed",
+                        pair_key
+                    ),
+                    span: span.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 }

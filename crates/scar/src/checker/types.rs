@@ -1,6 +1,107 @@
 use super::*;
 
 impl Checker {
+    fn type_ref_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message:
+                "TypeRef<$T> is only allowed as a trait method parameter tied to a trait head type parameter."
+                    .into(),
+            span: span.clone(),
+            hint: Some(
+                "Use TypeRef<$T> only in deftrait / impl Trait method parameters, not in ordinary signatures or return types."
+                    .into(),
+            ),
+        }
+    }
+
+    pub(super) fn resolve_trait_type_ref_param_ty(
+        &mut self,
+        ast_ty: &AstTy,
+        trait_head_bindings: &HashMap<String, Ty>,
+        allow_concrete_inner: bool,
+        self_ty: &Ty,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Option<Ty>, TypeError> {
+        let AstTy::Generic(span, name, args) = ast_ty else {
+            return Ok(None);
+        };
+        if name != "TypeRef" {
+            return Ok(None);
+        }
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: "TypeRef<T> requires exactly 1 type argument".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let inner = match &args[0] {
+            AstTy::Named(_, name) if name.starts_with('$') => {
+                trait_head_bindings
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "TypeRef<{}> must refer to a type parameter declared on the surrounding trait head",
+                            name
+                        ),
+                        span: Self::ast_ty_span(&args[0]).clone(),
+                        hint: None,
+                    })?
+            }
+            other if allow_concrete_inner => self.resolve_trait_signature_ast_ty_in_context(
+                other,
+                TypeSyntaxContext::General,
+                self_ty,
+                tyvars,
+            )?,
+            _ => {
+                return Err(TypeError {
+                    message:
+                        "TypeRef<$T> in trait declarations must point at a trait head type parameter."
+                            .into(),
+                    span: Self::ast_ty_span(&args[0]).clone(),
+                    hint: None,
+                });
+            }
+        };
+
+        if matches!(inner, Ty::TypeRef(_)) {
+            return Err(TypeError {
+                message: "Nested TypeRef is not supported".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        Ok(Some(Ty::TypeRef(Box::new(inner))))
+    }
+
+    pub(super) fn register_tyvar_bound(&mut self, var: u32, trait_name: &str) {
+        let bounds = self.tyvar_bounds.entry(var).or_default();
+        if !bounds.iter().any(|bound| bound == trait_name) {
+            bounds.push(trait_name.to_string());
+            bounds.sort();
+        }
+    }
+
+    pub(super) fn register_tyvar_bounds(&mut self, var: u32, bounds: &[String]) {
+        for bound in bounds {
+            self.register_tyvar_bound(var, bound);
+        }
+    }
+
+    pub(super) fn tyvar_bound_names(&self, var: u32) -> Vec<String> {
+        self.tyvar_bounds.get(&var).cloned().unwrap_or_default()
+    }
+
+    pub(super) fn tyvar_has_bound(&self, var: u32, trait_name: &str) -> bool {
+        self.tyvar_bounds
+            .get(&var)
+            .is_some_and(|bounds| bounds.iter().any(|bound| bound == trait_name))
+    }
+
     pub(super) fn lit_type(&self, lit: &Lit) -> Ty {
         match lit {
             Lit::Int(_) => Ty::Int,
@@ -13,7 +114,11 @@ impl Checker {
 
     pub(super) fn ast_ty_span(ast_ty: &AstTy) -> &Span {
         match ast_ty {
-            AstTy::Named(span, _) | AstTy::Generic(span, _, _) | AstTy::Func(span, _, _) => span,
+            AstTy::Named(span, _)
+            | AstTy::Generic(span, _, _)
+            | AstTy::Tuple(span, _)
+            | AstTy::Func(span, _, _)
+            | AstTy::ImplTrait(span, _) => span,
         }
     }
 
@@ -29,12 +134,18 @@ impl Checker {
                     Self::collect_type_ref_names(arg, out);
                 }
             }
+            AstTy::Tuple(_, items) => {
+                for item in items {
+                    Self::collect_type_ref_names(item, out);
+                }
+            }
             AstTy::Func(_, params, ret) => {
                 for param in params {
                     Self::collect_type_ref_names(param, out);
                 }
                 Self::collect_type_ref_names(ret, out);
             }
+            AstTy::ImplTrait(_, name) => out.push(name.clone()),
         }
     }
 
@@ -55,6 +166,9 @@ impl Checker {
                 "Boolean" => Ok(Ty::Bool),
                 "Unit" => Ok(Ty::Unit),
                 "Error" => Ok(Ty::Error),
+                "Regex" => Ok(Ty::Enum("Regex".into(), Vec::new())),
+                "RegexCaptures" => Ok(Ty::Enum("RegexCaptures".into(), Vec::new())),
+                "RegexMatch" => Ok(Ty::Enum("RegexMatch".into(), Vec::new())),
                 other => {
                     if let Some(def) = self.env.lookup_type_def(other) {
                         match &def.kind {
@@ -90,21 +204,10 @@ impl Checker {
                     }
                 }
             },
+            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+                Err(self.type_ref_not_allowed_error(span))
+            }
             AstTy::Generic(span, name, args) => match name.as_str() {
-                "Seq" => {
-                    if args.is_empty() {
-                        return Err(TypeError {
-                            message: "Seq<T1, ...> requires at least 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let items = args
-                        .iter()
-                        .map(|arg| self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(Ty::Seq(items))
-                }
                 "MatchResult" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -139,6 +242,32 @@ impl Checker {
                     let inner_ty =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::List(Box::new(inner_ty)))
+                }
+                "HashMap" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "HashMap<V> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let value_ty =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    Ok(Ty::Enum("HashMap".into(), vec![value_ty]))
+                }
+                "Lens" => {
+                    if args.len() != 2 {
+                        return Err(TypeError {
+                            message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let source =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    let focus =
+                        self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
+                    Ok(Ty::Lens(Box::new(source), Box::new(focus)))
                 }
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
@@ -202,6 +331,20 @@ impl Checker {
                     }
                 }
             },
+            AstTy::Tuple(span, items) => {
+                if items.len() < 2 {
+                    return Err(TypeError {
+                        message: "Tuple types require at least 2 item types".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let items = items
+                    .iter()
+                    .map(|item| self.resolve_ast_ty_in_context(item, TypeSyntaxContext::General))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Tuple(items))
+            }
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
@@ -210,6 +353,14 @@ impl Checker {
                 let ret = self.resolve_ast_ty_in_context(ret, TypeSyntaxContext::General)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
+            AstTy::ImplTrait(span, name) => Err(TypeError {
+                message: format!(
+                    "`impl {}` is only supported in function and extractor parameters",
+                    name
+                ),
+                span: span.clone(),
+                hint: Some("Name the type parameter explicitly, e.g. `<$N: Trait>`.".into()),
+            }),
         }
     }
 
@@ -245,6 +396,25 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
+            AstTy::ImplTrait(_, trait_name) => {
+                if context == TypeSyntaxContext::ErrorMarker {
+                    return Err(TypeError {
+                        message:
+                            "The error marker E in Result<T, E> must be a deferror-defined type."
+                                .into(),
+                        span: Self::ast_ty_span(ast_ty).clone(),
+                        hint: None,
+                    });
+                }
+                let fresh = self.env.fresh_tyvar();
+                if let Ty::Var(var) = fresh {
+                    self.register_tyvar_bound(var, trait_name);
+                }
+                Ok(fresh)
+            }
+            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+                return Err(self.type_ref_not_allowed_error(span));
+            }
             AstTy::Generic(span, name, args) if name == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
@@ -260,25 +430,40 @@ impl Checker {
                 )?;
                 Ok(Ty::List(Box::new(inner)))
             }
-            AstTy::Generic(span, name, args) if name == "Seq" => {
-                if args.is_empty() {
+            AstTy::Generic(span, name, args) if name == "HashMap" => {
+                if args.len() != 1 {
                     return Err(TypeError {
-                        message: "Seq<T1, ...> requires at least 1 type argument".into(),
+                        message: "HashMap<V> requires exactly 1 type argument".into(),
                         span: span.clone(),
                         hint: None,
                     });
                 }
-                let items = args
-                    .iter()
-                    .map(|arg| {
-                        self.resolve_signature_ast_ty_in_context(
-                            arg,
-                            TypeSyntaxContext::General,
-                            tyvars,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Ty::Seq(items))
+                let value = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("HashMap".into(), vec![value]))
+            }
+            AstTy::Generic(span, name, args) if name == "Lens" => {
+                if args.len() != 2 {
+                    return Err(TypeError {
+                        message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let source = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                let focus = self.resolve_signature_ast_ty_in_context(
+                    &args[1],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::Lens(Box::new(source), Box::new(focus)))
             }
             AstTy::Generic(span, name, args) if name == "MatchResult" => {
                 if args.is_empty() || args.len() > 2 {
@@ -343,6 +528,26 @@ impl Checker {
                 };
                 Ok(Ty::Result(Box::new(ok), Box::new(err)))
             }
+            AstTy::Tuple(span, items) => {
+                if items.len() < 2 {
+                    return Err(TypeError {
+                        message: "Tuple types require at least 2 item types".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let items = items
+                    .iter()
+                    .map(|item| {
+                        self.resolve_signature_ast_ty_in_context(
+                            item,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Tuple(items))
+            }
             AstTy::Generic(span, name, args) => {
                 let def = self
                     .env
@@ -406,6 +611,267 @@ impl Checker {
         }
     }
 
+    pub(super) fn seed_signature_type_params(
+        &mut self,
+        type_params: &[ResolvedTypeParam],
+        tyvars: &mut HashMap<String, Ty>,
+    ) {
+        for param in type_params {
+            let fresh = self.env.fresh_tyvar();
+            if let Ty::Var(var) = fresh {
+                if let Some(bound) = &param.bound {
+                    self.register_tyvar_bound(var, bound);
+                }
+            }
+            tyvars.insert(param.name.clone(), fresh);
+        }
+    }
+
+    pub(super) fn resolve_trait_signature_ast_ty_in_context(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+        self_ty: &Ty,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
+        match ast_ty {
+            AstTy::Named(_, name) if name == "Self" => Ok(self_ty.clone()),
+            AstTy::Named(_, name) if name.starts_with('$') => {
+                if context == TypeSyntaxContext::ErrorMarker {
+                    return Err(TypeError {
+                        message:
+                            "The error marker E in Result<T, E> must be a deferror-defined type."
+                                .into(),
+                        span: Self::ast_ty_span(ast_ty).clone(),
+                        hint: None,
+                    });
+                }
+                if let Some(existing) = tyvars.get(name) {
+                    return Ok(existing.clone());
+                }
+                let fresh = self.env.fresh_tyvar();
+                tyvars.insert(name.clone(), fresh.clone());
+                Ok(fresh)
+            }
+            AstTy::ImplTrait(span, trait_name) => Err(TypeError {
+                message: format!(
+                    "`impl {}` is not supported inside trait method signatures",
+                    trait_name
+                ),
+                span: span.clone(),
+                hint: None,
+            }),
+            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+                return Err(self.type_ref_not_allowed_error(span));
+            }
+            AstTy::Generic(span, name, args) if name == "List" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "List<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                Ok(Ty::List(Box::new(inner)))
+            }
+            AstTy::Generic(span, name, args) if name == "HashMap" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "HashMap<V> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let value = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("HashMap".into(), vec![value]))
+            }
+            AstTy::Generic(span, name, args) if name == "Lens" => {
+                if args.len() != 2 {
+                    return Err(TypeError {
+                        message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let source = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                let focus = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[1],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+            }
+            AstTy::Generic(span, name, args) if name == "MatchResult" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(TypeError {
+                        message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let value = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                if args.len() == 2 {
+                    let err = self.resolve_trait_signature_ast_ty_in_context(
+                        &args[1],
+                        TypeSyntaxContext::General,
+                        self_ty,
+                        tyvars,
+                    )?;
+                    if !matches!(err, Ty::Error) {
+                        return Err(TypeError {
+                            message:
+                                "MatchResult<$Value, Error> requires Error as the second argument"
+                                    .into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+                Ok(Ty::Enum("MatchResult".into(), vec![value]))
+            }
+            AstTy::Generic(span, name, args) if name == "Result" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(TypeError {
+                        message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let ok = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                let err = if args.len() == 2 {
+                    if context != TypeSyntaxContext::FunctionReturn {
+                        return Err(TypeError {
+                            message: "Result<T, E> is only allowed in function return signatures."
+                                .into(),
+                            span: span.clone(),
+                            hint: Some("Use Result<T> in local code.".into()),
+                        });
+                    }
+                    self.resolve_trait_signature_ast_ty_in_context(
+                        &args[1],
+                        TypeSyntaxContext::ErrorMarker,
+                        self_ty,
+                        tyvars,
+                    )?
+                } else {
+                    Ty::Error
+                };
+                Ok(Ty::Result(Box::new(ok), Box::new(err)))
+            }
+            AstTy::Tuple(span, items) => {
+                if items.len() < 2 {
+                    return Err(TypeError {
+                        message: "Tuple types require at least 2 item types".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let items = items
+                    .iter()
+                    .map(|item| {
+                        self.resolve_trait_signature_ast_ty_in_context(
+                            item,
+                            TypeSyntaxContext::General,
+                            self_ty,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Tuple(items))
+            }
+            AstTy::Generic(span, name, args) => {
+                let def = self
+                    .env
+                    .lookup_type_def(name)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        message: format!("Unknown generic type: {}", name),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                if def.type_params.len() != args.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Type {} requires {} type argument(s), got {}",
+                            name,
+                            def.type_params.len(),
+                            args.len()
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let resolved_args = args
+                    .iter()
+                    .map(|arg| {
+                        self.resolve_trait_signature_ast_ty_in_context(
+                            arg,
+                            TypeSyntaxContext::General,
+                            self_ty,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                match def.kind {
+                    crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
+                    _ => Err(TypeError {
+                        message: format!("Generic type {} is not supported in this context", name),
+                        span: span.clone(),
+                        hint: None,
+                    }),
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                let params = params
+                    .iter()
+                    .map(|param| {
+                        self.resolve_trait_signature_ast_ty_in_context(
+                            param,
+                            TypeSyntaxContext::General,
+                            self_ty,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ret = self.resolve_trait_signature_ast_ty_in_context(
+                    ret,
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                Ok(Ty::Func(params, Box::new(ret)))
+            }
+            _ => self.resolve_ast_ty_in_context(ast_ty, context),
+        }
+    }
+
     pub(super) fn resolve_builtin_ast_ty_in_context(
         &mut self,
         ast_ty: &AstTy,
@@ -430,27 +896,10 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
+            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+                Err(self.type_ref_not_allowed_error(span))
+            }
             AstTy::Generic(span, name, args) => match name.as_str() {
-                "Seq" => {
-                    if args.is_empty() {
-                        return Err(TypeError {
-                            message: "Seq<T1, ...> requires at least 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let items = args
-                        .iter()
-                        .map(|arg| {
-                            self.resolve_builtin_ast_ty_in_context(
-                                arg,
-                                TypeSyntaxContext::General,
-                                tyvars,
-                            )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(Ty::Seq(items))
-                }
                 "MatchResult" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -495,6 +944,41 @@ impl Checker {
                     )?;
                     Ok(Ty::List(Box::new(inner_ty)))
                 }
+                "HashMap" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "HashMap<V> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let value_ty = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    Ok(Ty::Enum("HashMap".into(), vec![value_ty]))
+                }
+                "Lens" => {
+                    if args.len() != 2 {
+                        return Err(TypeError {
+                            message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let source = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    let focus = self.resolve_builtin_ast_ty_in_context(
+                        &args[1],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+                }
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -531,6 +1015,26 @@ impl Checker {
                 }
                 _ => self.resolve_ast_ty_in_context(ast_ty, context),
             },
+            AstTy::Tuple(span, items) => {
+                if items.len() < 2 {
+                    return Err(TypeError {
+                        message: "Tuple types require at least 2 item types".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let items = items
+                    .iter()
+                    .map(|item| {
+                        self.resolve_builtin_ast_ty_in_context(
+                            item,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::Tuple(items))
+            }
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
@@ -563,6 +1067,10 @@ impl Checker {
                 hint: None,
             });
         };
+
+        if name == "Error" {
+            return Ok(Ty::Error);
+        }
 
         let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
             message: "The error marker E in Result<T, E> must be a deferror-defined type.".into(),
@@ -606,7 +1114,11 @@ impl Checker {
             | (Ty::Unit, Ty::Unit)
             | (Ty::Error, Ty::Error) => true,
             (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-            (Ty::Seq(a), Ty::Seq(b)) => {
+            (Ty::TypeRef(a), Ty::TypeRef(b)) => self.types_compatible(a, b),
+            (Ty::Lens(src_a, focus_a), Ty::Lens(src_b, focus_b)) => {
+                self.types_compatible(src_a, src_b) && self.types_compatible(focus_a, focus_b)
+            }
+            (Ty::Tuple(a), Ty::Tuple(b)) => {
                 a.len() == b.len()
                     && a.iter()
                         .zip(b.iter())
@@ -645,15 +1157,51 @@ impl Checker {
         if self.ty_contains_var(&ty, var) {
             return false;
         }
+        let var_bounds = self.tyvar_bound_names(var);
+        match &ty {
+            Ty::Var(other) => {
+                let mut combined = var_bounds;
+                for bound in self.tyvar_bound_names(*other) {
+                    if !combined.iter().any(|existing| existing == &bound) {
+                        combined.push(bound);
+                    }
+                }
+                combined.sort();
+                self.tyvar_bounds.insert(var, combined.clone());
+                self.tyvar_bounds.insert(*other, combined);
+            }
+            _ => {
+                if !self.ty_satisfies_bounds(&ty, &var_bounds) {
+                    return false;
+                }
+            }
+        }
         self.substitutions.insert(var, ty);
         true
+    }
+
+    pub(super) fn ty_satisfies_bounds(&self, ty: &Ty, bounds: &[String]) -> bool {
+        if bounds.is_empty() {
+            return true;
+        }
+
+        match self.resolve_ty(ty) {
+            Ty::Var(var) => bounds.iter().all(|bound| self.tyvar_has_bound(var, bound)),
+            concrete => bounds
+                .iter()
+                .all(|bound| self.trait_impl_exists(bound, &concrete)),
+        }
     }
 
     pub(super) fn ty_contains_var(&self, ty: &Ty, needle: u32) -> bool {
         match self.resolve_ty(ty) {
             Ty::Var(var) => var == needle,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
-            Ty::Seq(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
+            Ty::TypeRef(inner) => self.ty_contains_var(&inner, needle),
+            Ty::Lens(source, focus) => {
+                self.ty_contains_var(&source, needle) || self.ty_contains_var(&focus, needle)
+            }
+            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
             Ty::Func(params, ret) => {
                 params
                     .iter()
@@ -684,7 +1232,12 @@ impl Checker {
                 None => Ty::Var(*var),
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
-            Ty::Seq(items) => Ty::Seq(items.iter().map(|item| self.resolve_ty(item)).collect()),
+            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
+            Ty::Lens(source, focus) => Ty::Lens(
+                Box::new(self.resolve_ty(source)),
+                Box::new(self.resolve_ty(focus)),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect()),
             Ty::Func(params, ret) => Ty::Func(
                 params.iter().map(|param| self.resolve_ty(param)).collect(),
                 Box::new(self.resolve_ty(ret)),
@@ -739,10 +1292,24 @@ impl Checker {
         match ty {
             Ty::Var(var) => fresh
                 .entry(*var)
-                .or_insert_with(|| self.env.fresh_tyvar())
+                .or_insert_with(|| {
+                    let fresh = self.env.fresh_tyvar();
+                    if let Ty::Var(new_var) = fresh {
+                        let bounds = self.tyvar_bound_names(*var);
+                        self.register_tyvar_bounds(new_var, &bounds);
+                    }
+                    fresh
+                })
                 .clone(),
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
-            Ty::Seq(items) => Ty::Seq(
+            Ty::TypeRef(inner) => {
+                Ty::TypeRef(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
+            }
+            Ty::Lens(source, focus) => Ty::Lens(
+                Box::new(self.instantiate_ty_with_fresh(source, fresh)),
+                Box::new(self.instantiate_ty_with_fresh(focus, fresh)),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(
                 items
                     .iter()
                     .map(|item| self.instantiate_ty_with_fresh(item, fresh))
@@ -849,8 +1416,12 @@ impl Checker {
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
-            Ty::Seq(items) => format!(
-                "Seq<{}>",
+            Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
+            Ty::Lens(source, focus) => {
+                format!("Lens<{}, {}>", self.ty_name(source), self.ty_name(focus))
+            }
+            Ty::Tuple(items) => format!(
+                "({})",
                 items
                     .iter()
                     .map(|item| self.ty_name(item))
@@ -891,6 +1462,39 @@ impl Checker {
         }
     }
 
+    pub(super) fn ty_contains_lens(&self, ty: &Ty) -> bool {
+        match self.resolve_ty(ty) {
+            Ty::Lens(_, _) => true,
+            Ty::List(inner) | Ty::TypeRef(inner) => self.ty_contains_lens(inner.as_ref()),
+            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_lens(item)),
+            Ty::Func(params, ret) => {
+                params.iter().any(|param| self.ty_contains_lens(param))
+                    || self.ty_contains_lens(ret.as_ref())
+            }
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                params.iter().any(|param| self.ty_contains_lens(param))
+                    || self.ty_contains_lens(ret.as_ref())
+            }
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+                .iter()
+                .any(|(_, field_ty)| self.ty_contains_lens(field_ty)),
+            Ty::Enum(_, args) => args.iter().any(|arg| self.ty_contains_lens(arg)),
+            Ty::Result(ok, err) => {
+                self.ty_contains_lens(ok.as_ref()) || self.ty_contains_lens(err.as_ref())
+            }
+            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Var(_) | Ty::Error => false,
+        }
+    }
+
+    fn resolve_typed_lens_path(&self, path: TypedLensPath) -> TypedLensPath {
+        TypedLensPath {
+            source_ty: self.resolve_ty(&path.source_ty),
+            focus_ty: self.resolve_ty(&path.focus_ty),
+            may_fail: path.may_fail,
+            segments: path.segments,
+        }
+    }
+
     pub(super) fn resolve_typed_node(&self, node: TypedNode) -> TypedNode {
         let span = node.span.clone();
         let ty = self.resolve_ty(&node.ty);
@@ -903,6 +1507,22 @@ impl Checker {
                     .map(|arg| self.resolve_typed_node(arg))
                     .collect(),
             ),
+            TypedInner::TraitCall {
+                trait_name,
+                method_name,
+                receiver_ty,
+                dispatch,
+                args,
+            } => TypedInner::TraitCall {
+                trait_name,
+                method_name,
+                receiver_ty: self.resolve_ty(&receiver_ty),
+                dispatch,
+                args: args
+                    .into_iter()
+                    .map(|arg| self.resolve_typed_node(arg))
+                    .collect(),
+            },
             TypedInner::InjectCall(func, args) => TypedInner::InjectCall(
                 Box::new(self.resolve_typed_node(*func)),
                 args.into_iter()
@@ -956,6 +1576,12 @@ impl Checker {
                     .map(|elem| self.resolve_typed_node(elem))
                     .collect(),
             ),
+            TypedInner::TupleLiteral(elems) => TypedInner::TupleLiteral(
+                elems
+                    .into_iter()
+                    .map(|elem| self.resolve_typed_node(elem))
+                    .collect(),
+            ),
             TypedInner::InterpolatedStr(parts) => TypedInner::InterpolatedStr(
                 parts
                     .into_iter()
@@ -995,6 +1621,38 @@ impl Checker {
             TypedInner::FieldAccess(expr, idx) => {
                 TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
             }
+            TypedInner::LensPath(path) => TypedInner::LensPath(self.resolve_typed_lens_path(path)),
+            TypedInner::LensView {
+                source,
+                path,
+                source_is_result,
+            } => TypedInner::LensView {
+                source: Box::new(self.resolve_typed_node(*source)),
+                path: self.resolve_typed_lens_path(path),
+                source_is_result,
+            },
+            TypedInner::LensSet {
+                source,
+                path,
+                value,
+                source_is_result,
+            } => TypedInner::LensSet {
+                source: Box::new(self.resolve_typed_node(*source)),
+                path: self.resolve_typed_lens_path(path),
+                value: Box::new(self.resolve_typed_node(*value)),
+                source_is_result,
+            },
+            TypedInner::LensOver {
+                source,
+                path,
+                update_fun,
+                source_is_result,
+            } => TypedInner::LensOver {
+                source: Box::new(self.resolve_typed_node(*source)),
+                path: self.resolve_typed_lens_path(path),
+                update_fun: Box::new(self.resolve_typed_node(*update_fun)),
+                source_is_result,
+            },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
                 fields
@@ -1022,29 +1680,51 @@ impl Checker {
                     .collect(),
                 Box::new(self.resolve_typed_node(*show)),
             ),
-            TypedInner::Def(fun_idx, id, params, ret_ty, body) => TypedInner::Def(
-                fun_idx,
-                id,
-                params
-                    .into_iter()
-                    .map(|param| TypedFunParam {
+            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
+                TypedInner::Def(
+                    fun_idx,
+                    id,
+                    type_params
+                        .into_iter()
+                        .map(|param| TypedTypeParam {
+                            name: param.name,
+                            ty_var: param.ty_var,
+                            bound: param.bound,
+                        })
+                        .collect(),
+                    params
+                        .into_iter()
+                        .map(|param| TypedFunParam {
+                            id: param.id,
+                            ty: self.resolve_ty(&param.ty),
+                        })
+                        .collect(),
+                    self.resolve_ty(&ret_ty),
+                    Box::new(self.resolve_typed_node(*body)),
+                    visibility,
+                )
+            }
+            TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
+                TypedInner::ExtractorDef(
+                    fun_idx,
+                    id,
+                    type_params
+                        .into_iter()
+                        .map(|param| TypedTypeParam {
+                            name: param.name,
+                            ty_var: param.ty_var,
+                            bound: param.bound,
+                        })
+                        .collect(),
+                    TypedFunParam {
                         id: param.id,
                         ty: self.resolve_ty(&param.ty),
-                    })
-                    .collect(),
-                self.resolve_ty(&ret_ty),
-                Box::new(self.resolve_typed_node(*body)),
-            ),
-            TypedInner::ExtractorDef(fun_idx, id, param, ret_ty, body) => TypedInner::ExtractorDef(
-                fun_idx,
-                id,
-                TypedFunParam {
-                    id: param.id,
-                    ty: self.resolve_ty(&param.ty),
-                },
-                self.resolve_ty(&ret_ty),
-                Box::new(self.resolve_typed_node(*body)),
-            ),
+                    },
+                    self.resolve_ty(&ret_ty),
+                    Box::new(self.resolve_typed_node(*body)),
+                    visibility,
+                )
+            }
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
                 TypedInner::BuiltinExtractorDecl(
                     id,
@@ -1076,6 +1756,10 @@ impl Checker {
                 TypedInner::RecordDef(tag, name, field_names)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
+            TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
+            TypedInner::TraitImplDef(trait_name, target_name) => {
+                TypedInner::TraitImplDef(trait_name, target_name)
+            }
             TypedInner::Semi(inner) => TypedInner::Semi(Box::new(self.resolve_typed_node(*inner))),
         };
 
@@ -1100,6 +1784,13 @@ impl Checker {
             TypedPattern::IntLit(ty, n) => TypedPattern::IntLit(self.resolve_ty(&ty), n),
             TypedPattern::StrLit(ty, s) => TypedPattern::StrLit(self.resolve_ty(&ty), s),
             TypedPattern::BoolLit(ty, b) => TypedPattern::BoolLit(self.resolve_ty(&ty), b),
+            TypedPattern::Tuple(ty, items) => TypedPattern::Tuple(
+                self.resolve_ty(&ty),
+                items
+                    .into_iter()
+                    .map(|item| self.resolve_typed_pattern(item))
+                    .collect(),
+            ),
             TypedPattern::ResultOk(ty, inner) => TypedPattern::ResultOk(
                 self.resolve_ty(&ty),
                 Box::new(self.resolve_typed_pattern(*inner)),
@@ -1142,6 +1833,12 @@ impl Checker {
             TypedMatchPattern::BoolLit(value) => TypedMatchPattern::BoolLit(value),
             TypedMatchPattern::IntLit(value) => TypedMatchPattern::IntLit(value),
             TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
+            TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.resolve_typed_match_pattern(item))
+                    .collect(),
+            ),
             TypedMatchPattern::Constructor {
                 tag,
                 fields,

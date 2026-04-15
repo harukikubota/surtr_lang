@@ -11,19 +11,32 @@ pub use codegen::{
 #[cfg(test)]
 mod tests {
     use super::codegen;
+    use crate::bytecode::Constant;
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
-    use sindr::builtin::builtin_meta_by_name;
+    use sindr::builtin::builtin_id_by_name;
     use spire::ast::Ast;
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
+    const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
+    const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
+    const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/compare.srt");
+    const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
+    const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
+    const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
+    const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/try_from.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
+    const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/regex.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
+    const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/ordering.srt");
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
+    const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
+    const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
 
     fn strip_test_annotations(source: &str) -> String {
@@ -40,9 +53,9 @@ mod tests {
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             &strip_test_annotations(source),
-            spire::ParserContext::module(0, None).with_rules(spire::SourceRules::std_module()),
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
-        .expect("std module should parse");
+        .unwrap_or_else(|err| panic!("std module {fallback_module_path} should parse: {err:?}"));
 
         let shared_imports = ast
             .iter()
@@ -64,6 +77,7 @@ mod tests {
                         module_path,
                         ast: module_ast,
                         module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
                     });
                 }
                 Ast::Import(_, _, _) => {}
@@ -92,6 +106,7 @@ mod tests {
                 module_path: fallback_module_path.to_string(),
                 ast: global_ast,
                 module_doc: None,
+                auto_import: false,
             });
         }
 
@@ -102,6 +117,7 @@ mod tests {
                 module_path: String::new(),
                 ast: global_ast,
                 module_doc: None,
+                auto_import: false,
             });
         }
 
@@ -113,12 +129,24 @@ mod tests {
             parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
             [
                 ("Kernel", KERNEL_PRELUDE_SOURCE),
+                ("Numeric", NUMERIC_MODULE_SOURCE),
+                ("Show", SHOW_MODULE_SOURCE),
+                ("Eq", EQ_MODULE_SOURCE),
+                ("Ordering", ORDERING_MODULE_SOURCE),
+                ("Compare", COMPARE_MODULE_SOURCE),
+                ("Ord", ORD_MODULE_SOURCE),
+                ("Concat", CONCAT_MODULE_SOURCE),
+                ("From", FROM_MODULE_SOURCE),
+                ("TryFrom", TRY_FROM_MODULE_SOURCE),
                 ("Int", INT_MODULE_SOURCE),
                 ("String", STRING_MODULE_SOURCE),
+                ("Regex", REGEX_MODULE_SOURCE),
                 ("Boolean", BOOLEAN_MODULE_SOURCE),
                 ("Error", ERROR_MODULE_SOURCE),
                 ("List", LIST_MODULE_SOURCE),
+                ("HashMap", HASH_MAP_MODULE_SOURCE),
                 ("Result", RESULT_MODULE_SOURCE),
+                ("Lens", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),
             ]
             .into_iter()
@@ -259,18 +287,13 @@ right = Int::bit_xor(6, 3)"#,
             .iter()
             .any(|op| matches!(op, Opcode::BitXorInt)));
 
-        let bit_not_id = builtin_meta_by_name("bit_not")
-            .expect("bit_not builtin metadata must exist")
-            .builtin_id;
-        let bit_and_id = builtin_meta_by_name("bit_and")
-            .expect("bit_and builtin metadata must exist")
-            .builtin_id;
-        let bit_or_id = builtin_meta_by_name("bit_or")
-            .expect("bit_or builtin metadata must exist")
-            .builtin_id;
-        let bit_xor_id = builtin_meta_by_name("bit_xor")
-            .expect("bit_xor builtin metadata must exist")
-            .builtin_id;
+        let bit_not_id =
+            builtin_id_by_name("bit_not").expect("bit_not builtin metadata must exist");
+        let bit_and_id =
+            builtin_id_by_name("bit_and").expect("bit_and builtin metadata must exist");
+        let bit_or_id = builtin_id_by_name("bit_or").expect("bit_or builtin metadata must exist");
+        let bit_xor_id =
+            builtin_id_by_name("bit_xor").expect("bit_xor builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
             matches!(
@@ -296,9 +319,8 @@ toggled = Int::toggle_bit(5, 0)"#,
         );
 
         for name in ["test_bit", "set_bit", "clear_bit", "toggle_bit"] {
-            let builtin_id = builtin_meta_by_name(name)
-                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"))
-                .builtin_id;
+            let builtin_id = builtin_id_by_name(name)
+                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
             assert!(bytecode.opcodes.iter().any(|op| {
                 matches!(
                     op,
@@ -310,5 +332,142 @@ toggled = Int::toggle_bit(5, 0)"#,
                 )
             }));
         }
+    }
+
+    #[test]
+    fn numeric_trait_calls_lower_to_existing_targets() {
+        let bytecode = codegen_source(
+            r#"sum = 1 + 2
+quot = Numeric::safe_div(8, 2)
+largest = Numeric::max(1.5, 2.5)"#,
+        );
+
+        let safe_div_id =
+            builtin_id_by_name("safe_div").expect("safe_div builtin metadata must exist");
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::AddInt)));
+        assert!(bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 2,
+                    ..
+                } if *builtin_id == safe_div_id
+            )
+        }));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::Call { arity: 2, .. })));
+    }
+
+    #[test]
+    fn lens_set_and_over_are_lowered_without_runtime_builtin_calls() {
+        let bytecode = codegen_source(
+            r#"defrecord User(name: String)
+user = User("alice")
+user2 = Lens::set(User.name, user, "bob")
+user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
+        );
+
+        let lens_set_id = builtin_id_by_name("set").expect("set builtin metadata must exist");
+        let lens_over_id = builtin_id_by_name("over").expect("over builtin metadata must exist");
+
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == lens_set_id || *builtin_id == lens_over_id
+            )
+        }));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { arity: 1, .. })));
+    }
+
+    #[test]
+    fn lens_bindings_are_erased_and_only_viewed_values_are_captured() {
+        let bytecode = codegen_source(
+            r#"defrecord User(name: String)
+lens = User.name
+name = Lens::view(lens, User("alice"))
+getter = {|| name}
+result = getter()"#,
+        );
+
+        let lens_view_id = builtin_id_by_name("view").expect("view builtin metadata must exist");
+        let lens_compose_id =
+            builtin_id_by_name("compose").expect("compose builtin metadata must exist");
+
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == lens_view_id || *builtin_id == lens_compose_id
+            )
+        }));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { .. })));
+    }
+
+    #[test]
+    fn lens_variant_mismatch_detail_includes_segment_context() {
+        let bytecode = codegen_source(
+            r#"defenum Expr {
+  Add(Int, Int),
+  Halt,
+}
+expr = Expr::Halt
+Lens::view(Expr.Add, expr)"#,
+        );
+
+        let has_segment_detail = bytecode.constants.iter().any(|constant| {
+            matches!(
+                constant,
+                Constant::Str(message)
+                    if message.contains("Variant mismatch at segment 1")
+                        && message.contains(".Add")
+            )
+        });
+        assert!(
+            has_segment_detail,
+            "expected variant mismatch detail with segment context in constants"
+        );
+    }
+
+    #[test]
+    fn bounded_numeric_generic_helpers_emit_specialized_functions() {
+        let bytecode = codegen_source(
+            r#"def double<$N: Numeric>(x: $N) -> $N { x + x }
+a = double(21)
+b = double(1.5)"#,
+        );
+
+        let double_entries = bytecode
+            .functions
+            .iter()
+            .filter(|entry| entry.qualified_name.as_deref() == Some("double"))
+            .count();
+
+        assert_eq!(double_entries, 2);
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::AddInt)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::AddFloat)));
     }
 }

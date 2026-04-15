@@ -1,5 +1,6 @@
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use forge::bytecode::line_column_for_offset;
+use sindr::policy::CompileUnitKind;
 
 pub(crate) type RuneResult<T> = Result<T, RuneError>;
 
@@ -7,8 +8,8 @@ pub(crate) const USAGE_TEXT: &str = "\
 Usage:\n\
   surtr --version\n\
   surtr check <file.srt> [--format json]\n\
-  surtr run <file.srt|file.eldr> [--entry <name>]\n\
-  surtr test [selector]\n\
+  surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always]\n\
+  surtr test <lib-relative-name>\n\
   surtr repl [--quiet] [--banner] [--version]\n\
   surtr build <file.srt> [output.eldr]\n\
   surtr dump <file.eldr|entry.srt> [--format json] [--entry <name>]\n\
@@ -39,10 +40,10 @@ impl ExecutionEnv {
         }
     }
 
-    pub(crate) fn compile_unit_kind(self) -> spire::CompileUnitKind {
+    pub(crate) fn compile_unit_kind(self) -> CompileUnitKind {
         match self {
-            Self::Repl => spire::CompileUnitKind::Repl,
-            _ => spire::CompileUnitKind::Script,
+            Self::Repl => CompileUnitKind::Repl,
+            _ => CompileUnitKind::Script,
         }
     }
 

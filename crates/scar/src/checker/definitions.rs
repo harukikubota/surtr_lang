@@ -74,13 +74,6 @@ impl Checker {
             "ensure" => "Kernel::ensure",
             "and" => "Kernel::and",
             "or" => "Kernel::or",
-            "eq" => "Kernel::eq",
-            "neq" => "Kernel::neq",
-            "lt" => "Kernel::lt",
-            "lte" => "Kernel::lte",
-            "gt" => "Kernel::gt",
-            "gte" => "Kernel::gte",
-            "concat" => "Kernel::concat",
             _ => unreachable!(),
         };
 
@@ -136,30 +129,6 @@ impl Checker {
                         .as_ref()
                         .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
             }
-            "eq" | "neq" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_named_type(&params[1].ty, "$A")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
-            }
-            "lt" | "lte" | "gt" | "gte" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_named_type(&params[1].ty, "$A")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
-            }
-            "concat" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "String")
-                    && Self::is_named_type(&params[1].ty, "String")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "String"))
-            }
             _ => false,
         };
 
@@ -171,13 +140,6 @@ impl Checker {
                 "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>",
                 "and" => "@@builtin def and(left: Boolean, right: Boolean) -> Boolean",
                 "or" => "@@builtin def or(left: Boolean, right: Boolean) -> Boolean",
-                "eq" => "@@builtin def eq(left: $A, right: $A) -> Boolean",
-                "neq" => "@@builtin def neq(left: $A, right: $A) -> Boolean",
-                "lt" => "@@builtin def lt(left: $A, right: $A) -> Boolean",
-                "lte" => "@@builtin def lte(left: $A, right: $A) -> Boolean",
-                "gt" => "@@builtin def gt(left: $A, right: $A) -> Boolean",
-                "gte" => "@@builtin def gte(left: $A, right: $A) -> Boolean",
-                "concat" => "@@builtin def concat(left: String, right: String) -> String",
                 _ => unreachable!(),
             };
             return Err(TypeError {
@@ -466,13 +428,16 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
+        type_params: &[ResolvedTypeParam],
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
         body: &Resolved,
+        attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
         let mut fun_env = self.env.clone();
         let mut typed_params = Vec::new();
         let mut tyvars = HashMap::new();
+        self.seed_signature_type_params(type_params, &mut tyvars);
 
         for param in params {
             let param_ty = self.resolve_signature_ast_ty_in_context(
@@ -480,6 +445,15 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
+            if self.ty_contains_lens(&param_ty) {
+                return Err(TypeError {
+                    message:
+                        "Lens is compile-time only in Stage1 and cannot appear in function parameter types"
+                            .into(),
+                    span: param.id.span.clone(),
+                    hint: None,
+                });
+            }
             fun_env.bind_var(param.id.unique_id, param_ty.clone());
             typed_params.push(TypedFunParam {
                 id: param.id.clone(),
@@ -495,10 +469,19 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
+        if self.ty_contains_lens(&expected_ret) {
+            return Err(TypeError {
+                message:
+                    "Lens is compile-time only in Stage1 and cannot appear in function return types"
+                        .into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
         let is_entrypoint = self
-            .source_rules
+            .runtime_policy
             .normalized_entrypoint
             .as_deref()
             .is_some_and(|entry| entry == current_symbol);
@@ -516,7 +499,7 @@ impl Checker {
             if !Self::is_main_result_unit_ty(&expected_ret) {
                 let legacy_main = current_symbol == "main"
                     && self
-                        .source_rules
+                        .runtime_policy
                         .normalized_entrypoint
                         .as_deref()
                         .is_some_and(|entry| entry == "main");
@@ -589,15 +572,28 @@ impl Checker {
                 });
             }
         };
+        let typed_type_params = type_params
+            .iter()
+            .filter_map(|param| match tyvars.get(&param.name) {
+                Some(Ty::Var(var)) => Some(TypedTypeParam {
+                    name: param.name.clone(),
+                    ty_var: *var,
+                    bound: param.bound.clone(),
+                }),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
             node: TypedInner::Def(
                 fun_idx,
                 id.clone(),
+                typed_type_params,
                 typed_params,
                 expected_ret,
                 Box::new(typed_body),
+                attrs.visibility,
             ),
         })
     }
@@ -606,12 +602,15 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
+        type_params: &[ResolvedTypeParam],
         param: &ResolvedExtractorParam,
         ret_ty: &AstTy,
         body: &Resolved,
+        attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
         let mut fun_env = self.env.clone();
         let mut tyvars = HashMap::new();
+        self.seed_signature_type_params(type_params, &mut tyvars);
 
         let param_ty = match &param.ty {
             Some(ty) => self.resolve_signature_ast_ty_in_context(
@@ -621,6 +620,15 @@ impl Checker {
             )?,
             None => self.env.fresh_tyvar(),
         };
+        if self.ty_contains_lens(&param_ty) {
+            return Err(TypeError {
+                message:
+                    "Lens is compile-time only in Stage1 and cannot appear in extractor parameter types"
+                        .into(),
+                span: param.id.span.clone(),
+                hint: None,
+            });
+        }
         fun_env.bind_var(param.id.unique_id, param_ty.clone());
         let typed_param = TypedFunParam {
             id: param.id.clone(),
@@ -632,6 +640,15 @@ impl Checker {
             TypeSyntaxContext::FunctionReturn,
             &mut tyvars,
         )?;
+        if self.ty_contains_lens(&expected_ret) {
+            return Err(TypeError {
+                message:
+                    "Lens is compile-time only in Stage1 and cannot appear in extractor return types"
+                        .into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
         self.require_match_result_seq_ty(
             &expected_ret,
             &param.id.span,
@@ -680,12 +697,199 @@ impl Checker {
             node: TypedInner::ExtractorDef(
                 fun_idx,
                 id.clone(),
+                type_params
+                    .iter()
+                    .filter_map(|param| match tyvars.get(&param.name) {
+                        Some(Ty::Var(var)) => Some(TypedTypeParam {
+                            name: param.name.clone(),
+                            ty_var: *var,
+                            bound: param.bound.clone(),
+                        }),
+                        _ => None,
+                    })
+                    .collect(),
                 TypedFunParam {
                     id: typed_param.id,
                     ty: self.resolve_ty(&typed_param.ty),
                 },
                 self.resolve_ty(&expected_ret),
                 Box::new(typed_body),
+                attrs.visibility,
+            ),
+        })
+    }
+
+    pub(super) fn check_trait_impl_items(
+        &mut self,
+        span: &Span,
+        trait_id: &ResolvedId,
+        trait_args: &[AstTy],
+        target_ast_ty: &AstTy,
+        methods: &[ResolvedTraitImplMethod],
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let target_ty =
+            self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+        let target_name = self
+            .trait_target_name(&target_ty)
+            .ok_or_else(|| TypeError {
+                message: "trait impl target must be a concrete named type".into(),
+                span: Self::ast_ty_span(target_ast_ty).clone(),
+                hint: None,
+            })?;
+        let trait_key = self.trait_key(trait_id);
+        let trait_info = self
+            .traits
+            .get(&trait_key)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown trait: {}", trait_id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let mut typed_nodes = vec![TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::TraitImplDef(
+                self.trait_instance_key(trait_id, trait_args),
+                target_name.clone(),
+            ),
+        }];
+
+        for method in methods {
+            let trait_method = trait_info
+                .methods
+                .get(&method.method_name)
+                .cloned()
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Trait impl {} for {} defines unknown method `{}`",
+                        trait_id.name, target_name, method.method_name
+                    ),
+                    span: method.span.clone(),
+                    hint: None,
+                })?;
+
+            let inline_method = TraitImplMethodInfo {
+                method_name: method.method_name.clone(),
+                function_id: method.function_id.clone(),
+                type_params: method.type_params.clone(),
+                params: method.params.clone(),
+                ret_ty: method.ret_ty.clone(),
+                body: method.body.clone(),
+                attrs: method.attrs.clone(),
+                span: method.span.clone(),
+                dispatch_override: None,
+            };
+            let (param_tys, expected_ret, type_params) = self.resolve_trait_impl_method_signature(
+                &trait_info,
+                trait_args,
+                &inline_method,
+                &target_ty,
+                &trait_method.ret_ty,
+            )?;
+
+            let mut fun_env = self.env.clone();
+            let mut typed_params = Vec::new();
+            for (param, param_ty) in method.params.iter().zip(param_tys.iter()) {
+                fun_env.bind_var(param.id.unique_id, param_ty.clone());
+                typed_params.push(TypedFunParam {
+                    id: param.id.clone(),
+                    ty: param_ty.clone(),
+                });
+            }
+
+            let mut body_checker = self.spawn_child_checker(fun_env);
+            if self
+                .env
+                .lookup_type_def(&target_name)
+                .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
+            {
+                body_checker.current_impl_struct_target = Some(target_name.clone());
+            }
+            body_checker.function_return_ty = Some(expected_ret.clone());
+            body_checker.current_function_symbol = Some(method.function_id.name.clone());
+            let typed_body = body_checker.check_node(&method.body)?;
+            let typed_body = body_checker.resolve_typed_node(typed_body);
+            self.absorb_child_progress(&body_checker);
+
+            if !self.types_compatible(&expected_ret, &typed_body.ty) {
+                let hint = if matches!(typed_body.ty, Ty::Unit) {
+                    body_checker.describe_unit_return_hint(&typed_body)
+                } else {
+                    None
+                };
+                return Err(TypeError {
+                    message: format!(
+                        "expected {}, got {}",
+                        self.ty_name(&expected_ret),
+                        self.ty_name(&typed_body.ty)
+                    ),
+                    span: body_checker.return_mismatch_span(&typed_body),
+                    hint,
+                });
+            }
+
+            let fun_idx = match self.env.lookup_var(method.function_id.unique_id) {
+                Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
+                _ => {
+                    return Err(TypeError {
+                        message: format!("Undefined function: {}", method.function_id.name),
+                        span: method.span.clone(),
+                        hint: None,
+                    });
+                }
+            };
+            let typed_type_params = method
+                .type_params
+                .iter()
+                .zip(type_params.iter())
+                .map(|(param, ty_var)| TypedTypeParam {
+                    name: param.name.clone(),
+                    ty_var: *ty_var,
+                    bound: param.bound.clone(),
+                })
+                .collect::<Vec<_>>();
+            typed_nodes.push(TypedNode {
+                ty: Ty::Unit,
+                span: method.span.clone(),
+                node: TypedInner::Def(
+                    fun_idx,
+                    method.function_id.clone(),
+                    typed_type_params,
+                    typed_params,
+                    expected_ret,
+                    Box::new(typed_body),
+                    method.attrs.visibility,
+                ),
+            });
+        }
+
+        Ok(typed_nodes)
+    }
+
+    pub(super) fn check_trait_impl_def(
+        &mut self,
+        span: &Span,
+        trait_id: &ResolvedId,
+        trait_args: &[AstTy],
+        target_ast_ty: &AstTy,
+        _methods: &[ResolvedTraitImplMethod],
+    ) -> Result<TypedNode, TypeError> {
+        let target_ty =
+            self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+        let target_name = self
+            .trait_target_name(&target_ty)
+            .ok_or_else(|| TypeError {
+                message: "trait impl target must be a concrete named type".into(),
+                span: Self::ast_ty_span(target_ast_ty).clone(),
+                hint: None,
+            })?;
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::TraitImplDef(
+                self.trait_instance_key(trait_id, trait_args),
+                target_name,
             ),
         })
     }
@@ -713,10 +917,15 @@ impl Checker {
                 ))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
+        let private_fields = fields
+            .iter()
+            .filter(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
 
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone())
+            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
             .ok_or_else(|| TypeError {
                 message: format!("Unknown struct type declaration: {}", id.name),
                 span: span.clone(),
@@ -796,10 +1005,15 @@ impl Checker {
                 ))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
+        let private_fields = fields
+            .iter()
+            .filter(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
 
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone())
+            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
             .ok_or_else(|| TypeError {
                 message: format!("Unknown record type declaration: {}", id.name),
                 span: span.clone(),
@@ -880,6 +1094,15 @@ impl Checker {
                         hint: None,
                     })?;
             let typed_val = self.check_node(resolved_val)?;
+            if self.ty_contains_lens(&typed_val.ty) {
+                return Err(TypeError {
+                    message:
+                        "Struct literal fields cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                            .into(),
+                    span: typed_val.span.clone(),
+                    hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                });
+            }
             if !self.types_compatible(def_ty, &typed_val.ty) {
                 return Err(TypeError {
                     message: format!(
@@ -920,6 +1143,18 @@ impl Checker {
             let inner = match &args[0] {
                 ResolvedRecordLitArg::Positional(expr) => {
                     let typed = self.check_node(expr)?;
+                    if self.ty_contains_lens(&typed.ty) {
+                        return Err(TypeError {
+                            message:
+                                "Result constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    .into(),
+                            span: typed.span.clone(),
+                            hint: Some(
+                                "Apply Lens::view/set/over before wrapping with Ok(...) or Err(...)."
+                                    .into(),
+                            ),
+                        });
+                    }
                     self.maybe_call_zero_arg_function(typed, span.clone())
                 }
                 ResolvedRecordLitArg::Named(_, _) => {
@@ -995,6 +1230,15 @@ impl Checker {
                         });
                     }
                 };
+                if self.ty_contains_lens(&typed.ty) {
+                    return Err(TypeError {
+                        message:
+                            "Enum constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                .into(),
+                        span: typed.span.clone(),
+                        hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                    });
+                }
                 if !self.types_compatible(expected, &typed.ty) {
                     return Err(TypeError {
                         message: format!(
@@ -1051,6 +1295,18 @@ impl Checker {
                                 });
                             }
                         };
+                        if self.ty_contains_lens(&typed_val.ty) {
+                            return Err(TypeError {
+                                message:
+                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                        .into(),
+                                span: typed_val.span.clone(),
+                                hint: Some(
+                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                        .into(),
+                                ),
+                            });
+                        }
                         if !self.types_compatible(param_ty, &typed_val.ty) {
                             return Err(TypeError {
                                 message: format!(
@@ -1123,6 +1379,18 @@ impl Checker {
                             unreachable!("validated argument form above")
                         };
                         let typed = self.check_node(expr)?;
+                        if self.ty_contains_lens(&typed.ty) {
+                            return Err(TypeError {
+                                message:
+                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                        .into(),
+                                span: typed.span.clone(),
+                                hint: Some(
+                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                        .into(),
+                                ),
+                            });
+                        }
                         if !self.types_compatible(expected_ty, &typed.ty) {
                             return Err(TypeError {
                                 message: format!(
@@ -1276,6 +1544,15 @@ impl Checker {
             for (i, arg) in args.iter().enumerate() {
                 if let ResolvedRecordLitArg::Positional(expr) = arg {
                     let typed_val = self.check_node(expr)?;
+                    if self.ty_contains_lens(&typed_val.ty) {
+                        return Err(TypeError {
+                            message:
+                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    .into(),
+                            span: typed_val.span.clone(),
+                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                        });
+                    }
                     let (_, def_ty) = &def.fields[i];
                     if !self.types_compatible(def_ty, &typed_val.ty) {
                         return Err(TypeError {
@@ -1313,6 +1590,15 @@ impl Checker {
                             hint: None,
                         })?;
                     let typed_val = self.check_node(expr)?;
+                    if self.ty_contains_lens(&typed_val.ty) {
+                        return Err(TypeError {
+                            message:
+                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    .into(),
+                            span: typed_val.span.clone(),
+                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                        });
+                    }
                     let (_, def_ty) = &def.fields[idx];
                     if !self.types_compatible(def_ty, &typed_val.ty) {
                         return Err(TypeError {
@@ -1390,6 +1676,11 @@ impl Checker {
                 ty_fields
                     .iter()
                     .map(|(ty, rid)| (rid.name.clone(), ty.clone()))
+                    .collect(),
+                fields
+                    .iter()
+                    .filter(|field| field.visibility == spire::ast::Visibility::Private)
+                    .map(|field| field.name.clone())
                     .collect(),
             )
             .ok_or_else(|| TypeError {

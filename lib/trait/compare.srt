@@ -1,0 +1,10 @@
+@@doc """
+Standard `Compare` trait declaration.
+`Compare` models three-way comparison and returns `Ordering`.
+The unqualified helper `compare(...)` comes from this auto-imported trait
+surface rather than from a compiler-only builtin shim.
+"""
+@@autoimport
+deftrait Compare {
+  def compare(self: Self, rhs: Self) -> Ordering
+}

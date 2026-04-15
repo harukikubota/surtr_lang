@@ -1,6 +1,33 @@
 True
 True
+5
+2
 [core]
 a,b,c
 Ok(nanana)
 Err(NegativeRepeatCount("repeat count must be non-negative: -1"))
+True
+False
+True
+False
+Ok(tr)
+Err(NoneError("None Value."))
+Ok(sur)
+Err(NoneError("None Value."))
+Ok(StringSplit::Split(key, value))
+Ok(StringSplit::Split(, surtr))
+Err(NoneError("None Value."))
+True
+False
+[あ, b]
+Ok(あb)
+Err(InvalidCharList("expected single-character string at index 0, got \"ab\""))
+Ok([65, 227, 129, 130])
+Ok(Aあ)
+Ok([65, 90])
+Err(InvalidStringEncoding("ASCII encoding does not support character at index 0: あ"))
+Ok(AZ)
+Err(InvalidStringEncoding("ASCII code out of range at index 0: 128"))
+core
+core
+core

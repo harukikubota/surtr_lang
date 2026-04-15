@@ -7,6 +7,7 @@ impl Checker {
             | ResolvedPattern::Annotated(_, _)
             | ResolvedPattern::Wildcard(_) => true,
             ResolvedPattern::As(inner, _, _) => Self::is_total_bind_pattern(inner),
+            ResolvedPattern::Tuple(items) => items.iter().all(Self::is_total_bind_pattern),
             ResolvedPattern::ListNil(_)
             | ResolvedPattern::ListCons(_, _)
             | ResolvedPattern::IntLit(_, _)
@@ -74,6 +75,36 @@ impl Checker {
             ResolvedPattern::Wildcard(_) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 Ok((TypedPattern::Wildcard(rhs_ty.clone()), rhs_ty))
+            }
+            ResolvedPattern::Tuple(items) => {
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                let Ty::Tuple(item_tys) = &rhs_ty else {
+                    return Err(TypeError {
+                        message: format!(
+                            "tuple pattern requires tuple scrutinee, got {}",
+                            self.ty_name(&rhs_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                };
+                if items.len() != item_tys.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "tuple pattern expects {} value(s), got {}",
+                            item_tys.len(),
+                            items.len()
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let mut typed_items = Vec::with_capacity(items.len());
+                for (item, item_ty) in items.iter().zip(item_tys.iter()) {
+                    let (typed_item, _) = self.check_pattern(item, item_ty, span)?;
+                    typed_items.push(typed_item);
+                }
+                Ok((TypedPattern::Tuple(rhs_ty.clone(), typed_items), rhs_ty))
             }
             ResolvedPattern::ListNil(pspan) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
@@ -293,6 +324,15 @@ impl Checker {
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
             | TypedPattern::BoolLit(_, _) => {}
+            TypedPattern::Tuple(_, items) => {
+                let item_tys = match &rhs_ty {
+                    Ty::Tuple(item_tys) => item_tys.clone(),
+                    _ => return,
+                };
+                for (item, item_ty) in items.iter().zip(item_tys.iter()) {
+                    self.bind_typed_pattern(item, item_ty);
+                }
+            }
             TypedPattern::ListCons(_, head, tail) => {
                 let elem_ty = match &rhs_ty {
                     Ty::List(inner) => inner.as_ref().clone(),
@@ -337,6 +377,11 @@ impl Checker {
             TypedPattern::ListCons(_, head, tail) => {
                 self.collect_pattern_result_error_types(head, out);
                 self.collect_pattern_result_error_types(tail, out);
+            }
+            TypedPattern::Tuple(_, items) => {
+                for item in items {
+                    self.collect_pattern_result_error_types(item, out);
+                }
             }
             TypedPattern::As(_, inner, _) => {
                 self.collect_pattern_result_error_types(inner, out);

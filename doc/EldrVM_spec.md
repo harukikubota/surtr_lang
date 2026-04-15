@@ -91,7 +91,7 @@ Eldr は次を担わない。
 ### 3.6 トップレベル名衝突ポリシー（コンパイラ契約）
 
 - 同一モジュール（REPL セッションを含む）で、トップレベル定義名の重複は禁止する
-- 対象: `def` / `defstruct` / `defrecord` / `deferror`（trait は将来仕様）
+- 対象: `def` / `defstruct` / `defrecord` / `deferror` / `deftrait`
 - 本規約はファイル実行と REPL で同一に適用する
 
 ---
@@ -101,7 +101,7 @@ Eldr は次を担わない。
 Eldr が扱う値の概念カテゴリ:
 
 - プリミティブ: `Int`, `Float`, `String`, `Boolean`, `Unit`
-- コンテナ: `List`
+- コンテナ: `List`, `HashMap`
 - タグ付き値: `Tagged { tag, fields }`
 - runtime 内部 tag 値: `Tag(u32)`（user-visible `Int` と分離）
 - 呼び出し可能値: `Callable`
@@ -120,8 +120,23 @@ Eldr が扱う値の概念カテゴリ:
 - `kind`
 - `message`
 - `location`
+- `cause: Option<RichError>`
 
-`cause` チェーンは V9 範囲外とする。
+`cause` は runtime 管理の線形 chain とする。
+
+- parallel error は持たない
+- `Result::cause(result, err)` は `err` chain の末尾に既存 error chain を付ける
+- `Result::chain(head, tail)` は右 error chain の末尾に左 error chain を付ける
+- `Result::map_err(result, err)` は既存 error chain を捨てて `err` chain で置き換える
+
+表示契約は次で固定する。
+
+- `inspect(Error)` / `to_string(Error)` は head-first tree 表示を返す
+- 先頭行は `Kind("message")`
+- cause がある場合、次行以降を `|_ ...` でネスト表示する
+- `inspect(Result::Err(...))` も同じ tree を使うが、先頭行だけ `Err(...)` で包む
+- `inspect(HashMap)` / `to_string(HashMap)` は `HashMap("key" => value, ...)` 形式で、key は `String` literal と同じ escaping で表示する
+- `eprint(Error)` は先頭行を `Error: Kind: message`、以降を `Caused by: Kind: message` で出力する
 
 ---
 
@@ -176,11 +191,16 @@ Opcode は以下のカテゴリを持つ。
 - 組込み関数メタデータは単一テーブルで管理する
 - `Bootstrap` module の `@@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
+- `Lens::view` / `Lens::set` / `Lens::over` / `Lens::compose` は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
+- Lens の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
+- `HashMap` の runtime 表現は immutable な insertion-order `Vec<(String, Value)>` を基準にし、duplicate key 更新時は値のみ差し替えて順序を維持する
+- regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
+- `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>`, `input: String` を保持する
 - `Float` の厳密契約は `doc/float.md` を参照する
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel + 他標準モジュール] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.1 TypeRegistry
 

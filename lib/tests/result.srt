@@ -1,0 +1,53 @@
+import Result::{is_ok, is_err, map_err, cause, chain};
+import Test;
+
+test("Result") {
+  describe("is_ok") {
+    it("returns True for Ok") { assert_true(is_ok(Ok(1))) }
+    it("returns False for Err") { assert_false(is_ok(Err(NoneError))) }
+  }
+
+  describe("is_err") {
+    it("returns False for Ok") { assert_false(is_err(Ok(1))) }
+    it("returns True for Err") { assert_true(is_err(Err(NoneError))) }
+  }
+
+  describe("map_err") {
+    it("keeps Ok") {
+      assert_eq("Ok(1)", inspect(map_err(Ok(1), NoneError)))
+    }
+
+    it("replaces Err") {
+      assert_eq(
+        "Err(ZeroDivisionError(\"division by zero\"))",
+        inspect(map_err(Err(NoneError), ZeroDivisionError)),
+      )
+    }
+  }
+
+  describe("cause") {
+    it("keeps Ok") {
+      assert_eq("Ok(1)", inspect(cause(Ok(1), ZeroDivisionError)))
+    }
+
+    it("appends previous error") {
+      assert_eq(
+        "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")",
+        inspect(cause(Err(NoneError), ZeroDivisionError)),
+      )
+    }
+  }
+
+  describe("chain") {
+    it("keeps left Ok value") {
+      assert_eq("Ok(1)", inspect(chain(Ok(1), Ok(()))))
+    }
+
+    it("chains right Err") {
+      assert_eq(
+        "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")",
+        inspect(chain(Err(NoneError), Err(ZeroDivisionError))),
+      )
+    }
+  }
+}

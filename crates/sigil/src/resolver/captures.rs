@@ -42,13 +42,13 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                     Resolved::Bind(_, pat, _) | Resolved::SafeBind(_, pat, _) => {
                         collect_bind_pattern_bindings(pat, &mut local_bound);
                     }
-                    Resolved::Def(_, id, params, _, _, _) => {
+                    Resolved::Def(_, id, _, params, _, _, _) => {
                         local_bound.insert(id.unique_id);
                         for param in params {
                             local_bound.insert(param.id.unique_id);
                         }
                     }
-                    Resolved::ExtractorDef(_, id, param, _, _, _) => {
+                    Resolved::ExtractorDef(_, id, _, param, _, _, _) => {
                         local_bound.insert(id.unique_id);
                         local_bound.insert(param.id.unique_id);
                     }
@@ -103,6 +103,11 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(elem, bound, free);
             }
         }
+        Resolved::TupleLiteral(_, elems) => {
+            for elem in elems {
+                collect_captures_inner(elem, bound, free);
+            }
+        }
         Resolved::InterpolatedStr(_, parts) => {
             for part in parts {
                 if let ResolvedInterpolatedPart::Expr(expr) = part {
@@ -135,6 +140,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             }
         }
         Resolved::FieldAccess(_, expr, _) => collect_captures_inner(expr, bound, free),
+        Resolved::TypeRefWitness(_, _) => {}
         Resolved::StructLit(_, _, fields) => {
             for (_, expr) in fields {
                 collect_captures_inner(expr, bound, free);
@@ -156,11 +162,13 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::RecordDef(_, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
         | Resolved::EnumDef(_, _, _, _)
+        | Resolved::TraitDef(_, _, _, _, _)
+        | Resolved::TraitImplDef(_, _, _, _, _)
         | Resolved::BuiltinDecl(_, _, _, _, _)
         | Resolved::BuiltinExtractorDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)
         | Resolved::ResultCtorDecl(_, _, _, _, _) => {}
-        Resolved::Def(_, id, params, _, body, _) => {
+        Resolved::Def(_, id, _, params, _, body, _) => {
             let mut fun_bound = bound.clone();
             fun_bound.insert(id.unique_id);
             for param in params {
@@ -168,7 +176,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             }
             collect_captures_inner(body, &mut fun_bound, free);
         }
-        Resolved::ExtractorDef(_, id, param, _, body, _) => {
+        Resolved::ExtractorDef(_, id, _, param, _, body, _) => {
             let mut fun_bound = bound.clone();
             fun_bound.insert(id.unique_id);
             fun_bound.insert(param.id.unique_id);
@@ -206,6 +214,11 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
         ResolvedPattern::Extractor(_, inners) => {
             for inner in inners {
                 collect_bind_pattern_bindings(inner, bound);
+            }
+        }
+        ResolvedPattern::Tuple(items) => {
+            for item in items {
+                collect_bind_pattern_bindings(item, bound);
             }
         }
         ResolvedPattern::As(inner, id, _) => {

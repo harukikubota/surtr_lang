@@ -1,0 +1,19 @@
+True
+False
+False
+True
+Ok(1)
+Err(ZeroDivisionError("division by zero"))
+Ok(1)
+Err(ZeroDivisionError("division by zero"))
+|_ NoneError("None Value.")
+Ok(7)
+Err(IndexOutOfBounds("tail"))
+Err(NoneError("None Value."))
+Err(ZeroDivisionError("division by zero"))
+|_ NoneError("None Value.")
+Err(ZeroDivisionError("division by zero"))
+|_ NoneError("None Value.")
+   |_ IndexOutOfBounds("tail")
+ZeroDivisionError("division by zero")
+|_ NoneError("None Value.")

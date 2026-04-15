@@ -1,0 +1,15 @@
+deftrait Summable {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+impl Summable for Int {
+  def add(self: Self, rhs: Self) -> Self {
+    self + rhs
+  }
+}
+
+impl Summable for Int {
+  def add(self: Self, rhs: Self) -> Self {
+    rhs
+  }
+}

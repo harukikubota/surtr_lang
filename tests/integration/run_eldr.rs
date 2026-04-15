@@ -1,43 +1,10 @@
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-fn surtr_bin() -> String {
-    if let Ok(path) = env::var("CARGO_BIN_EXE_surtr") {
-        return path;
-    }
+use serde_json::Value;
 
-    let mut path = env::current_exe().expect("failed to locate current test executable");
-    // .../target/debug/deps/<test-binary> -> .../target/debug/surtr
-    path.pop(); // <test-binary>
-    path.pop(); // deps
-    path.push("surtr");
-    if cfg!(windows) {
-        path.set_extension("exe");
-    }
-    assert!(
-        path.exists(),
-        "surtr binary not found at {}",
-        path.display()
-    );
-    path.to_string_lossy().into_owned()
-}
-
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be after unix epoch")
-        .as_nanos();
-    let dir = env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), nanos));
-    fs::create_dir_all(&dir).expect("failed to create temp dir");
-    dir
-}
-
-fn write_source(path: &Path, source: &str) {
-    fs::write(path, source).expect("failed to write source file");
-}
+mod common;
+use common::{surtr_bin, unique_temp_dir, write_source};
 
 #[test]
 fn run_eldr_matches_run_srt_output() {
@@ -102,7 +69,118 @@ fn run_eldr_matches_run_srt_output() {
 }
 
 #[test]
-fn run_source_rejects_explicit_bootstrap_import() {
+fn run_vm_dump_writes_json_on_success_when_always_enabled() {
+    let temp = unique_temp_dir("surtr_vm_dump_success");
+    let source_path = temp.join("sample.srt");
+    let dump_path = temp.join("vm-dump.json");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let output = Command::new(surtr_bin())
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-dump",
+            dump_path.to_str().expect("dump path must be utf-8"),
+            "--vm-dump-on",
+            "always",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dump_path.exists(), "vm dump file should exist");
+
+    let dump: Value =
+        serde_json::from_slice(&fs::read(&dump_path).expect("vm dump file should be readable"))
+            .expect("vm dump should be valid json");
+    assert_eq!(dump["result"]["status"], "ok");
+    assert_eq!(dump["result"]["exit_code"], 0);
+    assert_eq!(dump["vm"]["last_opcode"], "Halt");
+    assert!(
+        dump["stats"]["executed_opcodes"].as_u64().unwrap_or(0) > 0,
+        "expected opcode stats in vm dump: {dump}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_vm_dump_skips_success_when_error_mode_is_default() {
+    let temp = unique_temp_dir("surtr_vm_dump_skip_success");
+    let source_path = temp.join("sample.srt");
+    let dump_path = temp.join("vm-dump.json");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let output = Command::new(surtr_bin())
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-dump",
+            dump_path.to_str().expect("dump path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !dump_path.exists(),
+        "vm dump should not be written for successful run in default error mode"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_vm_dump_writes_json_for_err_result_in_error_mode() {
+    let temp = unique_temp_dir("surtr_vm_dump_err_result");
+    let source_path = temp.join("sample.srt");
+    let dump_path = temp.join("vm-dump.json");
+    write_source(&source_path, "safe_div(1, 0)\n");
+
+    let output = Command::new(surtr_bin())
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-dump",
+            dump_path.to_str().expect("dump path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dump_path.exists(), "vm dump file should exist");
+
+    let dump: Value =
+        serde_json::from_slice(&fs::read(&dump_path).expect("vm dump file should be readable"))
+            .expect("vm dump should be valid json");
+    assert_eq!(dump["result"]["status"], "result_err");
+    assert_eq!(dump["result"]["exit_code"], 0);
+    assert_eq!(
+        dump["result"]["last_value"],
+        "Err(ZeroDivisionError(\"division by zero\"))"
+    );
+    assert!(dump["result"]["runtime_error"].is_null());
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_allows_explicit_bootstrap_import() {
     let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_explicit_bootstrap_import");
     let source_path = temp.join("sample.srt");
@@ -122,22 +200,17 @@ print("ok")"#,
         .expect("failed to run source command");
 
     assert!(
-        !output.status.success(),
-        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Duplicate import"),
-        "expected duplicate import diagnostic, got:\n{}",
-        stderr
-    );
-    assert!(
-        stderr.contains("Bootstrap"),
-        "expected Bootstrap in diagnostic, got:\n{}",
-        stderr
+        String::from_utf8_lossy(&output.stdout).contains("ok"),
+        "expected bootstrap-imported script to print ok\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 
     let _ = fs::remove_dir_all(temp);
@@ -172,8 +245,8 @@ print(to_string(add(1, 2)))"#,
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("Duplicate import"),
-        "expected duplicate import diagnostic, got:\n{}",
+        stderr.contains("Import conflict"),
+        "expected import conflict diagnostic, got:\n{}",
         stderr
     );
     assert!(

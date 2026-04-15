@@ -1,9 +1,10 @@
 use sindr::primitives::SurtrInt;
-use spire::ast::{AstTy, BinOp, Lit, Span, Symbol};
+use spire::ast::{AstTy, BinOp, Lit, Span, Symbol, Visibility};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
+    pub visibility: Visibility,
 }
 
 /// A resolved identifier — name + unique id + source location.
@@ -63,6 +64,9 @@ pub enum Resolved {
     /// Fixed list literal
     ListLiteral(Span, Vec<Resolved>),
 
+    /// Tuple literal
+    TupleLiteral(Span, Vec<Resolved>),
+
     /// Interpolated string
     InterpolatedStr(Span, Vec<ResolvedInterpolatedPart>),
 
@@ -87,6 +91,10 @@ pub enum Resolved {
     /// Constructor call: `Point(1.0, 2.0)`
     ConstructorCall(Span, ResolvedId, Vec<ResolvedRecordLitArg>),
 
+    /// Compiler-synthesized target-type witness used only for conversion
+    /// surfaces such as `from(value, String)`.
+    TypeRefWitness(Span, AstTy),
+
     /// Struct definition (passed through for Scar)
     StructDef(Span, ResolvedId, Vec<ResolvedField>),
 
@@ -108,6 +116,7 @@ pub enum Resolved {
     Def(
         Span,
         ResolvedId,
+        Vec<ResolvedTypeParam>,
         Vec<ResolvedFunParam>,
         Option<AstTy>,
         Box<Resolved>,
@@ -117,10 +126,29 @@ pub enum Resolved {
     ExtractorDef(
         Span,
         ResolvedId,
+        Vec<ResolvedTypeParam>,
         ResolvedExtractorParam,
         AstTy,
         Box<Resolved>,
         ResolvedDeclAttrs,
+    ),
+
+    /// Trait definition
+    TraitDef(
+        Span,
+        ResolvedId,
+        Vec<ResolvedTypeParam>,
+        Vec<ResolvedTraitMethodSig>,
+        ResolvedDeclAttrs,
+    ),
+
+    /// Trait impl definition
+    TraitImplDef(
+        Span,
+        ResolvedId,
+        Vec<AstTy>,
+        AstTy,
+        Vec<ResolvedTraitImplMethod>,
     ),
 
     /// Builtin declaration
@@ -186,6 +214,7 @@ pub enum ResolvedPattern {
     BoolLit(Span, bool),
     Constructor(ResolvedId, Vec<ResolvedPattern>),
     Extractor(ResolvedId, Vec<ResolvedPattern>),
+    Tuple(Vec<ResolvedPattern>),
     As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
 }
 
@@ -203,6 +232,7 @@ pub struct ResolvedField {
     pub name: Symbol,
     pub ty: AstTy,
     pub span: Span,
+    pub visibility: Visibility,
 }
 
 /// Function parameter (resolved).
@@ -234,7 +264,29 @@ pub struct ResolvedEnumVariant {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTraitMethodSig {
+    pub id: ResolvedId,
+    pub type_params: Vec<ResolvedTypeParam>,
+    pub params: Vec<ResolvedFunParam>,
+    pub ret_ty: AstTy,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedTraitImplMethod {
+    pub method_name: Symbol,
+    pub function_id: ResolvedId,
+    pub type_params: Vec<ResolvedTypeParam>,
+    pub params: Vec<ResolvedFunParam>,
+    pub ret_ty: Option<AstTy>,
+    pub body: Box<Resolved>,
+    pub attrs: ResolvedDeclAttrs,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedTypeParam {
     pub name: Symbol,
+    pub bound: Option<Symbol>,
     pub span: Span,
 }

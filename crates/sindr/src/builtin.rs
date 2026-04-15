@@ -5,7 +5,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltinMeta {
     pub name: &'static str,
-    pub builtin_id: u16,
     pub arity: u8,
     /// Type signature string used by type checker bootstrap and validation.
     pub sig_str: &'static str,
@@ -25,111 +24,313 @@ pub const BUILTIN_UID_BASE: u32 = 2;
 pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "print",
-        builtin_id: 0,
         arity: 1,
         sig_str: "(String) -> Unit",
     },
     BuiltinMeta {
         name: "to_string",
-        builtin_id: 1,
         arity: 1,
         sig_str: "($A) -> String",
     },
     BuiltinMeta {
         name: "inspect",
-        builtin_id: 2,
         arity: 1,
         sig_str: "($A) -> String",
     },
     BuiltinMeta {
         name: "safe_div",
-        builtin_id: 3,
         arity: 2,
         sig_str: "($A, $A) -> Result<$A, ZeroDivisionError>",
     },
     BuiltinMeta {
         name: "safe_mod",
-        builtin_id: 4,
         arity: 2,
         sig_str: "(Int, Int) -> Result<Int, ZeroDivisionError>",
     },
     BuiltinMeta {
         name: "eprint",
-        builtin_id: 5,
         arity: 1,
         sig_str: "(Error) -> Unit",
     },
     BuiltinMeta {
         name: "set_exit_code",
-        builtin_id: 6,
         arity: 1,
         sig_str: "(Int) -> Unit",
     },
     BuiltinMeta {
         name: "shl",
-        builtin_id: 7,
         arity: 2,
         sig_str: "(Int, Int) -> Result<Int, NegativeShiftCount>",
     },
     BuiltinMeta {
         name: "shr",
-        builtin_id: 8,
         arity: 2,
         sig_str: "(Int, Int) -> Result<Int, NegativeShiftCount>",
     },
     BuiltinMeta {
         name: "len",
-        builtin_id: 9,
         arity: 1,
         sig_str: "(List<$A>) -> Int",
     },
     BuiltinMeta {
         name: "bit_and",
-        builtin_id: 10,
         arity: 2,
         sig_str: "(Int, Int) -> Int",
     },
     BuiltinMeta {
         name: "bit_or",
-        builtin_id: 11,
         arity: 2,
         sig_str: "(Int, Int) -> Int",
     },
     BuiltinMeta {
         name: "bit_xor",
-        builtin_id: 12,
         arity: 2,
         sig_str: "(Int, Int) -> Int",
     },
     BuiltinMeta {
         name: "bit_not",
-        builtin_id: 13,
         arity: 1,
         sig_str: "(Int) -> Int",
     },
     BuiltinMeta {
         name: "test_bit",
-        builtin_id: 14,
         arity: 2,
         sig_str: "(Int, Int) -> Result<Boolean, NegativeBitIndex>",
     },
     BuiltinMeta {
         name: "set_bit",
-        builtin_id: 15,
         arity: 2,
         sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
     },
     BuiltinMeta {
         name: "clear_bit",
-        builtin_id: 16,
         arity: 2,
         sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
     },
     BuiltinMeta {
         name: "toggle_bit",
-        builtin_id: 17,
         arity: 2,
         sig_str: "(Int, Int) -> Result<Int, NegativeBitIndex>",
+    },
+    BuiltinMeta {
+        name: "codepoints",
+        arity: 2,
+        sig_str: "(String, StringEncoding) -> Result<List<Int>, InvalidStringEncoding>",
+    },
+    BuiltinMeta {
+        name: "from_codepoints",
+        arity: 2,
+        sig_str: "(List<Int>, StringEncoding) -> Result<String, InvalidStringEncoding>",
+    },
+    BuiltinMeta {
+        name: "map_err",
+        arity: 2,
+        sig_str: "(Result<$T>, Error) -> Result<$T>",
+    },
+    BuiltinMeta {
+        name: "cause",
+        arity: 2,
+        sig_str: "(Result<$T>, Error) -> Result<$T>",
+    },
+    BuiltinMeta {
+        name: "chain",
+        arity: 2,
+        sig_str: "(Result<$T>, Result<()>) -> Result<$T>",
+    },
+    BuiltinMeta {
+        name: "__test_push",
+        arity: 2,
+        sig_str: "(String, String) -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_pop",
+        arity: 0,
+        sig_str: "() -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_pass",
+        arity: 1,
+        sig_str: "(String) -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_fail",
+        arity: 2,
+        sig_str: "(String, String) -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_fail_current",
+        arity: 1,
+        sig_str: "(String) -> Unit",
+    },
+    BuiltinMeta {
+        name: "group_count",
+        arity: 1,
+        sig_str: "(List<$A>) -> List<($A, Int)>",
+    },
+    BuiltinMeta {
+        name: "zip",
+        arity: 2,
+        sig_str: "(List<$A>, List<$B>) -> List<($A, $B)>",
+    },
+    BuiltinMeta {
+        name: "empty_map",
+        arity: 0,
+        sig_str: "() -> HashMap<$V>",
+    },
+    BuiltinMeta {
+        name: "map_from_entries",
+        arity: 1,
+        sig_str: "(List<(String, $V)>) -> HashMap<$V>",
+    },
+    BuiltinMeta {
+        name: "map_len",
+        arity: 1,
+        sig_str: "(HashMap<$V>) -> Int",
+    },
+    BuiltinMeta {
+        name: "map_contains_key",
+        arity: 2,
+        sig_str: "(HashMap<$V>, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "map_get",
+        arity: 2,
+        sig_str: "(HashMap<$V>, String) -> Result<$V, NoneError>",
+    },
+    BuiltinMeta {
+        name: "map_insert",
+        arity: 3,
+        sig_str: "(HashMap<$V>, String, $V) -> HashMap<$V>",
+    },
+    BuiltinMeta {
+        name: "map_remove",
+        arity: 2,
+        sig_str: "(HashMap<$V>, String) -> HashMap<$V>",
+    },
+    BuiltinMeta {
+        name: "map_keys",
+        arity: 1,
+        sig_str: "(HashMap<$V>) -> List<String>",
+    },
+    BuiltinMeta {
+        name: "map_values",
+        arity: 1,
+        sig_str: "(HashMap<$V>) -> List<$V>",
+    },
+    BuiltinMeta {
+        name: "view",
+        arity: 2,
+        sig_str: "(Lens<$S, $A>, $S) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "compose",
+        arity: 2,
+        sig_str: "(Lens<$S, $A>, Lens<$A, $B>) -> Lens<$S, $B>",
+    },
+    BuiltinMeta {
+        name: "set",
+        arity: 3,
+        sig_str: "(Lens<$S, $A>, $S, $A) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "over",
+        arity: 3,
+        sig_str: "(Lens<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "__test_capture_stdout",
+        arity: 0,
+        sig_str: "() -> List<String>",
+    },
+    BuiltinMeta {
+        name: "__test_capture_stderr",
+        arity: 0,
+        sig_str: "() -> List<String>",
+    },
+    BuiltinMeta {
+        name: "compile",
+        arity: 1,
+        sig_str: "(String) -> Result<Regex, RegexCompileError>",
+    },
+    BuiltinMeta {
+        name: "is_match",
+        arity: 2,
+        sig_str: "(Regex, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "captures",
+        arity: 2,
+        sig_str: "(Regex, String) -> Result<RegexCaptures, NoneError>",
+    },
+    BuiltinMeta {
+        name: "whole",
+        arity: 1,
+        sig_str: "(RegexCaptures) -> String",
+    },
+    BuiltinMeta {
+        name: "capture_count",
+        arity: 1,
+        sig_str: "(RegexCaptures) -> Int",
+    },
+    BuiltinMeta {
+        name: "get",
+        arity: 2,
+        sig_str: "(RegexCaptures, Int) -> Result<String, NoneError>",
+    },
+    BuiltinMeta {
+        name: "get_name",
+        arity: 2,
+        sig_str: "(RegexCaptures, String) -> Result<String, NoneError>",
+    },
+    BuiltinMeta {
+        name: "find",
+        arity: 2,
+        sig_str: "(Regex, String) -> Result<RegexMatch, NoneError>",
+    },
+    BuiltinMeta {
+        name: "find_all",
+        arity: 2,
+        sig_str: "(Regex, String) -> List<RegexMatch>",
+    },
+    BuiltinMeta {
+        name: "split",
+        arity: 2,
+        sig_str: "(Regex, String) -> List<String>",
+    },
+    BuiltinMeta {
+        name: "replace",
+        arity: 3,
+        sig_str: "(Regex, String, String) -> String",
+    },
+    BuiltinMeta {
+        name: "replace_all",
+        arity: 3,
+        sig_str: "(Regex, String, String) -> String",
+    },
+    BuiltinMeta {
+        name: "escape",
+        arity: 1,
+        sig_str: "(String) -> String",
+    },
+    BuiltinMeta {
+        name: "group_names",
+        arity: 1,
+        sig_str: "(Regex) -> List<String>",
+    },
+    BuiltinMeta {
+        name: "text",
+        arity: 1,
+        sig_str: "(RegexMatch) -> String",
+    },
+    BuiltinMeta {
+        name: "start",
+        arity: 1,
+        sig_str: "(RegexMatch) -> Int",
+    },
+    BuiltinMeta {
+        name: "end",
+        arity: 1,
+        sig_str: "(RegexMatch) -> Int",
     },
 ];
 
@@ -163,16 +364,36 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &[],
     },
     BuiltinTypeMeta {
+        name: "Regex",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "RegexCaptures",
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: "RegexMatch",
+        params: &[],
+    },
+    BuiltinTypeMeta {
         name: "List",
         params: &["$A"],
+    },
+    BuiltinTypeMeta {
+        name: "HashMap",
+        params: &["$V"],
     },
     BuiltinTypeMeta {
         name: "Result",
         params: &["$T"],
     },
     BuiltinTypeMeta {
-        name: "Seq",
-        params: &["$Type"],
+        name: "TypeRef",
+        params: &["$T"],
+    },
+    BuiltinTypeMeta {
+        name: "Lens",
+        params: &["$S", "$A"],
     },
 ];
 
@@ -180,11 +401,15 @@ pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
     BUILTIN_METAS.iter().find(|meta| meta.name == name)
 }
 
-pub fn builtin_meta_by_id(builtin_id: u16) -> Option<&'static BuiltinMeta> {
-    let idx = builtin_id as usize;
+pub fn builtin_id_by_name(name: &str) -> Option<u16> {
     BUILTIN_METAS
-        .get(idx)
-        .filter(|meta| meta.builtin_id == builtin_id)
+        .iter()
+        .position(|meta| meta.name == name)
+        .and_then(|idx| (idx <= u16::MAX as usize).then_some(idx as u16))
+}
+
+pub fn builtin_meta_by_id(builtin_id: u16) -> Option<&'static BuiltinMeta> {
+    BUILTIN_METAS.get(builtin_id as usize)
 }
 
 pub fn builtin_type_meta_by_name(name: &str) -> Option<&'static BuiltinTypeMeta> {
@@ -197,13 +422,16 @@ pub fn builtin_uid(builtin_id: u16) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{builtin_meta_by_id, builtin_meta_by_name, builtin_uid, BUILTIN_METAS};
+    use super::{
+        builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name, builtin_uid, BUILTIN_METAS,
+    };
 
     #[test]
     fn builtin_ids_match_definition_order() {
         for (idx, meta) in BUILTIN_METAS.iter().enumerate() {
-            assert_eq!(meta.builtin_id as usize, idx);
-            assert_eq!(builtin_uid(meta.builtin_id), 2 + idx as u32);
+            let id = idx as u16;
+            assert_eq!(builtin_id_by_name(meta.name), Some(id));
+            assert_eq!(builtin_uid(id), 2 + idx as u32);
         }
     }
 

@@ -89,6 +89,132 @@ print(to_string(add(y: 2, x: 1)))
 - 関数本体は式として評価される
 - 前方参照は許可される。後で同じコンパイル単位に定義が現れればよい
 
+### 5.1 関数はどこに属するか
+
+Surtr では、関数は必ず何らかの namespace に属します。
+
+- 普通の module 関数は `defmod Name { ... }`
+- 構造体 / enum 付属関数は `impl Type { ... }`
+- trait の契約は `deftrait Name { ... }`
+- trait 実装は `impl Trait for Type { ... }`
+- script / REPL の top-level `def` も、暗黙の擬似 module に属する
+
+特に `impl Type` は「`self` / `Self` が使える `defmod` の型専用版」と捉えると理解しやすくなります。
+
+```surtr
+defmod Math {
+  def add(x: Int, y: Int) -> Int { x + y }
+}
+
+defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+
+  def normalize(self: Self) -> Self {
+    self
+  }
+}
+```
+
+`defstruct` / `defenum` のような型定義そのものは関数 namespace の中ではなく、
+top-level 宣言名として直接見えます。
+
+### 5.2 Trait System V1
+
+Surtr には V1 の trait system があります。最初の trait は `Numeric` です。
+
+```surtr
+deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+def twice<$N: Numeric>(x: $N) -> $N {
+  x + x
+}
+
+def show_abs(x: impl Numeric) -> String {
+  inspect(Numeric::abs(x))
+}
+```
+
+押さえておくとよい点は次のとおりです。
+
+- `deftrait` は method 宣言だけを持つ
+- trait は `deftrait Name<$T, ...> { ... }` のように型引数を取れる
+- 実装は `impl Numeric for Int { ... }` の形で書く
+- trait 側の型引数を使う実装は `impl Trait<Concrete> for Type { ... }` の形で書く
+- `impl Trait` は parameter 位置だけで使える
+- 戻り値でも同じ型を使いたいときは `<$N: Numeric>` のように名前付き bound を使う
+- `-> impl Numeric` と `where ...` はまだ使えない
+
+target type を明示する trait では、compiler-reserved な witness type
+`TypeRef<$T>` を method parameter にだけ置けます。
+これは ordinary value ではなく、「どの型へ変換するか」を表すための特別な型です。
+
+```surtr
+@@builtin type TypeRef<$T>
+
+deftrait From<$To> {
+  def from(self: Self, to: TypeRef<$To>) -> $To
+}
+
+deftrait TryFrom<$To> {
+  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}
+```
+
+`TypeRef<$T>` のルールはかなり限定的です。
+
+- trait head で宣言した型引数に対応するときだけ使える
+- trait method parameter と、それに対応する impl method parameter にだけ書ける
+- 通常の `def` の引数や戻り値には書けない
+- local 変数の型注釈や field type にも書けない
+- 値として生成したり返したり束縛したりすることはできない
+
+この制約により、`TypeRef` は first-class value ではなく
+"target type witness" としてだけ振る舞います。
+
+### 5.3 `from` / `try_from`
+
+`From` / `TryFrom` 系は、trait と call surface を少し分けて考えると分かりやすいです。
+
+- impl coherence は `From<$To>` / `TryFrom<$To>` trait で管理する
+- source 上の呼び出しは `from(value, TargetTy)` / `try_from(value, TargetTy)` で書く
+- 第2引数の `TargetTy` は ordinary expression ではなく、型指定スロットとして扱う
+
+```surtr
+text = from(42, String)
+value = try_from("42", Int)
+```
+
+この `String` / `Int` は value ではありません。
+`from` / `try_from` の第2引数位置に限って、bare な型名が
+内部的に `TypeRef<String>` / `TypeRef<Int>` の witness として解釈されます。
+
+pipeline でも同じ方向で読めます。
+
+```surtr
+text = 42 |> from(String)
+value = "42" |> try_from(Int)
+```
+
+target type を取る trait は `From` / `TryFrom` だけに限りません。
+たとえば decoder 系でも同じパターンを使えます。
+
+```surtr
+deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}
+```
+
+このときも `TypeRef<$To>` は ordinary value にはならず、
+trait method parameter の中だけで target type witness として使われます。
+
 ## 6. 条件分岐とパターンマッチ
 
 Surtr では `if` と `match` が重要です。
@@ -499,14 +625,15 @@ f = &`+`   # 未実装
 - `eprint(Error) -> Unit`
 - `set_exit_code(Int) -> Unit`
 
-`safe_div` と `safe_mod` は、失敗を例外ではなく `Result<_, ZeroDivisionError>` で返します。
+`safe_div` と `safe_mod` は、失敗を例外ではなく `Result<_, ZeroDivisionError>` で返します。  
+`+`, `-`, `*` は内部では `Numeric` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
 
 ## 12. 標準モジュールの前提
 
 現在の Surtr では、標準モジュールを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。
@@ -518,6 +645,9 @@ Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user 
   - auto import される最小の標準 API
   - `defmod Kernel` 配下に置かれる `print` のような cross-cutting builtin
   - 専用 file を持たない `Unit` の type 宣言
+- `Numeric`
+  - compile-time trait dispatch の基準になる trait 宣言
+  - `Int` / `Float` が共有する `add`, `sub`, `mul`, `safe_div`, `abs`, `min`, `max` の契約
 - 各 type module
   - `Int` や `String` のような型ごとの helper と説明
   - その型自身の `@@builtin type` 宣言
@@ -562,7 +692,7 @@ value: Result<Int> = Ok(42)
 
 - 値として扱うときは `Result<T>`
 - 関数契約を詳しく見せたいときは `Result<T, E>` が現れることがある
-- どちらも `Ok(...)` / `Err(...)` と `match` を中心に扱う
+- どちらも `Ok(...)` / `Err(...)` と `match` を中心に扱い、variant 判定だけなら `Result::is_ok(...)` / `Result::is_err(...)` も使える
 
 ## 15. 現時点のスコープ
 
@@ -577,12 +707,12 @@ value: Result<Int> = Ok(42)
 - `defstruct`
 - `defrecord`
 - `deferror`
+- trait (`Numeric` first)
 - `Result`
 - `List`
 
 含まないもの:
 
-- trait
 - 型エイリアス / NewType
 - マクロシステム拡張
 - 並列コンパイル

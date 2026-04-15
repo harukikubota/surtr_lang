@@ -1,0 +1,2 @@
+phase: typecheck
+contains: HashMap<V> requires exactly 1 type argument

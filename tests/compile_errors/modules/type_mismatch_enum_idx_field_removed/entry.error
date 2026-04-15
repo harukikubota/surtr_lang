@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Cannot access field on Direction
+contains: No variant selector 'idx' on Direction

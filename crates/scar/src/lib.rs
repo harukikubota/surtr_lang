@@ -10,20 +10,32 @@ pub use checker::{
 
 #[cfg(test)]
 mod tests {
-    use super::{typecheck, typecheck_with_context, TypecheckContext};
-    use crate::typed::TypedInner;
+    use super::{typecheck, typecheck_with_context, ScarSession, TypecheckContext};
     use crate::typed::TypedNode;
+    use crate::typed::{TypedInner, TypedLensSegment};
+    use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
     use spire::ast::Ast;
-    use spire::{EntryPoint, SetExitCodePolicy, SourceRules};
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
+    const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
+    const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
+    const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/compare.srt");
+    const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
+    const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
+    const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
+    const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/try_from.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
+    const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/regex.srt");
     const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
+    const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/ordering.srt");
     const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
+    const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
+    const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
 
     fn strip_test_annotations(source: &str) -> String {
@@ -40,7 +52,7 @@ mod tests {
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             &strip_test_annotations(source),
-            spire::ParserContext::module(0, None).with_rules(SourceRules::std_module()),
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
         .expect("std module should parse");
 
@@ -64,6 +76,7 @@ mod tests {
                         module_path,
                         ast: module_ast,
                         module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
                     });
                 }
                 Ast::Import(_, _, _) => {}
@@ -92,6 +105,7 @@ mod tests {
                 module_path: fallback_module_path.to_string(),
                 ast: global_ast,
                 module_doc: None,
+                auto_import: false,
             });
         }
 
@@ -102,6 +116,7 @@ mod tests {
                 module_path: String::new(),
                 ast: global_ast,
                 module_doc: None,
+                auto_import: false,
             });
         }
 
@@ -122,10 +137,38 @@ mod tests {
                     "Kernel",
                     pick_override("Kernel", KERNEL_PRELUDE_SOURCE, overrides),
                 ),
+                (
+                    "Numeric",
+                    pick_override("Numeric", NUMERIC_MODULE_SOURCE, overrides),
+                ),
+                ("Show", pick_override("Show", SHOW_MODULE_SOURCE, overrides)),
+                ("Eq", pick_override("Eq", EQ_MODULE_SOURCE, overrides)),
+                (
+                    "Ordering",
+                    pick_override("Ordering", ORDERING_MODULE_SOURCE, overrides),
+                ),
+                (
+                    "Compare",
+                    pick_override("Compare", COMPARE_MODULE_SOURCE, overrides),
+                ),
+                ("Ord", pick_override("Ord", ORD_MODULE_SOURCE, overrides)),
+                (
+                    "Concat",
+                    pick_override("Concat", CONCAT_MODULE_SOURCE, overrides),
+                ),
+                ("From", pick_override("From", FROM_MODULE_SOURCE, overrides)),
+                (
+                    "TryFrom",
+                    pick_override("TryFrom", TRY_FROM_MODULE_SOURCE, overrides),
+                ),
                 ("Int", pick_override("Int", INT_MODULE_SOURCE, overrides)),
                 (
                     "String",
                     pick_override("String", STRING_MODULE_SOURCE, overrides),
+                ),
+                (
+                    "Regex",
+                    pick_override("Regex", REGEX_MODULE_SOURCE, overrides),
                 ),
                 (
                     "Boolean",
@@ -137,9 +180,14 @@ mod tests {
                 ),
                 ("List", pick_override("List", LIST_MODULE_SOURCE, overrides)),
                 (
+                    "HashMap",
+                    pick_override("HashMap", HASH_MAP_MODULE_SOURCE, overrides),
+                ),
+                (
                     "Result",
                     pick_override("Result", RESULT_MODULE_SOURCE, overrides),
                 ),
+                ("Lens", pick_override("Lens", LENS_MODULE_SOURCE, overrides)),
                 (
                     "Float",
                     pick_override("Float", FLOAT_MODULE_SOURCE, overrides),
@@ -162,6 +210,22 @@ mod tests {
         sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
     }
 
+    fn resolve_with_builtin_prelude_in_script_module(
+        source: &str,
+    ) -> Result<Vec<sigil::resolved::Resolved>, sigil::error::ResolveError> {
+        let module_stages = std_module_stages();
+        let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+            .expect("source should parse");
+        let declaration_index = sigil::precollect_declaration_index(&module_stages)
+            .expect("std modules should precollect");
+        sigil::resolve_staged_program(
+            &module_stages,
+            user_ast,
+            &declaration_index,
+            Some("__Script::fixture".to_string()),
+        )
+    }
+
     fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
         resolve_with_builtin_prelude_result(source).expect("source should resolve")
     }
@@ -171,15 +235,21 @@ mod tests {
         typecheck(resolved).expect("source should typecheck")
     }
 
+    fn typecheck_with_builtin_prelude_in_script_module(source: &str) -> Vec<TypedNode> {
+        let resolved = resolve_with_builtin_prelude_in_script_module(source)
+            .expect("source should resolve inside script module");
+        typecheck(resolved).expect("source should typecheck inside script module")
+    }
+
     fn typecheck_with_rules(
         source: &str,
-        source_rules: SourceRules,
+        runtime_policy: RuntimeSourcePolicy,
     ) -> Result<Vec<TypedNode>, crate::error::TypeError> {
         let resolved = resolve_with_builtin_prelude(source);
         typecheck_with_context(
             resolved,
             TypecheckContext {
-                source_rules,
+                runtime_policy,
                 enforce_builtin_type_contracts: false,
             },
         )
@@ -197,7 +267,7 @@ mod tests {
         typecheck_with_context(
             resolved,
             TypecheckContext {
-                source_rules: SourceRules::std_module(),
+                runtime_policy: RuntimeSourcePolicy::std_module(),
                 enforce_builtin_type_contracts: true,
             },
         )
@@ -234,16 +304,28 @@ age = user.age"#,
         );
 
         let typed = typecheck(resolved).expect("typecheck should succeed");
-        let field_index = typed.iter().find_map(|node| {
+        let lens_view = typed.iter().find_map(|node| {
             if let TypedInner::Bind(_, rhs) = &node.node {
-                if let TypedInner::FieldAccess(_, idx) = &rhs.node {
-                    return Some(*idx);
+                if let TypedInner::LensView {
+                    path,
+                    source_is_result,
+                    ..
+                } = &rhs.node
+                {
+                    return Some((path.clone(), *source_is_result));
                 }
             }
             None
         });
 
-        assert_eq!(field_index, Some(1));
+        let (path, source_is_result) = lens_view.expect("expected bind rhs to be LensView");
+        assert!(!source_is_result);
+        assert!(!path.may_fail);
+        assert_eq!(path.segments.len(), 1);
+        match &path.segments[0] {
+            TypedLensSegment::Field { field_index, .. } => assert_eq!(*field_index, 1),
+            other => panic!("expected field segment, got {other:?}"),
+        }
     }
 
     #[test]
@@ -373,6 +455,510 @@ print(match value {
     }
 
     #[test]
+    fn tuple_literal_and_field_access_typecheck() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"pair = (1, "two")
+first = pair._0
+second = pair._1"#,
+        );
+        let typed = typecheck(resolved).expect("tuple access should typecheck");
+        assert!(
+            typed
+                .iter()
+                .filter(|node| matches!(node.node, TypedInner::Bind(_, _)))
+                .count()
+                >= 3
+        );
+    }
+
+    #[test]
+    fn tuple_bind_pattern_typechecks() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"pair = (1, "two")
+(left, right) = pair"#,
+        );
+        let typed = typecheck(resolved).expect("tuple bind should typecheck");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::Bind(_, _))
+        ));
+    }
+
+    #[test]
+    fn lens_view_on_plain_value_returns_plain_focus() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+user = User("alice")
+user.name"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+    }
+
+    #[test]
+    fn lens_view_on_result_value_returns_result_focus() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+result_user: Result<User> = Ok(User("alice"))
+result_user.name"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(
+            &last.ty,
+            crate::types::Ty::Result(ok, err)
+                if matches!(ok.as_ref(), crate::types::Ty::Str)
+                    && matches!(err.as_ref(), crate::types::Ty::Error)
+        ));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+    }
+
+    #[test]
+    fn lens_variant_selector_returns_result_and_requires_pascal_case() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defenum Expr {
+  Add(Int, Int),
+  Halt,
+}
+expr = Expr::Add(1, 2)
+expr.Add"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(
+            &last.ty,
+            crate::types::Ty::Result(ok, err)
+                if matches!(ok.as_ref(), crate::types::Ty::Tuple(items) if items.len() == 2)
+                    && matches!(err.as_ref(), crate::types::Ty::Error)
+        ));
+
+        let err = typecheck_with_rules(
+            r#"defenum Expr {
+  Add(Int, Int),
+  Halt,
+}
+expr = Expr::Add(1, 2)
+expr.add"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("lowercase variant selector should fail");
+        assert!(err.message.contains("No variant selector 'add'"));
+    }
+
+    #[test]
+    fn lens_compose_typecheck_success_and_mismatch() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord Profile(name: String)
+defrecord User(profile: Profile)
+user = User(Profile("alice"))
+Lens::view(Lens::compose(User.profile, Profile.name), user)"#,
+        );
+        assert!(matches!(
+            typed.last().map(|node| &node.ty),
+            Some(crate::types::Ty::Str)
+        ));
+
+        let err = typecheck_with_rules(
+            r#"defrecord Profile(name: String)
+defrecord User(profile: Profile)
+Lens::compose(Profile.name, User.profile)"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("mismatched compose should fail");
+        assert!(err.message.contains("Lens::compose source/focus mismatch"));
+    }
+
+    #[test]
+    fn lens_set_returns_result_source() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+user = User("alice")
+Lens::set(User.name, user, "bob")"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(
+            &last.ty,
+            crate::types::Ty::Result(ok, err)
+                if matches!(ok.as_ref(), crate::types::Ty::Record(name, _) if name == "User")
+                    && matches!(err.as_ref(), crate::types::Ty::Error)
+        ));
+        assert!(matches!(last.node, TypedInner::LensSet { .. }));
+    }
+
+    #[test]
+    fn lens_over_requires_unary_result_callable() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+user = User("alice")
+Lens::over(User.name, user, {|name| Ok(name)})"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(
+            &last.ty,
+            crate::types::Ty::Result(ok, err)
+                if matches!(ok.as_ref(), crate::types::Ty::Record(name, _) if name == "User")
+                    && matches!(err.as_ref(), crate::types::Ty::Error)
+        ));
+        assert!(matches!(last.node, TypedInner::LensOver { .. }));
+
+        let err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+user = User("alice")
+Lens::over(User.name, user, {|name| name})"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("non-Result update function should fail");
+        assert!(err
+            .message
+            .contains("Lens::over update function must return Result"));
+    }
+
+    #[test]
+    fn lens_standalone_tuple_root_is_rejected() {
+        let err = resolve_with_builtin_prelude_result(
+            r#"pair = (1, "one")
+Lens::view(_0, pair)"#,
+        )
+        .expect_err("standalone tuple root should fail during resolve");
+        assert!(err.message.contains("Undefined variable: _0"));
+    }
+
+    #[test]
+    fn lens_bindings_can_be_reused_by_lens_intrinsics() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+user = User("alice")
+lens = User.name
+Lens::view(lens, user)"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+    }
+
+    #[test]
+    fn lens_tuple_type_root_view_works_with_expected_context() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"pair = ("alice", 42)
+Lens::view(Tuple._0, pair)"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+    }
+
+    #[test]
+    fn lens_tuple_type_root_compose_works_as_inner_path() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(pair: (String, Int))
+user = User(("alice", 42))
+Lens::view(Lens::compose(User.pair, Tuple._0), user)"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+    }
+
+    #[test]
+    fn lens_tuple_type_root_without_context_is_rejected() {
+        let err = typecheck_with_rules("Tuple._0", RuntimeSourcePolicy::script())
+            .expect_err("Tuple._0 without context should fail");
+        assert!(err.message.contains("requires Lens type context"));
+    }
+
+    #[test]
+    fn lens_capture_is_rejected_for_scope_local_model() {
+        let err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+lens = User.name
+getter = {|user| Lens::view(lens, user)}
+getter(User("alice"))"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("capturing Lens value should fail");
+        assert!(err.message.contains("cannot be captured by closures"));
+    }
+
+    #[test]
+    fn lens_values_cannot_be_embedded_in_runtime_containers() {
+        let tuple_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+(User.name, 1)"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("tuple literal should reject lens");
+        assert!(tuple_err
+            .message
+            .contains("Tuple literal cannot contain Lens values"));
+
+        let list_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+[User.name, User.name]"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("list literal should reject lens");
+        assert!(list_err
+            .message
+            .contains("List literal cannot contain Lens values"));
+
+        let ok_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+Ok(User.name)"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("result constructors should reject lens");
+        assert!(ok_err
+            .message
+            .contains("Result constructors cannot contain Lens values"));
+    }
+
+    #[test]
+    fn nested_lens_types_are_rejected_in_function_signatures() {
+        let param_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+def bad(values: List<Lens<User, String>>) -> Unit { () }"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("nested lens in parameter type should fail");
+        assert!(param_err
+            .message
+            .contains("cannot appear in function parameter types"));
+
+        let ret_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+def bad() -> List<Lens<User, String>> { [] }"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("nested lens in return type should fail");
+        assert!(ret_err
+            .message
+            .contains("cannot appear in function return types"));
+    }
+
+    #[test]
+    fn private_value_access_is_allowed_but_capability_root_is_rejected() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+user = User("alice", "s3cr3t")
+user.password"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+        assert!(matches!(last.node, TypedInner::LensView { .. }));
+
+        let err = typecheck_with_rules(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+User.password"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("private capability root should fail");
+        assert!(err.message.contains("Field 'User.password' is private"));
+    }
+
+    #[test]
+    fn private_value_access_inside_closure_is_rejected_outside_impl() {
+        let err = typecheck_with_rules(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+user = User("alice", "s3cr3t")
+{|| user.password}"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("private value access inside closure should fail");
+        assert!(err
+            .message
+            .contains("cannot be accessed from closures outside impl"));
+    }
+
+    #[test]
+    fn private_value_can_be_returned_as_plain_value() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+def read_password(user: User) -> String {
+  user.password
+}
+user = User("alice", "s3cr3t")
+read_password(user)"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+    }
+
+    #[test]
+    fn private_value_capture_after_scope_local_read_is_allowed() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+user = User("alice", "s3cr3t")
+password = user.password
+reader = {|| password}
+reader()"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+    }
+
+    #[test]
+    fn private_value_access_inside_param_closure_is_rejected_outside_impl() {
+        let err = typecheck_with_rules(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+reader = {|user: User| user.password}
+user = User("alice", "s3cr3t")
+reader(user)"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("private value access inside closure parameter should fail");
+        assert!(
+            err.message
+                .contains("cannot be accessed from closures outside impl")
+                || err.message.contains("Field 'User.password' is private")
+        );
+    }
+
+    #[test]
+    fn private_capability_root_is_rejected_in_lens_view_call() {
+        let err = typecheck_with_rules(
+            r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}
+user = User("alice", "s3cr3t")
+Lens::view(User.password, user)"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("private capability root in Lens::view should fail");
+        assert!(err.message.contains("Field 'User.password' is private"));
+    }
+
+    #[test]
+    fn lens_scope_local_value_can_flow_to_closure_after_view() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"defrecord User(name: String)
+user = User("alice")
+lens = User.name
+name = Lens::view(lens, user)
+reader = {|| name}
+reader()"#,
+        );
+        let last = typed.last().expect("typed program should not be empty");
+        assert!(matches!(last.ty, crate::types::Ty::Str));
+    }
+
+    #[test]
+    fn lens_runtime_transport_restrictions_remain() {
+        let arg_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+print(to_string(User.name))"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("passing Lens value as argument should fail");
+        assert!(arg_err.message.contains("cannot accept Lens values"));
+
+        let return_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+def bad() -> Lens<User, String> {
+  User.name
+}"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("returning Lens value should fail");
+        assert!(return_err
+            .message
+            .contains("cannot appear in function return types"));
+
+        let arg_var_err = typecheck_with_rules(
+            r#"defrecord User(name: String)
+def consume(value: String) -> String {
+  value
+}
+lens = User.name
+consume(lens)"#,
+            RuntimeSourcePolicy::script(),
+        )
+        .expect_err("passing Lens binding as runtime function argument should fail");
+        assert!(
+            arg_var_err.message.contains("cannot accept Lens values")
+                || arg_var_err.message.contains("Argument type mismatch")
+                || arg_var_err.message.contains("compile-time only")
+        );
+    }
+
+    #[test]
+    fn extractor_single_value_match_result_contract_typechecks() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defstruct Single {
+  value: Int,
+}
+impl Single {
+  def new(value: Int) -> Self {
+    Single { value: value }
+  }
+
+  def deconstruct(self: Self) -> MatchResult<Int, Error> {
+    MatchResult::Success(self.value)
+  }
+}
+
+value = Single(1)
+print(match value {
+  Single(inner) => to_string(inner),
+  _ => "bad",
+})"#,
+        );
+        let typed = typecheck(resolved).expect("single-value extractor should typecheck");
+        assert!(!typed.is_empty());
+    }
+
+    #[test]
     fn struct_matchblock_head_uses_attached_deconstruct_method() {
         let resolved = resolve_with_builtin_prelude(
             r#"defstruct User {
@@ -383,7 +969,7 @@ impl User {
   def new(name: String, age: Int) -> Self {
     User { name: name, age: age }
   }
-  def deconstruct(self: Self) -> MatchResult<Seq<String, Int>, Error> {
+  def deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
     MatchResult::NoMatch
   }
 }
@@ -455,6 +1041,20 @@ deferror NotFound {
     }
 
     #[test]
+    fn zero_arg_deferror_value_can_flow_into_error_parameter() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"wrapped = Result::cause(Err(NoneError), NotFound)
+deferror NotFound {
+  "not found"
+}"#,
+        );
+        let typed = typecheck(resolved).expect("zero-arg deferror should satisfy Error parameters");
+        assert!(typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::Bind(_, _))));
+    }
+
+    #[test]
     fn forward_reference_type_tags_are_deterministic_across_runs() {
         let source = r#"user: User = User("alice", 30)
 pair = Pair(first: 1, second: "two")
@@ -497,9 +1097,81 @@ deferror NotFound(code: String) {
     }
 
     #[test]
+    fn user_function_calls_typecheck_inside_script_module_scope() {
+        let typed = typecheck_with_builtin_prelude_in_script_module(
+            "def add1(x: Int) -> Int { x + 1 }\nprint(to_string(add1(41)))",
+        );
+        assert!(
+            typed
+                .iter()
+                .any(|node| matches!(node.node, TypedInner::Def(..))),
+            "expected user function definition to survive typechecking"
+        );
+    }
+
+    #[test]
+    fn generic_user_function_calls_typecheck_inside_script_module_scope() {
+        let typed = typecheck_with_builtin_prelude_in_script_module(
+            r#"def id(x: $A) -> $A { x }
+
+print(to_string(id(1)))
+print(id("ok"))"#,
+        );
+        assert!(
+            typed
+                .iter()
+                .filter(|node| matches!(node.node, TypedInner::App(_, _)))
+                .count()
+                >= 2,
+            "expected both generic function call sites to typecheck"
+        );
+    }
+
+    #[test]
+    fn named_args_user_function_calls_typecheck_inside_script_module_scope() {
+        let typed = typecheck_with_builtin_prelude_in_script_module(
+            r#"def add(x: Int, y: Int) -> Int { x + y }
+def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
+
+print(to_string(add(y: 2, x: 1)))
+print(to_string(add3(z: 3, y: 2, x: 1)))"#,
+        );
+        assert!(
+            typed
+                .iter()
+                .filter(|node| matches!(node.node, TypedInner::Def(..)))
+                .count()
+                >= 2,
+            "expected named-argument user functions to typecheck"
+        );
+    }
+
+    #[test]
+    fn trailing_block_calls_typecheck_inside_script_module_scope() {
+        let typed = typecheck_with_builtin_prelude_in_script_module(
+            r#"def take(flag: Boolean, value: Int) -> Int {
+  if(flag, value, 0)
+}
+
+print(to_string(take(True) { num = 10; num }))
+
+v = if_then(True) { print("x") }
+print(to_string(v))"#,
+        );
+        assert!(
+            typed
+                .iter()
+                .filter(|node| matches!(node.node, TypedInner::App(_, _)))
+                .count()
+                >= 2,
+            "expected trailing-block call sites to typecheck"
+        );
+    }
+
+    #[test]
     fn set_exit_code_is_allowed_in_script_rules() {
-        let typed =
-            typecheck_with_rules("set_exit_code(9)", SourceRules::script()).expect("must pass");
+        let typed = typecheck_with_rules("set_exit_code(9)", RuntimeSourcePolicy::script())
+            .expect("must pass");
         assert!(matches!(
             typed.last().map(|node| &node.node),
             Some(TypedInner::App(_, _))
@@ -508,7 +1180,7 @@ deferror NotFound(code: String) {
 
     #[test]
     fn set_exit_code_is_forbidden_in_repl_chunk_rules() {
-        let err = typecheck_with_rules("set_exit_code(9)", SourceRules::repl_chunk())
+        let err = typecheck_with_rules("set_exit_code(9)", RuntimeSourcePolicy::repl_chunk())
             .expect_err("must fail");
         assert!(err.message.contains("forbidden by source policy"));
     }
@@ -516,8 +1188,8 @@ deferror NotFound(code: String) {
     #[test]
     fn set_exit_code_entry_only_policy_allows_only_entrypoint_function() {
         let entrypoint = EntryPoint::qualified("main");
-        let rules = SourceRules::module()
-            .with_set_exit_code_policy(SetExitCodePolicy::EntryOnly, Some(&entrypoint));
+        let rules = RuntimeSourcePolicy::module()
+            .with_exit_code_policy(ExitCodePolicy::EntryOnly, Some(&entrypoint));
 
         let ok = typecheck_with_rules(
             r#"def main() -> Result<()> {
@@ -529,7 +1201,7 @@ deferror NotFound(code: String) {
         .expect("entrypoint body should allow set_exit_code");
         assert!(ok
             .iter()
-            .find(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _)))
+            .find(|node| matches!(node.node, TypedInner::Def(..)))
             .is_some());
 
         let err = typecheck_with_rules(
@@ -602,10 +1274,10 @@ deferror NotFound(code: String) {
                 {
                     Some(format!("builtin {}", id.name))
                 }
-                sigil::resolved::Resolved::Def(_, id, _, _, _, _) if id.unique_id == use_uid => {
+                sigil::resolved::Resolved::Def(_, id, _, _, _, _, _) if id.unique_id == use_uid => {
                     Some(format!("def {}", id.name))
                 }
-                sigil::resolved::Resolved::ExtractorDef(_, id, _, _, _, _)
+                sigil::resolved::Resolved::ExtractorDef(_, id, _, _, _, _, _)
                     if id.unique_id == use_uid =>
                 {
                     Some(format!("extractor {}", id.name))
@@ -672,14 +1344,14 @@ guard = ensure(4, &is_even, NoneError)"#,
     }
 
     #[test]
-    fn eq_special_form_typechecks_as_binop() {
+    fn eq_helper_typechecks_as_trait_call() {
         let typed = typecheck_with_builtin_prelude("flag = eq(1, 1)");
         let bind = typed.last().expect("binding should exist");
         match &bind.node {
             TypedInner::Bind(_, rhs) => {
                 assert!(matches!(
                     rhs.node,
-                    TypedInner::BinOp(spire::ast::BinOp::Eq, _, _)
+                    TypedInner::TraitCall { ref method_name, .. } if method_name == "eq"
                 ));
                 assert!(matches!(rhs.ty, crate::types::Ty::Bool));
             }
@@ -688,14 +1360,14 @@ guard = ensure(4, &is_even, NoneError)"#,
     }
 
     #[test]
-    fn lt_special_form_typechecks_as_binop() {
+    fn lt_helper_typechecks_as_trait_call() {
         let typed = typecheck_with_builtin_prelude("flag = lt(1, 2)");
         let bind = typed.last().expect("binding should exist");
         match &bind.node {
             TypedInner::Bind(_, rhs) => {
                 assert!(matches!(
                     rhs.node,
-                    TypedInner::BinOp(spire::ast::BinOp::Lt, _, _)
+                    TypedInner::TraitCall { ref method_name, .. } if method_name == "lt"
                 ));
                 assert!(matches!(rhs.ty, crate::types::Ty::Bool));
             }
@@ -704,14 +1376,30 @@ guard = ensure(4, &is_even, NoneError)"#,
     }
 
     #[test]
-    fn concat_special_form_typechecks_as_binop() {
+    fn concat_helper_typechecks_as_trait_call() {
         let typed = typecheck_with_builtin_prelude(r#"value = concat("a", "b")"#);
         let bind = typed.last().expect("binding should exist");
         match &bind.node {
             TypedInner::Bind(_, rhs) => {
                 assert!(matches!(
                     rhs.node,
-                    TypedInner::BinOp(spire::ast::BinOp::Concat, _, _)
+                    TypedInner::TraitCall { ref method_name, .. } if method_name == "concat"
+                ));
+                assert!(matches!(rhs.ty, crate::types::Ty::Str));
+            }
+            other => panic!("expected bind, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn to_string_helper_typechecks_as_trait_call() {
+        let typed = typecheck_with_builtin_prelude("text = to_string(42)");
+        let bind = typed.last().expect("binding should exist");
+        match &bind.node {
+            TypedInner::Bind(_, rhs) => {
+                assert!(matches!(
+                    rhs.node,
+                    TypedInner::TraitCall { ref method_name, .. } if method_name == "to_string"
                 ));
                 assert!(matches!(rhs.ty, crate::types::Ty::Str));
             }
@@ -724,7 +1412,7 @@ guard = ensure(4, &is_even, NoneError)"#,
         let err = typecheck_with_rules(
             r#"def is_even() -> (Int -> Boolean) { {|n| Int::is_even(n) } }
 guard = ensure(4, is_even(), NoneError)"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("call expression predicate must fail");
         assert!(err.message.contains("ensure requires a closure or capture"));
@@ -741,7 +1429,7 @@ def make_error(flag: Boolean) -> Error {
 }
 
 guard = assert(False, make_error(True))"#,
-            SourceRules::script(),
+            RuntimeSourcePolicy::script(),
         )
         .expect_err("plain Error expression must fail");
         assert!(err
@@ -772,6 +1460,10 @@ defmod Kernel {
             r#"@@builtin type Boolean
 
 defmod Boolean {
+  def not(value: Boolean) -> Boolean {
+    if(value, False, True)
+  }
+
   @@builtin def and(left: Boolean, right: Boolean) -> Boolean
 }"#,
         )])
@@ -782,19 +1474,21 @@ defmod Boolean {
     }
 
     #[test]
-    fn kernel_concat_contract_rejects_generic_signature() {
-        let err = typecheck_std_modules_with_overrides(&[(
+    fn kernel_does_not_allow_removed_concat_builtin() {
+        let module_stages = std_module_stages_with_overrides(&[(
             "Kernel",
             r#"@@builtin type Unit
 
 defmod Kernel {
   @@builtin def concat(left: $A, right: $A) -> String
 }"#,
-        )])
-        .expect_err("generic concat signature should violate canonical contract");
-        assert!(err
-            .message
-            .contains("@@builtin def concat(left: String, right: String) -> String"));
+        )]);
+        let declaration_index = sigil::precollect_declaration_index(&module_stages)
+            .expect("std modules should precollect");
+        let err =
+            sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+                .expect_err("concat is no longer a declared runtime builtin");
+        assert!(err.message.contains("Unknown builtin declaration: concat"));
     }
 
     #[test]
@@ -814,10 +1508,11 @@ left: Int = id(1)
 right: String = id("ok")"#,
         );
         assert!(typed.len() >= 3);
-        assert!(typed.iter().rev().take(3).all(|node| matches!(
-            node.node,
-            TypedInner::Bind(_, _) | TypedInner::Def(_, _, _, _, _)
-        )));
+        assert!(typed
+            .iter()
+            .rev()
+            .take(3)
+            .all(|node| matches!(node.node, TypedInner::Bind(_, _) | TypedInner::Def(..))));
     }
 
     #[test]
@@ -928,7 +1623,9 @@ up: Direction = Direction::Up
 x = up.idx"#,
         );
         let err = typecheck(resolved).expect_err("enum field access must fail");
-        assert!(err.message.contains("Cannot access field on Direction"));
+        assert!(err
+            .message
+            .contains("No variant selector 'idx' on Direction"));
     }
 
     #[test]
@@ -940,6 +1637,21 @@ answer = match flag {
 }"#,
         );
         let typed = typecheck(resolved).expect("binding arm should be exhaustive");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::Bind(_, _))
+        ));
+    }
+
+    #[test]
+    fn match_tuple_binding_pattern_is_treated_as_exhaustive() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"pair = (1, "two")
+answer = match pair {
+  (left, right) => right,
+}"#,
+        );
+        let typed = typecheck(resolved).expect("tuple binding arm should be exhaustive");
         assert!(matches!(
             typed.last().map(|node| &node.node),
             Some(TypedInner::Bind(_, _))
@@ -1075,5 +1787,368 @@ impl User {
             .message
             .contains("deferror show block must return String"));
         assert_eq!(err.span.start, literal_start);
+    }
+
+    #[test]
+    fn numeric_trait_calls_typecheck_with_static_dispatch() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"sum = 1 + 2
+quot = Numeric::safe_div(8, 2)
+largest = Numeric::max(1.5, 2.5)"#,
+        );
+
+        let trait_calls = typed
+            .iter()
+            .filter_map(|node| match &node.node {
+                TypedInner::Bind(_, rhs) => match &rhs.node {
+                    TypedInner::TraitCall {
+                        trait_name,
+                        method_name,
+                        dispatch,
+                        ..
+                    } => Some((trait_name.as_str(), method_name.as_str(), dispatch)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(trait_calls
+            .iter()
+            .any(|(trait_name, method_name, dispatch)| {
+                *trait_name == "Numeric"
+                    && *method_name == "add"
+                    && matches!(
+                        dispatch,
+                        crate::typed::TraitDispatch::Static(
+                            crate::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
+                        )
+                    )
+            }));
+        assert!(trait_calls
+            .iter()
+            .any(|(trait_name, method_name, dispatch)| {
+                *trait_name == "Numeric"
+                    && *method_name == "safe_div"
+                    && matches!(
+                        dispatch,
+                        crate::typed::TraitDispatch::Static(
+                            crate::typed::TraitDispatchTarget::Builtin(name)
+                        ) if name == "safe_div"
+                    )
+            }));
+        assert!(trait_calls
+            .iter()
+            .any(|(trait_name, method_name, dispatch)| {
+                *trait_name == "Numeric"
+                    && *method_name == "max"
+                    && matches!(
+                        dispatch,
+                        crate::typed::TraitDispatch::Static(
+                            crate::typed::TraitDispatchTarget::UserFunction { name, .. }
+                        ) if name == "Float::max"
+                    )
+            }));
+    }
+
+    #[test]
+    fn bounded_numeric_generics_specialize_without_pending_trait_calls() {
+        fn has_pending_trait_call(node: &TypedNode) -> bool {
+            match &node.node {
+                TypedInner::TraitCall { dispatch, args, .. } => {
+                    matches!(dispatch, crate::typed::TraitDispatch::Pending)
+                        || args.iter().any(has_pending_trait_call)
+                }
+                TypedInner::App(func, args)
+                | TypedInner::InjectCall(func, args)
+                | TypedInner::Capture(func, args) => {
+                    has_pending_trait_call(func) || args.iter().any(has_pending_trait_call)
+                }
+                TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
+                TypedInner::Bind(_, rhs)
+                | TypedInner::SafeBind(_, rhs)
+                | TypedInner::Semi(rhs)
+                | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+                TypedInner::LensPath(_) => false,
+                TypedInner::LensView { source, .. } => has_pending_trait_call(source),
+                TypedInner::LensSet { source, value, .. } => {
+                    has_pending_trait_call(source) || has_pending_trait_call(value)
+                }
+                TypedInner::LensOver {
+                    source, update_fun, ..
+                } => has_pending_trait_call(source) || has_pending_trait_call(update_fun),
+                TypedInner::BinOp(_, left, right)
+                | TypedInner::Pipe(left, right)
+                | TypedInner::ResultMap(left, right)
+                | TypedInner::ResultBind(left, right)
+                | TypedInner::Compose(_, left, right)
+                | TypedInner::ListCons(left, right) => {
+                    has_pending_trait_call(left) || has_pending_trait_call(right)
+                }
+                TypedInner::TupleLiteral(items)
+                | TypedInner::ListLiteral(items)
+                | TypedInner::ConstructorCall(_, items)
+                | TypedInner::StructLit(_, items) => items.iter().any(has_pending_trait_call),
+                TypedInner::If(cond, then_branch, else_branch) => {
+                    has_pending_trait_call(cond)
+                        || has_pending_trait_call(then_branch)
+                        || else_branch.as_deref().is_some_and(has_pending_trait_call)
+                }
+                TypedInner::Assert(cond, err) => {
+                    has_pending_trait_call(cond) || has_pending_trait_call(err)
+                }
+                TypedInner::Ensure(value, pred, err) => {
+                    has_pending_trait_call(value)
+                        || has_pending_trait_call(pred)
+                        || has_pending_trait_call(err)
+                }
+                TypedInner::Match(scrutinee, arms) => {
+                    has_pending_trait_call(scrutinee)
+                        || arms.iter().any(|(_, arm)| has_pending_trait_call(arm))
+                }
+                TypedInner::InterpolatedStr(parts) => parts.iter().any(|part| match part {
+                    crate::typed::TypedInterpolatedPart::Text(_) => false,
+                    crate::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
+                }),
+                TypedInner::Def(_, _, _, _, _, body, _)
+                | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
+                | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
+                TypedInner::Lit(_)
+                | TypedInner::Var(_)
+                | TypedInner::ListNil
+                | TypedInner::DeferrorDef(..)
+                | TypedInner::EnumDef(..)
+                | TypedInner::TraitDef(..)
+                | TypedInner::TraitImplDef(..)
+                | TypedInner::BuiltinExtractorDecl(..)
+                | TypedInner::StructDef(..)
+                | TypedInner::RecordDef(..) => false,
+            }
+        }
+
+        let typed = typecheck_with_builtin_prelude(
+            r#"def double<$N: Numeric>(x: $N) -> $N { x + x }
+a = double(21)
+b = double(1.5)"#,
+        );
+
+        let double_defs = typed
+            .iter()
+            .filter_map(|node| match &node.node {
+                TypedInner::Def(fun_idx, id, ..) if id.name == "double" => Some(*fun_idx),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(double_defs.len(), 2);
+        assert_ne!(double_defs[0], double_defs[1]);
+        assert!(!typed.iter().any(has_pending_trait_call));
+    }
+
+    #[test]
+    fn scar_session_preserves_trait_registry_across_chunks() {
+        let module_stages = std_module_stages();
+        let declaration_index = sigil::precollect_declaration_index(&module_stages)
+            .expect("std modules should precollect");
+        let std_resolved =
+            sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+                .expect("std modules should resolve");
+        let std_resolved_len = std_resolved.len();
+
+        let mut session = ScarSession::new();
+        session
+            .typecheck_with_context(
+                std_resolved,
+                TypecheckContext {
+                    runtime_policy: RuntimeSourcePolicy::std_module(),
+                    enforce_builtin_type_contracts: true,
+                },
+            )
+            .expect("std modules should typecheck");
+
+        let user_ast = spire::parse_with_context("value = 1 + 2", spire::ParserContext::project(0))
+            .expect("user chunk should parse");
+        let user_resolved =
+            sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
+                .expect("user chunk should resolve");
+        let user_resolved = user_resolved.into_iter().skip(std_resolved_len).collect();
+        let typed = session
+            .typecheck(user_resolved)
+            .expect("trait registry should survive across chunks");
+
+        assert!(typed.iter().any(|node| {
+            matches!(
+                &node.node,
+                TypedInner::Bind(_, rhs)
+                    if matches!(
+                        &rhs.node,
+                        TypedInner::TraitCall {
+                            method_name,
+                            dispatch: crate::typed::TraitDispatch::Static(
+                                crate::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
+                            ),
+                            ..
+                        } if method_name == "add"
+                    )
+            )
+        }));
+    }
+
+    #[test]
+    fn numeric_trait_mismatch_lists_available_implementations() {
+        let resolved = resolve_with_builtin_prelude("value = Numeric::add(1, False)");
+        let err = typecheck(resolved).expect_err("mismatched numeric trait call must fail");
+        assert!(err.message.contains("Numeric::add expects argument 2"));
+        assert!(err.message.contains("receiver type Int"));
+        assert!(err.message.contains("got Boolean"));
+        assert!(err
+            .message
+            .contains("Numeric is implemented for: Float, Int"));
+    }
+
+    #[test]
+    fn numeric_trait_missing_receiver_lists_available_implementations() {
+        let resolved = resolve_with_builtin_prelude("value = Numeric::add(False, True)");
+        let err = typecheck(resolved).expect_err("invalid numeric receiver must fail");
+        assert!(err
+            .message
+            .contains("Numeric::add requires a receiver type implementing Numeric, got Boolean"));
+        assert!(err
+            .message
+            .contains("Numeric is implemented for: Float, Int"));
+    }
+
+    #[test]
+    fn from_helper_typechecks_as_generic_trait_call() {
+        let typed = typecheck_with_builtin_prelude(r#"value = from(42, String)"#);
+        let rhs = typed
+            .iter()
+            .find_map(|node| match &node.node {
+                TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+                _ => None,
+            })
+            .expect("bind rhs should exist");
+        match &rhs.node {
+            TypedInner::TraitCall {
+                trait_name,
+                method_name,
+                receiver_ty,
+                dispatch:
+                    crate::typed::TraitDispatch::Static(
+                        crate::typed::TraitDispatchTarget::UserFunction { name, .. },
+                    ),
+                args,
+            } => {
+                assert_eq!(trait_name, "From<String>");
+                assert_eq!(method_name, "from");
+                assert_eq!(name, "From<String>::Int::from");
+                assert_eq!(receiver_ty, &crate::types::Ty::Int);
+                assert!(matches!(args[1].ty, crate::types::Ty::TypeRef(_)));
+                assert_eq!(rhs.ty, crate::types::Ty::Str);
+            }
+            other => panic!("expected trait call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn try_from_helper_typechecks_as_generic_trait_call() {
+        let typed = typecheck_with_builtin_prelude(r#"value = try_from("42", Int)"#);
+        let rhs = typed
+            .iter()
+            .find_map(|node| match &node.node {
+                TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+                _ => None,
+            })
+            .expect("bind rhs should exist");
+        match &rhs.node {
+            TypedInner::TraitCall {
+                trait_name,
+                method_name,
+                receiver_ty,
+                dispatch:
+                    crate::typed::TraitDispatch::Static(
+                        crate::typed::TraitDispatchTarget::UserFunction { name, .. },
+                    ),
+                args,
+            } => {
+                assert_eq!(trait_name, "TryFrom<Int>");
+                assert_eq!(method_name, "try_from");
+                assert_eq!(name, "TryFrom<Int>::String::try_from");
+                assert_eq!(receiver_ty, &crate::types::Ty::Str);
+                assert!(matches!(args[1].ty, crate::types::Ty::TypeRef(_)));
+                assert!(matches!(rhs.ty, crate::types::Ty::Result(_, _)));
+            }
+            other => panic!("expected trait call, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
+        let resolved = resolve_with_builtin_prelude(r#"value = from("42", Int)"#);
+        let err = typecheck(resolved).expect_err("from on fallible conversion must fail");
+        assert!(err
+            .message
+            .contains("String -> Int implements TryFrom, not From"));
+        assert!(err.message.contains("Use try_from(value, Int)."));
+    }
+
+    #[test]
+    fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
+        let resolved = resolve_with_builtin_prelude(r#"value = try_from(42, String)"#);
+        let err = typecheck(resolved).expect_err("try_from on infallible conversion must fail");
+        assert!(err
+            .message
+            .contains("Int -> String implements From, not TryFrom"));
+        assert!(err.message.contains("Use from(value, String)."));
+    }
+
+    #[test]
+    fn from_and_try_from_impls_are_mutually_exclusive() {
+        let overrides = [(
+            "String",
+            r#"@@builtin type String
+
+defmod String {}
+
+impl Show for String {
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<String> for String {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    self
+  }
+}
+
+impl TryFrom<Int> for String {
+  def try_from(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
+    Ok(0)
+  }
+}
+
+impl From<Int> for String {
+  def from(self: Self, to: TypeRef<Int>) -> Int {
+    0
+  }
+}
+
+impl Eq for String {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self == rhs
+  }
+
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self != rhs
+  }
+}"#,
+        )];
+
+        let err = typecheck_std_modules_with_overrides(&overrides)
+            .expect_err("conflicting From/TryFrom impls must fail");
+        assert!(err
+            .message
+            .contains("From and TryFrom cannot both be implemented for String -> Int"));
     }
 }

@@ -5,8 +5,8 @@ use sindr::builtin::{
     builtin_meta_by_name, builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS,
     BUILTIN_TYPE_METAS,
 };
+use sindr::policy::{ExitCodePolicy, RuntimeSourcePolicy};
 use spire::ast::{AstTy, BinOp, Lit, Span};
-use spire::{SetExitCodePolicy, SourceRules};
 
 use crate::env::{TypeEnv, TypeKind};
 use crate::error::TypeError;
@@ -18,6 +18,7 @@ mod expr;
 mod matching;
 mod patterns;
 mod predeclare;
+mod specialize;
 mod types;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +26,48 @@ enum TypeSyntaxContext {
     General,
     FunctionReturn,
     ErrorMarker,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct TraitMethodInfo {
+    id: ResolvedId,
+    type_params: Vec<ResolvedTypeParam>,
+    params: Vec<ResolvedFunParam>,
+    ret_ty: AstTy,
+    span: Span,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct TraitInfo {
+    id: ResolvedId,
+    type_params: Vec<ResolvedTypeParam>,
+    methods: HashMap<String, TraitMethodInfo>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct TraitImplMethodInfo {
+    method_name: String,
+    function_id: ResolvedId,
+    type_params: Vec<ResolvedTypeParam>,
+    params: Vec<ResolvedFunParam>,
+    ret_ty: Option<AstTy>,
+    body: Box<Resolved>,
+    attrs: ResolvedDeclAttrs,
+    span: Span,
+    dispatch_override: Option<TraitDispatchTarget>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct TraitImplInfo {
+    trait_id: ResolvedId,
+    trait_args: Vec<AstTy>,
+    target_name: String,
+    target_ty: Ty,
+    methods: HashMap<String, TraitImplMethodInfo>,
 }
 
 /// Type-check the resolved AST, producing a fully typed tree.
@@ -42,14 +85,14 @@ pub fn typecheck_with_context(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckContext {
-    pub source_rules: SourceRules,
+    pub runtime_policy: RuntimeSourcePolicy,
     pub enforce_builtin_type_contracts: bool,
 }
 
 impl Default for TypecheckContext {
     fn default() -> Self {
         Self {
-            source_rules: SourceRules::script(),
+            runtime_policy: RuntimeSourcePolicy::script(),
             enforce_builtin_type_contracts: false,
         }
     }
@@ -81,8 +124,8 @@ fn initialize_env() -> TypeEnv {
         },
     );
 
-    for meta in BUILTIN_METAS {
-        let uid = builtin_uid(meta.builtin_id);
+    for (idx, meta) in BUILTIN_METAS.iter().enumerate() {
+        let uid = builtin_uid(idx as u16);
         let ty = builtin_ty_from_meta(meta, &mut env);
         env.bind_var(uid, ty);
     }
@@ -161,6 +204,22 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
             params: vec![Ty::Int, Ty::Int],
             ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
         },
+        "codepoints" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Str, Ty::Enum("StringEncoding".into(), Vec::new())],
+            ret: Box::new(Ty::Result(
+                Box::new(Ty::List(Box::new(Ty::Int))),
+                Box::new(Ty::Error),
+            )),
+        },
+        "from_codepoints" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![
+                Ty::List(Box::new(Ty::Int)),
+                Ty::Enum("StringEncoding".into(), Vec::new()),
+            ],
+            ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
+        },
         "len" => {
             let a = env.fresh_tyvar();
             Ty::BuiltinFunc {
@@ -169,6 +228,240 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
                 ret: Box::new(Ty::Int),
             }
         }
+        "group_count" => {
+            let a = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::List(Box::new(a.clone()))],
+                ret: Box::new(Ty::List(Box::new(Ty::Tuple(vec![a, Ty::Int])))),
+            }
+        }
+        "zip" => {
+            let a = env.fresh_tyvar();
+            let b = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::List(Box::new(a.clone())), Ty::List(Box::new(b.clone()))],
+                ret: Box::new(Ty::List(Box::new(Ty::Tuple(vec![a, b])))),
+            }
+        }
+        "empty_map" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: Vec::new(),
+                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
+            }
+        }
+        "map_from_entries" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::List(Box::new(Ty::Tuple(vec![Ty::Str, value.clone()])))],
+                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
+            }
+        }
+        "map_len" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value])],
+                ret: Box::new(Ty::Int),
+            }
+        }
+        "map_contains_key" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value]), Ty::Str],
+                ret: Box::new(Ty::Bool),
+            }
+        }
+        "map_get" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value.clone()]), Ty::Str],
+                ret: Box::new(Ty::Result(Box::new(value), Box::new(Ty::Error))),
+            }
+        }
+        "map_insert" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Enum("HashMap".into(), vec![value.clone()]),
+                    Ty::Str,
+                    value.clone(),
+                ],
+                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
+            }
+        }
+        "map_remove" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value.clone()]), Ty::Str],
+                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
+            }
+        }
+        "map_keys" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value])],
+                ret: Box::new(Ty::List(Box::new(Ty::Str))),
+            }
+        }
+        "map_values" => {
+            let value = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![Ty::Enum("HashMap".into(), vec![value.clone()])],
+                ret: Box::new(Ty::List(Box::new(value))),
+            }
+        }
+        "view" => {
+            let source = env.fresh_tyvar();
+            let focus = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Lens(Box::new(source.clone()), Box::new(focus.clone())),
+                    source,
+                ],
+                ret: Box::new(Ty::Result(Box::new(focus), Box::new(Ty::Error))),
+            }
+        }
+        "compose" => {
+            let source = env.fresh_tyvar();
+            let middle = env.fresh_tyvar();
+            let focus = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Lens(Box::new(source.clone()), Box::new(middle.clone())),
+                    Ty::Lens(Box::new(middle), Box::new(focus.clone())),
+                ],
+                ret: Box::new(Ty::Lens(Box::new(source), Box::new(focus))),
+            }
+        }
+        "set" => {
+            let source = env.fresh_tyvar();
+            let focus = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Lens(Box::new(source.clone()), Box::new(focus.clone())),
+                    source.clone(),
+                    focus,
+                ],
+                ret: Box::new(Ty::Result(Box::new(source), Box::new(Ty::Error))),
+            }
+        }
+        "over" => {
+            let source = env.fresh_tyvar();
+            let focus = env.fresh_tyvar();
+            Ty::BuiltinFunc {
+                name: meta.name.into(),
+                params: vec![
+                    Ty::Lens(Box::new(source.clone()), Box::new(focus.clone())),
+                    source.clone(),
+                    Ty::Func(
+                        vec![focus.clone()],
+                        Box::new(Ty::Result(Box::new(focus), Box::new(Ty::Error))),
+                    ),
+                ],
+                ret: Box::new(Ty::Result(Box::new(source), Box::new(Ty::Error))),
+            }
+        }
+        "compile" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Str],
+            ret: Box::new(Ty::Result(
+                Box::new(Ty::Enum("Regex".into(), Vec::new())),
+                Box::new(Ty::Error),
+            )),
+        },
+        "is_match" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::Bool),
+        },
+        "captures" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::Result(
+                Box::new(Ty::Enum("RegexCaptures".into(), Vec::new())),
+                Box::new(Ty::Error),
+            )),
+        },
+        "whole" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new())],
+            ret: Box::new(Ty::Str),
+        },
+        "capture_count" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new())],
+            ret: Box::new(Ty::Int),
+        },
+        "get" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new()), Ty::Int],
+            ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
+        },
+        "get_name" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
+        },
+        "find" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::Result(
+                Box::new(Ty::Enum("RegexMatch".into(), Vec::new())),
+                Box::new(Ty::Error),
+            )),
+        },
+        "find_all" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::List(Box::new(Ty::Enum(
+                "RegexMatch".into(),
+                Vec::new(),
+            )))),
+        },
+        "split" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
+            ret: Box::new(Ty::List(Box::new(Ty::Str))),
+        },
+        "replace" | "replace_all" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str, Ty::Str],
+            ret: Box::new(Ty::Str),
+        },
+        "escape" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Str],
+            ret: Box::new(Ty::Str),
+        },
+        "group_names" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("Regex".into(), Vec::new())],
+            ret: Box::new(Ty::List(Box::new(Ty::Str))),
+        },
+        "text" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexMatch".into(), Vec::new())],
+            ret: Box::new(Ty::Str),
+        },
+        "start" | "end" => Ty::BuiltinFunc {
+            name: meta.name.into(),
+            params: vec![Ty::Enum("RegexMatch".into(), Vec::new())],
+            ret: Box::new(Ty::Int),
+        },
         _ => Ty::BuiltinFunc {
             name: meta.name.into(),
             params: vec![Ty::Unit; meta.arity as usize],
@@ -191,6 +484,10 @@ pub struct ScarCheckpoint {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -199,6 +496,10 @@ pub struct ScarSession {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
 }
 
 struct CheckerParts {
@@ -206,6 +507,10 @@ struct CheckerParts {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
 }
 
 impl ScarSession {
@@ -215,6 +520,10 @@ impl ScarSession {
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
+            traits: HashMap::new(),
+            trait_impls: HashMap::new(),
+            trait_methods_by_qualified_name: HashMap::new(),
+            tyvar_bounds: HashMap::new(),
         }
     }
 
@@ -232,6 +541,10 @@ impl ScarSession {
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
+            self.traits.clone(),
+            self.trait_impls.clone(),
+            self.trait_methods_by_qualified_name.clone(),
+            self.tyvar_bounds.clone(),
             context,
         );
         let typed = checker.check_program(resolved)?;
@@ -240,11 +553,19 @@ impl ScarSession {
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
+            traits,
+            trait_impls,
+            trait_methods_by_qualified_name,
+            tyvar_bounds,
         } = checker.into_parts();
         self.env = env;
         self.user_func_params = user_func_params;
         self.impl_method_uids = impl_method_uids;
         self.function_ids_by_name = function_ids_by_name;
+        self.traits = traits;
+        self.trait_impls = trait_impls;
+        self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
+        self.tyvar_bounds = tyvar_bounds;
         Ok(typed)
     }
 
@@ -254,6 +575,10 @@ impl ScarSession {
             user_func_params: self.user_func_params.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
+            traits: self.traits.clone(),
+            trait_impls: self.trait_impls.clone(),
+            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
+            tyvar_bounds: self.tyvar_bounds.clone(),
         }
     }
 
@@ -262,10 +587,17 @@ impl ScarSession {
         self.user_func_params = checkpoint.user_func_params;
         self.impl_method_uids = checkpoint.impl_method_uids;
         self.function_ids_by_name = checkpoint.function_ids_by_name;
+        self.traits = checkpoint.traits;
+        self.trait_impls = checkpoint.trait_impls;
+        self.trait_methods_by_qualified_name = checkpoint.trait_methods_by_qualified_name;
+        self.tyvar_bounds = checkpoint.tyvar_bounds;
     }
 
     pub fn ensure_next_fun_idx_at_least(&mut self, next_fun_idx: u32) {
-        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+        // REPL runtime is the source of truth for currently materialized
+        // function indices. Keep Scar aligned exactly so newly inferred
+        // callable indices continue to match VM function entries.
+        self.env.next_fun_idx = next_fun_idx;
     }
 }
 
@@ -280,13 +612,19 @@ struct Checker {
     function_return_ty: Option<Ty>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
+    closure_depth: usize,
+    lens_bindings: HashMap<u32, TypedLensPath>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     substitutions: HashMap<u32, Ty>,
-    source_rules: SourceRules,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
+    runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
 }
 
 impl Checker {
@@ -296,13 +634,19 @@ impl Checker {
             function_return_ty: None,
             current_function_symbol: None,
             current_impl_struct_target: None,
+            closure_depth: 0,
+            lens_bindings: HashMap::new(),
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
             substitutions: HashMap::new(),
-            source_rules: context.source_rules,
+            tyvar_bounds: HashMap::new(),
+            runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             seen_builtin_type_decls: HashMap::new(),
+            traits: HashMap::new(),
+            trait_impls: HashMap::new(),
+            trait_methods_by_qualified_name: HashMap::new(),
         }
     }
 
@@ -311,6 +655,10 @@ impl Checker {
         user_func_params: HashMap<u32, Vec<String>>,
         impl_method_uids: HashMap<String, u32>,
         function_ids_by_name: HashMap<String, ResolvedId>,
+        traits: HashMap<String, TraitInfo>,
+        trait_impls: HashMap<(String, String), TraitImplInfo>,
+        trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+        tyvar_bounds: HashMap<u32, Vec<String>>,
         context: TypecheckContext,
     ) -> Self {
         Self {
@@ -318,13 +666,19 @@ impl Checker {
             function_return_ty: None,
             current_function_symbol: None,
             current_impl_struct_target: None,
+            closure_depth: 0,
+            lens_bindings: HashMap::new(),
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
             substitutions: HashMap::new(),
-            source_rules: context.source_rules,
+            tyvar_bounds,
+            runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             seen_builtin_type_decls: HashMap::new(),
+            traits,
+            trait_impls,
+            trait_methods_by_qualified_name,
         }
     }
 
@@ -334,14 +688,20 @@ impl Checker {
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
+            self.traits.clone(),
+            self.trait_impls.clone(),
+            self.trait_methods_by_qualified_name.clone(),
+            self.tyvar_bounds.clone(),
             TypecheckContext {
-                source_rules: self.source_rules.clone(),
+                runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
+        checker.closure_depth = self.closure_depth;
+        checker.lens_bindings = self.lens_bindings.clone();
         checker.impl_method_uids = self.impl_method_uids.clone();
         checker.function_ids_by_name = self.function_ids_by_name.clone();
         checker.substitutions = self.substitutions.clone();
@@ -351,10 +711,14 @@ impl Checker {
 
     fn absorb_child_progress(&mut self, child: &Checker) {
         self.substitutions = child.substitutions.clone();
+        self.tyvar_bounds = child.tyvar_bounds.clone();
         self.env.next_tyvar = self.env.next_tyvar.max(child.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(child.env.next_tag);
         self.seen_builtin_type_decls = child.seen_builtin_type_decls.clone();
         self.impl_method_uids = child.impl_method_uids.clone();
+        self.traits = child.traits.clone();
+        self.trait_impls = child.trait_impls.clone();
+        self.trait_methods_by_qualified_name = child.trait_methods_by_qualified_name.clone();
     }
 
     fn into_parts(self) -> CheckerParts {
@@ -363,20 +727,31 @@ impl Checker {
             user_func_params: self.user_func_params,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
+            traits: self.traits,
+            trait_impls: self.trait_impls,
+            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
+            tyvar_bounds: self.tyvar_bounds,
         }
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
         self.predeclare_error_types(&stmts);
         self.predeclare_type_signatures(&stmts)?;
+        self.predeclare_traits(&stmts)?;
         self.predeclare_functions(&stmts)?;
         self.ensure_struct_impl_new_contract(&stmts)?;
         let mut typed = Vec::new();
         for stmt in stmts {
+            if let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) = &stmt {
+                let nodes =
+                    self.check_trait_impl_items(span, trait_id, trait_args, target_ty, methods)?;
+                typed.extend(nodes.into_iter().map(|node| self.resolve_typed_node(node)));
+                continue;
+            }
             let node = self.check_node(&stmt)?;
             typed.push(self.resolve_typed_node(node));
         }
         self.ensure_builtin_type_contracts()?;
-        Ok(typed)
+        self.specialize_program(typed)
     }
 }

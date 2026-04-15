@@ -1,0 +1,2 @@
+phase: parse
+contains: Trailing block sugar is not supported for constructor calls

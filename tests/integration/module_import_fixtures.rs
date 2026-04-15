@@ -1,254 +1,89 @@
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
-use xldr::ModuleInput;
 
+mod common;
 mod support;
+use common::{
+    extract_phase_tag, module_compile_error_fixtures, module_spec_fixtures, normalize_text,
+    parse_compile_error_expectation, repo_root, surtr_bin, unique_temp_dir, ModuleFixtureCase,
+};
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("failed to resolve repository root")
-}
-
-fn normalize_text(text: &str) -> String {
-    text.replace("\r\n", "\n").trim_end().to_string()
-}
-
-fn surtr_bin() -> String {
-    if let Ok(path) = env::var("CARGO_BIN_EXE_surtr") {
-        return path;
-    }
-
-    let mut path = env::current_exe().expect("failed to locate current test executable");
-    path.pop();
-    path.pop();
-    path.push("surtr");
-    if cfg!(windows) {
-        path.set_extension("exe");
-    }
-    assert!(
-        path.exists(),
-        "surtr binary not found at {}",
-        path.display()
-    );
-    path.to_string_lossy().into_owned()
-}
-
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be after unix epoch")
-        .as_nanos();
-    let dir = env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), nanos));
-    fs::create_dir_all(&dir).expect("failed to create temp dir");
-    dir
-}
-
-#[derive(Debug)]
-struct CompileErrorExpectation {
-    phase: Option<String>,
-    contains: Vec<String>,
-}
-
-fn parse_compile_error_expectation(path: &Path) -> CompileErrorExpectation {
-    let content = fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-    let mut phase = None;
-    let mut contains = Vec::new();
-
-    for raw in content.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("phase:") {
-            phase = Some(rest.trim().to_string());
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("contains:") {
-            contains.push(rest.trim().to_string());
-            continue;
-        }
-        panic!(
-            "invalid compile error expectation line in {}: {}",
-            path.display(),
-            line
-        );
-    }
-
-    CompileErrorExpectation { phase, contains }
-}
-
-fn extract_phase_tag(message: &str) -> Option<&str> {
-    message
-        .strip_prefix("phase=")
-        .and_then(|rest| rest.split_once(';').map(|(phase, _)| phase))
-}
-
-fn sorted_entries(dir: &Path) -> Vec<PathBuf> {
-    let mut entries = fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", dir.display(), e))
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .collect::<Vec<_>>();
-    entries.sort();
-    entries
-}
-
-fn case_dirs(root: &Path) -> Vec<PathBuf> {
-    sorted_entries(root)
-        .into_iter()
-        .filter(|path| path.is_dir())
-        .collect()
-}
-
-fn module_path_from_fixture_file(path: &Path) -> String {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_else(|| panic!("module file stem must be valid utf-8: {}", path.display()))
-        .replace("__", "::")
-}
-
-fn collect_module_input_stages(case_dir: &Path) -> Vec<Vec<ModuleInput>> {
-    let explicit_stage_dirs = sorted_entries(case_dir)
-        .into_iter()
-        .filter(|path| {
-            path.is_dir()
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("stage"))
-        })
-        .collect::<Vec<_>>();
-
-    if explicit_stage_dirs.is_empty() {
-        let stage = sorted_entries(case_dir)
-            .into_iter()
-            .filter(|path| {
-                path.is_file()
-                    && path.extension().and_then(|ext| ext.to_str()) == Some("srt")
-                    && path.file_name().and_then(|name| name.to_str()) != Some("entry.srt")
-            })
-            .map(|path| ModuleInput {
-                file_name: path.to_string_lossy().into_owned(),
-                source: fs::read_to_string(&path)
-                    .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e)),
-                module_path: module_path_from_fixture_file(&path),
-            })
-            .collect::<Vec<_>>();
-
-        if stage.is_empty() {
-            Vec::new()
-        } else {
-            vec![stage]
-        }
-    } else {
-        explicit_stage_dirs
-            .into_iter()
-            .map(|stage_dir| {
-                sorted_entries(&stage_dir)
-                    .into_iter()
-                    .filter(|path| {
-                        path.is_file()
-                            && path.extension().and_then(|ext| ext.to_str()) == Some("srt")
-                    })
-                    .map(|path| ModuleInput {
-                        file_name: path.to_string_lossy().into_owned(),
-                        source: fs::read_to_string(&path)
-                            .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e)),
-                        module_path: module_path_from_fixture_file(&path),
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    }
-}
-
-fn compile_multi_source_case(case_dir: &Path) -> Result<forge::bytecode::Bytecode, String> {
-    let entry_path = case_dir.join("entry.srt");
-    let entry_source = fs::read_to_string(&entry_path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", entry_path.display(), e));
-    let module_stages = collect_module_input_stages(case_dir);
-
-    let module_sources = support::collect_module_sources(&module_stages)?;
+fn compile_multi_source_case(
+    case: &ModuleFixtureCase,
+) -> Result<forge::bytecode::Bytecode, String> {
+    let module_sources = support::collect_module_sources(&case.module_stages)?;
     let compile_sources = support::compose_script_sources(
-        &entry_path.to_string_lossy(),
-        &entry_source,
+        &case.entry_path.to_string_lossy(),
+        case.entry_source,
         module_sources,
     );
 
     support::compile_script_sources(&compile_sources)
 }
 
-fn run_multi_source_case(case_dir: &Path) -> Result<Vec<String>, String> {
-    let bytecode = compile_multi_source_case(case_dir)?;
+fn run_multi_source_case(case: &ModuleFixtureCase) -> Result<Vec<String>, String> {
+    let bytecode = compile_multi_source_case(case)?;
     let mut vm = eldr::VM::new(bytecode).with_output_capture();
     vm.run()
         .map_err(|e| format!("phase=runtime; message={}", e))?;
     Ok(vm.output.unwrap_or_default())
 }
 
-#[test]
-fn module_spec_fixtures_match_expected_stdout_via_loader() {
-    let spec_root = repo_root().join("tests/spec/modules");
-    let cases = case_dirs(&spec_root);
+fn run_module_spec_bucket(bucket: usize, bucket_count: usize) {
+    let cases = module_spec_fixtures()
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| index % bucket_count == bucket)
+        .map(|(_, fixture)| fixture)
+        .collect::<Vec<_>>();
     assert!(
         !cases.is_empty(),
-        "no module spec fixture directories found under {}",
-        spec_root.display()
+        "no module spec cases assigned to bucket {} of {}",
+        bucket,
+        bucket_count
     );
 
-    for case_dir in cases {
-        let expected_path = case_dir.join("entry.expected");
-        assert!(
-            expected_path.exists(),
-            "missing entry.expected for {}",
-            case_dir.display()
-        );
-
-        let expected = fs::read_to_string(&expected_path)
-            .unwrap_or_else(|e| panic!("failed to read {}: {}", expected_path.display(), e));
-        let output = run_multi_source_case(&case_dir)
-            .unwrap_or_else(|e| panic!("pipeline failed for {}: {}", case_dir.display(), e));
+    for fixture in cases {
+        let output = run_multi_source_case(&fixture.case).unwrap_or_else(|e| {
+            panic!(
+                "pipeline failed for {}: {}",
+                fixture.case.case_dir.display(),
+                e
+            )
+        });
         let actual_stdout = output.join("\n");
         assert_eq!(
             normalize_text(&actual_stdout),
-            normalize_text(&expected),
+            normalize_text(fixture.expected),
             "stdout mismatch for {}",
-            case_dir.display()
+            fixture.case.case_dir.display()
         );
     }
 }
 
-#[test]
-fn module_compile_error_fixtures_match_expectations_via_loader() {
-    let error_root = repo_root().join("tests/compile_errors/modules");
-    let cases = case_dirs(&error_root);
+fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
+    let cases = module_compile_error_fixtures()
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| index % bucket_count == bucket)
+        .map(|(_, fixture)| fixture)
+        .collect::<Vec<_>>();
     assert!(
         !cases.is_empty(),
-        "no module compile-error fixture directories found under {}",
-        error_root.display()
+        "no module compile-error cases assigned to bucket {} of {}",
+        bucket,
+        bucket_count
     );
 
-    for case_dir in cases {
-        let error_path = case_dir.join("entry.error");
-        assert!(
-            error_path.exists(),
-            "missing entry.error for {}",
-            case_dir.display()
-        );
-
-        let expected = parse_compile_error_expectation(&error_path);
-        let result = compile_multi_source_case(&case_dir);
+    for fixture in cases {
+        let expected = parse_compile_error_expectation(&fixture.error_path);
+        let result = compile_multi_source_case(&fixture.case);
         match result {
             Ok(_) => panic!(
                 "expected compile failure but succeeded: {}",
-                case_dir.display()
+                fixture.case.case_dir.display()
             ),
             Err(msg) => {
                 if let Some(expected_phase) = expected.phase.as_deref() {
@@ -257,7 +92,7 @@ fn module_compile_error_fixtures_match_expectations_via_loader() {
                         actual_phase,
                         expected_phase,
                         "phase mismatch for {}",
-                        case_dir.display()
+                        fixture.case.case_dir.display()
                     );
                 }
                 for needle in &expected.contains {
@@ -265,13 +100,53 @@ fn module_compile_error_fixtures_match_expectations_via_loader() {
                         msg.contains(needle),
                         "expected '{}' in error for {}\nactual: {}",
                         needle,
-                        case_dir.display(),
+                        fixture.case.case_dir.display(),
                         msg
                     );
                 }
             }
         }
     }
+}
+
+#[test]
+fn module_spec_fixtures_bucket_0() {
+    run_module_spec_bucket(0, 4);
+}
+
+#[test]
+fn module_spec_fixtures_bucket_1() {
+    run_module_spec_bucket(1, 4);
+}
+
+#[test]
+fn module_spec_fixtures_bucket_2() {
+    run_module_spec_bucket(2, 4);
+}
+
+#[test]
+fn module_spec_fixtures_bucket_3() {
+    run_module_spec_bucket(3, 4);
+}
+
+#[test]
+fn module_compile_error_fixtures_bucket_0() {
+    run_module_compile_error_bucket(0, 4);
+}
+
+#[test]
+fn module_compile_error_fixtures_bucket_1() {
+    run_module_compile_error_bucket(1, 4);
+}
+
+#[test]
+fn module_compile_error_fixtures_bucket_2() {
+    run_module_compile_error_bucket(2, 4);
+}
+
+#[test]
+fn module_compile_error_fixtures_bucket_3() {
+    run_module_compile_error_bucket(3, 4);
 }
 
 #[test]
@@ -301,9 +176,20 @@ fn direct_module_file_compiles_without_module_resolution_stub_error() {
 
 #[test]
 fn dump_includes_qualified_function_names_for_module_defined_functions() {
-    let case_dir = repo_root().join("tests/spec/modules/qualified_name_without_import");
-    let bytecode = compile_multi_source_case(&case_dir)
-        .unwrap_or_else(|e| panic!("pipeline failed for {}: {}", case_dir.display(), e));
+    let fixture = module_spec_fixtures()
+        .into_iter()
+        .find(|fixture| {
+            fixture.case.case_dir
+                == repo_root().join("tests/spec/modules/qualified_name_without_import")
+        })
+        .expect("qualified_name_without_import fixture should exist");
+    let bytecode = compile_multi_source_case(&fixture.case).unwrap_or_else(|e| {
+        panic!(
+            "pipeline failed for {}: {}",
+            fixture.case.case_dir.display(),
+            e
+        )
+    });
 
     let temp = unique_temp_dir("surtr_dump_module_qualified_names");
     let eldr_path = temp.join("module_sample.eldr");

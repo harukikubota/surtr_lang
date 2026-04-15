@@ -1,13 +1,11 @@
-use spire::token::Token;
-
 mod loader;
 pub mod repl;
 pub mod tui;
 
 pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
-    collect_module_sources_with_module_file_stages, collect_module_sources_with_module_stages,
-    collect_module_sources_with_modules, collect_module_sources_with_std_module_stages,
+    collect_module_sources_with_extra_std_sources, collect_module_sources_with_module_file_stages,
+    collect_module_sources_with_module_stages, collect_module_sources_with_modules,
     compose_script_compile_sources, derive_primary_module_path, is_default_std_module_file_name,
     is_default_std_module_path, script_pseudo_module_path, CompileSources, LoadError, ModuleInput,
     ModuleSources, SourceDescriptor, SourceKind, StagedModule,
@@ -16,6 +14,7 @@ pub use loader::{
 pub use repl::logic::core::{EldrLoadError, ReplEngine};
 pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
 use sindr::ir::{DocEntry, DocKind};
+use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 // ── Public types used by other crates ────────────────────────────────────────
 
@@ -25,11 +24,13 @@ pub struct LoweredModuleAst {
     pub ast: Vec<spire::ast::Ast>,
     pub declared_span: Option<spire::ast::Span>,
     pub module_doc: Option<String>,
+    pub auto_import: bool,
 }
 
 fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
     match ty {
         spire::ast::AstTy::Named(_, name) => name.clone(),
+        spire::ast::AstTy::ImplTrait(_, name) => format!("impl {name}"),
         spire::ast::AstTy::Generic(_, name, args) => {
             let args = args
                 .iter()
@@ -37,6 +38,14 @@ fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{name}<{args}>")
+        }
+        spire::ast::AstTy::Tuple(_, items) => {
+            let items = items
+                .iter()
+                .map(format_ast_ty)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({items})")
         }
         spire::ast::AstTy::Func(_, params, ret) => {
             if params.is_empty() {
@@ -53,19 +62,37 @@ fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
     }
 }
 
+fn format_type_params(type_params: &[spire::ast::TypeParam]) -> String {
+    if type_params.is_empty() {
+        String::new()
+    } else {
+        let params = type_params
+            .iter()
+            .map(|param| match &param.bound {
+                Some(bound) => format!("${}: {}", param.name, bound),
+                None => format!("${}", param.name),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("<{params}>")
+    }
+}
+
 fn format_fun_signature(
     name: &str,
+    type_params: &[spire::ast::TypeParam],
     params: &[spire::ast::FunParam],
     ret_ty: &Option<spire::ast::AstTy>,
 ) -> String {
+    let type_params = format_type_params(type_params);
     let params = params
         .iter()
         .map(|param| format!("{}: {}", param.name, format_ast_ty(&param.ty)))
         .collect::<Vec<_>>()
         .join(", ");
     match ret_ty {
-        Some(ret) => format!("{name}({params}) -> {}", format_ast_ty(ret)),
-        None => format!("{name}({params})"),
+        Some(ret) => format!("{name}{type_params}({params}) -> {}", format_ast_ty(ret)),
+        None => format!("{name}{type_params}({params})"),
     }
 }
 
@@ -141,13 +168,13 @@ fn collect_doc_entries_for_ast(
 ) {
     for stmt in ast {
         match stmt {
-            spire::ast::Ast::Def(_, name, params, ret_ty, _, attrs) => {
+            spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
                         module_path: module_path.to_string(),
-                        signature: Some(format_fun_signature(name, params, ret_ty)),
+                        signature: Some(format_fun_signature(name, type_params, params, ret_ty)),
                         doc: doc.clone(),
                     });
                 }
@@ -158,7 +185,34 @@ fn collect_doc_entries_for_ast(
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
                         module_path: module_path.to_string(),
-                        signature: Some(format_fun_signature(name, params, ret_ty)),
+                        signature: Some(format_fun_signature(name, &[], params, ret_ty)),
+                        doc: doc.clone(),
+                    });
+                }
+            }
+            spire::ast::Ast::TraitDef(_, name, _type_params, methods, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, name),
+                        kind: DocKind::Type,
+                        module_path: module_path.to_string(),
+                        signature: Some(format!(
+                            "trait {} {{ {} }}",
+                            name,
+                            methods
+                                .iter()
+                                .map(|method| format!(
+                                    "{}",
+                                    format_fun_signature(
+                                        &method.name,
+                                        &method.type_params,
+                                        &method.params,
+                                        &Some(method.ret_ty.clone()),
+                                    )
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
                         doc: doc.clone(),
                     });
                 }
@@ -285,44 +339,39 @@ impl ModuleStageParseError {
     }
 }
 
-pub fn derive_source_rules(
-    compile_unit_kind: spire::CompileUnitKind,
+pub fn derive_parse_rules(source_kind: SourceKind) -> spire::ParseRules {
+    match source_kind {
+        SourceKind::Script => spire::ParseRules::script(),
+        SourceKind::Module => spire::ParseRules::module(),
+        SourceKind::StdModule => spire::ParseRules::std_module(),
+        SourceKind::ReplChunk => spire::ParseRules::repl_chunk(),
+    }
+}
+
+pub fn derive_runtime_policy(
+    compile_unit_kind: CompileUnitKind,
     source_kind: SourceKind,
-    entrypoint: Option<&spire::EntryPoint>,
-) -> spire::SourceRules {
-    // SourceKind controls the syntactic boundary (`@@builtin`, top-level expr,
-    // etc.), while CompileUnitKind refines runtime-only rules such as where
-    // `set_exit_code` is legal in project builds.
+    entrypoint: Option<&EntryPoint>,
+) -> RuntimeSourcePolicy {
     let base = match source_kind {
-        SourceKind::Script => spire::SourceRules::script(),
-        SourceKind::Module => spire::SourceRules::module(),
-        SourceKind::StdModule => spire::SourceRules::std_module(),
-        SourceKind::ReplChunk => spire::SourceRules::repl_chunk(),
+        SourceKind::Script => RuntimeSourcePolicy::script(),
+        SourceKind::Module => RuntimeSourcePolicy::module(),
+        SourceKind::StdModule => RuntimeSourcePolicy::std_module(),
+        SourceKind::ReplChunk => RuntimeSourcePolicy::repl_chunk(),
     };
 
     let policy = match source_kind {
-        SourceKind::Script => spire::SetExitCodePolicy::Anywhere,
-        SourceKind::ReplChunk => spire::SetExitCodePolicy::Forbidden,
+        SourceKind::Script => ExitCodePolicy::Anywhere,
+        SourceKind::ReplChunk => ExitCodePolicy::Forbidden,
         SourceKind::Module | SourceKind::StdModule
-            if compile_unit_kind == spire::CompileUnitKind::Project =>
+            if compile_unit_kind == CompileUnitKind::Project =>
         {
-            spire::SetExitCodePolicy::EntryOnly
+            ExitCodePolicy::EntryOnly
         }
-        SourceKind::Module | SourceKind::StdModule => spire::SetExitCodePolicy::Forbidden,
+        SourceKind::Module | SourceKind::StdModule => ExitCodePolicy::Forbidden,
     };
 
-    base.with_set_exit_code_policy(policy, entrypoint)
-}
-
-fn erase_non_newline_span(chars: &mut [char], start: usize, end: usize) {
-    let len = chars.len();
-    let capped_end = end.min(len);
-    let capped_start = start.min(len);
-    for ch in chars.iter_mut().take(capped_end).skip(capped_start) {
-        if *ch != '\n' {
-            *ch = ' ';
-        }
-    }
+    base.with_exit_code_policy(policy, entrypoint)
 }
 
 /// Strip `@@test <expr>` annotations while preserving source span offsets.
@@ -330,34 +379,7 @@ fn erase_non_newline_span(chars: &mut [char], start: usize, end: usize) {
 /// The parser does not need to process `@@test` in normal compilation flows.
 /// Replacing characters with spaces keeps diagnostics line/column stable.
 pub fn strip_test_annotations(source: &str) -> String {
-    let tokens = match spire::lexer::tokenize(source) {
-        Ok(tokens) => tokens,
-        Err(_) => return source.to_string(),
-    };
-
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut i = 0usize;
-    while i < tokens.len() {
-        if let Token::Annotator(name) = &tokens[i].token {
-            if name == "test" {
-                let mut j = i + 1;
-                while j < tokens.len() && !matches!(tokens[j].token, Token::Newline | Token::Eof) {
-                    j += 1;
-                }
-                let end = if j > i + 1 {
-                    tokens[j - 1].span.end
-                } else {
-                    tokens[i].span.end
-                };
-                erase_non_newline_span(&mut chars, tokens[i].span.start, end);
-                i = j;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    chars.into_iter().collect::<String>()
+    spire::strip_test_annotations(source)
 }
 
 pub fn lower_module_source_ast(
@@ -386,6 +408,7 @@ pub fn lower_module_source_ast(
                     ast: module_ast,
                     declared_span: Some(span),
                     module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
                 });
             }
             spire::ast::Ast::Import(_, _, _) => {}
@@ -436,6 +459,7 @@ pub fn lower_module_source_ast(
                 ast: shared_ast,
                 declared_span: None,
                 module_doc: None,
+                auto_import: false,
             });
         }
     }
@@ -448,6 +472,7 @@ pub fn lower_module_source_ast(
             ast: shared_ast,
             declared_span: None,
             module_doc: None,
+            auto_import: false,
         });
     }
 
@@ -456,7 +481,7 @@ pub fn lower_module_source_ast(
 
 pub fn parse_module_stages_from_compile_sources(
     compile_sources: &CompileSources,
-    compile_unit_kind: spire::CompileUnitKind,
+    compile_unit_kind: CompileUnitKind,
 ) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
     repl::logic::core::parse_module_stages_from_sources(
         &compile_sources.sources,
@@ -512,7 +537,7 @@ defmod B {
 defmod Result {
   def dummy() { () }
 }"#,
-            spire::ParserContext::module(1, None).with_rules(spire::SourceRules::std_module()),
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
         .expect("std module source should parse");
 
@@ -523,7 +548,7 @@ defmod Result {
             |stmt| matches!(stmt, spire::ast::Ast::ResultCtorDecl(_, name, _, _, _) if name == "Ok")
         ));
         assert!(lowered[0].ast.iter().any(
-            |stmt| matches!(stmt, spire::ast::Ast::Def(_, name, _, _, _, _) if name == "dummy")
+            |stmt| matches!(stmt, spire::ast::Ast::Def(_, name, _, _, _, _, _) if name == "dummy")
         ));
     }
 
@@ -536,7 +561,7 @@ defmod Result {
 defmod Int {
   def dummy() { () }
 }"#,
-            spire::ParserContext::module(1, None).with_rules(spire::SourceRules::std_module()),
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
         .expect("std module source should parse");
 
@@ -563,7 +588,7 @@ defmod Int {
 
 @@doc """Missing value."""
 deferror NoneError { "None Value." }"#,
-            spire::ParserContext::module(1, None).with_rules(spire::SourceRules::std_module()),
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
         .expect("std module source should parse");
 
@@ -574,6 +599,7 @@ deferror NoneError { "None Value." }"#,
                 module_path: module.module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
+                auto_import: module.auto_import,
             })
             .collect::<Vec<_>>()];
 
@@ -603,11 +629,9 @@ deferror NoneError { "None Value." }"#,
         let compile_sources =
             compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
 
-        let err = parse_module_stages_from_compile_sources(
-            &compile_sources,
-            spire::CompileUnitKind::Script,
-        )
-        .expect_err("duplicate defmod path must fail");
+        let err =
+            parse_module_stages_from_compile_sources(&compile_sources, CompileUnitKind::Script)
+                .expect_err("duplicate defmod path must fail");
         assert!(matches!(
             err.kind,
             ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Shared"

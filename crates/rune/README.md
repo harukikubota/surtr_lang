@@ -18,7 +18,7 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 
 ```bash
 surtr --version
-surtr run <file.srt|file.eldr>
+surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always]
 surtr repl [--quiet] [--banner] [--version]
 surtr build <file.srt> [output.eldr]
 surtr dump <file.eldr> [--format json]

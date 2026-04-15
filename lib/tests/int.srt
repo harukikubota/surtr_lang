@@ -1,0 +1,258 @@
+import Int::{
+  bit_and,
+  bit_or,
+  bit_xor,
+  bit_not,
+  test_bit,
+  set_bit,
+  clear_bit,
+  toggle_bit,
+  width_bits,
+  mask,
+  wrap_unsigned,
+  wrap_signed,
+  bit_not_in,
+  test_bit_in,
+  set_bit_in,
+  clear_bit_in,
+  toggle_bit_in,
+  shl_in,
+  shr_logical_in,
+  rotl_in,
+  rotr_in,
+  shl,
+  shr,
+};
+import Test;
+
+test("Int") {
+  describe("bit_and") {
+    it("combines shared bits") { assert_eq(2, bit_and(6, 3)) }
+  }
+
+  describe("bit_or") {
+    it("combines any set bit") { assert_eq(7, bit_or(6, 3)) }
+  }
+
+  describe("bit_xor") {
+    it("keeps differing bits") { assert_eq(5, bit_xor(6, 3)) }
+  }
+
+  describe("bit_not") {
+    it("inverts zero") { assert_eq(-1, bit_not(0)) }
+    it("inverts positive values") { assert_eq(-7, bit_not(6)) }
+  }
+
+  describe("test_bit") {
+    it("reads the lowest bit") { assert_eq("Ok(True)", inspect(test_bit(5, 0))) }
+    it("reads a cleared bit") { assert_eq("Ok(False)", inspect(test_bit(5, 1))) }
+    it("reads a higher set bit") { assert_eq("Ok(True)", inspect(test_bit(5, 2))) }
+    it("rejects negative indexes") {
+      assert_eq(
+        "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))",
+        inspect(test_bit(5, -1)),
+      )
+    }
+  }
+
+  describe("set_bit") {
+    it("sets a bit") { assert_eq("Ok(2)", inspect(set_bit(0, 1))) }
+    it("rejects negative indexes") {
+      assert_eq(
+        "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))",
+        inspect(set_bit(5, -1)),
+      )
+    }
+  }
+
+  describe("clear_bit") {
+    it("clears a bit") { assert_eq("Ok(5)", inspect(clear_bit(7, 1))) }
+    it("rejects negative indexes") {
+      assert_eq(
+        "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))",
+        inspect(clear_bit(5, -1)),
+      )
+    }
+  }
+
+  describe("toggle_bit") {
+    it("toggles a bit") { assert_eq("Ok(4)", inspect(toggle_bit(5, 0))) }
+    it("rejects negative indexes") {
+      assert_eq(
+        "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))",
+        inspect(toggle_bit(5, -1)),
+      )
+    }
+  }
+
+  describe("width_bits") {
+    it("returns named widths") { assert_eq("Ok(8)", inspect(width_bits(BitWidth::W8))) }
+    it("returns custom widths") { assert_eq("Ok(24)", inspect(width_bits(BitWidth::Any(24)))) }
+    it("rejects non-positive custom widths") {
+      assert_eq(
+        "Err(InvalidBitWidth(\"bit width must be positive: 0\"))",
+        inspect(width_bits(BitWidth::Any(0))),
+      )
+    }
+  }
+
+  describe("mask") {
+    it("builds a W8 mask") { assert_eq("Ok(255)", inspect(mask(BitWidth::W8))) }
+    it("builds a custom-width mask") { assert_eq("Ok(31)", inspect(mask(BitWidth::Any(5)))) }
+  }
+
+  describe("wrap_unsigned") {
+    it("wraps negative values") {
+      assert_eq("Ok(255)", inspect(wrap_unsigned(-1, BitWidth::W8)))
+    }
+
+    it("wraps overflowing values") {
+      assert_eq("Ok(4)", inspect(wrap_unsigned(260, BitWidth::W8)))
+    }
+  }
+
+  describe("wrap_signed") {
+    it("wraps into signed range") {
+      assert_eq("Ok(-1)", inspect(wrap_signed(255, BitWidth::W8)))
+    }
+
+    it("wraps positive values with sign bit set") {
+      assert_eq("Ok(-127)", inspect(wrap_signed(129, BitWidth::W8)))
+    }
+  }
+
+  describe("bit_not_in") {
+    it("inverts within W8") {
+      assert_eq("Ok(249)", inspect(bit_not_in(6, BitWidth::W8)))
+    }
+
+    it("inverts within custom width") {
+      assert_eq("Ok(30)", inspect(bit_not_in(1, BitWidth::Any(5))))
+    }
+  }
+
+  describe("test_bit_in") {
+    it("reads an in-range fixed-width bit") {
+      assert_eq("Ok(True)", inspect(test_bit_in(5, 2, BitWidth::W8)))
+    }
+
+    it("rejects out-of-range indexes") {
+      assert_eq(
+        "Err(BitIndexOutOfRange(\"bit index 8 out of range for width 8\"))",
+        inspect(test_bit_in(5, 8, BitWidth::W8)),
+      )
+    }
+  }
+
+  describe("set_bit_in") {
+    it("sets an in-range bit") {
+      assert_eq("Ok(2)", inspect(set_bit_in(0, 1, BitWidth::W8)))
+    }
+
+    it("rejects negative indexes") {
+      assert_eq(
+        "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))",
+        inspect(set_bit_in(0, -1, BitWidth::W8)),
+      )
+    }
+  }
+
+  describe("clear_bit_in") {
+    it("clears an in-range bit") {
+      assert_eq("Ok(5)", inspect(clear_bit_in(7, 1, BitWidth::W8)))
+    }
+
+    it("rejects out-of-range indexes") {
+      assert_eq(
+        "Err(BitIndexOutOfRange(\"bit index 8 out of range for width 8\"))",
+        inspect(clear_bit_in(0, 8, BitWidth::W8)),
+      )
+    }
+  }
+
+  describe("toggle_bit_in") {
+    it("toggles an in-range bit") {
+      assert_eq("Ok(4)", inspect(toggle_bit_in(5, 0, BitWidth::W8)))
+    }
+
+    it("rejects out-of-range indexes") {
+      assert_eq(
+        "Err(BitIndexOutOfRange(\"bit index 8 out of range for width 8\"))",
+        inspect(toggle_bit_in(5, 8, BitWidth::W8)),
+      )
+    }
+  }
+
+  describe("shl_in") {
+    it("shifts left within width") {
+      assert_eq("Ok(254)", inspect(shl_in(255, 1, BitWidth::W8)))
+    }
+
+    it("rejects negative shifts") {
+      assert_eq(
+        "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))",
+        inspect(shl_in(1, -1, BitWidth::W8)),
+      )
+    }
+  }
+
+  describe("shr_logical_in") {
+    it("shifts logically within width") {
+      assert_eq("Ok(127)", inspect(shr_logical_in(-1, 1, BitWidth::W8)))
+    }
+
+    it("rejects negative shifts") {
+      assert_eq(
+        "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))",
+        inspect(shr_logical_in(1, -1, BitWidth::W8)),
+      )
+    }
+  }
+
+  describe("rotl_in") {
+    it("rotates left within W8") {
+      assert_eq("Ok(3)", inspect(rotl_in(129, 1, BitWidth::W8)))
+    }
+
+    it("rotates left within custom widths") {
+      assert_eq("Ok(3)", inspect(rotl_in(17, 1, BitWidth::Any(5))))
+    }
+  }
+
+  describe("rotr_in") {
+    it("rotates right within W8") {
+      assert_eq("Ok(192)", inspect(rotr_in(129, 1, BitWidth::W8)))
+    }
+
+    it("rejects negative shifts") {
+      assert_eq(
+        "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))",
+        inspect(rotr_in(1, -1, BitWidth::W8)),
+      )
+    }
+  }
+
+  describe("shl") {
+    it("shifts by one") { assert_eq("Ok(2)", inspect(shl(1, 1))) }
+    it("shifts by several bits") { assert_eq("Ok(16)", inspect(shl(1, 4))) }
+    it("shifts larger numbers") { assert_eq("Ok(32)", inspect(shl(8, 2))) }
+    it("rejects negative shifts") {
+      assert_eq(
+        "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))",
+        inspect(shl(1, -1)),
+      )
+    }
+  }
+
+  describe("shr") {
+    it("shifts down by one") { assert_eq("Ok(0)", inspect(shr(1, 1))) }
+    it("shifts down by several bits") { assert_eq("Ok(4)", inspect(shr(16, 2))) }
+    it("shifts large powers") { assert_eq("Ok(1)", inspect(shr(1024, 10))) }
+    it("rejects negative shifts") {
+      assert_eq(
+        "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))",
+        inspect(shr(1, -1)),
+      )
+    }
+  }
+}

@@ -12,11 +12,18 @@ pub enum Ty {
     /// `List<T>`
     List(Box<Ty>),
 
-    /// MatchBlock-only heterogenous payload, represented at runtime as a list.
-    Seq(Vec<Ty>),
+    /// Tuple `(A, B, ...)`
+    Tuple(Vec<Ty>),
 
     /// Generic function type: `(params) -> ret`
     Func(Vec<Ty>, Box<Ty>),
+
+    /// Compiler-reserved target-type witness used only in restricted trait
+    /// method parameter positions such as `From<$To>::from(_, TypeRef<$To>)`.
+    TypeRef(Box<Ty>),
+
+    /// Compiler-managed lens path capability: `Lens<S, A>`
+    Lens(Box<Ty>, Box<Ty>),
 
     /// Built-in function with a known name (for codegen dispatch)
     BuiltinFunc {

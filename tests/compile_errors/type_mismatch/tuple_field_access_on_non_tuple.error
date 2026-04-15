@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Tuple-style access ._0 is only available on tuples

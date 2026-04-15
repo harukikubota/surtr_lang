@@ -1,0 +1,3 @@
+print(from(42, String))
+print(inspect(try_from("True", Boolean)))
+print(inspect(try_from("42", Int)))

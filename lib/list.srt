@@ -48,7 +48,7 @@ defmod List {
   def last(values: List<$A>) -> Result<$A, NoneError> {
     match values {
       [] => Err(NoneError),
-      [head, ..tail] => Ok(List::_last_go(head, tail)),
+      [head, ..tail] => Ok(_last_go(head, tail)),
     }
   }
 
@@ -59,35 +59,71 @@ defmod List {
   """
   @@builtin def len(values: List<$A>) -> Int
 
-  def _list_reverse_go(values: List<$A>, acc: List<$A>) -> List<$A> {
+  defp _list_reverse_go(values: List<$A>, acc: List<$A>) -> List<$A> {
     match values {
       [] => acc,
-      [head, ..tail] => List::_list_reverse_go(tail, List::cons(head, acc)),
+      [head, ..tail] => _list_reverse_go(tail, cons(head, acc)),
     }
   }
 
-  def _append_reverse(values: List<$A>, acc: List<$A>) -> List<$A> {
+  defp _append_reverse(values: List<$A>, acc: List<$A>) -> List<$A> {
     match values {
       [] => acc,
-      [head, ..tail] => List::_append_reverse(tail, List::cons(head, acc)),
+      [head, ..tail] => _append_reverse(tail, cons(head, acc)),
     }
   }
 
-  def _index_out_of_bounds(index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
+  defp _index_out_of_bounds(index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
     Err(IndexOutOfBounds("index #{index} out of bounds for len #{len}"))
   }
 
-  def _last_go(current: $A, rest: List<$A>) -> $A {
+  defp _last_go(current: $A, rest: List<$A>) -> $A {
     match rest {
       [] => current,
-      [head, ..tail] => List::_last_go(head, tail),
+      [head, ..tail] => _last_go(head, tail),
     }
   }
 
-  def _at_go(values: List<$A>, index: Int, original_index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
+  defp _at_go(values: List<$A>, index: Int, original_index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
     match values {
-      [] => List::_index_out_of_bounds(original_index, len),
-      [head, ..tail] => if(index == 0, Ok(head), List::_at_go(tail, index - 1, original_index, len)),
+      [] => _index_out_of_bounds(original_index, len),
+      [head, ..tail] => if(index == 0, Ok(head), _at_go(tail, index - 1, original_index, len)),
+    }
+  }
+
+  defp _take_go(values: List<$A>, remaining: Int) -> List<$A> {
+    if(
+      remaining <= 0,
+      [],
+      match values {
+        [] => [],
+        [head, ..tail] => cons(head, _take_go(tail, remaining - 1)),
+      },
+    )
+  }
+
+  defp _drop_go(values: List<$A>, remaining: Int) -> List<$A> {
+    if(
+      remaining <= 0,
+      values,
+      match values {
+        [] => [],
+        [_, ..tail] => _drop_go(tail, remaining - 1),
+      },
+    )
+  }
+
+  defp _partition_go(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    match values {
+      [] => ([], []),
+      [head, ..tail] => {
+        rest = _partition_go(tail, pred)
+        if(
+          pred(head),
+          (cons(head, rest._0), rest._1),
+          (rest._0, cons(head, rest._1)),
+        )
+      },
     }
   }
 
@@ -98,7 +134,7 @@ defmod List {
   def append(left: List<$A>, right: List<$A>) -> List<$A> {
     match left {
       [] => right,
-      [head, ..tail] => List::cons(head, List::append(tail, right)),
+      [head, ..tail] => cons(head, append(tail, right)),
     }
   }
 
@@ -106,9 +142,9 @@ defmod List {
   Map each element to a list and concatenate the results.
   """
   def flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B> {
-    List::reverse(
-      List::reduce(values, [], {|acc, x|
-        List::_append_reverse(f(x), acc)
+    reverse(
+      reduce(values, [], {|acc, x|
+        _append_reverse(f(x), acc)
       }),
     )
   }
@@ -119,7 +155,7 @@ defmod List {
   def concat(values: List<List<$A>>) -> List<$A> {
     match values {
       [] => [],
-      [head, ..tail] => List::append(head, List::concat(tail)),
+      [head, ..tail] => append(head, concat(tail)),
     }
   }
 
@@ -127,7 +163,7 @@ defmod List {
   Reverse the order of a list.
   """
   def reverse(values: List<$A>) -> List<$A> {
-    List::_list_reverse_go(values, [])
+    _list_reverse_go(values, [])
   }
 
   @@doc """
@@ -135,8 +171,8 @@ defmod List {
   Negative indices and out-of-range access return `Err(IndexOutOfBounds(...))`.
   """
   def at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds> {
-    len = List::len(values)
-    if(index < 0, List::_index_out_of_bounds(index, len), List::_at_go(values, index, index, len))
+    value_len = len(values)
+    if(index < 0, _index_out_of_bounds(index, value_len), _at_go(values, index, index, value_len))
   }
 
   @@doc """
@@ -145,7 +181,7 @@ defmod List {
   def reduce(values: List<$A>, init: $B, f: ($B, $A -> $B)) -> $B {
     match values {
       [] => init,
-      [head, ..tail] => List::reduce(tail, f(init, head), f),
+      [head, ..tail] => reduce(tail, f(init, head), f),
     }
   }
 
@@ -156,7 +192,7 @@ defmod List {
     match values {
       [] => init,
       [head, ..tail] => match f(init, head) {
-        ReduceStep::Resume(next) => List::reduce_while(tail, next, f),
+        ReduceStep::Resume(next) => reduce_while(tail, next, f),
         ReduceStep::Stop(done) => done,
       },
     }
@@ -167,9 +203,9 @@ defmod List {
   This matches the semantics of `|*>` on `List`.
   """
   def map(values: List<$A>, f: ($A -> $B)) -> List<$B> {
-    List::reverse(
-      List::reduce(values, [], {|acc, x|
-        List::cons(f(x), acc)
+    reverse(
+      reduce(values, [], {|acc, x|
+        cons(f(x), acc)
       }),
     )
   }
@@ -178,9 +214,9 @@ defmod List {
   Keep only the elements that satisfy `pred`.
   """
   def filter(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
-    List::reverse(
-      List::reduce(values, [], {|acc, x|
-        if(pred(x), List::cons(x, acc), acc)
+    reverse(
+      reduce(values, [], {|acc, x|
+        if(pred(x), cons(x, acc), acc)
       }),
     )
   }
@@ -191,7 +227,7 @@ defmod List {
   def find(values: List<$A>, pred: ($A -> Boolean)) -> Result<$A, NoneError> {
     match values {
       [] => Err(NoneError),
-      [head, ..tail] => if(pred(head), Ok(head), List::find(tail, pred)),
+      [head, ..tail] => if(pred(head), Ok(head), find(tail, pred)),
     }
   }
 
@@ -203,7 +239,7 @@ defmod List {
       [] => Err(NoneError),
       [head, ..tail] => match f(head) {
         Ok(value) => Ok(value),
-        Err(_) => List::find_map(tail, f),
+        Err(_) => find_map(tail, f),
       },
     }
   }
@@ -214,7 +250,7 @@ defmod List {
   def any(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
     match values {
       [] => False,
-      [head, ..tail] => if(pred(head), True, List::any(tail, pred)),
+      [head, ..tail] => if(pred(head), True, any(tail, pred)),
     }
   }
 
@@ -224,7 +260,62 @@ defmod List {
   def all(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
     match values {
       [] => True,
-      [head, ..tail] => if(pred(head), List::all(tail, pred), False),
+      [head, ..tail] => if(pred(head), all(tail, pred), False),
     }
   }
+
+  @@doc """
+  Count how many elements satisfy `pred`.
+  """
+  def count(values: List<$A>, pred: ($A -> Boolean)) -> Int {
+    reduce(values, 0, {|acc, value|
+      if(pred(value), acc + 1, acc)
+    })
+  }
+
+  @@doc """
+  Sum all integer elements in a list.
+  Empty lists return `0`.
+  """
+  def sum(values: List<Int>) -> Int {
+    reduce(values, 0, {|acc, value|
+      acc + value
+    })
+  }
+
+  @@doc """
+  Keep at most the first `count` elements.
+  `count <= 0` returns `[]`.
+  """
+  def take(values: List<$A>, count: Int) -> List<$A> {
+    _take_go(values, count)
+  }
+
+  @@doc """
+  Skip the first `count` elements.
+  `count <= 0` returns the input unchanged.
+  """
+  def drop(values: List<$A>, count: Int) -> List<$A> {
+    _drop_go(values, count)
+  }
+
+  @@doc """
+  Split a list into elements that satisfy `pred` and the rest.
+  Both output lists keep the original order.
+  """
+  def partition(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    _partition_go(values, pred)
+  }
+
+  @@doc """
+  Count repeated values while keeping first-seen group order.
+  Requires `Eq` for the element type and returns `(value, count)` tuples.
+  """
+  @@builtin def group_count(values: List<$A>) -> List<($A, Int)>
+
+  @@doc """
+  Pair elements from two lists until either side runs out.
+  Each output element is a `(left, right)` tuple.
+  """
+  @@builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
 }

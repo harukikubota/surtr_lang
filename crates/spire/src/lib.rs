@@ -1,11 +1,13 @@
 pub mod ast;
 pub mod error;
-pub mod lexer;
-pub mod parser;
-pub mod token;
+mod lexer;
+mod parser;
+mod token;
 
 // Re-export the main entry point
 pub use parser::{
-    parse, parse_with_context, CompileUnitKind, DeclLevel, EntryPoint, ParserContext,
-    SetExitCodePolicy, SourceRules, TopLevelDeclKind, TopLevelDeclPolicy,
+    collect_entrypoint_annotations, parse, parse_incomplete_expr, parse_incomplete_stmt,
+    parse_with_context, parse_with_context_diagnostic, strip_test_annotations, CompletionContext,
+    EntryAnnotation, IncompleteParseResult, LspDiagnostic, LspDiagnosticSeverity, LspPosition,
+    LspRange, LspRelatedInformation, ParseDiagnostic, ParseRules, ParserContext,
 };

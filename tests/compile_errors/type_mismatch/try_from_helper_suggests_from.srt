@@ -1,0 +1,1 @@
+value = try_from(42, String)

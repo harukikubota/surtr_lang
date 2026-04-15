@@ -77,6 +77,14 @@ pub enum Opcode {
         len: u32,
     },
 
+    // Tuple
+    TupleNew {
+        len: u32,
+    },
+    GetTupleField {
+        field_index: u32,
+    },
+
     // Struct / Tagged
     StructNew {
         field_count: u32,
@@ -181,6 +189,8 @@ impl Opcode {
             Self::ListHead => "ListHead",
             Self::ListTail => "ListTail",
             Self::ListFromItems { .. } => "ListFromItems",
+            Self::TupleNew { .. } => "TupleNew",
+            Self::GetTupleField { .. } => "GetTupleField",
             Self::StructNew { .. } => "StructNew",
             Self::GetField { .. } => "GetField",
             Self::GetTag => "GetTag",

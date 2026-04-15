@@ -1,7 +1,5 @@
 use super::*;
 
-pub(super) const AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel", "Result"];
-
 fn initialize_base_scope() -> Scope {
     let mut scope = Scope::new();
     let dummy = Span { start: 0, end: 0 };
@@ -15,9 +13,9 @@ fn initialize_base_scope() -> Scope {
 
 pub(super) fn initialize_scope() -> Scope {
     let mut scope = initialize_base_scope();
-    for meta in BUILTIN_METAS {
+    for (idx, meta) in BUILTIN_METAS.iter().enumerate() {
         if is_global_runtime_builtin(meta.name) {
-            scope.define_with_id(meta.name, builtin_uid(meta.builtin_id));
+            scope.define_with_id(meta.name, builtin_uid(idx as u16));
         }
     }
     scope
@@ -33,6 +31,7 @@ fn is_global_runtime_builtin(name: &str) -> bool {
 pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
     ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
+        visibility: attrs.visibility,
     }
 }
 
@@ -41,19 +40,5 @@ pub(super) fn is_runtime_builtin_decl(name: &str) -> bool {
 }
 
 pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {
-    matches!(
-        name,
-        "if" | "if_then"
-            | "assert"
-            | "ensure"
-            | "and"
-            | "or"
-            | "eq"
-            | "neq"
-            | "lt"
-            | "lte"
-            | "gt"
-            | "gte"
-            | "concat"
-    )
+    matches!(name, "if" | "if_then" | "assert" | "ensure" | "and" | "or")
 }

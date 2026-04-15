@@ -1,0 +1,2 @@
+map = HashMap::from_entries([(1, 2)])
+print(to_string(map))

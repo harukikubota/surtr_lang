@@ -22,6 +22,7 @@ pub struct TypeDefInfo {
     pub name: Symbol,
     pub type_params: Vec<Symbol>,
     pub fields: Vec<(Symbol, Ty)>,
+    pub private_fields: HashSet<Symbol>,
     pub state: TypeDefState,
 }
 
@@ -68,6 +69,8 @@ pub struct TypeEnv {
     pub enum_variant_tags: HashMap<u32, EnumVariantInfo>,
     /// enum type name -> variants
     pub enum_variants_by_enum: HashMap<Symbol, Vec<EnumVariantInfo>>,
+    /// type declaration bindings usable as type-root lens path heads.
+    pub type_constructor_ids: HashSet<u32>,
 }
 
 impl Default for TypeEnv {
@@ -89,6 +92,7 @@ impl TypeEnv {
             enum_constructor_ids: HashMap::new(),
             enum_variant_tags: HashMap::new(),
             enum_variants_by_enum: HashMap::new(),
+            type_constructor_ids: HashSet::new(),
         }
     }
 
@@ -136,6 +140,7 @@ impl TypeEnv {
                 name,
                 type_params,
                 fields: Vec::new(),
+                private_fields: HashSet::new(),
                 state: TypeDefState::Declared,
             },
         );
@@ -149,9 +154,11 @@ impl TypeEnv {
         &mut self,
         name: &str,
         fields: Vec<(Symbol, Ty)>,
+        private_fields: HashSet<Symbol>,
     ) -> Option<u32> {
         let def = self.type_defs.get_mut(name)?;
         def.fields = fields;
+        def.private_fields = private_fields;
         def.state = TypeDefState::SignatureResolved;
         Some(def.tag)
     }
@@ -166,6 +173,12 @@ impl TypeEnv {
     /// Look up a type definition by name.
     pub fn lookup_type_def(&self, name: &str) -> Option<&TypeDefInfo> {
         self.type_defs.get(name)
+    }
+
+    pub fn is_private_field(&self, type_name: &str, field_name: &str) -> bool {
+        self.type_defs
+            .get(type_name)
+            .is_some_and(|def| def.private_fields.contains(field_name))
     }
 
     pub fn is_type_signature_resolved(&self, name: &str) -> bool {
@@ -233,10 +246,20 @@ impl TypeEnv {
     pub fn enum_variants_of(&self, enum_name: &str) -> Option<&Vec<EnumVariantInfo>> {
         self.enum_variants_by_enum.get(enum_name)
     }
+
+    pub fn register_type_constructor_id(&mut self, unique_id: u32) {
+        self.type_constructor_ids.insert(unique_id);
+    }
+
+    pub fn is_type_constructor_id(&self, unique_id: u32) -> bool {
+        self.type_constructor_ids.contains(&unique_id)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::{TypeDefState, TypeEnv, TypeKind};
     use crate::types::Ty;
 
@@ -266,6 +289,7 @@ mod tests {
         let resolved = env.resolve_type_def_signature(
             "ApiError",
             vec![("code".into(), Ty::Int), ("msg".into(), Ty::Str)],
+            HashSet::new(),
         );
         assert_eq!(resolved, Some(tag));
         assert!(env.is_type_signature_resolved("ApiError"));
@@ -285,6 +309,7 @@ mod tests {
         let resolved = env.resolve_type_def_signature(
             "Pair",
             vec![("first".into(), Ty::Int), ("second".into(), Ty::Str)],
+            HashSet::new(),
         );
 
         assert_eq!(tag, 2);

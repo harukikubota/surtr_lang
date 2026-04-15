@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない将来課題を追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md` を正本とする。
 
-最終更新日: 2026-04-11
+最終更新日: 2026-04-14
 
 2026-04-09 整理メモ:
 
@@ -27,13 +27,14 @@
   - `Unit`
   - `Error`
   - `List<$A>`
+  - `HashMap<$V>`
   - `Result<$T>`
 - `@@doc """..."""` の導入
 - `.eldr` への `Docs` chunk 追加
 - `.eldr` viewer 向け chunk 基盤
   - `Code`, `Cnst`, `Func`, `Type`, `ErrT`, `CInf`, `LblT`, `ImpT`, `ExpT`, `LitT`, `Line`, `SpnT`, `SrcP`, `PcSp`
 - 標準モジュールの type 単位分割
-  - `Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user`
+  - `Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> user`
   - cross-cutting builtin は `kernel.srt` へ置く
   - builtin type 宣言は各対応 `lib/*.srt` のトップレベルへ置く
 - `List` 最小 surface の固定
@@ -74,7 +75,7 @@
 補足:
 
 - `Bootstrap` / `Kernel` 分離
-- `Bootstrap -> [Kernel + 他標準モジュール] -> ユーザ拡張` のロード順
+- `Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> ユーザ拡張` のロード順
 - `Bootstrap` / `Kernel` の auto import と明示 import 禁止
 - `@@builtin` は `SourceKind::StdModule` のみ許可
 
@@ -106,7 +107,7 @@
   - 解決順は「宣言・依存型収集 -> macro slot(no-op) -> 関数/本体チェック」を基本線とする
 - 未確定点:
   - macro 導入後に queue 優先度をどう調整するか
-  - `impl Trait` や enum 導入後の依存ノード分割粒度
+  - trait specialization や enum 導入後の依存ノード分割粒度
 - 受け入れ条件:
   - 依存が解決したノードのみを再評価できる。
   - 無関係ノードの再評価を抑制し、総コンパイルコストが悪化しない。
@@ -137,7 +138,7 @@
   - 前方参照は許可したが、循環依存（関数循環、型循環、混合循環）の許容範囲は未確定。
 - 2026-04-09 時点の固定事項:
   - 現 phase の struct / record / error / type 相当の型循環は一律禁止
-  - enum による条件付き循環や `impl Trait` が入る段階で再度 reopen する
+  - enum による条件付き循環や trait specialization が複雑化した段階で再度 reopen する
 - 未確定点:
   - 関数循環や将来 enum 導入後の許可境界
   - エラー時の責務点（cycle の最小閉路表示）
@@ -309,6 +310,67 @@
   - tail recursion / mutual recursion / non-tail recursion の観測テストを回帰基準にする。
   - CLI や dump へ露出を足す場合は integration で stderr / JSON 形状を固定する。
   - bytecode 表現を増やす場合は `unit/sindr` と viewer schema テストを更新する。
+
+### OI-014 private value 持ち出し warning 方針
+
+- 策定コミット: `42fd699`（Lens / private capability 境界固定）
+- 背景:
+  - 現行仕様では `User.password`（type-root capability）は禁止し、`user.password`（value access）は許可している。
+  - また closure 内 private access（`{|| user.password}`）は scope 外 escape 防止のため禁止した。
+  - 一方で `return user.password` は「値の持ち出し」として現行仕様上は許可しており、warning を出すかどうかは未確定である。
+- 未確定点:
+  - warning を導入するか（導入する場合の default severity）
+  - warning message に「ユーザ責任の持ち出し」であることを明示するか
+  - lint 体系（on/off / warning code / CI fail-on-warning）とどう接続するか
+- 受け入れ条件:
+  - warning 導入有無が `doc/要件定義v9.md` と `doc/テスト方針.md` で一貫する。
+  - warning を導入する場合、`return user.password` は compile error にしない。
+- テスト方針:
+  - warning 導入時は `integration` で diagnostics（human/json）の warning 出力を固定する。
+  - warning 非導入の場合は現行どおり `spec/modules/private_visibility_function_return_private_value` の成功を維持する。
+
+### OI-015 test DSL I/O capture の `it` 単位分離
+
+- 策定コミット: `2026-04-14 capture API 導入`
+- 背景:
+  - `Test::capture_stdout` / `Test::capture_stderr` を追加し、Surtr test script から `print` / `eprint` 出力を直接アサート可能にした。
+  - 現行実装は per-VM バッファ + drain cursor 方式のため、同一 script VM 内で `it` 間の未読出力が次の `capture_*` に流入しうる。
+- 2026-04-14 時点の固定事項:
+  - Rust 側の並列実行（別 process / 別 VM）ではバッファは分離される。
+  - 直近運用は `it` 内で `print` と `capture_*` を 1 対 1 で完結させる前提とする。
+- 未確定点:
+  - `it` 開始/終了に合わせた自動 cursor reset を入れるか
+  - `test` / `describe` / `it` のどの粒度で capture scope を切るか
+  - `capture_*` を drain API のまま維持するか、peek API を追加するか
+- 受け入れ条件:
+  - `it` 単位で deterministic に capture でき、隣接 `it` の未読出力が混入しない。
+  - 現行の `capture_*` 利用コードに対して後方互換方針（移行手順）が明示される。
+- テスト方針:
+  - `tests/integration/test_command.rs` に「前の `it` が出した未読出力を次の `it` が拾わない」ケースを追加する。
+  - `lib/tests/*.srt` に capture API の推奨パターン fixture を追加して契約を固定する。
+
+### OI-016 HashMap v1 follow-up（literal / API / runtime 方針）
+
+- 策定コミット: `d0bec79`（HashMap v1 baseline）
+- 背景:
+  - `HashMap<$V>`（key=`String` 固定）と `defmod HashMap` surface、`HashMap("key" => value)` 表示契約は正本へ統合済み。
+  - 一方で旧 HashMap 設計メモで管理していた将来課題は、正本へは未確定事項として残さない方針にしたため、本台帳へ移管する。
+- 2026-04-14 時点の固定事項:
+  - runtime 表現は immutable な insertion-order `Vec<(String, Value)>` を基準にする
+  - `insert` の duplicate key 更新は順序を維持する
+  - `get` miss は `Err(NoneError)` を返す
+- 未確定点:
+  - `hash![...]` literal sugar を導入するか（導入時の lowering を `from_entries` と `empty + insert` のどちらに寄せるか）
+  - `entries(map) -> List<(String, $V)>` を v1.x で公開するか
+  - runtime 内部表現を `order + HashMap<String, Value>` へ切り替えるか（lookup コストと実装単純性のトレードオフ）
+  - `HashMap` key 表示の escaping 実装を `String` 表示 helper とどこまで共通化するか
+- 受け入れ条件:
+  - 採用方針が `doc/要件定義v9.md` / `doc/EldrVM_spec.md` / `doc/テスト方針.md` の3点で矛盾なく記述される。
+  - surface を増やす場合、`lib/hash_map.srt` と `BUILTIN_METAS` の整合が維持される。
+- テスト方針:
+  - literal 導入時は `unit/spire`（構文）+ `unit/forge`（lowering）+ `spec`（実行結果）を同時に固定する。
+  - API 追加時は `spec/stdmod` と `compile_errors/type_mismatch` を追加して key/value 契約を固定する。
+  - runtime 表現変更時は `unit/sindr` / `unit/eldr` の insertion-order / display 契約テストを必須回帰にする。
 
 ---
 

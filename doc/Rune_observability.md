@@ -16,6 +16,8 @@
 ### 1.1 `surtr run`
 
 - `--entry <name>`
+- `--vm-dump <path>`
+- `--vm-dump-on error|always`
 - `--vm-stats`
 - `--trace-call`
 - `--trace-opcode`
@@ -37,6 +39,7 @@
 
 - ユーザプログラムの通常出力は従来どおり `stdout`
 - 開発観測のための統計・トレース・時間計測は `stderr`
+- `--vm-dump` は指定パスへ JSON ファイルを書き出す
 - `dump --format json` / `dump --format viewer-json` の本体 JSON は `stdout`
 - `dump --opcode-histogram` は `dump --format json` の JSON 本体に内包する
 
@@ -62,6 +65,21 @@
 
 `tail_calls_optimized` は current frame を再利用した user-function tail call 回数を表す。
 TCO が効いた実行では `return_count` や `max_frame_depth` が非最適化時より小さくなりうる。
+
+### 3.1.1 `--vm-dump <path>`
+
+実行終了時に VM dump JSON を指定パスへ保存する。
+
+- `stdout` / `stderr` とは分離し、既存の run 契約を壊さない
+- dump には終了状態、exit code、最終 `pc` / opcode、stack / frame 深さ、VM observation を含む
+- compile error で VM 実行に到達しなかった場合は dump を生成しない
+
+### 3.1.2 `--vm-dump-on error|always`
+
+`--vm-dump` の保存条件を指定する。
+
+- `error`: runtime error、`Err(...)` 終了、非0 exit code のときだけ保存
+- `always`: 成功終了を含めて常に保存
 
 ### 3.2 `--trace-call`
 
@@ -127,6 +145,7 @@ runtime error 表示に以下を追加する。
 ### 4.1 `Rune`
 
 - CLI option parse
+- VM dump の保存条件判定と JSON 書き出し
 - compile phase timing 計測
 - 観測結果の整形と `stderr` 出力
 - `dump` JSON の histogram 追加
@@ -158,6 +177,7 @@ runtime error 表示に以下を追加する。
 ## 6. テスト観点
 
 - `run` option parser の正常系 / 異常系
+- `--vm-dump` の success / failure 保存条件
 - `dump --opcode-histogram` の JSON 形状
 - VM stats の opcode 集計
 - call trace の件数と kind

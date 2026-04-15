@@ -8,3 +8,15 @@ directly; it defines concrete error values and lets them be viewed through this
 shared abstraction.
 """
 @@builtin type Error
+
+impl Show for Error {
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<String> for Error {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}

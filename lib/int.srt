@@ -79,29 +79,24 @@ defmod Int {
   Return the bitwise AND of `a` and `b`.
   """
   @@builtin
-  @@test bit_and(6, 3) == 2
   def bit_and(a: Int, b: Int) -> Int
 
   @@doc """
   Return the bitwise OR of `a` and `b`.
   """
   @@builtin
-  @@test bit_or(6, 3) == 7
   def bit_or(a: Int, b: Int) -> Int
 
   @@doc """
   Return the bitwise XOR of `a` and `b`.
   """
   @@builtin
-  @@test bit_xor(6, 3) == 5
   def bit_xor(a: Int, b: Int) -> Int
 
   @@doc """
   Return the bitwise complement of `value`.
   """
   @@builtin
-  @@test bit_not(0) == -1
-  @@test bit_not(6) == -7
   def bit_not(value: Int) -> Int
 
   @@doc """
@@ -109,10 +104,6 @@ defmod Int {
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
   """
   @@builtin
-  @@test inspect(test_bit(5, 0)) == "Ok(True)"
-  @@test inspect(test_bit(5, 1)) == "Ok(False)"
-  @@test inspect(test_bit(5, 2)) == "Ok(True)"
-  @@test inspect(test_bit(5, -1)) == "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))"
   def test_bit(value: Int, index: Int) -> Result<Boolean, NegativeBitIndex>
 
   @@doc """
@@ -120,8 +111,6 @@ defmod Int {
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
   """
   @@builtin
-  @@test inspect(set_bit(0, 1)) == "Ok(2)"
-  @@test inspect(set_bit(5, -1)) == "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))"
   def set_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
 
   @@doc """
@@ -129,8 +118,6 @@ defmod Int {
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
   """
   @@builtin
-  @@test inspect(clear_bit(7, 1)) == "Ok(5)"
-  @@test inspect(clear_bit(5, -1)) == "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))"
   def clear_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
 
   @@doc """
@@ -138,38 +125,36 @@ defmod Int {
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
   """
   @@builtin
-  @@test inspect(toggle_bit(5, 0)) == "Ok(4)"
-  @@test inspect(toggle_bit(5, -1)) == "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))"
   def toggle_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
 
-  def _pow2_go(remaining: Int, acc: Int) -> Int {
-    if(remaining == 0, acc, Int::_pow2_go(remaining - 1, acc + acc))
+  defp _pow2_go(remaining: Int, acc: Int) -> Int {
+    if(remaining == 0, acc, _pow2_go(remaining - 1, acc + acc))
   }
 
-  def _pow2(count: Int) -> Int {
-    Int::_pow2_go(count, 1)
+  defp _pow2(count: Int) -> Int {
+    _pow2_go(count, 1)
   }
 
-  def _positive_mod(value: Int, modulus: Int) -> Int {
-    match Int::safe_mod(value, modulus) {
+  defp _positive_mod(value: Int, modulus: Int) -> Int {
+    match safe_mod(value, modulus) {
       Ok(rem) => if(rem < 0, rem + modulus, rem),
       Err(_) => 0,
     }
   }
 
-  def _mask_bits(width_bits: Int) -> Int {
-    Int::_pow2(width_bits) - 1
+  defp _mask_bits(width_bits: Int) -> Int {
+    _pow2(width_bits) - 1
   }
 
-  def _wrap_unsigned_bits(value: Int, width_bits: Int) -> Int {
-    Int::_positive_mod(value, Int::_pow2(width_bits))
+  defp _wrap_unsigned_bits(value: Int, width_bits: Int) -> Int {
+    _positive_mod(value, _pow2(width_bits))
   }
 
-  def _validate_shift_count(bits: Int) -> Result<Int, NegativeShiftCount> {
+  defp _validate_shift_count(bits: Int) -> Result<Int, NegativeShiftCount> {
     if(bits < 0, Err(NegativeShiftCount(bits)), Ok(bits))
   }
 
-  def _validate_fixed_bit_index(index: Int, width_bits: Int) -> Result<Int> {
+  defp _validate_fixed_bit_index(index: Int, width_bits: Int) -> Result<Int> {
     if(
       index < 0,
       Err(NegativeBitIndex(index)),
@@ -177,11 +162,11 @@ defmod Int {
     )
   }
 
-  def _shr_logical_bits(value: Int, shift: Int, width_bits: Int) -> Int {
+  defp _shr_logical_bits(value: Int, shift: Int, width_bits: Int) -> Int {
     if(
       shift >= width_bits,
       0,
-      match Int::safe_div(value, Int::_pow2(shift)) {
+      match safe_div(value, _pow2(shift)) {
         Ok(quotient) => quotient,
         Err(_) => 0,
       },
@@ -192,9 +177,6 @@ defmod Int {
   Resolve a `BitWidth` selector to its concrete bit count.
   `BitWidth::Any(bits)` accepts only positive widths.
   """
-  @@test inspect(width_bits(BitWidth::W8)) == "Ok(8)"
-  @@test inspect(width_bits(BitWidth::Any(24))) == "Ok(24)"
-  @@test inspect(width_bits(BitWidth::Any(0))) == "Err(InvalidBitWidth(\"bit width must be positive: 0\"))"
   def width_bits(width: BitWidth) -> Result<Int, InvalidBitWidth> {
     match width {
       BitWidth::W8 => Ok(8),
@@ -210,33 +192,27 @@ defmod Int {
   Return the all-ones mask for `width`.
   For example, `W8` returns `255`.
   """
-  @@test inspect(mask(BitWidth::W8)) == "Ok(255)"
-  @@test inspect(mask(BitWidth::Any(5))) == "Ok(31)"
   def mask(width: BitWidth) -> Result<Int, InvalidBitWidth> {
-    width_bits =? Int::width_bits(width)
-    Ok(Int::_mask_bits(width_bits))
+    bits =? width_bits(width)
+    Ok(_mask_bits(bits))
   }
 
   @@doc """
   Wrap `value` into the unsigned range represented by `width`.
   """
-  @@test inspect(wrap_unsigned(-1, BitWidth::W8)) == "Ok(255)"
-  @@test inspect(wrap_unsigned(260, BitWidth::W8)) == "Ok(4)"
   def wrap_unsigned(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
-    width_bits =? Int::width_bits(width)
-    Ok(Int::_wrap_unsigned_bits(value, width_bits))
+    bits =? width_bits(width)
+    Ok(_wrap_unsigned_bits(value, bits))
   }
 
   @@doc """
   Wrap `value` into the signed two's-complement range represented by `width`.
   """
-  @@test inspect(wrap_signed(255, BitWidth::W8)) == "Ok(-1)"
-  @@test inspect(wrap_signed(129, BitWidth::W8)) == "Ok(-127)"
   def wrap_signed(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
-    width_bits =? Int::width_bits(width)
-    unsigned = Int::_wrap_unsigned_bits(value, width_bits)
-    modulus = Int::_pow2(width_bits)
-    sign_bit = Int::_pow2(width_bits - 1)
+    bits =? width_bits(width)
+    unsigned = _wrap_unsigned_bits(value, bits)
+    modulus = _pow2(bits)
+    sign_bit = _pow2(bits - 1)
     Ok(if(unsigned >= sign_bit, unsigned - modulus, unsigned))
   }
 
@@ -244,128 +220,110 @@ defmod Int {
   Return the fixed-width bitwise complement of `value`.
   `value` is first wrapped into the unsigned range of `width`.
   """
-  @@test inspect(bit_not_in(6, BitWidth::W8)) == "Ok(249)"
-  @@test inspect(bit_not_in(1, BitWidth::Any(5))) == "Ok(30)"
   def bit_not_in(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
-    width_bits =? Int::width_bits(width)
-    width_mask = Int::_mask_bits(width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    Ok(Int::bit_xor(width_mask, wrapped))
+    bits =? width_bits(width)
+    width_mask = _mask_bits(bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    Ok(bit_xor(width_mask, wrapped))
   }
 
   @@doc """
   Return whether the fixed-width bit at `index` is set on `value`.
   Indexes must satisfy `0 <= index < width`.
   """
-  @@test inspect(test_bit_in(5, 2, BitWidth::W8)) == "Ok(True)"
-  @@test inspect(test_bit_in(5, 8, BitWidth::W8)) == "Err(BitIndexOutOfRange(\"bit index 8 out of range for width 8\"))"
   def test_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Boolean> {
-    width_bits =? Int::width_bits(width)
-    checked =? Int::_validate_fixed_bit_index(index, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    bit_mask = Int::_pow2(checked)
-    Ok(Int::bit_and(wrapped, bit_mask) != 0)
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    Ok(bit_and(wrapped, bit_mask) != 0)
   }
 
   @@doc """
   Return `value` with the fixed-width bit at `index` set.
   Indexes must satisfy `0 <= index < width`.
   """
-  @@test inspect(set_bit_in(0, 1, BitWidth::W8)) == "Ok(2)"
-  @@test inspect(set_bit_in(0, -1, BitWidth::W8)) == "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))"
   def set_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    checked =? Int::_validate_fixed_bit_index(index, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    bit_mask = Int::_pow2(checked)
-    Ok(Int::bit_or(wrapped, bit_mask))
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    Ok(bit_or(wrapped, bit_mask))
   }
 
   @@doc """
   Return `value` with the fixed-width bit at `index` cleared.
   Indexes must satisfy `0 <= index < width`.
   """
-  @@test inspect(clear_bit_in(7, 1, BitWidth::W8)) == "Ok(5)"
-  @@test inspect(clear_bit_in(0, 8, BitWidth::W8)) == "Err(BitIndexOutOfRange(\"bit index 8 out of range for width 8\"))"
   def clear_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    checked =? Int::_validate_fixed_bit_index(index, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    bit_mask = Int::_pow2(checked)
-    clear_mask = Int::bit_xor(Int::_mask_bits(width_bits), bit_mask)
-    Ok(Int::bit_and(wrapped, clear_mask))
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    clear_mask = bit_xor(_mask_bits(bits), bit_mask)
+    Ok(bit_and(wrapped, clear_mask))
   }
 
   @@doc """
   Return `value` with the fixed-width bit at `index` toggled.
   Indexes must satisfy `0 <= index < width`.
   """
-  @@test inspect(toggle_bit_in(5, 0, BitWidth::W8)) == "Ok(4)"
-  @@test inspect(toggle_bit_in(5, 8, BitWidth::W8)) == "Err(BitIndexOutOfRange(\"bit index 8 out of range for width 8\"))"
   def toggle_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    checked =? Int::_validate_fixed_bit_index(index, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    bit_mask = Int::_pow2(checked)
-    Ok(Int::bit_xor(wrapped, bit_mask))
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    Ok(bit_xor(wrapped, bit_mask))
   }
 
   @@doc """
   Shift `value` left inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
-  @@test inspect(shl_in(255, 1, BitWidth::W8)) == "Ok(254)"
-  @@test inspect(shl_in(1, -1, BitWidth::W8)) == "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))"
   def shl_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    shift =? Int::_validate_shift_count(bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    Ok(Int::_wrap_unsigned_bits(wrapped * Int::_pow2(shift), width_bits))
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    Ok(_wrap_unsigned_bits(wrapped * _pow2(shift), width_size))
   }
 
   @@doc """
   Shift `value` right logically inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
-  @@test inspect(shr_logical_in(-1, 1, BitWidth::W8)) == "Ok(127)"
-  @@test inspect(shr_logical_in(1, -1, BitWidth::W8)) == "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))"
   def shr_logical_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    shift =? Int::_validate_shift_count(bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    Ok(Int::_shr_logical_bits(wrapped, shift, width_bits))
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    Ok(_shr_logical_bits(wrapped, shift, width_size))
   }
 
   @@doc """
   Rotate `value` left inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
-  @@test inspect(rotl_in(129, 1, BitWidth::W8)) == "Ok(3)"
-  @@test inspect(rotl_in(17, 1, BitWidth::Any(5))) == "Ok(3)"
   def rotl_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    shift =? Int::_validate_shift_count(bits)
-    normalized = Int::_positive_mod(shift, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    left = Int::_wrap_unsigned_bits(wrapped * Int::_pow2(normalized), width_bits)
-    right = Int::_shr_logical_bits(wrapped, width_bits - normalized, width_bits)
-    Ok(Int::bit_or(left, right))
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    normalized = _positive_mod(shift, width_size)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    left = _wrap_unsigned_bits(wrapped * _pow2(normalized), width_size)
+    right = _shr_logical_bits(wrapped, width_size - normalized, width_size)
+    Ok(bit_or(left, right))
   }
 
   @@doc """
   Rotate `value` right inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
-  @@test inspect(rotr_in(129, 1, BitWidth::W8)) == "Ok(192)"
-  @@test inspect(rotr_in(1, -1, BitWidth::W8)) == "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))"
   def rotr_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
-    width_bits =? Int::width_bits(width)
-    shift =? Int::_validate_shift_count(bits)
-    normalized = Int::_positive_mod(shift, width_bits)
-    wrapped = Int::_wrap_unsigned_bits(value, width_bits)
-    left = Int::_wrap_unsigned_bits(wrapped * Int::_pow2(width_bits - normalized), width_bits)
-    right = Int::_shr_logical_bits(wrapped, normalized, width_bits)
-    Ok(Int::bit_or(left, right))
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    normalized = _positive_mod(shift, width_size)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    left = _wrap_unsigned_bits(wrapped * _pow2(width_size - normalized), width_size)
+    right = _shr_logical_bits(wrapped, normalized, width_size)
+    Ok(bit_or(left, right))
   }
 
   @@doc """
@@ -373,10 +331,6 @@ defmod Int {
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
   @@builtin
-  @@test inspect(shl(1, 1)) == "Ok(2)"
-  @@test inspect(shl(1, 4)) == "Ok(16)"
-  @@test inspect(shl(8, 2)) == "Ok(32)"
-  @@test inspect(shl(1, -1)) == "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))"
   def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
 
   @@doc """
@@ -384,10 +338,6 @@ defmod Int {
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   """
   @@builtin
-  @@test inspect(shr(1, 1)) == "Ok(0)"
-  @@test inspect(shr(16, 2)) == "Ok(4)"
-  @@test inspect(shr(1024, 10)) == "Ok(1)"
-  @@test inspect(shr(1, -1)) == "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))"
   def shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
 
   @@doc """
@@ -422,7 +372,7 @@ defmod Int {
   Return `True` when `value` is divisible by two.
   """
   def is_even(value: Int) -> Boolean {
-    match Int::safe_mod(value, 2) {
+    match safe_mod(value, 2) {
       Ok(rem) => rem == 0,
       Err(_) => False,
     }
@@ -432,9 +382,111 @@ defmod Int {
   Return `True` when `value` is not divisible by two.
   """
   def is_odd(value: Int) -> Boolean {
-    match Int::safe_mod(value, 2) {
+    match safe_mod(value, 2) {
       Ok(rem) => rem != 0,
       Err(_) => False,
+    }
+  }
+}
+
+impl Numeric for Int {
+  def add(self: Self, rhs: Self) -> Self {
+    self + rhs
+  }
+
+  def sub(self: Self, rhs: Self) -> Self {
+    self - rhs
+  }
+
+  def mul(self: Self, rhs: Self) -> Self {
+    self * rhs
+  }
+
+  def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
+    Int::safe_div(self, rhs)
+  }
+
+  def abs(self: Self) -> Self {
+    Int::abs(self)
+  }
+
+  def min(self: Self, rhs: Self) -> Self {
+    Int::min(self, rhs)
+  }
+
+  def max(self: Self, rhs: Self) -> Self {
+    Int::max(self, rhs)
+  }
+}
+
+impl Show for Int {
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<Int> for Int {
+  def from(self: Self, to: TypeRef<Int>) -> Int {
+    self
+  }
+}
+
+impl From<String> for Int {
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}
+
+impl Eq for Int {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self == rhs
+  }
+
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self != rhs
+  }
+}
+
+impl Compare for Int {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    if(
+      self < rhs,
+      Ordering::Less,
+      if(self > rhs, Ordering::Greater, Ordering::Equal),
+    )
+  }
+}
+
+impl Ord for Int {
+  def lt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal => False,
+      Ordering::Greater => False,
+    }
+  }
+
+  def lte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal => True,
+      Ordering::Greater => False,
+    }
+  }
+
+  def gt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal => False,
+      Ordering::Greater => True,
+    }
+  }
+
+  def gte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal => True,
+      Ordering::Greater => True,
     }
   }
 }

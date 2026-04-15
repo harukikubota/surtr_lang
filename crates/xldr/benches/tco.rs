@@ -2,6 +2,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use eldr::vm::{VmObservation, VmObservationOptions};
 use eldr::VM;
 use forge::bytecode::{populate_error_template_lines, Bytecode};
+use sindr::policy::CompileUnitKind;
 
 const FIB_TAIL_50: &str = r#"
 def fib_tail(n: Int, a: Int, b: Int) -> Int {
@@ -63,12 +64,8 @@ fn collect_script_compile_sources(
 ) -> Result<xldr::CompileSources, String> {
     let module_inputs = xldr::collect_additional_default_std_module_inputs()
         .map_err(|e| format!("phase=load; message={}", e))?;
-    let module_sources = if module_inputs.is_empty() {
-        xldr::collect_module_sources_with_module_stages(&[])
-    } else {
-        xldr::collect_module_sources_with_std_module_stages(&[module_inputs])
-    }
-    .map_err(|e| format!("phase=load; message={}", e))?;
+    let module_sources = xldr::collect_module_sources_with_module_stages(&[module_inputs])
+        .map_err(|e| format!("phase=load; message={}", e))?;
     Ok(xldr::compose_script_compile_sources(
         file_name,
         source,
@@ -80,23 +77,18 @@ fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, String> {
     let compile_sources = collect_script_compile_sources(source_name, source)?;
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
-    let module_stages = xldr::parse_module_stages_from_compile_sources(
-        &compile_sources,
-        spire::CompileUnitKind::Script,
-    )
-    .map_err(|e| {
-        let file_name = sources.file_name(e.source_id).unwrap_or("<unknown>");
-        format!("phase=parse; file={}; message={}", file_name, e.message())
-    })?;
+    let module_stages =
+        xldr::parse_module_stages_from_compile_sources(&compile_sources, CompileUnitKind::Script)
+            .map_err(|e| {
+            let file_name = sources.file_name(e.source_id).unwrap_or("<unknown>");
+            format!("phase=parse; file={}; message={}", file_name, e.message())
+        })?;
 
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = spire::parse_with_context(
         user_source,
-        spire::ParserContext::script(user_source_id.0).with_rules(xldr::derive_source_rules(
-            spire::CompileUnitKind::Script,
-            xldr::SourceKind::Script,
-            None,
-        )),
+        spire::ParserContext::script(user_source_id.0)
+            .with_rules(xldr::derive_parse_rules(xldr::SourceKind::Script)),
     )
     .map_err(|e| {
         let file_name = sources.file_name(user_source_id).unwrap_or("<unknown>");
@@ -120,8 +112,8 @@ fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, String> {
     let typed = scar::typecheck_with_context(
         resolved,
         scar::TypecheckContext {
-            source_rules: xldr::derive_source_rules(
-                spire::CompileUnitKind::Script,
+            runtime_policy: xldr::derive_runtime_policy(
+                CompileUnitKind::Script,
                 xldr::SourceKind::Script,
                 None,
             ),

@@ -1,0 +1,10 @@
+defstruct User {
+  name: String,
+  private password: String,
+}
+
+impl User {
+  def new(name: String, password: String) -> Self {
+    User { name: name, password: password }
+  }
+}

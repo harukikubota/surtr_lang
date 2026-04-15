@@ -1,6 +1,22 @@
 use super::*;
 
 impl Checker {
+    fn parse_standalone_tuple_root_index(name: &str) -> Option<usize> {
+        let suffix = name.strip_prefix('_')?;
+        if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        suffix.parse::<usize>().ok()
+    }
+
+    fn parse_tuple_segment_index(field: &str) -> Option<usize> {
+        let suffix = field.strip_prefix('_')?;
+        if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        suffix.parse::<usize>().ok()
+    }
+
     pub(super) fn check_node(&mut self, node: &Resolved) -> Result<TypedNode, TypeError> {
         match node {
             Resolved::Lit(span, lit) => {
@@ -13,6 +29,23 @@ impl Checker {
             }
 
             Resolved::Var(span, id) => {
+                if id.qualified_name.as_ref().is_some_and(|qualified_name| {
+                    self.trait_methods_by_qualified_name
+                        .contains_key(qualified_name)
+                }) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait helper `{}` cannot be referenced directly",
+                            id.name
+                        ),
+                        span: span.clone(),
+                        hint: Some(
+                            "Call the helper with arguments so the receiver type can choose an impl."
+                                .into(),
+                        ),
+                    });
+                }
+
                 if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
                     let ty = match &stored_ty {
                         Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
@@ -20,6 +53,33 @@ impl Checker {
                         }
                         _ => self.resolve_ty(&stored_ty),
                     };
+                    if matches!(ty, Ty::Lens(_, _)) {
+                        if let Some(path) = self.lens_bindings.get(&id.unique_id).cloned() {
+                            let source_ty = self.resolve_ty(&path.source_ty);
+                            let focus_ty = self.resolve_ty(&path.focus_ty);
+                            return Ok(TypedNode {
+                                ty: Ty::Lens(
+                                    Box::new(source_ty.clone()),
+                                    Box::new(focus_ty.clone()),
+                                ),
+                                span: span.clone(),
+                                node: TypedInner::LensPath(TypedLensPath {
+                                    source_ty,
+                                    focus_ty,
+                                    may_fail: path.may_fail,
+                                    segments: path.segments,
+                                }),
+                            });
+                        }
+                        return Err(TypeError {
+                            message: "Lens value is not statically resolvable at this usage site"
+                                .into(),
+                            span: span.clone(),
+                            hint: Some(
+                                "Use a concrete path expression like User.name or pair._0.".into(),
+                            ),
+                        });
+                    }
                     return Ok(TypedNode {
                         ty,
                         span: span.clone(),
@@ -56,12 +116,31 @@ impl Checker {
                     });
                 }
 
+                if let Some(index) = Self::parse_standalone_tuple_root_index(id.name.as_str()) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Standalone tuple root _{} is not allowed; use tuple access with ._{}",
+                            index, index
+                        ),
+                        span: span.clone(),
+                        hint: Some("Tuple elements are accessed as value._0, value._1, ...".into()),
+                    });
+                }
+
                 Err(TypeError {
                     message: format!("Undefined variable: {}", id.name),
                     span: span.clone(),
                     hint: None,
                 })
             }
+
+            Resolved::TypeRefWitness(span, ast_ty) => Ok(TypedNode {
+                ty: Ty::TypeRef(Box::new(
+                    self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?,
+                )),
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Unit),
+            }),
 
             Resolved::Bind(span, pat, rhs) => {
                 if !Self::is_total_bind_pattern(pat) {
@@ -74,16 +153,17 @@ impl Checker {
                         ),
                     });
                 }
-                let typed_rhs = if let (
-                    ResolvedPattern::Annotated(_, ast_ty),
-                    Resolved::Closure(cspan, params, captures, body),
-                ) = (pat, rhs.as_ref())
-                {
+                let typed_rhs = if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
-                    self.check_closure(cspan, params, captures, body, Some(&expected))?
+                    self.check_node_with_expected(rhs, Some(&expected))?
                 } else {
                     self.check_node(rhs)?
+                };
+                let lens_path = if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
+                    Some(self.resolve_lens_path_from_node(typed_rhs.clone(), span)?)
+                } else {
+                    None
                 };
                 if matches!(typed_rhs.ty, Ty::Error) {
                     return Err(TypeError {
@@ -96,6 +176,11 @@ impl Checker {
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
+                if let Some(path) = &lens_path {
+                    self.bind_lens_pattern_bindings(&typed_pat, path, span)?;
+                } else {
+                    self.clear_lens_pattern_bindings(&typed_pat);
+                }
                 self.normalize_env_bindings();
 
                 Ok(TypedNode {
@@ -121,6 +206,7 @@ impl Checker {
             Resolved::ListNil(span) => self.check_list_nil(span),
             Resolved::ListCons(span, head, tail) => self.check_list_cons(span, head, tail),
             Resolved::ListLiteral(span, elems) => self.check_list_literal(span, elems),
+            Resolved::TupleLiteral(span, elems) => self.check_tuple_literal(span, elems),
 
             Resolved::InterpolatedStr(span, parts) => self.check_interpolated_str(span, parts),
 
@@ -170,11 +256,25 @@ impl Checker {
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
             }
-            Resolved::Def(span, id, params, ret_ty, body, _) => {
-                self.check_def(span, id, params, ret_ty, body)
+            Resolved::Def(span, id, type_params, params, ret_ty, body, attrs) => {
+                self.check_def(span, id, type_params, params, ret_ty, body, attrs)
             }
-            Resolved::ExtractorDef(span, id, param, ret_ty, body, _) => {
-                self.check_extractor_def(span, id, param, ret_ty, body)
+            Resolved::ExtractorDef(span, id, type_params, param, ret_ty, body, attrs) => {
+                self.check_extractor_def(span, id, type_params, param, ret_ty, body, attrs)
+            }
+            Resolved::TraitDef(span, id, _, methods, _) => Ok(TypedNode {
+                ty: Ty::Unit,
+                span: span.clone(),
+                node: TypedInner::TraitDef(
+                    self.trait_key(id),
+                    methods
+                        .iter()
+                        .map(|method| method.id.name.clone())
+                        .collect(),
+                ),
+            }),
+            Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) => {
+                self.check_trait_impl_def(span, trait_id, trait_args, target_ty, methods)
             }
             Resolved::BuiltinDecl(span, id, params, ret_ty, _) => {
                 self.check_builtin_decl(span, id, params, ret_ty)
@@ -204,7 +304,75 @@ impl Checker {
             (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
                 self.check_closure(span, params, captures, body, Some(expected_ty))
             }
+            (Resolved::FieldAccess(span, expr, field), expected_ty) => {
+                self.check_field_access_with_expected(span, expr, field, expected_ty)
+            }
+            (_, Some(expected_ty)) => {
+                let typed = self.check_node(node)?;
+                if matches!(expected_ty, Ty::Error) && self.is_concrete_error_value(&typed) {
+                    let call_span = typed.span.clone();
+                    return Ok(self.maybe_call_zero_arg_function(typed, call_span));
+                }
+                Ok(typed)
+            }
             _ => self.check_node(node),
+        }
+    }
+
+    fn bind_lens_pattern_bindings(
+        &mut self,
+        pattern: &TypedPattern,
+        path: &TypedLensPath,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        match pattern {
+            TypedPattern::Var(_, id) => {
+                self.lens_bindings.insert(id.unique_id, path.clone());
+                Ok(())
+            }
+            TypedPattern::As(_, inner, alias) => {
+                self.bind_lens_pattern_bindings(inner, path, span)?;
+                self.lens_bindings.insert(alias.unique_id, path.clone());
+                Ok(())
+            }
+            TypedPattern::Wildcard(_) => Ok(()),
+            _ => Err(TypeError {
+                message: "Lens values can only be bound to variables or `_` patterns".into(),
+                span: span.clone(),
+                hint: Some("Use `lens = User.name` or `_ = User.name`.".into()),
+            }),
+        }
+    }
+
+    fn clear_lens_pattern_bindings(&mut self, pattern: &TypedPattern) {
+        match pattern {
+            TypedPattern::Var(_, id) => {
+                self.lens_bindings.remove(&id.unique_id);
+            }
+            TypedPattern::As(_, inner, alias) => {
+                self.clear_lens_pattern_bindings(inner);
+                self.lens_bindings.remove(&alias.unique_id);
+            }
+            TypedPattern::ListCons(_, head, tail) => {
+                self.clear_lens_pattern_bindings(head);
+                self.clear_lens_pattern_bindings(tail);
+            }
+            TypedPattern::Tuple(_, items) => {
+                for item in items {
+                    self.clear_lens_pattern_bindings(item);
+                }
+            }
+            TypedPattern::ResultOk(_, inner) => self.clear_lens_pattern_bindings(inner),
+            TypedPattern::Extractor { items, .. } => {
+                for item in items {
+                    self.clear_lens_pattern_bindings(item);
+                }
+            }
+            TypedPattern::Wildcard(_)
+            | TypedPattern::ListNil(_)
+            | TypedPattern::IntLit(_, _)
+            | TypedPattern::StrLit(_, _)
+            | TypedPattern::BoolLit(_, _) => {}
         }
     }
 
@@ -215,6 +383,13 @@ impl Checker {
         rhs: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
+        if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message: "Lens values cannot be bound with `=?`".into(),
+                span: typed_rhs.span.clone(),
+                hint: Some("Use `=` for compile-time Lens bindings.".into()),
+            });
+        }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
         let pattern_can_nomatch = !Self::is_total_bind_pattern(pat);
         let (ok_ty, mut propagated_err_tys) = match rhs_ty {
@@ -332,6 +507,7 @@ impl Checker {
             | Resolved::ListNil(span)
             | Resolved::ListCons(span, _, _)
             | Resolved::ListLiteral(span, _)
+            | Resolved::TupleLiteral(span, _)
             | Resolved::InterpolatedStr(span, _)
             | Resolved::If(span, _, _, _)
             | Resolved::Assert(span, _, _)
@@ -340,16 +516,19 @@ impl Checker {
             | Resolved::FieldAccess(span, _, _)
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
+            | Resolved::TypeRefWitness(span, _)
             | Resolved::StructDef(span, _, _)
             | Resolved::RecordDef(span, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
             | Resolved::EnumDef(span, _, _, _)
-            | Resolved::Def(span, _, _, _, _, _)
-            | Resolved::ExtractorDef(span, _, _, _, _, _)
+            | Resolved::Def(span, _, _, _, _, _, _)
+            | Resolved::ExtractorDef(span, _, _, _, _, _, _)
             | Resolved::BuiltinDecl(span, _, _, _, _)
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
             | Resolved::ResultCtorDecl(span, _, _, _, _)
+            | Resolved::TraitDef(span, _, _, _, _)
+            | Resolved::TraitImplDef(span, _, _, _, _)
             | Resolved::Closure(span, _, _, _)
             | Resolved::Capture(span, _, _)
             | Resolved::Semi(span, _) => span,
@@ -469,10 +648,322 @@ impl Checker {
                 });
             }
         }
+        self.ensure_no_runtime_lens_args(&args, span, "Function application")?;
         Ok(TypedNode {
             ty: self.resolve_ty(&ret),
             span: span.clone(),
             node: TypedInner::App(Box::new(func), args),
+        })
+    }
+
+    pub(super) fn trait_method_ref<'a>(
+        &self,
+        func: &'a Resolved,
+    ) -> Option<(&'a ResolvedId, String, String)> {
+        let Resolved::Var(_, id) = func else {
+            return None;
+        };
+        let qualified_name = id.qualified_name.as_ref()?;
+        let (trait_name, method_name) = self
+            .trait_methods_by_qualified_name
+            .get(qualified_name)?
+            .clone();
+        Some((id, trait_name, method_name))
+    }
+
+    pub(super) fn trait_dispatch_target(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+    ) -> Option<TraitDispatch> {
+        let receiver_ty = self.resolve_ty(receiver_ty);
+        match receiver_ty {
+            Ty::Var(var) => {
+                if self.tyvar_has_bound(var, trait_name)
+                    || self.tyvar_satisfies_compiler_trait(var, trait_name)
+                {
+                    Some(TraitDispatch::Pending)
+                } else {
+                    None
+                }
+            }
+            concrete => {
+                if let Some(target_name) = self.trait_target_name(&concrete) {
+                    if let Some(impl_info) = self
+                        .trait_impls
+                        .get(&(trait_name.into(), target_name.clone()))
+                    {
+                        let method = impl_info.methods.get(method_name)?;
+
+                        if let Some(dispatch_override) = &method.dispatch_override {
+                            return Some(TraitDispatch::Static(dispatch_override.clone()));
+                        }
+                        let function_key = method
+                            .function_id
+                            .qualified_name
+                            .as_ref()
+                            .unwrap_or(&method.function_id.name);
+                        let function_id = self.function_ids_by_name.get(function_key)?;
+                        let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                        let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                            return None;
+                        };
+                        return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                            name: method.function_id.name.clone(),
+                            fun_idx: *fun_idx,
+                        }));
+                    }
+                }
+                self.compiler_trait_dispatch_target(trait_name, method_name, &concrete)
+                    .map(TraitDispatch::Static)
+            }
+        }
+    }
+
+    fn opposite_conversion_hint(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+        typed_args: &[TypedNode],
+        span: &Span,
+    ) -> Option<TypeError> {
+        let requested_trait = if self.trait_matches_short_name(trait_name, "From") {
+            "From"
+        } else if self.trait_matches_short_name(trait_name, "TryFrom") {
+            "TryFrom"
+        } else {
+            return None;
+        };
+        let opposite_trait = if requested_trait == "From" {
+            "TryFrom"
+        } else {
+            "From"
+        };
+        let receiver_name = self.trait_target_name(receiver_ty)?;
+        let witness_ty = self.resolve_ty(&typed_args.get(1)?.ty);
+        let Ty::TypeRef(target_ty) = witness_ty else {
+            return None;
+        };
+        let opposite_trait_key = self.trait_key_by_short_name(opposite_trait)?;
+        let opposite_instance_key =
+            self.trait_instance_key_from_tys(&opposite_trait_key, &[target_ty.as_ref().clone()]);
+        if !self
+            .trait_impls
+            .contains_key(&(opposite_instance_key, receiver_name.clone()))
+        {
+            return None;
+        }
+
+        let target_name = self.ty_name(&target_ty);
+        let opposite_method = if opposite_trait == "From" {
+            "from"
+        } else {
+            "try_from"
+        };
+        Some(TypeError {
+            message: format!(
+                "{} -> {} implements {}, not {}. Use {}(value, {}).",
+                receiver_name,
+                target_name,
+                opposite_trait,
+                requested_trait,
+                opposite_method,
+                target_name
+            ),
+            span: span.clone(),
+            hint: Some(format!(
+                "{}::{} is not available for this conversion pair.",
+                self.trait_display_name(trait_name),
+                method_name
+            )),
+        })
+    }
+
+    pub(super) fn check_trait_method_call(
+        &mut self,
+        span: &Span,
+        trait_name: &str,
+        method_name: &str,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: format!(
+                    "{}::{} does not accept named arguments",
+                    trait_name, method_name
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let trait_info = self
+            .traits
+            .get(trait_name)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown trait: {}", trait_name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let method = trait_info
+            .methods
+            .get(method_name)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown trait method: {}::{}", trait_name, method_name),
+                span: span.clone(),
+                hint: None,
+            })?;
+
+        let self_ty = self.env.fresh_tyvar();
+        let (param_tys, ret_ty, trait_arg_tys) =
+            self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
+
+        let trait_display_name = self.trait_display_name(trait_name);
+        let trait_impl_summary = self.trait_implementation_summary(trait_name);
+
+        if args.len() != param_tys.len() {
+            return Err(TypeError {
+                message: format!(
+                    "{}::{} expects {} argument(s), got {}",
+                    trait_name,
+                    method_name,
+                    param_tys.len(),
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let typed_args = args
+            .iter()
+            .zip(param_tys.iter())
+            .map(|(arg, expected)| match arg {
+                ResolvedRecordLitArg::Positional(expr) => {
+                    self.check_node_with_expected(expr, Some(expected))
+                }
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.ensure_no_runtime_lens_args(&typed_args, span, "Trait method call")?;
+
+        for (idx, (expected, arg)) in param_tys.iter().zip(&typed_args).enumerate() {
+            if !self.types_compatible(expected, &arg.ty) {
+                if typed_args.len() == 2 {
+                    let left_ty = self.ty_name(&typed_args[0].ty);
+                    let right_ty = self.ty_name(&typed_args[1].ty);
+                    if self.trait_matches_short_name(trait_name, "Eq")
+                        || self.trait_matches_short_name(trait_name, "Ord")
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "Cannot compare {} and {}. {}",
+                                left_ty, right_ty, trait_impl_summary
+                            ),
+                            span: arg.span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if self.trait_matches_short_name(trait_name, "Concat") {
+                        return Err(TypeError {
+                            message: format!(
+                                "++ requires (String, String), got ({}, {}). {}",
+                                left_ty, right_ty, trait_impl_summary
+                            ),
+                            span: arg.span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+                let receiver_ty = self.resolve_ty(&self_ty);
+                if !matches!(receiver_ty, Ty::Var(_))
+                    && self.trait_impl_exists(trait_name, &receiver_ty)
+                {
+                    return Err(TypeError {
+                        message: format!(
+                            "{}::{} expects argument {} to match receiver type {}, got {}. {}",
+                            trait_display_name,
+                            method_name,
+                            idx + 1,
+                            self.ty_name(&receiver_ty),
+                            self.ty_name(&arg.ty),
+                            trait_impl_summary
+                        ),
+                        span: arg.span.clone(),
+                        hint: None,
+                    });
+                }
+                return Err(TypeError {
+                    message: format!(
+                        "Argument type mismatch in {}::{}: expected {}, got {}. {}",
+                        trait_display_name,
+                        method_name,
+                        self.ty_name(expected),
+                        self.ty_name(&arg.ty),
+                        trait_impl_summary
+                    ),
+                    span: arg.span.clone(),
+                    hint: None,
+                });
+            }
+        }
+
+        let trait_call_name = self.trait_instance_key_from_tys(trait_name, &trait_arg_tys);
+        let trait_call_display_name = self.trait_display_name(&trait_call_name);
+        let trait_call_summary = self.trait_implementation_summary(&trait_call_name);
+        let receiver_ty = self.resolve_ty(&self_ty);
+        let receiver_span = typed_args
+            .first()
+            .map(|arg| arg.span.clone())
+            .unwrap_or_else(|| span.clone());
+
+        if let Some(err) = self.opposite_conversion_hint(
+            &trait_call_name,
+            method_name,
+            &receiver_ty,
+            &typed_args,
+            &receiver_span,
+        ) {
+            if self
+                .trait_dispatch_target(&trait_call_name, method_name, &receiver_ty)
+                .is_none()
+            {
+                return Err(err);
+            }
+        }
+
+        let dispatch = self
+            .trait_dispatch_target(&trait_call_name, method_name, &receiver_ty)
+            .ok_or_else(|| TypeError {
+                message: format!(
+                    "{}::{} requires a receiver type implementing {}, got {}. {}",
+                    trait_call_display_name,
+                    method_name,
+                    trait_call_display_name,
+                    self.ty_name(&receiver_ty),
+                    trait_call_summary
+                ),
+                span: receiver_span,
+                hint: None,
+            })?;
+
+        Ok(TypedNode {
+            ty: self.resolve_ty(&ret_ty),
+            span: span.clone(),
+            node: TypedInner::TraitCall {
+                trait_name: trait_call_name,
+                method_name: method_name.into(),
+                receiver_ty,
+                dispatch,
+                args: typed_args,
+            },
         })
     }
 
@@ -539,6 +1030,7 @@ impl Checker {
                 ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
             })
             .collect::<Result<Vec<_>, _>>()?;
+        self.ensure_no_runtime_lens_args(&typed_args, span, op_name)?;
 
         for (expected, arg) in params.iter().skip(1).zip(&typed_args) {
             if !self.types_compatible(expected, &arg.ty) {
@@ -592,9 +1084,8 @@ impl Checker {
         match helper.ty {
             Ty::UserFunc { fun_idx, .. } => Ok(ListHelperRef::User(fun_idx)),
             Ty::BuiltinFunc { ref name, .. } => {
-                let builtin_id = builtin_meta_by_name(name)
-                    .map(|meta| meta.builtin_id)
-                    .ok_or_else(|| TypeError {
+                let builtin_id =
+                    sindr::builtin::builtin_id_by_name(name).ok_or_else(|| TypeError {
                         message: format!("Unknown builtin helper: {}", helper_name),
                         span: span.clone(),
                         hint: None,
@@ -1060,20 +1551,12 @@ impl Checker {
     ) -> Result<Vec<Ty>, TypeError> {
         match self.resolve_ty(ty) {
             Ty::Enum(name, args) if name == "MatchResult" && args.len() == 1 => match &args[0] {
-                Ty::Seq(items) => Ok(items.clone()),
-                other => Err(TypeError {
-                    message: format!(
-                        "{} must return MatchResult<Seq<...>>, got MatchResult<{}>",
-                        context,
-                        self.ty_name(other)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
+                Ty::Tuple(items) => Ok(items.clone()),
+                other => Ok(vec![other.clone()]),
             },
             other => Err(TypeError {
                 message: format!(
-                    "{} must return MatchResult<Seq<...>>, got {}",
+                    "{} must return MatchResult<T> or MatchResult<(...)>, got {}",
                     context,
                     self.ty_name(&other)
                 ),
@@ -1156,6 +1639,7 @@ impl Checker {
                     hint: None,
                 })?;
                 let typed = self.check_node_with_expected(expr, Some(expected_ty))?;
+                self.ensure_no_runtime_lens_value(&typed, "Function call arguments")?;
                 if !self.types_compatible(expected_ty, &typed.ty) {
                     return Err(TypeError {
                         message: format!(
@@ -1189,6 +1673,7 @@ impl Checker {
                 unreachable!("validated argument form above")
             };
             let typed = self.check_node_with_expected(expr, Some(expected_ty))?;
+            self.ensure_no_runtime_lens_value(&typed, "Function call arguments")?;
             if !self.types_compatible(expected_ty, &typed.ty) {
                 return Err(TypeError {
                     message: format!(
@@ -1206,12 +1691,485 @@ impl Checker {
         Ok(typed_args)
     }
 
+    fn lens_intrinsic_kind(&self, func: &Resolved) -> Option<&'static str> {
+        let Resolved::Var(_, id) = func else {
+            return None;
+        };
+        if let Some(qualified_name) = id.qualified_name.as_deref() {
+            return match qualified_name {
+                "Lens::view" => Some("view"),
+                "Lens::compose" => Some("compose"),
+                "Lens::set" => Some("set"),
+                "Lens::over" => Some("over"),
+                _ => None,
+            };
+        }
+        match id.name.as_str() {
+            // Keep legacy fallback for Stage1 names.
+            "view" => Some("view"),
+            "compose" => Some("compose"),
+            _ => None,
+        }
+    }
+
+    fn resolve_lens_path_from_node(
+        &self,
+        typed: TypedNode,
+        span: &Span,
+    ) -> Result<TypedLensPath, TypeError> {
+        if !matches!(typed.ty, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message: format!("Expected Lens<...> value, got {}", self.ty_name(&typed.ty)),
+                span: typed.span.clone(),
+                hint: None,
+            });
+        }
+        match typed.node {
+            TypedInner::LensPath(path) => Ok(TypedLensPath {
+                source_ty: self.resolve_ty(&path.source_ty),
+                focus_ty: self.resolve_ty(&path.focus_ty),
+                may_fail: path.may_fail,
+                segments: path.segments,
+            }),
+            _ => Err(TypeError {
+                message:
+                    "Lens values are compile-time only in Stage1 and cannot be stored or passed around"
+                        .into(),
+                span: span.clone(),
+                hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
+            }),
+        }
+    }
+
+    fn check_lens_compose_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args.len() != 2 {
+            return Err(TypeError {
+                message: format!("Lens::compose expects 2 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: "Lens::compose does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let ResolvedRecordLitArg::Positional(left_expr) = &args[0] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(right_expr) = &args[1] else {
+            unreachable!("validated argument form above")
+        };
+
+        let left = self.check_node(left_expr)?;
+        let left_path = self.resolve_lens_path_from_node(left, span)?;
+
+        let expected_right_focus = self.env.fresh_tyvar();
+        let expected_right_ty = Ty::Lens(
+            Box::new(self.resolve_ty(&left_path.focus_ty)),
+            Box::new(expected_right_focus),
+        );
+        let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
+        let right_path = self.resolve_lens_path_from_node(right, span)?;
+
+        if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Lens::compose source/focus mismatch: left focus is {}, right source is {}",
+                    self.ty_name(&left_path.focus_ty),
+                    self.ty_name(&right_path.source_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let source_ty = self.resolve_ty(&left_path.source_ty);
+        let focus_ty = self.resolve_ty(&right_path.focus_ty);
+        let mut segments = left_path.segments;
+        segments.extend(right_path.segments);
+        let path = TypedLensPath {
+            source_ty: source_ty.clone(),
+            focus_ty: focus_ty.clone(),
+            may_fail: left_path.may_fail || right_path.may_fail,
+            segments,
+        };
+        Ok(TypedNode {
+            ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+            span: span.clone(),
+            node: TypedInner::LensPath(path),
+        })
+    }
+
+    fn check_lens_source_value(
+        &mut self,
+        op_name: &str,
+        source_expr: &Resolved,
+    ) -> Result<(TypedNode, bool, Ty), TypeError> {
+        let typed_source = self.check_node(source_expr)?;
+        if matches!(typed_source.ty, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message: format!("{} source value cannot be a Lens", op_name),
+                span: typed_source.span.clone(),
+                hint: None,
+            });
+        }
+
+        let (source_is_result, source_value_ty) = match self.resolve_ty(&typed_source.ty) {
+            Ty::Result(ok, _) => (true, ok.as_ref().clone()),
+            other => (false, other),
+        };
+
+        Ok((typed_source, source_is_result, source_value_ty))
+    }
+
+    fn check_lens_path_argument(
+        &mut self,
+        span: &Span,
+        op_name: &str,
+        path_expr: &Resolved,
+        source_value_ty: &Ty,
+        source_input_ty: &Ty,
+    ) -> Result<TypedLensPath, TypeError> {
+        let expected_focus_ty = self.env.fresh_tyvar();
+        let expected_path_ty = Ty::Lens(
+            Box::new(self.resolve_ty(source_value_ty)),
+            Box::new(expected_focus_ty),
+        );
+        let path_node = self.check_node_with_expected(path_expr, Some(&expected_path_ty))?;
+        let path = self.resolve_lens_path_from_node(path_node, span)?;
+
+        if !self.types_compatible(&path.source_ty, source_value_ty) {
+            return Err(TypeError {
+                message: format!(
+                    "{} source type mismatch: lens expects {}, got {}",
+                    op_name,
+                    self.ty_name(&path.source_ty),
+                    self.ty_name(source_input_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        Ok(path)
+    }
+
+    fn check_lens_view_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args.len() != 2 {
+            return Err(TypeError {
+                message: format!("Lens::view expects 2 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: "Lens::view does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
+            unreachable!("validated argument form above")
+        };
+
+        let (typed_source, source_is_result, source_value_ty) =
+            self.check_lens_source_value("Lens::view", source_expr)?;
+        let path = self.check_lens_path_argument(
+            span,
+            "Lens::view",
+            path_expr,
+            &source_value_ty,
+            &typed_source.ty,
+        )?;
+
+        let focus_ty = self.resolve_ty(&path.focus_ty);
+        let out_ty = if source_is_result || path.may_fail {
+            Ty::Result(Box::new(focus_ty.clone()), Box::new(Ty::Error))
+        } else {
+            focus_ty
+        };
+
+        Ok(TypedNode {
+            ty: out_ty,
+            span: span.clone(),
+            node: TypedInner::LensView {
+                source: Box::new(typed_source),
+                path,
+                source_is_result,
+            },
+        })
+    }
+
+    fn check_lens_set_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args.len() != 3 {
+            return Err(TypeError {
+                message: format!("Lens::set expects 3 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: "Lens::set does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(value_expr) = &args[2] else {
+            unreachable!("validated argument form above")
+        };
+
+        let (typed_source, source_is_result, source_value_ty) =
+            self.check_lens_source_value("Lens::set", source_expr)?;
+        let path = self.check_lens_path_argument(
+            span,
+            "Lens::set",
+            path_expr,
+            &source_value_ty,
+            &typed_source.ty,
+        )?;
+
+        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
+        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Lens::set value type mismatch: expected {}, got {}",
+                    self.ty_name(&path.focus_ty),
+                    self.ty_name(&typed_value.ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: None,
+            });
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Result(
+                Box::new(self.resolve_ty(&source_value_ty)),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::LensSet {
+                source: Box::new(typed_source),
+                path,
+                value: Box::new(typed_value),
+                source_is_result,
+            },
+        })
+    }
+
+    fn check_lens_over_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args.len() != 3 {
+            return Err(TypeError {
+                message: format!("Lens::over expects 3 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: "Lens::over does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(update_expr) = &args[2] else {
+            unreachable!("validated argument form above")
+        };
+
+        let (typed_source, source_is_result, source_value_ty) =
+            self.check_lens_source_value("Lens::over", source_expr)?;
+        let path = self.check_lens_path_argument(
+            span,
+            "Lens::over",
+            path_expr,
+            &source_value_ty,
+            &typed_source.ty,
+        )?;
+
+        let typed_update = self.check_node(update_expr)?;
+        let (in_ty, out_ty) = self.unary_function_parts(&typed_update.ty, "Lens::over", span)?;
+        if !self.types_compatible(&path.focus_ty, &in_ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Lens::over update function input mismatch: expected {}, got {}",
+                    self.ty_name(&path.focus_ty),
+                    self.ty_name(&in_ty)
+                ),
+                span: typed_update.span.clone(),
+                hint: None,
+            });
+        }
+
+        let (out_ok, out_err) = match self.resolve_ty(&out_ty) {
+            Ty::Result(ok, err) => (ok.as_ref().clone(), err.as_ref().clone()),
+            _ => {
+                return Err(TypeError {
+                    message: format!(
+                        "Lens::over update function must return Result<...>, got {}",
+                        self.ty_name(&out_ty)
+                    ),
+                    span: typed_update.span.clone(),
+                    hint: None,
+                });
+            }
+        };
+        if !self.types_compatible(&path.focus_ty, &out_ok) {
+            return Err(TypeError {
+                message: format!(
+                    "Lens::over update function output mismatch: expected {}, got {}",
+                    self.ty_name(&path.focus_ty),
+                    self.ty_name(&out_ok)
+                ),
+                span: typed_update.span.clone(),
+                hint: None,
+            });
+        }
+        if !self.types_compatible(&Ty::Error, &out_err) {
+            return Err(TypeError {
+                message: format!(
+                    "Lens::over update function error type must be Error-compatible, got {}",
+                    self.ty_name(&out_err)
+                ),
+                span: typed_update.span.clone(),
+                hint: None,
+            });
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Result(
+                Box::new(self.resolve_ty(&source_value_ty)),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::LensOver {
+                source: Box::new(typed_source),
+                path,
+                update_fun: Box::new(typed_update),
+                source_is_result,
+            },
+        })
+    }
+
+    fn try_check_lens_intrinsic_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        match self.lens_intrinsic_kind(func) {
+            Some("view") => Ok(Some(self.check_lens_view_intrinsic(span, args)?)),
+            Some("compose") => Ok(Some(self.check_lens_compose_intrinsic(span, args)?)),
+            Some("set") => Ok(Some(self.check_lens_set_intrinsic(span, args)?)),
+            Some("over") => Ok(Some(self.check_lens_over_intrinsic(span, args)?)),
+            _ => Ok(None),
+        }
+    }
+
+    fn ensure_no_runtime_lens_args(
+        &self,
+        args: &[TypedNode],
+        span: &Span,
+        callee: &str,
+    ) -> Result<(), TypeError> {
+        if args.iter().any(|arg| self.ty_contains_lens(&arg.ty)) {
+            return Err(TypeError {
+                message: format!(
+                    "{} cannot accept Lens values in Stage1 (Lens is compile-time only)",
+                    callee
+                ),
+                span: span.clone(),
+                hint: Some("Apply Lens::view(...) before passing the value.".into()),
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_no_runtime_lens_value(
+        &self,
+        value: &TypedNode,
+        context: &str,
+    ) -> Result<(), TypeError> {
+        if self.ty_contains_lens(&value.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "{} cannot contain Lens values in Stage1 (Lens is compile-time only)",
+                    context
+                ),
+                span: value.span.clone(),
+                hint: Some(
+                    "Consume Lens with Lens::view/set/over first, then pass the plain value."
+                        .into(),
+                ),
+            });
+        }
+        Ok(())
+    }
+
     pub(super) fn check_app(
         &mut self,
         span: &Span,
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
+        if let Some(typed) = self.try_check_lens_intrinsic_app(span, func, args)? {
+            return Ok(typed);
+        }
+
+        if let Some((_id, trait_name, method_name)) = self.trait_method_ref(func) {
+            return self.check_trait_method_call(span, &trait_name, &method_name, args);
+        }
+
         let typed_func = self.check_node(func)?;
         let func_ty = self.resolve_ty(&typed_func.ty);
 
@@ -1263,15 +2221,16 @@ impl Checker {
                         });
                     }
                 }
+                self.ensure_no_runtime_lens_args(&typed_args, span, name)?;
 
                 if name == "set_exit_code" {
-                    match self.source_rules.set_exit_code_policy {
-                        SetExitCodePolicy::Anywhere => {}
-                        SetExitCodePolicy::Forbidden => {
+                    match self.runtime_policy.exit_code_policy {
+                        ExitCodePolicy::Anywhere => {}
+                        ExitCodePolicy::Forbidden => {
                             return Err(TypeError {
                                 message: format!(
                                     "set_exit_code is forbidden by source policy ({})",
-                                    self.source_rules.set_exit_code_policy.as_str()
+                                    self.runtime_policy.exit_code_policy.as_str()
                                 ),
                                 span: span.clone(),
                                 hint: Some(
@@ -1280,8 +2239,9 @@ impl Checker {
                                 ),
                             });
                         }
-                        SetExitCodePolicy::EntryOnly => {
-                            let Some(entrypoint) = self.source_rules.normalized_entrypoint.as_ref()
+                        ExitCodePolicy::EntryOnly => {
+                            let Some(entrypoint) =
+                                self.runtime_policy.normalized_entrypoint.as_ref()
                             else {
                                 return Err(TypeError {
                                     message:
@@ -1299,7 +2259,7 @@ impl Checker {
                                     message: format!(
                                         "set_exit_code is only allowed inside entrypoint `{}` (policy: {})",
                                         entrypoint,
-                                        self.source_rules.set_exit_code_policy.as_str()
+                                        self.runtime_policy.exit_code_policy.as_str()
                                     ),
                                     span: span.clone(),
                                     hint: Some(
@@ -1335,6 +2295,7 @@ impl Checker {
                 };
                 let typed_args =
                     self.typecheck_user_function_args(span, callee_uid, params, args)?;
+                self.ensure_no_runtime_lens_args(&typed_args, span, "Function call")?;
 
                 Ok(TypedNode {
                     ty: self.resolve_ty(ret),
@@ -1388,6 +2349,7 @@ impl Checker {
                         });
                     }
                 }
+                self.ensure_no_runtime_lens_args(&typed_args, span, "Function call")?;
 
                 Ok(TypedNode {
                     ty: self.resolve_ty(ret),
@@ -1412,6 +2374,7 @@ impl Checker {
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         let mut body_checker = self.spawn_child_checker(self.env.clone());
+        body_checker.closure_depth = self.closure_depth.saturating_add(1);
         let mut typed_params = Vec::new();
         let param_tys = match expected {
             Some(Ty::Func(expected_params, _)) => {
@@ -1477,6 +2440,16 @@ impl Checker {
 
         for capture in captures {
             if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
+                if matches!(ty, Ty::Lens(_, _)) {
+                    return Err(TypeError {
+                        message: "Lens values are scope-local compile-time capabilities and cannot be captured by closures".into(),
+                        span: capture.span.clone(),
+                        hint: Some(
+                            "Consume the Lens in the current scope with Lens::view/set/over before creating the closure."
+                                .into(),
+                        ),
+                    });
+                }
                 body_checker
                     .env
                     .bind_var(capture.unique_id, body_checker.resolve_ty(&ty));
@@ -1487,6 +2460,14 @@ impl Checker {
             body_checker.function_return_ty = Some(expected_ret.as_ref().clone());
         }
         let typed_body = body_checker.check_node(body)?;
+        if matches!(typed_body.ty, Ty::Lens(_, _)) {
+            return Err(TypeError {
+                message: "Lens is compile-time only in Stage1 and cannot be returned from closures"
+                    .into(),
+                span: typed_body.span.clone(),
+                hint: Some("Use Lens::view(...) inside the closure instead.".into()),
+            });
+        }
         let typed_body = body_checker.resolve_typed_node(typed_body);
         self.absorb_child_progress(&body_checker);
 
@@ -1563,6 +2544,7 @@ impl Checker {
                 });
             }
         }
+        self.ensure_no_runtime_lens_args(&typed_args, span, "Partial application")?;
 
         let remaining = params[typed_args.len()..].to_vec();
         Ok(TypedNode {
@@ -1610,108 +2592,218 @@ impl Checker {
         let typed_right = self.check_node(right)?;
         let lt = self.resolve_ty(&typed_left.ty);
         let rt = self.resolve_ty(&typed_right.ty);
+        let compatibility_checkpoint = self.substitutions.clone();
+        let compatible = self.types_compatible(&lt, &rt);
 
-        let result_ty = match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul => match (&lt, &rt) {
-                (Ty::Int, Ty::Int) => Ok(Ty::Int),
-                (Ty::Float, Ty::Float) => Ok(Ty::Float),
-                (Ty::Var(_), Ty::Int) | (Ty::Int, Ty::Var(_)) => {
-                    self.types_compatible(&lt, &Ty::Int);
-                    self.types_compatible(&rt, &Ty::Int);
-                    Ok(Ty::Int)
-                }
-                (Ty::Var(_), Ty::Float) | (Ty::Float, Ty::Var(_)) => {
-                    self.types_compatible(&lt, &Ty::Float);
-                    self.types_compatible(&rt, &Ty::Float);
-                    Ok(Ty::Float)
-                }
-                _ => Err(TypeError {
-                    message: format!(
-                        "Cannot apply {:?} to {} and {}",
-                        op,
-                        self.ty_name(&lt),
-                        self.ty_name(&rt)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
-            },
-            BinOp::Eq | BinOp::Neq => match (&lt, &rt) {
-                (Ty::Int, Ty::Int)
-                | (Ty::Str, Ty::Str)
-                | (Ty::Bool, Ty::Bool)
-                | (Ty::Enum(_, _), Ty::Enum(_, _)) => {
-                    if self.types_compatible(&lt, &rt) {
-                        Ok(Ty::Bool)
-                    } else {
-                        Err(TypeError {
-                            message: format!(
-                                "Cannot compare {} and {}",
-                                self.ty_name(&lt),
-                                self.ty_name(&rt)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        })
-                    }
-                }
-                _ => {
-                    let before = self.substitutions.clone();
-                    let comparable = self.types_compatible(&lt, &rt);
-                    self.substitutions = before;
-                    if !comparable {
-                        Err(TypeError {
-                            message: format!(
-                                "Cannot compare {} and {}",
-                                self.ty_name(&lt),
-                                self.ty_name(&rt)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        })
-                    } else {
-                        Err(TypeError {
-                            message: format!(
-                                "== / != not supported for {} in phase 1",
-                                self.ty_name(&lt)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        })
-                    }
-                }
-            },
-            BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => match (&lt, &rt) {
-                (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) => Ok(Ty::Bool),
-                _ => Err(TypeError {
-                    message: format!(
-                        "Cannot compare {} and {}",
-                        self.ty_name(&lt),
-                        self.ty_name(&rt)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
-            },
-            BinOp::Concat => match (&lt, &rt) {
-                (Ty::Str, Ty::Str) => Ok(Ty::Str),
-                _ => Err(TypeError {
-                    message: format!(
-                        "++ requires (String, String), got ({}, {})",
-                        self.ty_name(&lt),
-                        self.ty_name(&rt)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
-            },
-        }?;
+        let make_trait_call = |trait_name: String,
+                               method_name: &str,
+                               receiver_ty: Ty,
+                               dispatch: TraitDispatch,
+                               result_ty: Ty,
+                               typed_left: TypedNode,
+                               typed_right: TypedNode| {
+            TypedNode {
+                ty: result_ty,
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name,
+                    method_name: method_name.into(),
+                    receiver_ty,
+                    dispatch,
+                    args: vec![typed_left, typed_right],
+                },
+            }
+        };
 
-        Ok(TypedNode {
-            ty: result_ty,
-            span: span.clone(),
-            node: TypedInner::BinOp(op.clone(), Box::new(typed_left), Box::new(typed_right)),
-        })
+        match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul => {
+                let method_name = match op {
+                    BinOp::Add => "add",
+                    BinOp::Sub => "sub",
+                    BinOp::Mul => "mul",
+                    _ => unreachable!("validated above"),
+                };
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "Cannot apply {:?} to {} and {}",
+                            op,
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let numeric_trait =
+                    self.trait_key_by_short_name("Numeric")
+                        .ok_or_else(|| TypeError {
+                            message: "Unknown trait: Numeric".into(),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
+                let dispatch = self
+                    .trait_dispatch_target(&numeric_trait, method_name, &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "Operator {:?} requires both operands to implement Numeric",
+                            op
+                        ),
+                        span: span.clone(),
+                        hint: Some("Add a `Numeric` bound or use `Int` / `Float` values.".into()),
+                    })?;
+                Ok(make_trait_call(
+                    numeric_trait,
+                    method_name,
+                    receiver_ty.clone(),
+                    dispatch,
+                    receiver_ty,
+                    typed_left,
+                    typed_right,
+                ))
+            }
+            BinOp::Eq | BinOp::Neq => {
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "Cannot compare {} and {}",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let eq_trait = self
+                    .trait_key_by_short_name("Eq")
+                    .ok_or_else(|| TypeError {
+                        message: "Unknown trait: Eq".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let method_name = match op {
+                    BinOp::Eq => "eq",
+                    BinOp::Neq => "neq",
+                    _ => unreachable!("validated above"),
+                };
+                let dispatch = self
+                    .trait_dispatch_target(&eq_trait, method_name, &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "{} / {} not supported for {}",
+                            "==",
+                            "!=",
+                            self.ty_name(&receiver_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                Ok(make_trait_call(
+                    eq_trait,
+                    method_name,
+                    receiver_ty,
+                    dispatch,
+                    Ty::Bool,
+                    typed_left,
+                    typed_right,
+                ))
+            }
+            BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "Cannot compare {} and {}",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let ord_trait = self
+                    .trait_key_by_short_name("Ord")
+                    .ok_or_else(|| TypeError {
+                        message: "Unknown trait: Ord".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let method_name = match op {
+                    BinOp::Lt => "lt",
+                    BinOp::Gt => "gt",
+                    BinOp::Lte => "lte",
+                    BinOp::Gte => "gte",
+                    _ => unreachable!("validated above"),
+                };
+                let dispatch = self
+                    .trait_dispatch_target(&ord_trait, method_name, &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "Cannot compare {} and {}",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                Ok(make_trait_call(
+                    ord_trait,
+                    method_name,
+                    receiver_ty,
+                    dispatch,
+                    Ty::Bool,
+                    typed_left,
+                    typed_right,
+                ))
+            }
+            BinOp::Concat => {
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "++ requires (String, String), got ({}, {})",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let concat_trait =
+                    self.trait_key_by_short_name("Concat")
+                        .ok_or_else(|| TypeError {
+                            message: "Unknown trait: Concat".into(),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
+                let dispatch = self
+                    .trait_dispatch_target(&concat_trait, "concat", &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "++ requires values implementing Concat, got ({}, {})",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                Ok(make_trait_call(
+                    concat_trait,
+                    "concat",
+                    receiver_ty.clone(),
+                    dispatch,
+                    receiver_ty,
+                    typed_left,
+                    typed_right,
+                ))
+            }
+        }
     }
 
     pub(super) fn check_list_nil(&mut self, span: &Span) -> Result<TypedNode, TypeError> {
@@ -1731,6 +2823,8 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_head = self.check_node(head)?;
         let typed_tail = self.check_node(tail)?;
+        self.ensure_no_runtime_lens_value(&typed_head, "List construction")?;
+        self.ensure_no_runtime_lens_value(&typed_tail, "List construction")?;
         let tail_elem_ty = match &typed_tail.ty {
             Ty::List(inner) => inner.as_ref().clone(),
             other => {
@@ -1775,6 +2869,9 @@ impl Checker {
             .iter()
             .map(|e| self.check_node(e))
             .collect::<Result<Vec<_>, _>>()?;
+        for typed in &typed_elems {
+            self.ensure_no_runtime_lens_value(typed, "List literal")?;
+        }
 
         let elem_ty = typed_elems[0].ty.clone();
         for te in typed_elems.iter().skip(1) {
@@ -1798,6 +2895,35 @@ impl Checker {
         })
     }
 
+    pub(super) fn check_tuple_literal(
+        &mut self,
+        span: &Span,
+        elems: &[Resolved],
+    ) -> Result<TypedNode, TypeError> {
+        if elems.len() < 2 {
+            return Err(TypeError {
+                message: "Tuple literals require at least 2 values".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let typed_elems = elems
+            .iter()
+            .map(|elem| self.check_node(elem))
+            .collect::<Result<Vec<_>, _>>()?;
+        for typed in &typed_elems {
+            self.ensure_no_runtime_lens_value(typed, "Tuple literal")?;
+        }
+        let item_tys = typed_elems.iter().map(|elem| elem.ty.clone()).collect();
+
+        Ok(TypedNode {
+            ty: Ty::Tuple(item_tys),
+            span: span.clone(),
+            node: TypedInner::TupleLiteral(typed_elems),
+        })
+    }
+
     pub(super) fn check_interpolated_str(
         &mut self,
         span: &Span,
@@ -1811,6 +2937,7 @@ impl Checker {
                 }
                 ResolvedInterpolatedPart::Expr(expr) => {
                     let typed_expr = self.check_node(expr)?;
+                    self.ensure_no_runtime_lens_value(&typed_expr, "String interpolation")?;
                     if matches!(typed_expr.ty, Ty::Result(_, _)) {
                         return Err(TypeError {
                             message: "Interpolation does not allow Result type".into(),
@@ -1967,38 +3094,368 @@ impl Checker {
         })
     }
 
+    fn resolve_lens_segment_for_source_ty(
+        &mut self,
+        source_ty: &Ty,
+        field: &str,
+        span: &Span,
+        for_capability: bool,
+    ) -> Result<(TypedLensSegment, Ty, bool), TypeError> {
+        match self.resolve_ty(source_ty) {
+            Ty::Tuple(items) => {
+                let index = field
+                    .strip_prefix('_')
+                    .ok_or_else(|| TypeError {
+                        message: "Tuple elements are accessed with ._0, ._1, ...".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?
+                    .parse::<usize>()
+                    .map_err(|_| TypeError {
+                        message: "Tuple elements are accessed with ._0, ._1, ...".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let field_ty = items.get(index).cloned().ok_or_else(|| TypeError {
+                    message: format!(
+                        "Tuple index ._{} is out of bounds for {}",
+                        index,
+                        self.ty_name(source_ty)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+                Ok((
+                    TypedLensSegment::Tuple {
+                        field_index: index as u32,
+                        tuple_len: items.len() as u32,
+                    },
+                    field_ty,
+                    false,
+                ))
+            }
+            Ty::Struct(name, fields) | Ty::Record(name, fields) => {
+                if self.env.is_private_field(&name, field) {
+                    let outside_impl =
+                        self.current_impl_struct_target.as_deref() != Some(name.as_str());
+                    if for_capability && outside_impl {
+                        return Err(TypeError {
+                            message: format!("Field '{}.{}' is private", name, field),
+                            span: span.clone(),
+                            hint: Some(format!(
+                                "Expose the value through a public method on {} instead.",
+                                name
+                            )),
+                        });
+                    }
+                    if !for_capability && outside_impl && self.closure_depth > 0 {
+                        return Err(TypeError {
+                            message: format!(
+                                "Field '{}.{}' is private and cannot be accessed from closures outside impl {}",
+                                name, field, name
+                            ),
+                            span: span.clone(),
+                            hint: Some(format!(
+                                "Read {}.{} in the current scope first, then capture the plain value.",
+                                name, field
+                            )),
+                        });
+                    }
+                }
+                let (field_index, field_ty) = fields
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (field_name, _))| field_name == field)
+                    .map(|(i, (_, ty))| (i as u32, ty.clone()))
+                    .ok_or_else(|| TypeError {
+                        message: format!("No field '{}' on {}", field, self.ty_name(source_ty)),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                Ok((
+                    TypedLensSegment::Field {
+                        field_name: field.to_string(),
+                        field_index,
+                        container_field_count: fields.len() as u32,
+                    },
+                    field_ty,
+                    false,
+                ))
+            }
+            Ty::Enum(enum_name, _) => {
+                let variants = self
+                    .env
+                    .enum_variants_of(&enum_name)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        message: format!("No variants found for enum {}", enum_name),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let variant = variants
+                    .iter()
+                    .find(|candidate| candidate.short_name == field)
+                    .cloned();
+                let Some(variant) = variant else {
+                    return Err(TypeError {
+                        message: format!(
+                            "No variant selector '{}' on {} (use PascalCase constructor names)",
+                            field, enum_name
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                };
+                let variant = self.instantiate_enum_variant(&variant);
+                if !self.types_compatible(&variant.enum_ty, source_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Variant selector {}.{} does not match {}",
+                            enum_name,
+                            field,
+                            self.ty_name(source_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let payload_arity = variant.payload.len() as u32;
+                let focus_ty = match variant.payload.len() {
+                    0 => Ty::Unit,
+                    1 => variant.payload[0].clone(),
+                    _ => Ty::Tuple(variant.payload.clone()),
+                };
+                Ok((
+                    TypedLensSegment::Variant {
+                        enum_name,
+                        variant_name: variant.short_name,
+                        variant_tag: variant.tag,
+                        payload_arity,
+                    },
+                    focus_ty,
+                    true,
+                ))
+            }
+            other => {
+                let message = if field.starts_with('_')
+                    && field
+                        .strip_prefix('_')
+                        .is_some_and(|suffix| suffix.chars().all(|ch| ch.is_ascii_digit()))
+                {
+                    format!(
+                        "Tuple-style access .{} is only available on tuples, got {}",
+                        field,
+                        self.ty_name(&other)
+                    )
+                } else {
+                    format!("Cannot access field on {}", self.ty_name(&other))
+                };
+                Err(TypeError {
+                    message,
+                    span: span.clone(),
+                    hint: None,
+                })
+            }
+        }
+    }
+
+    fn try_check_tuple_type_root_lens_path(
+        &mut self,
+        span: &Span,
+        expr: &Resolved,
+        field: &str,
+        expected: Option<&Ty>,
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Resolved::Var(_, id) = expr else {
+            return Ok(None);
+        };
+        if id.name != "Tuple" {
+            return Ok(None);
+        }
+        let Some(index) = Self::parse_tuple_segment_index(field) else {
+            return Ok(None);
+        };
+
+        let expected_ty = expected.ok_or_else(|| TypeError {
+            message: format!(
+                "Tuple.{} requires Lens type context (e.g. Lens::view(Tuple.{}, source_tuple))",
+                field, field
+            ),
+            span: span.clone(),
+            hint: Some("Use Tuple._N only where a Lens<(...), ...> is expected.".into()),
+        })?;
+        let expected_ty = self.resolve_ty(expected_ty);
+        let (expected_source, expected_focus) = match expected_ty {
+            Ty::Lens(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "Tuple.{} requires expected Lens<..., ...> context, got {}",
+                        field,
+                        self.ty_name(&other)
+                    ),
+                    span: span.clone(),
+                    hint: Some(
+                        "Use Tuple._N as a Lens path argument in Lens::view/set/over.".into(),
+                    ),
+                });
+            }
+        };
+
+        let tuple_items = match self.resolve_ty(&expected_source) {
+            Ty::Tuple(items) => items,
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "Tuple.{} requires tuple source context, got {}",
+                        field,
+                        self.ty_name(&other)
+                    ),
+                    span: span.clone(),
+                    hint: Some("Expected source type like (A, B, ...) for Tuple._N.".into()),
+                });
+            }
+        };
+
+        let focus_ty = tuple_items.get(index).cloned().ok_or_else(|| TypeError {
+            message: format!(
+                "Tuple index ._{} is out of bounds for ({})",
+                index,
+                tuple_items
+                    .iter()
+                    .map(|item| self.ty_name(item))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            span: span.clone(),
+            hint: None,
+        })?;
+
+        if !self.types_compatible(&focus_ty, &expected_focus) {
+            return Err(TypeError {
+                message: format!(
+                    "Tuple.{} focus type mismatch: expected {}, got {}",
+                    field,
+                    self.ty_name(&expected_focus),
+                    self.ty_name(&focus_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let source_ty = Ty::Tuple(tuple_items);
+        let path = TypedLensPath {
+            source_ty: source_ty.clone(),
+            focus_ty: focus_ty.clone(),
+            may_fail: false,
+            segments: vec![TypedLensSegment::Tuple {
+                field_index: index as u32,
+                tuple_len: match &source_ty {
+                    Ty::Tuple(items) => items.len() as u32,
+                    _ => unreachable!("source_ty is always Tuple here"),
+                },
+            }],
+        };
+
+        Ok(Some(TypedNode {
+            ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+            span: span.clone(),
+            node: TypedInner::LensPath(path),
+        }))
+    }
+
+    fn check_field_access_with_expected(
+        &mut self,
+        span: &Span,
+        expr: &Resolved,
+        field: &str,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        if let Some(tuple_root_path) =
+            self.try_check_tuple_type_root_lens_path(span, expr, field, expected)?
+        {
+            return Ok(tuple_root_path);
+        }
+        let typed_expr = self.check_node(expr)?;
+
+        if matches!(typed_expr.ty, Ty::Lens(_, _)) {
+            let path = self.resolve_lens_path_from_node(typed_expr, span)?;
+            let (segment, focus_ty, may_fail) =
+                self.resolve_lens_segment_for_source_ty(&path.focus_ty, field, span, true)?;
+            let source_ty = self.resolve_ty(&path.source_ty);
+            let focus_ty = self.resolve_ty(&focus_ty);
+            let mut segments = path.segments;
+            segments.push(segment);
+            let combined = TypedLensPath {
+                source_ty: source_ty.clone(),
+                focus_ty: focus_ty.clone(),
+                may_fail: path.may_fail || may_fail,
+                segments,
+            };
+            return Ok(TypedNode {
+                ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+                span: span.clone(),
+                node: TypedInner::LensPath(combined),
+            });
+        }
+
+        if let TypedInner::Var(id) = &typed_expr.node {
+            if self.env.is_type_constructor_id(id.unique_id) {
+                let source_ty = self.resolve_ty(&typed_expr.ty);
+                let (segment, focus_ty, may_fail) =
+                    self.resolve_lens_segment_for_source_ty(&source_ty, field, span, true)?;
+                let focus_ty = self.resolve_ty(&focus_ty);
+                let path = TypedLensPath {
+                    source_ty: source_ty.clone(),
+                    focus_ty: focus_ty.clone(),
+                    may_fail,
+                    segments: vec![segment],
+                };
+                return Ok(TypedNode {
+                    ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+                    span: span.clone(),
+                    node: TypedInner::LensPath(path),
+                });
+            }
+        }
+
+        let (source_is_result, source_focus_ty) = match self.resolve_ty(&typed_expr.ty) {
+            Ty::Result(ok, _) => (true, ok.as_ref().clone()),
+            other => (false, other),
+        };
+        let (segment, focus_ty, may_fail) =
+            self.resolve_lens_segment_for_source_ty(&source_focus_ty, field, span, false)?;
+        let focus_ty = self.resolve_ty(&focus_ty);
+        let path = TypedLensPath {
+            source_ty: source_focus_ty,
+            focus_ty: focus_ty.clone(),
+            may_fail,
+            segments: vec![segment],
+        };
+        let out_ty = if source_is_result || path.may_fail {
+            Ty::Result(Box::new(focus_ty), Box::new(Ty::Error))
+        } else {
+            focus_ty
+        };
+
+        Ok(TypedNode {
+            ty: out_ty,
+            span: span.clone(),
+            node: TypedInner::LensView {
+                source: Box::new(typed_expr),
+                path,
+                source_is_result,
+            },
+        })
+    }
+
     pub(super) fn check_field_access(
         &mut self,
         span: &Span,
         expr: &Resolved,
         field: &str,
     ) -> Result<TypedNode, TypeError> {
-        let typed_expr = self.check_node(expr)?;
-
-        let (idx, field_ty) = match &typed_expr.ty {
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-                .iter()
-                .enumerate()
-                .find(|(_, (name, _))| name == field)
-                .map(|(i, (_, ty))| (i as u32, ty.clone()))
-                .ok_or_else(|| TypeError {
-                    message: format!("No field '{}' on {}", field, self.ty_name(&typed_expr.ty)),
-                    span: span.clone(),
-                    hint: None,
-                })?,
-            _ => {
-                return Err(TypeError {
-                    message: format!("Cannot access field on {}", self.ty_name(&typed_expr.ty)),
-                    span: span.clone(),
-                    hint: None,
-                });
-            }
-        };
-
-        Ok(TypedNode {
-            ty: field_ty,
-            span: span.clone(),
-            node: TypedInner::FieldAccess(Box::new(typed_expr), idx),
-        })
+        self.check_field_access_with_expected(span, expr, field, None)
     }
 }

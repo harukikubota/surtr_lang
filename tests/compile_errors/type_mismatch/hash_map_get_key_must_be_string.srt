@@ -1,0 +1,3 @@
+map = HashMap::insert(HashMap::empty(), "name", 1)
+value = HashMap::get(map, 1)
+print(to_string(value))

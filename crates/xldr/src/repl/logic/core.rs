@@ -8,6 +8,7 @@ use forge::bytecode::populate_error_template_lines;
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
 use sindr::ir::DocEntry;
+use sindr::policy::CompileUnitKind;
 use spire::ast::{Ast, ImportSpec, Span};
 
 use super::command::{parse_repl_command, ReplCommand};
@@ -15,12 +16,11 @@ use super::output::{ReplOutput, ReplResult};
 use super::render;
 use crate::loader::{self, StagedModule};
 use crate::{
-    collect_additional_default_std_module_inputs, derive_source_rules, LoadError,
-    ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
+    collect_additional_default_std_module_inputs, derive_parse_rules, derive_runtime_policy,
+    LoadError, ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub(crate) const REPL_AUTO_IMPORT_MODULES: &[&str] = &["Bootstrap", "Kernel"];
 
 /// Error returned when loading a `.eldr` file into a REPL engine.
 #[derive(Debug)]
@@ -63,16 +63,13 @@ pub struct ReplEngine {
     result_metas: Vec<Option<forge::ChunkMeta>>,
     symbols: BTreeSet<String>,
     docs: Vec<DocEntry>,
+    auto_import_modules: BTreeSet<String>,
 }
 
 impl ReplEngine {
     pub(crate) fn new() -> Result<Self, LoadError> {
         let std_module_inputs = collect_additional_default_std_module_inputs()?;
-        let repl_sources = if std_module_inputs.is_empty() {
-            loader::collect_repl_sources()?
-        } else {
-            loader::collect_repl_sources_with_std_module_stages(&[std_module_inputs])?
-        };
+        let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])?;
         let forge_session = forge::ForgeSession::new();
         let vm = eldr::VM::new_interactive(forge_session.type_registry());
         let mut engine = Self {
@@ -98,6 +95,7 @@ impl ReplEngine {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            auto_import_modules: BTreeSet::new(),
         };
         engine.bootstrap_std_modules()?;
         Ok(engine)
@@ -120,12 +118,8 @@ impl ReplEngine {
 
         let std_module_inputs =
             collect_additional_default_std_module_inputs().map_err(EldrLoadError::Load)?;
-        let repl_sources = if std_module_inputs.is_empty() {
-            loader::collect_repl_sources()
-        } else {
-            loader::collect_repl_sources_with_std_module_stages(&[std_module_inputs])
-        }
-        .map_err(EldrLoadError::Load)?;
+        let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])
+            .map_err(EldrLoadError::Load)?;
 
         let docs = bytecode.docs.clone();
         let forge_session = forge::ForgeSession::from_bytecode(&bytecode);
@@ -165,6 +159,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols,
             docs,
+            auto_import_modules: BTreeSet::new(),
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
         engine
@@ -177,7 +172,7 @@ impl ReplEngine {
         let module_stages = match parse_module_stages_from_sources(
             &self.sources,
             &self.module_stages,
-            spire::CompileUnitKind::Repl,
+            CompileUnitKind::Repl,
         ) {
             Ok(stages) => stages,
             Err(e) => return Err(load_error_from_parse_failure(&self.sources, e)),
@@ -186,6 +181,13 @@ impl ReplEngine {
         if module_stages.iter().all(|stage| stage.is_empty()) {
             return Ok(());
         }
+
+        self.auto_import_modules = module_stages
+            .iter()
+            .flat_map(|stage| stage.iter())
+            .filter(|module| module.auto_import)
+            .map(|module| module.module_path.clone())
+            .collect();
 
         let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
             Ok(index) => index,
@@ -224,8 +226,8 @@ impl ReplEngine {
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
             scar::TypecheckContext {
-                source_rules: derive_source_rules(
-                    spire::CompileUnitKind::Repl,
+                runtime_policy: derive_runtime_policy(
+                    CompileUnitKind::Repl,
                     SourceKind::StdModule,
                     None,
                 ),
@@ -300,7 +302,8 @@ impl ReplEngine {
                 ));
             }
         };
-        self.sigil_session.replace_scope(scope);
+        self.sigil_session
+            .replace_scope_with_declarations(scope, &declaration_index);
 
         for name in &meta.function_defs {
             self.symbols.insert(name.clone());
@@ -319,7 +322,7 @@ impl ReplEngine {
         let module_stages = match parse_module_stages_from_sources(
             &self.sources,
             &self.module_stages,
-            spire::CompileUnitKind::Repl,
+            CompileUnitKind::Repl,
         ) {
             Ok(stages) => stages,
             Err(e) => return Err(load_error_from_parse_failure(&self.sources, e)),
@@ -328,6 +331,13 @@ impl ReplEngine {
         if module_stages.iter().all(|stage| stage.is_empty()) {
             return Ok(());
         }
+
+        self.auto_import_modules = module_stages
+            .iter()
+            .flat_map(|stage| stage.iter())
+            .filter(|module| module.auto_import)
+            .map(|module| module.module_path.clone())
+            .collect();
 
         let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
             Ok(index) => index,
@@ -367,8 +377,8 @@ impl ReplEngine {
         if let Err(e) = self.scar_session.typecheck_with_context(
             resolved,
             scar::TypecheckContext {
-                source_rules: derive_source_rules(
-                    spire::CompileUnitKind::Repl,
+                runtime_policy: derive_runtime_policy(
+                    CompileUnitKind::Repl,
                     SourceKind::StdModule,
                     None,
                 ),
@@ -404,7 +414,8 @@ impl ReplEngine {
                 ));
             }
         };
-        self.sigil_session.replace_scope(scope);
+        self.sigil_session
+            .replace_scope_with_declarations(scope, &declaration_index);
         Ok(())
     }
 
@@ -531,14 +542,19 @@ impl ReplEngine {
 
     fn apply_repl_imports(&mut self, ast: &[Ast]) -> Result<ReplImportResult, ResolveError> {
         let mut result = ReplImportResult::default();
+        let auto_import_traits = self
+            .declaration_index
+            .values()
+            .filter(|entry| entry.kind == sigil::DeclarationKind::Trait && entry.auto_import)
+            .map(|entry| entry.name.clone())
+            .collect::<std::collections::BTreeSet<_>>();
         for stmt in ast {
             let Ast::Import(span, path, spec) = stmt else {
                 continue;
             };
             let module_name = path.segments.join("::");
-            if REPL_AUTO_IMPORT_MODULES
-                .iter()
-                .any(|auto| auto == &module_name.as_str())
+            if self.auto_import_modules.contains(&module_name)
+                || auto_import_traits.contains(&module_name)
             {
                 return Err(ResolveError {
                     message: format!(
@@ -743,11 +759,8 @@ impl ReplEngine {
 
         let ast = match spire::parse_with_context(
             &self.pending,
-            spire::ParserContext::repl(self.repl_source_id.0).with_rules(derive_source_rules(
-                spire::CompileUnitKind::Repl,
-                SourceKind::ReplChunk,
-                None,
-            )),
+            spire::ParserContext::repl(self.repl_source_id.0)
+                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
         ) {
             Ok(ast) => ast,
             Err(e) if e.is_incomplete() => {
@@ -828,8 +841,8 @@ impl ReplEngine {
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
             scar::TypecheckContext {
-                source_rules: derive_source_rules(
-                    spire::CompileUnitKind::Repl,
+                runtime_policy: derive_runtime_policy(
+                    CompileUnitKind::Repl,
                     SourceKind::ReplChunk,
                     None,
                 ),
@@ -1100,7 +1113,7 @@ fn load_error_from_span_failure(
 pub(crate) fn parse_module_stages_from_sources(
     sources: &SourceRegistry,
     module_stages: &[Vec<StagedModule>],
-    compile_unit_kind: spire::CompileUnitKind,
+    _compile_unit_kind: CompileUnitKind,
 ) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
     let mut staged_module_asts = Vec::with_capacity(module_stages.len());
     let mut seen_module_paths: HashMap<String, String> = HashMap::new();
@@ -1112,9 +1125,8 @@ pub(crate) fn parse_module_stages_from_sources(
             let module_source = crate::strip_test_annotations(raw_module_source);
             let parsed = spire::parse_with_context(
                 &module_source,
-                spire::ParserContext::module(module.source_id.0, None).with_rules(
-                    derive_source_rules(compile_unit_kind, module.source_kind, None),
-                ),
+                spire::ParserContext::module(module.source_id.0, None)
+                    .with_rules(derive_parse_rules(module.source_kind)),
             )
             .map_err(|e| ModuleStageParseError {
                 source_id: module.source_id,
@@ -1150,6 +1162,7 @@ pub(crate) fn parse_module_stages_from_sources(
                     module_path: lowered.module_path,
                     ast: lowered.ast,
                     module_doc: lowered.module_doc,
+                    auto_import: lowered.auto_import,
                 });
             }
         }
@@ -1169,12 +1182,12 @@ mod tests {
 
     fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
         let repl_sources =
-            loader::collect_repl_sources_with_std_module_stages(&[vec![crate::ModuleInput {
+            loader::collect_repl_sources_with_module_stages(&[vec![crate::ModuleInput {
                 file_name: "lib/bad.srt".into(),
                 source: source.into(),
                 module_path: module_path.into(),
             }]])
-            .expect("test stdlib stage should load");
+            .expect("test module stage should load");
         let forge_session = forge::ForgeSession::new();
         let vm = eldr::VM::new_interactive(forge_session.type_registry());
 
@@ -1201,6 +1214,7 @@ mod tests {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            auto_import_modules: BTreeSet::new(),
         }
     }
 

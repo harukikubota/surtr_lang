@@ -1,0 +1,4 @@
+user = User("alice", "s3cr3t")
+password = user.password
+reader = {|| password}
+print(reader())

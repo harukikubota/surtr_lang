@@ -202,28 +202,28 @@ defenum MatchResult<$Value> {
 surface では `MatchResult<$Value, Error>` を canonical spelling として扱ってよい。
 ただし第 2 引数の `Error` は型変数ではなく、抽象型 `Error` そのものを指す。
 
-ここで `Seq` は MatchBlock evaluator が束縛対象の値列を運ぶための特別扱い型である。
+ここで extractor の成功値は、束縛対象が 1 個なら単一値、2 個以上なら tuple として扱う。
 
 ---
 
-## 5. `Seq` と `MatchResult`
+## 5. tuple と `MatchResult`
 
-### 5.1 `Seq`
+### 5.1 tuple payload
 
-`Seq` は MatchBlock evaluator 向けの内部的な値列である。
+extractor の成功 payload は MatchBlock evaluator 向けの値列である。
 
-- heterogenous な束縛候補列を運べる
-- `Seq` の要素数と左辺の期待 arity は一致しなければならない
-- `Seq` の各要素は再帰的に MatchBlock evaluator へ渡される
+- 1 個の束縛候補なら単一値 `T` を運べる
+- 2 個以上の束縛候補なら tuple `(T1, T2, ...)` を運べる
+- tuple の要素数と左辺の期待 arity は一致しなければならない
+- 単一値または tuple の各要素は再帰的に MatchBlock evaluator へ渡される
 
-`Seq` は一般-purpose tuple を導入するための機能ではない。
-分解結果の受け渡し専用とする。
+tuple 自体は user code でも使えるが、extractor 契約では「分解結果の受け渡し」として扱う。
 
 ### 5.2 `MatchResult`
 
 `MatchResult` は MatchBlock / Extractor 向けの特別扱いインターフェースである。
 
-- `Success(Seq)` を保持できる
+- `Success(T)` または `Success((...))` を保持できる
 - `NoMatch` を保持できる
 - `Err(Error)` を保持できる
 
@@ -337,7 +337,7 @@ MatchBlock 文脈では、これらは通常 call ではなく matcher invocatio
 意味:
 
 - 入力値に対して Extractor を適用する
-- 結果が `Success(Seq(...))` なら各要素を左辺 subpattern へ再帰適用する
+- 結果が `Success(value)` または `Success((...))` なら各要素を左辺 subpattern へ再帰適用する
 - `NoMatch` ならその matcher は失敗
 - `Err` ならそのまま error を返す
 
@@ -495,7 +495,7 @@ defextractor Name(self) -> MatchResult<$E>
 
 Extractor は次を返せる。
 
-- `Success(Seq(...))`
+- `Success(value)` / `Success((...))`
 - `NoMatch`
 - `Err(e)`
 
@@ -571,18 +571,12 @@ defenum MatchResult<$Value> {
   Err(Error),
 }
 
-@@doc """
-Extractor の分解結果を運ぶ compiler-special な型。
-一般の tuple 機能ではなく、MatchBlock 用の型付き値列を表す。
-"""
-@@builtin type Seq<$Type>
-
 defmod Kernel {
   @@doc """
   非空 List または非空 String を `(head, tail)` へ分解する builtin Extractor。
   空入力のときは `NoMatch` を返す。
   """
-  @@builtin defextractor uncons(term) -> MatchResult<Seq<$Head, $Tail>, Error>
+  @@builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>
 }
 
 @@doc """
@@ -592,7 +586,7 @@ deferror UserMatchError(detail: String) {
   "user extractor failed: #{detail}"
 }
 
-defextractor user(self) -> MatchResult<Seq<String, Int>, Error> {
+defextractor user(self) -> MatchResult<(String, Int), Error> {
   MatchResult::Err(UserMatchError("not yet implemented in surface"))
 }
 
@@ -602,7 +596,7 @@ defstruct User {
 }
 
 impl User {
-  def deconstruct(self: Self) -> MatchResult<Seq<String, Int>, Error> {
+  def deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
     MatchResult::Err(UserMatchError("not yet implemented in surface"))
   }
 }
@@ -610,8 +604,8 @@ impl User {
 
 補足:
 
-- `Seq<$Type>` は「型付きの分解結果を返す」という意図を code-level に見せるための表現である
-- `Seq` の arity や各要素型の厳密な扱いは compiler が吸収してよい
+- 単一値 extractor は `MatchResult<T, Error>` を返す
+- 複数値 extractor は `MatchResult<(T1, T2, ...), Error>` を返す
 - builtin Extractor も user-defined Extractor も、宣言レベルでは同じ段に置けることを重視する
 - `uncons` は code-level に宣言があっても、内部実装は compiler-special のままでよい
 - Pattern 位置の `[head, ..tail]` は `List` / `String` に対して `uncons(head, tail)` の alias として扱ってよい
@@ -656,7 +650,7 @@ MatchBlock 導入時は少なくとも次の診断を持つ。
 
 - Extractor が見つからない
 - Extractor の返り値が MatchBlock 契約に合わない
-- `Seq` の arity が左辺 subpattern 数と一致しない
+- tuple payload の arity が左辺 subpattern 数と一致しない
 - `=` で partial MatchBlock を使っている
 - `match` に partial matcher があるのに default arm がない
 - `Err` を default arm で吸収しようとしている
@@ -676,7 +670,7 @@ MatchBlock 導入時は少なくとも次の診断を持つ。
 ### 13.2 Extractor の責務
 
 - 入力から `Success / NoMatch / Err` を返す
-- 必要なら値列を `Seq` で返す
+- 必要なら複数値を tuple で返す
 
 ### 13.3 macro の責務
 
@@ -693,7 +687,7 @@ macro は MatchBlock evaluator の意味論そのものを担わない。
 
 - 既束縛変数の再出現を比較として扱うか
 - pin 相当記法を導入するか
-- `MatchResult` / `Seq` の surface syntax をどこまで見せるか
+- `MatchResult` / tuple payload の surface syntax をどこまで見せるか
 - `=` で許す total 判定をどこまで自動化するか
 - `match` の exhaustiveness 診断と partial matcher 診断をどう統合するか
 - REPL 表示で MatchBlock 失敗をどう見せるか

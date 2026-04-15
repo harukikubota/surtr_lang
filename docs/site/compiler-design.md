@@ -95,7 +95,7 @@ Surtr では、標準モジュールも source として扱います。
 ロード順は固定です。
 
 ```text
-Bootstrap -> [Kernel, 他標準モジュール] -> ユーザ拡張
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> ユーザ拡張
 ```
 
 ### `Bootstrap`
@@ -111,7 +111,7 @@ Bootstrap -> [Kernel, 他標準モジュール] -> ユーザ拡張
 - loader と auto import の起点を固定する
 - universally useful な concrete error を最初の標準ステージから使えるようにする
 
-### stage 2: `Kernel` + type modules
+### stage 2: `Kernel` + trait / type modules
 
 責務:
 
@@ -119,6 +119,8 @@ Bootstrap -> [Kernel, 他標準モジュール] -> ユーザ拡張
   - auto import される小さな標準 API
   - `defmod Kernel` の中にある `print` のような cross-cutting builtin
   - 専用 file を持たない `Unit` の type 宣言
+- `Numeric`
+  - compile-time trait dispatch 用の trait 宣言
 - type modules
   - `Int`, `String`, `Boolean`, `Error`, `List`, `Result`, `Float`
   - 各 file top-level の canonical builtin type head
@@ -159,7 +161,7 @@ Surtr では、「何を読むか」と「どういう実行単位か」を分�
 - `Project`
 - `Repl`
 
-これを分けている理由は、同じ parser でも source の性質によって許可したい構文が違うためです。
+これを分けている理由は、parse 制約と runtime 制約の責務を分離するためです。
 
 例:
 
@@ -168,7 +170,22 @@ Surtr では、「何を読むか」と「どういう実行単位か」を分�
 - REPL では top-level expression を許可したい
 - project build では `set_exit_code` を entrypoint のみに制限したい
 
-この方針を `SourceRules` に閉じ込めることで、個別の crate に ad-hoc な分岐を書き散らさずに済みます。
+この設計の前提には、関数を常に namespace へ所属させる方針があります。
+
+- `defmod` は通常 module namespace
+- `impl Type` は型専用の module-like namespace
+- `deftrait` は method 契約 namespace
+- `impl Trait for Type` は concrete 実装 namespace
+- `Script` / `ReplChunk` の top-level `def` は暗黙の擬似 module に属する
+
+つまり script / REPL は「module なし特例」ではなく、`defmod` を省略した実行形です。
+
+この方針は次の2層へ分離して保持します。
+
+- `Spire::ParseRules`: `@@builtin` の許可範囲や top-level 構文許可を管理
+- `sindr::policy::RuntimeSourcePolicy`: `set_exit_code` の実行時制約（Anywhere / Forbidden / EntryOnly）を管理
+
+これにより parser 実装（`chumsky` 含む）を差し替えても、runtime policy を巻き込まずに保守できます。
 
 ## 6. builtin の設計
 
@@ -208,6 +225,8 @@ Scar では、式の型だけでなく「言語としての整合性」を見ま
 - `match` が網羅的か
 - field access がどの index を参照するか
 - builtin シグネチャと実際の呼び出しが合うか
+- trait bound と concrete impl が一致するか
+- trait call をどの concrete dispatch target へ落とすか
 
 この時点で field 名を index に解決しておくことで、Forge と Eldr を単純化できます。
 
@@ -228,6 +247,9 @@ Surtr の `|>`, `|*>`, `|>=`, `>>`, `|=>`, `=?` は見た目が近くても責�
 - `Result` と `List` の文脈違いは Scar の型規則で分岐する
 
 こうしておくと、Forge は「どの外部契約が確定済みか」を前提に lower できます。
+
+`Numeric` のような trait も同じで、Scar が `TraitCall` と specialization を確定し、
+Forge は opcode / builtin / user function のどれへ落とすかだけを担当します。
 
 ## 9. Bytecode VM を後段へ押し込む設計
 

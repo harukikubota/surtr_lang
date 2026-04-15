@@ -1,0 +1,17 @@
+print(to_string(Result::is_ok(Ok(1))))
+print(to_string(Result::is_ok(Err(NoneError))))
+print(to_string(Result::is_err(Ok(1))))
+print(to_string(Result::is_err(Err(NoneError))))
+print(inspect(Result::map_err(Ok(1), ZeroDivisionError)))
+print(inspect(Result::map_err(Err(NoneError), ZeroDivisionError)))
+print(inspect(Result::cause(Ok(1), ZeroDivisionError)))
+print(inspect(Result::cause(Err(NoneError), ZeroDivisionError)))
+print(inspect(Result::chain(Ok(7), Ok(()))))
+print(inspect(Result::chain(Ok(7), Err(IndexOutOfBounds("tail")))))
+print(inspect(Result::chain(Err(NoneError), Ok(()))))
+print(inspect(Result::chain(Err(NoneError), Err(ZeroDivisionError))))
+print(inspect(Result::chain(Err(IndexOutOfBounds("tail")), Result::cause(Err(NoneError), ZeroDivisionError))))
+match Result::cause(Err(NoneError), ZeroDivisionError) {
+  Ok(_) => print("unexpected"),
+  Err(e) => print(inspect(e)),
+}
