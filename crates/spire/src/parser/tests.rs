@@ -732,6 +732,35 @@ fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
 }
 
 #[test]
+fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @@builtin def import() -> Unit
+  @@builtin def include(path: String) -> Unit
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("builtin import/include declarations should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            assert!(matches!(
+                &body[0],
+                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                    if builtin_name == "import" && params.is_empty() && ret == "Unit"
+            ));
+            assert!(matches!(
+                &body[1],
+                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                    if builtin_name == "include" && params.len() == 1 && ret == "Unit"
+            ));
+        }
+        other => panic!("expected defmod, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_unknown_annotator_is_error() {
     let err = parse("@@memo def f()").expect_err("error");
     assert!(err.message().contains("Unknown annotator: @@memo"));

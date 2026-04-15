@@ -1,7 +1,8 @@
 use super::captures::collect_captures;
 use super::declarations::trait_instance_key;
 use super::scope_init::{
-    initialize_scope, is_runtime_builtin_decl, is_special_form_builtin_decl, resolve_decl_attrs,
+    initialize_scope, is_doc_only_builtin_decl, is_runtime_builtin_decl,
+    is_special_form_builtin_decl, resolve_decl_attrs,
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
@@ -164,7 +165,9 @@ impl Resolver {
         self.predeclare_functions(&stmts)?;
         let mut resolved = Vec::new();
         for stmt in stmts {
-            if matches!(stmt, Ast::Import(_, _, _)) {
+            if matches!(stmt, Ast::Import(_, _, _))
+                || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
+            {
                 // `import` declarations are consumed by resolver-side module/import handling.
                 // Until full module resolution lands, they are intentionally no-op here.
                 continue;

@@ -1,5 +1,6 @@
 use super::scope_init::initialize_scope;
 use super::*;
+use super::scope_init::is_doc_only_builtin_decl;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
@@ -807,6 +808,11 @@ pub fn precollect_declaration_index(
                     _ => continue,
                 };
 
+                if matches!(stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
+                {
+                    continue;
+                }
+
                 let fq_name = if module.module_path.is_empty() {
                     name.to_string()
                 } else {
@@ -1116,6 +1122,9 @@ impl Resolver {
                     }
                 }
                 Ast::BuiltinDecl(_, name, _, _, _) => {
+                    if is_doc_only_builtin_decl(name) {
+                        continue;
+                    }
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),

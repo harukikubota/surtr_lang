@@ -260,7 +260,26 @@ impl Parser {
     }
 
     fn expect_builtin_decl_name(&mut self) -> Result<(Symbol, Span), ParseError> {
-        self.expect_ident()
+        let sp = self.peek_span();
+        match self.peek().clone() {
+            Token::Ident(name) => {
+                self.advance();
+                Ok((name, sp))
+            }
+            Token::Import => {
+                self.advance();
+                Ok(("import".to_string(), sp))
+            }
+            Token::Include => {
+                self.advance();
+                Ok(("include".to_string(), sp))
+            }
+            Token::Eof => Err(ParseError::incomplete("identifier", sp)),
+            _ => Err(ParseError::syntax(
+                format!("Expected identifier, got {:?}", self.peek()),
+                sp,
+            )),
+        }
     }
 
     fn skip_newlines(&mut self) {

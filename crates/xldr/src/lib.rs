@@ -612,6 +612,55 @@ deferror NoneError { "None Value." }"#,
     }
 
     #[test]
+    fn bundled_bootstrap_source_parses_in_std_module_context() {
+        let ast = spire::parse_with_context(
+            include_str!("../../../lib/bootstrap.srt"),
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .expect("bootstrap source should parse as a std module");
+        assert!(ast.iter().any(|stmt| matches!(
+            stmt,
+            spire::ast::Ast::Defmod(_, name, body, _)
+                if name == "Bootstrap"
+                && body.iter().any(|stmt| matches!(
+                    stmt,
+                    spire::ast::Ast::BuiltinDecl(_, builtin_name, _, _, _) if builtin_name == "import"
+                ))
+        )));
+    }
+
+    #[test]
+    fn collect_doc_entries_includes_bootstrap_import_docs() {
+        let ast = spire::parse_with_context(
+            r#"defmod Bootstrap {
+  @@doc """Language-provided import macro function."""
+  @@builtin def import() -> Unit
+}"#,
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .expect("std module source should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Bootstrap"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Bootstrap::import"
+                && entry.kind == DocKind::Function
+                && entry.signature.as_deref() == Some("import() -> Unit")
+                && entry.doc == "Language-provided import macro function."
+        }));
+    }
+
+    #[test]
     fn parse_module_stages_detects_duplicate_defmod_paths() {
         let module_sources = collect_module_sources_with_module_stages(&[vec![
             ModuleInput {
