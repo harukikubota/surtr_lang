@@ -252,6 +252,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "defmod" => Token::Defmod,
                 "deftrait" => Token::Deftrait,
                 "import" => Token::Import,
+                "include" => Token::Include,
                 "defstruct" => Token::Defstruct,
                 "defrecord" => Token::Defrecord,
                 "deferror" => Token::Deferror,
@@ -483,6 +484,12 @@ mod tests {
     fn test_import_keyword() {
         let tokens = tokenize("import Kernel::add").unwrap();
         assert!(matches!(tokens[0].token, Token::Import));
+    }
+
+    #[test]
+    fn test_include_keyword() {
+        let tokens = tokenize("include './mylib.srt'").unwrap();
+        assert!(matches!(tokens[0].token, Token::Include));
     }
 
     #[test]

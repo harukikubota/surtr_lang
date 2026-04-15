@@ -786,6 +786,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::Import(span, path, spec) => {
             Ast::Import(shift_span(span, delta), shift_ast_path(path, delta), spec)
         }
+        Ast::Include(span, path) => Ast::Include(shift_span(span, delta), path),
         Ast::Closure(span, params, body) => Ast::Closure(
             shift_span(span, delta),
             params
@@ -852,6 +853,7 @@ impl Ast {
             | Ast::TraitDef(s, _, _, _, _)
             | Ast::TraitImplDef(s, _, _, _, _)
             | Ast::Import(s, _, _)
+            | Ast::Include(s, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
             | Ast::Semi(s, _) => s,

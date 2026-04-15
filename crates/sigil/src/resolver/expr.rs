@@ -954,6 +954,10 @@ impl Resolver {
                 message: "Import resolution is not implemented yet".to_string(),
                 span,
             }),
+            Ast::Include(span, _) => Err(ResolveError {
+                message: "include directives must be resolved before name resolution".to_string(),
+                span,
+            }),
             Ast::ImplDef(span, target, _) => Err(ResolveError {
                 message: format!("impl lowering failed for target `{}`", target),
                 span,

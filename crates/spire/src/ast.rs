@@ -341,6 +341,9 @@ pub enum Ast {
     /// Import declaration
     Import(Span, AstPath, ImportSpec),
 
+    /// Script include directive: `include "./path/to/module.srt"`
+    Include(Span, String),
+
     /// Closure literal: `{|x, y| expr}` / `{|| expr}`
     Closure(Span, Vec<ClosureParam>, Box<Ast>),
 
@@ -378,6 +381,13 @@ mod tests {
         assert!(matches!(all, Ast::Import(_, _, ImportSpec::All)));
         assert!(matches!(single, Ast::Import(_, _, ImportSpec::Single(_))));
         assert!(matches!(list, Ast::Import(_, _, ImportSpec::List(_))));
+    }
+
+    #[test]
+    fn include_form_is_distinct_in_ast() {
+        let span = Span { start: 0, end: 20 };
+        let include = Ast::Include(span.clone(), "./mylib.srt".to_string());
+        assert!(matches!(include, Ast::Include(_, ref path) if path == "./mylib.srt"));
     }
 
     #[test]

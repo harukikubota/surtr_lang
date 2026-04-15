@@ -1862,6 +1862,15 @@ import Kernel::{add, sub};"#,
 }
 
 #[test]
+fn test_include_parses_string_path() {
+    let ast = parse("include './mylib.srt'").expect("include should parse");
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::Include(_, path)] if path == "./mylib.srt"
+    ));
+}
+
+#[test]
 fn test_defenum_parses_variants_with_payload_and_discriminant() {
     let ast = parse_with_context(
         r#"defenum Direction {
@@ -2093,17 +2102,32 @@ fn test_std_module_compile_unit_accepts_builtin_type_decl() {
 }
 
 #[test]
-fn test_script_compile_unit_accepts_top_level_def_and_import() {
+fn test_script_compile_unit_accepts_top_level_def_import_and_include() {
     let ast = parse_with_context(
-        "def add(x: Int, y: Int) -> Int { x + y }\nimport Kernel::add;",
+        "def add(x: Int, y: Int) -> Int { x + y }\ninclude './mylib.srt'\nimport Kernel::add;",
         ParserContext::script(1),
     )
-    .expect("script compile unit should accept top-level def and import");
+    .expect("script compile unit should accept top-level def, include, and import");
     assert!(matches!(
         ast.as_slice(),
-        [Ast::Def(_, name, _, _, _, _, _), Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(import_name))]
-            if name == "add" && segments.as_slice() == ["Kernel"] && import_name == "add"
+        [
+            Ast::Def(_, name, _, _, _, _, _),
+            Ast::Include(_, include_path),
+            Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(import_name))
+        ] if name == "add"
+            && include_path == "./mylib.srt"
+            && segments.as_slice() == ["Kernel"]
+            && import_name == "add"
     ));
+}
+
+#[test]
+fn test_module_compile_unit_rejects_top_level_include() {
+    let err = parse_with_context("include './mylib.srt'", ParserContext::module(1, None))
+        .expect_err("module compile unit should reject include");
+    assert!(err
+        .message()
+        .contains("This top-level declaration is not allowed in the current source policy"));
 }
 
 #[test]

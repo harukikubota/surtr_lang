@@ -146,8 +146,12 @@ fn run_source_file(
     let compile_plan = prepare_script_compile_plan(file_path, &source, cli_entry)
         .map_err(|e| script_plan_error_as_rune_error(file_path, &source, e))?;
 
-    let compile_sources =
-        collect_default_script_compile_sources(env, file_path, &compile_plan.source_for_parse)?;
+    let compile_sources = collect_default_script_compile_sources(
+        env,
+        file_path,
+        &compile_plan.source_for_parse,
+        &compile_plan.include_directives,
+    )?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     execute_bytecode(
         env,
