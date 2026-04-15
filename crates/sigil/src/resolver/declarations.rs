@@ -1,6 +1,6 @@
 use super::scope_init::initialize_scope;
-use super::*;
 use super::scope_init::is_doc_only_builtin_decl;
+use super::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
