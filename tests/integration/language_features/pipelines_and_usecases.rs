@@ -136,6 +136,40 @@ match bound {
 }
 
 #[test]
+fn pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping() {
+    assert_output(
+        r#"deferror ParseHandError(detail: String) {
+  detail
+}
+
+def is_digit_rank(n: Int) -> Boolean {
+  and(n >= 1, n <= 9)
+}
+
+def mk_detail(ch: String) -> String {
+  print("mk:" ++ ch)
+  "digit must be 1..9: " ++ ch
+}
+
+def parse_hand(ch: String) -> Result<Int> {
+  try_from(ch, Int)
+    |> map_err(ParseHandError("invalid digit: " ++ ch))
+    |>= ensure(&is_digit_rank, ParseHandError(mk_detail(ch)))
+}
+
+print(inspect(parse_hand("7")))
+print(inspect(parse_hand("0")))
+print(inspect(parse_hand("x")))"#,
+        &[
+            "Ok(7)",
+            "mk:0",
+            "Err(ParseHandError(\"digit must be 1..9: 0\"))",
+            "Err(ParseHandError(\"invalid digit: x\"))",
+        ],
+    );
+}
+
+#[test]
 fn list_pipeline_helpers_and_compose_work() {
     assert_output(
         r#"def inc(x: Int) -> Int {

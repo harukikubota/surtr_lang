@@ -2343,3 +2343,81 @@ fn test_build_scope_for_module_includes_prior_stage_declarations() {
         "Util::helper should be accessible by qualified name in App's scope"
     );
 }
+
+#[test]
+fn test_pipeline_rhs_desugars_partial_special_forms_into_closures() {
+    let resolved = parse_and_resolve(
+        r#"deferror GuardError { "guard" }
+
+def pred(n: Int) -> Boolean {
+  n > 0
+}
+
+checked = Ok(3) |>= ensure(&pred, GuardError)
+flagged = True |> and(False)
+verified = Ok(True) |>= assert(GuardError)"#,
+    )
+    .expect("pipeline partial special forms should resolve");
+
+    let mut checked_ok = false;
+    let mut flagged_ok = false;
+    let mut verified_ok = false;
+
+    for node in resolved {
+        let Resolved::Bind(_, pat, rhs) = node else {
+            continue;
+        };
+        let ResolvedPattern::Var(id) = pat else {
+            continue;
+        };
+        match id.name.as_str() {
+            "checked" => match rhs.as_ref() {
+                Resolved::ContextBind(_, _, right) => match right.as_ref() {
+                    Resolved::Closure(_, params, _, body) => {
+                        assert_eq!(params.len(), 1, "partial ensure must become unary closure");
+                        assert!(
+                            matches!(body.as_ref(), Resolved::Ensure(_, _, _, _)),
+                            "partial ensure closure body must resolve to Ensure"
+                        );
+                        checked_ok = true;
+                    }
+                    other => panic!("expected closure on checked rhs, got {:?}", other),
+                },
+                other => panic!("expected context bind for checked, got {:?}", other),
+            },
+            "flagged" => match rhs.as_ref() {
+                Resolved::Pipe(_, _, right) => match right.as_ref() {
+                    Resolved::Closure(_, params, _, body) => {
+                        assert_eq!(params.len(), 1, "partial and must become unary closure");
+                        assert!(
+                            matches!(body.as_ref(), Resolved::If(_, _, _, _)),
+                            "partial and closure body must resolve to If"
+                        );
+                        flagged_ok = true;
+                    }
+                    other => panic!("expected closure on flagged rhs, got {:?}", other),
+                },
+                other => panic!("expected pipe for flagged, got {:?}", other),
+            },
+            "verified" => match rhs.as_ref() {
+                Resolved::ContextBind(_, _, right) => match right.as_ref() {
+                    Resolved::Closure(_, params, _, body) => {
+                        assert_eq!(params.len(), 1, "partial assert must become unary closure");
+                        assert!(
+                            matches!(body.as_ref(), Resolved::Assert(_, _, _)),
+                            "partial assert closure body must resolve to Assert"
+                        );
+                        verified_ok = true;
+                    }
+                    other => panic!("expected closure on verified rhs, got {:?}", other),
+                },
+                other => panic!("expected context bind for verified, got {:?}", other),
+            },
+            _ => {}
+        }
+    }
+
+    assert!(checked_ok, "missing checked bind assertion");
+    assert!(flagged_ok, "missing flagged bind assertion");
+    assert!(verified_ok, "missing verified bind assertion");
+}

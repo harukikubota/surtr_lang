@@ -10,6 +10,53 @@ use super::*;
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 
 impl Resolver {
+    fn partial_pipeline_special_form_arity(name: &str) -> Option<usize> {
+        match name {
+            "if" => Some(3),
+            "if_then" => Some(2),
+            "assert" => Some(2),
+            "ensure" => Some(3),
+            "and" | "or" => Some(2),
+            _ => None,
+        }
+    }
+
+    fn desugar_pipeline_rhs_special_form_partial(&self, rhs: Ast) -> Ast {
+        let Ast::App(span, func, args) = rhs else {
+            return rhs;
+        };
+
+        let Ast::Var(_, ref name) = *func else {
+            return Ast::App(span, func, args);
+        };
+        let Some(expected_arity) = Self::partial_pipeline_special_form_arity(name) else {
+            return Ast::App(span, func, args);
+        };
+        if args.len() + 1 != expected_arity {
+            return Ast::App(span, func, args);
+        }
+
+        let param_name = format!("__pipe_injected_{}_{}", span.start, span.end);
+        let param_span = span.clone();
+        let mut injected_args = Vec::with_capacity(args.len() + 1);
+        injected_args.push(RecordLitArg::Positional(Ast::Var(
+            param_span.clone(),
+            param_name.clone(),
+        )));
+        injected_args.extend(args);
+
+        let call = Ast::App(span.clone(), func, injected_args);
+        Ast::Closure(
+            span.clone(),
+            vec![ClosureParam {
+                name: param_name,
+                ty: None,
+                span: param_span,
+            }],
+            Box::new(call),
+        )
+    }
+
     fn conversion_call_head(func: &Ast) -> Option<&'static str> {
         match func {
             Ast::Var(_, name) if name == "from" => Some("from"),
@@ -345,19 +392,22 @@ impl Resolver {
 
             Ast::Pipe(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let r = self.resolve_node(*right)?;
+                let rhs = self.desugar_pipeline_rhs_special_form_partial(*right);
+                let r = self.resolve_node(rhs)?;
                 Ok(Resolved::Pipe(span, Box::new(l), Box::new(r)))
             }
 
             Ast::ContextMap(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let r = self.resolve_node(*right)?;
+                let rhs = self.desugar_pipeline_rhs_special_form_partial(*right);
+                let r = self.resolve_node(rhs)?;
                 Ok(Resolved::ContextMap(span, Box::new(l), Box::new(r)))
             }
 
             Ast::ContextBind(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let r = self.resolve_node(*right)?;
+                let rhs = self.desugar_pipeline_rhs_special_form_partial(*right);
+                let r = self.resolve_node(rhs)?;
                 Ok(Resolved::ContextBind(span, Box::new(l), Box::new(r)))
             }
 
