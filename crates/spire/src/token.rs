@@ -75,6 +75,7 @@ pub enum Token {
     Defmod,
     Deftrait,
     Import,
+    Include,
     /// Generic annotator token: `@@builtin`, `@@foo`, ...
     Annotator(String),
     Defstruct,

@@ -39,6 +39,45 @@ print(user |> User::get_name())"#,
 }
 
 #[test]
+fn flow_operators_allow_multiline_elixir_style_layout() {
+    assert_output(
+        r#"def parse(text: String) -> Result<Int> {
+  Ok(2)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x + 3))
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def double(x: Int) -> Int {
+  x * 2
+}
+
+value = 4
+  |> inc()
+  |> double()
+
+pipeline = &parse
+  |=> &render
+
+plain = &inc
+  >> &double
+
+print(to_string(value))
+match pipeline("x") {
+  Ok(v) => print(v),
+  Err(e) => print("err"),
+}
+print(to_string(plain(4)))"#,
+        &["10", "5", "10"],
+    );
+}
+
+#[test]
 fn result_pipeline_map_and_bind_work() {
     assert_output(
         r#"def inc(x: Int) -> Int {
@@ -93,6 +132,40 @@ match bound {
   Err(e) => print("bound err"),
 }"#,
         &["3", "11"],
+    );
+}
+
+#[test]
+fn pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping() {
+    assert_output(
+        r#"deferror ParseHandError(detail: String) {
+  detail
+}
+
+def is_digit_rank(n: Int) -> Boolean {
+  and(n >= 1, n <= 9)
+}
+
+def mk_detail(ch: String) -> String {
+  print("mk:" ++ ch)
+  "digit must be 1..9: " ++ ch
+}
+
+def parse_hand(ch: String) -> Result<Int> {
+  try_from(ch, Int)
+    |> map_err(ParseHandError("invalid digit: " ++ ch))
+    |>= ensure(&is_digit_rank, ParseHandError(mk_detail(ch)))
+}
+
+print(inspect(parse_hand("7")))
+print(inspect(parse_hand("0")))
+print(inspect(parse_hand("x")))"#,
+        &[
+            "Ok(7)",
+            "mk:0",
+            "Err(ParseHandError(\"digit must be 1..9: 0\"))",
+            "Err(ParseHandError(\"invalid digit: x\"))",
+        ],
     );
 }
 

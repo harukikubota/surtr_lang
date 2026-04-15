@@ -19,6 +19,7 @@ impl Parser {
                     | Token::Deftrait
                     | Token::Impl
                     | Token::Import
+                    | Token::Include
                     | Token::Defstruct
                     | Token::Defrecord
                     | Token::Deferror
@@ -40,6 +41,7 @@ impl Parser {
             Token::Deftrait => self.parse_trait_def()?,
             Token::Impl => self.parse_impl_def()?,
             Token::Import => self.parse_import()?,
+            Token::Include => self.parse_include()?,
             Token::Defstruct => self.parse_struct_def()?,
             Token::Defrecord => self.parse_record_def()?,
             Token::Deferror => self.parse_deferror_def()?,

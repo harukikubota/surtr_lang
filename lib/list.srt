@@ -127,6 +127,71 @@ defmod List {
     }
   }
 
+  defp _take_while_go(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => if(pred(head), cons(head, _take_while_go(tail, pred)), []),
+    }
+  }
+
+  defp _drop_while_go(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => if(pred(head), _drop_while_go(tail, pred), values),
+    }
+  }
+
+  defp _max_int_go(values: List<Int>, current: Int) -> Int {
+    match values {
+      [] => current,
+      [head, ..tail] => _max_int_go(tail, if(head > current, head, current)),
+    }
+  }
+
+  defp _min_int_go(values: List<Int>, current: Int) -> Int {
+    match values {
+      [] => current,
+      [head, ..tail] => _min_int_go(tail, if(head < current, head, current)),
+    }
+  }
+
+  defp _max_by_go(values: List<$A>, current: $A, cmp: ($A, $A -> Ordering)) -> $A {
+    match values {
+      [] => current,
+      [head, ..tail] => _max_by_go(
+        tail,
+        match cmp(head, current) {
+          Ordering::Less => current,
+          Ordering::Equal => current,
+          Ordering::Greater => head,
+        },
+        cmp,
+      ),
+    }
+  }
+
+  defp _min_by_go(values: List<$A>, current: $A, cmp: ($A, $A -> Ordering)) -> $A {
+    match values {
+      [] => current,
+      [head, ..tail] => _min_by_go(
+        tail,
+        match cmp(head, current) {
+          Ordering::Less => head,
+          Ordering::Equal => current,
+          Ordering::Greater => current,
+        },
+        cmp,
+      ),
+    }
+  }
+
+  defp _dedup_groups(groups: List<($A, Int)>) -> List<$A> {
+    match groups {
+      [] => [],
+      [head, ..tail] => [head._0, .._dedup_groups(tail)],
+    }
+  }
+
   @@doc """
   Append `right` after `left`.
   This keeps the left-to-right order of both lists.
@@ -284,6 +349,52 @@ defmod List {
   }
 
   @@doc """
+  Return the largest integer in a list.
+  Empty lists return `Err(NoneError)`.
+  """
+  def max(values: List<Int>) -> Result<Int, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(_max_int_go(tail, head)),
+    }
+  }
+
+  @@doc """
+  Return the smallest integer in a list.
+  Empty lists return `Err(NoneError)`.
+  """
+  def min(values: List<Int>) -> Result<Int, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(_min_int_go(tail, head)),
+    }
+  }
+
+  @@doc """
+  Return the largest element according to `cmp`.
+  `cmp(left, right)` must return `Ordering::Greater` when `left` should win.
+  Empty lists return `Err(NoneError)`.
+  """
+  def max_by(values: List<$A>, cmp: ($A, $A -> Ordering)) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(_max_by_go(tail, head, cmp)),
+    }
+  }
+
+  @@doc """
+  Return the smallest element according to `cmp`.
+  `cmp(left, right)` must return `Ordering::Less` when `left` should win.
+  Empty lists return `Err(NoneError)`.
+  """
+  def min_by(values: List<$A>, cmp: ($A, $A -> Ordering)) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(_min_by_go(tail, head, cmp)),
+    }
+  }
+
+  @@doc """
   Keep at most the first `count` elements.
   `count <= 0` returns `[]`.
   """
@@ -300,6 +411,27 @@ defmod List {
   }
 
   @@doc """
+  Keep the longest prefix whose elements satisfy `pred`.
+  """
+  def take_while(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    _take_while_go(values, pred)
+  }
+
+  @@doc """
+  Drop the longest prefix whose elements satisfy `pred`.
+  """
+  def drop_while(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    _drop_while_go(values, pred)
+  }
+
+  @@doc """
+  Split a list into the longest matching prefix and the remaining suffix.
+  """
+  def span(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    (take_while(values, pred), drop_while(values, pred))
+  }
+
+  @@doc """
   Split a list into elements that satisfy `pred` and the rest.
   Both output lists keep the original order.
   """
@@ -312,6 +444,13 @@ defmod List {
   Requires `Eq` for the element type and returns `(value, count)` tuples.
   """
   @@builtin def group_count(values: List<$A>) -> List<($A, Int)>
+
+  @@doc """
+  Remove duplicate values while keeping the first-seen order.
+  """
+  def dedup(values: List<$A>) -> List<$A> {
+    _dedup_groups(group_count(values))
+  }
 
   @@doc """
   Pair elements from two lists until either side runs out.

@@ -122,6 +122,36 @@ impl Parser {
         ))
     }
 
+    pub(super) fn parse_include(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Include)?;
+        self.skip_newlines();
+        let (path, mut stmt_end) = match self.peek().clone() {
+            Token::Str(path) => {
+                let str_span = self.advance().span.clone();
+                (path, str_span.end)
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "include expects a string literal path",
+                    self.peek_span(),
+                ))
+            }
+        };
+
+        if matches!(self.peek(), Token::Semicolon) {
+            stmt_end = self.advance().span.end;
+        }
+
+        Ok(Ast::Include(
+            Span {
+                start: sp.start,
+                end: stmt_end,
+            },
+            path,
+        ))
+    }
+
     pub(super) fn parse_defmod(&mut self) -> Result<Ast, ParseError> {
         self.parse_defmod_with_attrs(DeclAttrs::default(), None)
     }

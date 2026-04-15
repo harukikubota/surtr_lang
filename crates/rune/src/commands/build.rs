@@ -1,6 +1,9 @@
 use std::fs;
 
-use crate::compile::{collect_default_script_compile_sources, compile_source, ScriptCompilePlan};
+use crate::compile::{
+    collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
+    script_plan_error_as_rune_error,
+};
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 use crate::util::default_output_path;
 
@@ -19,9 +22,14 @@ fn build_command(input_srt: &str, output_eldr: Option<&str>, env: ExecutionEnv) 
     let source = fs::read_to_string(input_srt)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", input_srt, e)))?;
 
-    let compile_plan = ScriptCompilePlan::plain(source);
-    let compile_sources =
-        collect_default_script_compile_sources(env, input_srt, &compile_plan.source_for_parse)?;
+    let compile_plan = prepare_script_compile_plan(input_srt, &source, None)
+        .map_err(|e| script_plan_error_as_rune_error(input_srt, &source, e))?;
+    let compile_sources = collect_default_script_compile_sources(
+        env,
+        input_srt,
+        &compile_plan.source_for_parse,
+        &compile_plan.include_directives,
+    )?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     let bytes = bytecode
         .encode()

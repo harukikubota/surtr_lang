@@ -1,7 +1,8 @@
 use super::captures::collect_captures;
 use super::declarations::trait_instance_key;
 use super::scope_init::{
-    initialize_scope, is_runtime_builtin_decl, is_special_form_builtin_decl, resolve_decl_attrs,
+    initialize_scope, is_doc_only_builtin_decl, is_runtime_builtin_decl,
+    is_special_form_builtin_decl, resolve_decl_attrs,
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
@@ -9,6 +10,53 @@ use super::*;
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 
 impl Resolver {
+    fn partial_pipeline_special_form_arity(name: &str) -> Option<usize> {
+        match name {
+            "if" => Some(3),
+            "if_then" => Some(2),
+            "assert" => Some(2),
+            "ensure" => Some(3),
+            "and" | "or" => Some(2),
+            _ => None,
+        }
+    }
+
+    fn desugar_pipeline_rhs_special_form_partial(&self, rhs: Ast) -> Ast {
+        let Ast::App(span, func, args) = rhs else {
+            return rhs;
+        };
+
+        let Ast::Var(_, ref name) = *func else {
+            return Ast::App(span, func, args);
+        };
+        let Some(expected_arity) = Self::partial_pipeline_special_form_arity(name) else {
+            return Ast::App(span, func, args);
+        };
+        if args.len() + 1 != expected_arity {
+            return Ast::App(span, func, args);
+        }
+
+        let param_name = format!("__pipe_injected_{}_{}", span.start, span.end);
+        let param_span = span.clone();
+        let mut injected_args = Vec::with_capacity(args.len() + 1);
+        injected_args.push(RecordLitArg::Positional(Ast::Var(
+            param_span.clone(),
+            param_name.clone(),
+        )));
+        injected_args.extend(args);
+
+        let call = Ast::App(span.clone(), func, injected_args);
+        Ast::Closure(
+            span.clone(),
+            vec![ClosureParam {
+                name: param_name,
+                ty: None,
+                span: param_span,
+            }],
+            Box::new(call),
+        )
+    }
+
     fn conversion_call_head(func: &Ast) -> Option<&'static str> {
         match func {
             Ast::Var(_, name) if name == "from" => Some("from"),
@@ -164,7 +212,9 @@ impl Resolver {
         self.predeclare_functions(&stmts)?;
         let mut resolved = Vec::new();
         for stmt in stmts {
-            if matches!(stmt, Ast::Import(_, _, _)) {
+            if matches!(stmt, Ast::Import(_, _, _))
+                || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
+            {
                 // `import` declarations are consumed by resolver-side module/import handling.
                 // Until full module resolution lands, they are intentionally no-op here.
                 continue;
@@ -342,19 +392,22 @@ impl Resolver {
 
             Ast::Pipe(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let r = self.resolve_node(*right)?;
+                let rhs = self.desugar_pipeline_rhs_special_form_partial(*right);
+                let r = self.resolve_node(rhs)?;
                 Ok(Resolved::Pipe(span, Box::new(l), Box::new(r)))
             }
 
             Ast::ContextMap(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let r = self.resolve_node(*right)?;
+                let rhs = self.desugar_pipeline_rhs_special_form_partial(*right);
+                let r = self.resolve_node(rhs)?;
                 Ok(Resolved::ContextMap(span, Box::new(l), Box::new(r)))
             }
 
             Ast::ContextBind(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let r = self.resolve_node(*right)?;
+                let rhs = self.desugar_pipeline_rhs_special_form_partial(*right);
+                let r = self.resolve_node(rhs)?;
                 Ok(Resolved::ContextBind(span, Box::new(l), Box::new(r)))
             }
 
@@ -952,6 +1005,10 @@ impl Resolver {
             }),
             Ast::Import(span, _, _) => Err(ResolveError {
                 message: "Import resolution is not implemented yet".to_string(),
+                span,
+            }),
+            Ast::Include(span, _) => Err(ResolveError {
+                message: "include directives must be resolved before name resolution".to_string(),
                 span,
             }),
             Ast::ImplDef(span, target, _) => Err(ResolveError {

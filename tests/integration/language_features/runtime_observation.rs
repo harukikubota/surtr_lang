@@ -68,3 +68,55 @@ sum_non_tail(200)"#,
     assert_eq!(observation.stats.function_calls, 201);
     assert_eq!(observation.stats.return_count, 201);
 }
+
+#[test]
+fn generator_fibonacci_resume_consumer_uses_tail_calls() {
+    let observation = observe_surtr(
+        r#"def fib_generator(count: Int) -> Generator<(Int, Int), Int> {
+  Generator::unfold((0, 1), {|state, idx|
+    if(
+      idx < count,
+      {
+        (a, b) = state
+        Ok((a, (b, a + b)))
+      },
+      Err(NoneError),
+    )
+  })
+}
+
+def take_and_resume(
+  gen: Generator<(Int, Int), Int>,
+  count: Int,
+  acc_rev: List<Int>,
+) -> (List<Int>, Generator<(Int, Int), Int>) {
+  if(
+    count <= 0,
+    (List::reverse(acc_rev), gen),
+    match Generator::next(gen) {
+      Ok(pair) => {
+        (value, next_gen) = pair
+        take_and_resume(next_gen, count - 1, [value, ..acc_rev])
+      },
+      Err(_) => (List::reverse(acc_rev), gen),
+    },
+  )
+}
+
+fib0 = fib_generator(240)
+pair = take_and_resume(fib0, 150, [])
+(_first, fib150) = pair
+Generator::idx(fib150)"#,
+    );
+
+    assert!(
+        observation.stats.max_frame_depth <= 8,
+        "expected frame depth to stay bounded in generator resume flow, stats={:?}",
+        observation.stats
+    );
+    assert!(
+        observation.stats.tail_calls_optimized >= 150,
+        "expected generator resume flow to use tail-call optimization, stats={:?}",
+        observation.stats
+    );
+}

@@ -29,12 +29,16 @@ Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, T
 
 - auto import の起点になる安定アンカー
 - loader が最初に読む固定ステージ
+- `import` / `include` builtin function docs の canonical anchor
 - 標準 concrete error の置き場
 
 `Bootstrap` は「何かでもかんでも置く場所」ではありません。  
 将来 bootstrap 手順が増えても、入口の module 名と順序を固定するために残しています。
 そのうえで、`NoneError` や `ZeroDivisionError` のような universally useful な
 concrete error は、最初の標準ステージから使えるようここに置きます。
+同時に、`import` / `include` のような language-provided macro surface も
+`Bootstrap` module 配下の `@@builtin def` として source に残します。
+ただし surface 構文では引き続き top-level 専用の special form として扱います。
 
 ### `Kernel`
 
@@ -186,6 +190,7 @@ defmod String {
 - 標準モジュールと説明文がずれにくい
 - dump や REPL の docs UI に同じ情報を流せる
 - Rust 実装ではなく Surtr surface として API を説明できる
+- language-provided macro surface も bootstrap module の function docs として揃えられる
 
 ## 6. いま読むときの目印
 

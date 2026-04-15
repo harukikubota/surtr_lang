@@ -1,3 +1,6 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use diagnostics::SourceRegistry;
 use forge::bytecode::{
     populate_error_template_lines, stable_hash_hex, synthesize_source_map, SourceFileEntry,
@@ -7,11 +10,12 @@ use spire::ast::{Ast, Span};
 
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ScriptCompilePlan {
     pub(crate) source_for_parse: String,
     pub(crate) selected_entry_name: Option<String>,
     pub(crate) normalized_entrypoint: Option<EntryPoint>,
+    pub(crate) include_directives: Vec<IncludeDirective>,
 }
 
 impl ScriptCompilePlan {
@@ -20,8 +24,15 @@ impl ScriptCompilePlan {
             source_for_parse,
             selected_entry_name: None,
             normalized_entrypoint: None,
+            include_directives: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct IncludeDirective {
+    pub(crate) file_path: String,
+    pub(crate) span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,6 +70,7 @@ pub(crate) fn collect_default_script_compile_sources(
     env: ExecutionEnv,
     file_path: &str,
     source: &str,
+    include_directives: &[IncludeDirective],
 ) -> RuneResult<xldr::CompileSources> {
     let module_inputs = xldr::collect_additional_default_std_module_inputs().map_err(|e| {
         RuneError::message(
@@ -70,7 +82,14 @@ pub(crate) fn collect_default_script_compile_sources(
             ),
         )
     })?;
-    let module_sources = xldr::collect_module_sources_with_module_stages(&[module_inputs])
+
+    let mut module_input_stages = vec![module_inputs];
+    for directive in include_directives {
+        let module_input = resolve_include_module_input(file_path, source, directive)?;
+        module_input_stages.push(vec![module_input]);
+    }
+
+    let module_sources = xldr::collect_module_sources_with_module_stages(&module_input_stages)
         .map_err(|e| {
             RuneError::message(
                 1,
@@ -86,6 +105,94 @@ pub(crate) fn collect_default_script_compile_sources(
         source,
         module_sources,
     ))
+}
+
+fn resolve_include_module_input(
+    script_file_path: &str,
+    script_source: &str,
+    directive: &IncludeDirective,
+) -> RuneResult<xldr::ModuleInput> {
+    let resolved_path = resolve_include_file_path(script_file_path, &directive.file_path);
+    let display_path = normalize_display_path(&resolved_path);
+    let module_source = fs::read_to_string(&resolved_path).map_err(|e| {
+        include_runtime_error(
+            script_file_path,
+            script_source,
+            directive.span.clone(),
+            format!(
+                "include failed to read `{}`: {}",
+                resolved_path.display(),
+                e
+            ),
+        )
+    })?;
+
+    let module_path = xldr::derive_primary_module_path(&module_source)
+        .or_else(|| module_path_from_file_name(&display_path))
+        .ok_or_else(|| {
+            include_runtime_error(
+                script_file_path,
+                script_source,
+                directive.span.clone(),
+                format!(
+                    "include could not derive module path from `{}`",
+                    display_path
+                ),
+            )
+        })?;
+
+    Ok(xldr::ModuleInput {
+        file_name: display_path,
+        source: module_source,
+        module_path,
+    })
+}
+
+fn resolve_include_file_path(script_file_path: &str, raw_path: &str) -> PathBuf {
+    let candidate = Path::new(raw_path);
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
+    }
+
+    let base_dir = Path::new(script_file_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    base_dir.join(candidate)
+}
+
+fn normalize_display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn module_path_from_file_name(file_name: &str) -> Option<String> {
+    let normalized = file_name.replace('\\', "/");
+    let mut body = normalized.trim().trim_start_matches("./").to_string();
+    if let Some(stripped) = body.strip_suffix(".srt") {
+        body = stripped.to_string();
+    }
+
+    let segments = body
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        return None;
+    }
+
+    Some(segments.join("::"))
+}
+
+fn include_runtime_error(file_path: &str, source: &str, span: Span, message: String) -> RuneError {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register(file_path, source.to_string());
+    RuneError::diagnostic(
+        1,
+        &sources,
+        source_id,
+        "runtime",
+        diagnostics::simple_error("RuntimeError", &message, span, None),
+    )
 }
 
 fn parse_program_with_module_sources(
@@ -328,6 +435,17 @@ pub(crate) fn prepare_script_compile_plan(
 ) -> Result<ScriptCompilePlan, ScriptPlanError> {
     let source_without_tests = spire::strip_test_annotations(source);
     let (source_for_parse, annotations) = collect_entrypoint_annotations(&source_without_tests)?;
+    let (source_for_parse, include_directives) = match collect_include_directives(&source_for_parse)
+    {
+        Ok(collected) => collected,
+        Err(err) => {
+            if xldr::derive_primary_module_path(&source_for_parse).is_some() {
+                (source_for_parse, Vec::new())
+            } else {
+                return Err(err);
+            }
+        }
+    };
 
     if annotations.len() > 1 {
         let second = &annotations[1];
@@ -353,6 +471,7 @@ pub(crate) fn prepare_script_compile_plan(
         source_for_parse,
         selected_entry_name,
         normalized_entrypoint,
+        include_directives,
     })
 }
 
@@ -361,6 +480,34 @@ pub(crate) fn collect_entrypoint_annotations(
 ) -> Result<(String, Vec<spire::EntryAnnotation>), ScriptPlanError> {
     spire::collect_entrypoint_annotations(source)
         .map_err(|e| ScriptPlanError::new(e.message().to_string(), e.span().clone()))
+}
+
+fn collect_include_directives(
+    source: &str,
+) -> Result<(String, Vec<IncludeDirective>), ScriptPlanError> {
+    let ast = spire::parse_with_context(
+        source,
+        spire::ParserContext::script(0).with_rules(spire::ParseRules::script()),
+    )
+    .map_err(|e| ScriptPlanError::new(e.message().to_string(), e.span().clone()))?;
+
+    let mut chars = source.chars().collect::<Vec<_>>();
+    let mut directives = Vec::new();
+    for stmt in &ast {
+        if let Ast::Include(span, file_path) = stmt {
+            directives.push(IncludeDirective {
+                file_path: file_path.clone(),
+                span: span.clone(),
+            });
+            for ch in chars.iter_mut().take(span.end).skip(span.start) {
+                if *ch != '\n' {
+                    *ch = ' ';
+                }
+            }
+        }
+    }
+
+    Ok((chars.into_iter().collect::<String>(), directives))
 }
 
 fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast> {
@@ -421,6 +568,53 @@ mod tests {
                 .as_ref()
                 .map(|e| e.qualified_symbol.as_str()),
             Some("__Script::sample::manual")
+        );
+    }
+
+    #[test]
+    fn script_compile_plan_extracts_include_directives() {
+        let source = r#"include 'fixtures/Helper.srt'
+import Helper::add
+print(to_string(add(1, 2)))
+"#;
+
+        let plan = prepare_script_compile_plan("sample.srt", source, None)
+            .expect("compile plan must succeed");
+
+        assert_eq!(plan.include_directives.len(), 1);
+        assert_eq!(plan.include_directives[0].file_path, "fixtures/Helper.srt");
+        assert_eq!(plan.source_for_parse.len(), source.len());
+        assert!(!plan
+            .source_for_parse
+            .contains("include 'fixtures/Helper.srt'"));
+        assert!(plan.source_for_parse.contains("import Helper::add"));
+    }
+
+    #[test]
+    fn script_compile_plan_rejects_include_non_literal_argument() {
+        let source = r#"path = "fixtures/Helper.srt"
+include path
+"#;
+
+        let err = prepare_script_compile_plan("sample.srt", source, None)
+            .expect_err("non-literal include path must fail");
+        assert!(err
+            .message
+            .contains("include expects a string literal path"));
+    }
+
+    #[test]
+    fn script_compile_plan_rejects_include_in_nested_expression() {
+        let source = r#"value = include 'fixtures/Helper.srt'
+print(to_string(1))
+"#;
+
+        let err = prepare_script_compile_plan("sample.srt", source, None)
+            .expect_err("nested include must fail");
+        assert!(
+            err.message
+                .contains("Declarations are only allowed at the top level")
+                || err.message.contains("Unexpected token")
         );
     }
 

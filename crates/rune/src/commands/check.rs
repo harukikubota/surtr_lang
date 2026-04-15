@@ -52,6 +52,7 @@ fn check_command(file_path: &str) -> RuneResult<()> {
         ExecutionEnv::Check,
         file_path,
         &compile_plan.source_for_parse,
+        &compile_plan.include_directives,
     )?;
 
     match compile_source(ExecutionEnv::Check, &compile_sources, &compile_plan) {

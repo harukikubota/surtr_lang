@@ -21,6 +21,7 @@ pub(crate) enum TopLevelDeclKind {
     TraitDef,
     TraitImplDef,
     Import,
+    Include,
     StructDef,
     RecordDef,
     DeferrorDef,
@@ -58,6 +59,7 @@ impl ParseRules {
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::Import,
+                TopLevelDeclKind::Include,
             ]),
         }
     }

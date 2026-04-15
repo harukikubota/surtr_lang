@@ -40,6 +40,7 @@ fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         Ast::TraitDef(_, _, _, _, _) => Some(TopLevelDeclKind::TraitDef),
         Ast::TraitImplDef(_, _, _, _, _) => Some(TopLevelDeclKind::TraitImplDef),
         Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
+        Ast::Include(_, _) => Some(TopLevelDeclKind::Include),
         Ast::StructDef(_, _, _) => Some(TopLevelDeclKind::StructDef),
         Ast::RecordDef(_, _, _) => Some(TopLevelDeclKind::RecordDef),
         Ast::DeferrorDef(_, _, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),

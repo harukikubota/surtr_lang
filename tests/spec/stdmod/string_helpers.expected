@@ -19,6 +19,14 @@ Ok(StringSplit::Split(, surtr))
 Err(NoneError("None Value."))
 True
 False
+baNANA
+surtr
+[a, , b, ]
+[s, u, r, t, r]
+[surtr]
+[]
+[a, b]
+[a, b]
 [あ, b]
 Ok(あb)
 Err(InvalidCharList("expected single-character string at index 0, got \"ab\""))

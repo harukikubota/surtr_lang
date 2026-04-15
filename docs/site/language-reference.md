@@ -440,9 +440,19 @@ Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, T
 
 ### import の意味
 
+- `import` は `Bootstrap` に属する builtin function として文書化される
+- 実際の surface では top-level macro syntax として扱う
 - `import Mod` は、その module の import 可能 member を現在 scope に unqualified で入れる
 - `import Mod::fun` は単一 member だけを入れる
 - `Struct` 名や `new` のように import 不可の宣言もある
+
+### include の意味
+
+- `include` も `Bootstrap` に属する builtin function として文書化される
+- 実際の surface では top-level macro syntax として扱う
+- script source でのみ使える loader directive
+- `include "./path/to/module.srt"` の形だけを受け付ける
+- block 内や式位置では使えない
 
 ### builtin type の置き場所
 
@@ -508,6 +518,20 @@ import Kernel::print;
 ```
 
 これらは通常の関数本体付き `def` ではなく、標準モジュール `result.srt` で compiler が特別扱いする surface contract です。
+
+`Bootstrap` では次のような macro doc anchor を置けます。
+
+```surtr
+defmod Bootstrap {
+  @@doc """Language-provided import macro function."""
+  @@builtin def import() -> Unit
+
+  @@doc """Language-provided include macro function."""
+  @@builtin def include(path: String) -> Unit
+}
+```
+
+これらは `Bootstrap::import` / `Bootstrap::include` の canonical source ですが、`import` / `include` 自体の top-level 制約はそのままです。
 
 ## 11. 現在のスコープ外
 

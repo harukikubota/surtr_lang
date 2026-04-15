@@ -259,6 +259,131 @@ print(to_string(add(1, 2)))"#,
 }
 
 #[test]
+fn run_source_include_loads_module_relative_to_script() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_include_relative_module");
+    let source_path = temp.join("sample.srt");
+    let helper_path = temp.join("Helper.srt");
+
+    write_source(
+        &helper_path,
+        r#"defmod Helper {
+  def add(x: Int, y: Int) -> Int { x + y }
+}"#,
+    );
+    write_source(
+        &source_path,
+        r#"include 'Helper.srt'
+import Helper::add
+print(to_string(add(1, 2)))"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains('3'),
+        "expected loaded module function output, got:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_include_rejects_non_literal_argument() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_include_non_literal");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"path = "Helper.srt"
+include path
+print("ok")"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("include expects a string literal path"),
+        "expected include argument diagnostic, got:\n{}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_module_file_rejects_include_directive() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_module_include_forbidden");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"defmod Helper {
+  def add(x: Int, y: Int) -> Int { x + y }
+}
+
+include './extra.srt'"#,
+    );
+
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("This top-level declaration is not allowed in the current source policy"),
+        "expected module policy diagnostic, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("include"),
+        "expected include in diagnostic, got:\n{}",
+        stderr
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn run_source_error_points_to_generation_site() {
     let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_deferror_location");
