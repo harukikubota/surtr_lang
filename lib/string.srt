@@ -459,10 +459,8 @@ defmod String {
   """
   def try_to_boolean(value: String) -> Result<Boolean, InvalidBooleanLiteral> {
     match value {
-      "True" => Ok(True),
-      "False" => Ok(False),
-      "true" => Ok(True),
-      "false" => Ok(False),
+      "True" | "true" => Ok(True),
+      "False" | "false" => Ok(False),
       _ => Err(InvalidBooleanLiteral(value)),
     }
   }

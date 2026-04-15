@@ -109,23 +109,20 @@ impl Ord for Float {
   def lt(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
       Ordering::Less => True,
-      Ordering::Equal => False,
-      Ordering::Greater => False,
+      Ordering::Equal | Ordering::Greater => False,
     }
   }
 
   def lte(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
-      Ordering::Less => True,
-      Ordering::Equal => True,
+      Ordering::Less | Ordering::Equal => True,
       Ordering::Greater => False,
     }
   }
 
   def gt(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
-      Ordering::Less => False,
-      Ordering::Equal => False,
+      Ordering::Less | Ordering::Equal => False,
       Ordering::Greater => True,
     }
   }
@@ -133,8 +130,7 @@ impl Ord for Float {
   def gte(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
       Ordering::Less => False,
-      Ordering::Equal => True,
-      Ordering::Greater => True,
+      Ordering::Equal | Ordering::Greater => True,
     }
   }
 }

@@ -161,8 +161,7 @@ defmod List {
       [head, ..tail] => _max_by_go(
         tail,
         match cmp(head, current) {
-          Ordering::Less => current,
-          Ordering::Equal => current,
+          Ordering::Less | Ordering::Equal => current,
           Ordering::Greater => head,
         },
         cmp,
@@ -177,8 +176,7 @@ defmod List {
         tail,
         match cmp(head, current) {
           Ordering::Less => head,
-          Ordering::Equal => current,
-          Ordering::Greater => current,
+          Ordering::Equal | Ordering::Greater => current,
         },
         cmp,
       ),

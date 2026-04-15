@@ -184,7 +184,8 @@ defmod Int {
       BitWidth::W32 => Ok(32),
       BitWidth::W64 => Ok(64),
       BitWidth::W128 => Ok(128),
-      BitWidth::Any(bits) => if(bits > 0, Ok(bits), Err(InvalidBitWidth(bits))),
+      BitWidth::Any(bits) when bits > 0 => Ok(bits),
+      BitWidth::Any(bits) => Err(InvalidBitWidth(bits)),
     }
   }
 
@@ -461,23 +462,20 @@ impl Ord for Int {
   def lt(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
       Ordering::Less => True,
-      Ordering::Equal => False,
-      Ordering::Greater => False,
+      Ordering::Equal | Ordering::Greater => False,
     }
   }
 
   def lte(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
-      Ordering::Less => True,
-      Ordering::Equal => True,
+      Ordering::Less | Ordering::Equal => True,
       Ordering::Greater => False,
     }
   }
 
   def gt(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
-      Ordering::Less => False,
-      Ordering::Equal => False,
+      Ordering::Less | Ordering::Equal => False,
       Ordering::Greater => True,
     }
   }
@@ -485,8 +483,7 @@ impl Ord for Int {
   def gte(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
       Ordering::Less => False,
-      Ordering::Equal => True,
-      Ordering::Greater => True,
+      Ordering::Equal | Ordering::Greater => True,
     }
   }
 }
