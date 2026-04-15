@@ -1,5 +1,59 @@
-import Result::{is_ok, is_err, map_err, cause, chain};
+import Result::{
+  all,
+  cause,
+  chain,
+  flat_lift,
+  flat_lift2,
+  flat_lift3,
+  flat_with,
+  flat_with2,
+  flat_with3,
+  flatten,
+  is_err,
+  is_ok,
+  lift,
+  lift2,
+  lift3,
+  map_err,
+  tap,
+  tap_err,
+  then,
+  with,
+  with2,
+  with3,
+  zip,
+  zip3,
+};
 import Test;
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def add2(x: Int, y: Int) -> Int {
+  x + y
+}
+
+def add3(x: Int, y: Int, z: Int) -> Int {
+  x + y + z
+}
+
+def safe_inc(x: Int) -> Result<Int> {
+  Ok(x + 1)
+}
+
+def safe_add2(x: Int, y: Int) -> Result<Int> {
+  Ok(x + y)
+}
+
+def safe_add3(x: Int, y: Int, z: Int) -> Result<Int> {
+  Ok(x + y + z)
+}
+
+def emit_next() -> Result<String> {
+  print("then-next")
+  Ok("next")
+}
 
 test("Result") {
   describe("is_ok") {
@@ -48,6 +102,107 @@ test("Result") {
         "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")",
         inspect(chain(Err(NoneError), Err(ZeroDivisionError))),
       )
+    }
+  }
+
+  describe("lift / with") {
+    it("lift applies wrapped unary function") {
+      assert_eq("Ok(2)", inspect(lift(Ok(&inc), Ok(1))))
+    }
+
+    it("lift2 applies wrapped binary function") {
+      assert_eq("Ok(3)", inspect(lift2(Ok(&add2), Ok(1), Ok(2))))
+    }
+
+    it("lift3 applies wrapped ternary function") {
+      assert_eq("Ok(6)", inspect(lift3(Ok(&add3), Ok(1), Ok(2), Ok(3))))
+    }
+
+    it("with keeps value-first order") {
+      assert_eq("Ok(2)", inspect(with(Ok(1), Ok(&inc))))
+    }
+
+    it("with2 keeps value-first order") {
+      assert_eq("Ok(3)", inspect(with2(Ok(1), Ok(2), Ok(&add2))))
+    }
+
+    it("with3 keeps value-first order") {
+      assert_eq("Ok(6)", inspect(with3(Ok(1), Ok(2), Ok(3), Ok(&add3))))
+    }
+  }
+
+  describe("flat_lift / flat_with") {
+    it("flat_lift flattens nested result") {
+      assert_eq("Ok(2)", inspect(flat_lift(Ok(&safe_inc), Ok(1))))
+    }
+
+    it("flat_lift2 flattens nested result") {
+      assert_eq("Ok(3)", inspect(flat_lift2(Ok(&safe_add2), Ok(1), Ok(2))))
+    }
+
+    it("flat_lift3 flattens nested result") {
+      assert_eq("Ok(6)", inspect(flat_lift3(Ok(&safe_add3), Ok(1), Ok(2), Ok(3))))
+    }
+
+    it("flat_with keeps value-first order") {
+      assert_eq("Ok(2)", inspect(flat_with(Ok(1), Ok(&safe_inc))))
+    }
+
+    it("flat_with2 keeps value-first order") {
+      assert_eq("Ok(3)", inspect(flat_with2(Ok(1), Ok(2), Ok(&safe_add2))))
+    }
+
+    it("flat_with3 keeps value-first order") {
+      assert_eq("Ok(6)", inspect(flat_with3(Ok(1), Ok(2), Ok(3), Ok(&safe_add3))))
+    }
+  }
+
+  describe("zip / all / flatten") {
+    it("zips two results") {
+      assert_eq("Ok((1, 2))", inspect(zip(Ok(1), Ok(2))))
+    }
+
+    it("zips three results") {
+      assert_eq("Ok((1, 2, 3))", inspect(zip3(Ok(1), Ok(2), Ok(3))))
+    }
+
+    it("collects all Ok values") {
+      assert_eq("Ok([1, 2, 3])", inspect(all([Ok(1), Ok(2), Ok(3)])))
+    }
+
+    it("returns first Err from all") {
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(all([Ok(1), Err(NoneError), Ok(3)])))
+    }
+
+    it("flattens nested Ok") {
+      assert_eq("Ok(1)", inspect(flatten(Ok(Ok(1)))))
+    }
+  }
+
+  describe("tap / tap_err / then") {
+    it("tap observes Ok and keeps value") {
+      capture_stdout()
+      result = tap(Ok(1), {|x| print("tap:#{to_string(x)}")})
+      assert_eq("Ok(1)", inspect(result))
+      assert_stdout_eq(["tap:1"])
+    }
+
+    it("tap_err observes Err and keeps error") {
+      capture_stdout()
+      result = tap_err(Err(NoneError), {|err| print("tap_err:#{inspect(err)}")})
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
+      assert_stdout_eq(["tap_err:NoneError(\"None Value.\")"])
+    }
+
+    it("then runs next when Ok") {
+      assert_eq("Ok(\"next\")", inspect(then(Ok(1), &emit_next)))
+    }
+
+    it("then short-circuits on Err") {
+      capture_stdout()
+      result = then(Err(NoneError), &emit_next)
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
+      assert_stdout_eq([])
     }
   }
 }

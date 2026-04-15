@@ -1,3 +1,32 @@
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def add2(x: Int, y: Int) -> Int {
+  x + y
+}
+
+def add3(x: Int, y: Int, z: Int) -> Int {
+  x + y + z
+}
+
+def safe_inc(x: Int) -> Result<Int> {
+  Ok(x + 1)
+}
+
+def safe_add2(x: Int, y: Int) -> Result<Int> {
+  Ok(x + y)
+}
+
+def safe_add3(x: Int, y: Int, z: Int) -> Result<Int> {
+  Ok(x + y + z)
+}
+
+def emit_next() -> Result<String> {
+  print("then-next")
+  Ok("next")
+}
+
 print(to_string(Result::is_ok(Ok(1))))
 print(to_string(Result::is_ok(Err(NoneError))))
 print(to_string(Result::is_err(Ok(1))))
@@ -15,3 +44,25 @@ match Result::cause(Err(NoneError), ZeroDivisionError) {
   Ok(_) => print("unexpected"),
   Err(e) => print(inspect(e)),
 }
+print(inspect(Result::lift(Ok(&inc), Ok(1))))
+print(inspect(Result::lift2(Ok(&add2), Ok(1), Ok(2))))
+print(inspect(Result::lift3(Ok(&add3), Ok(1), Ok(2), Ok(3))))
+print(inspect(Result::with(Ok(1), Ok(&inc))))
+print(inspect(Result::with2(Ok(1), Ok(2), Ok(&add2))))
+print(inspect(Result::with3(Ok(1), Ok(2), Ok(3), Ok(&add3))))
+print(inspect(Result::flat_lift(Ok(&safe_inc), Ok(1))))
+print(inspect(Result::flat_lift2(Ok(&safe_add2), Ok(1), Ok(2))))
+print(inspect(Result::flat_lift3(Ok(&safe_add3), Ok(1), Ok(2), Ok(3))))
+print(inspect(Result::flat_with(Ok(1), Ok(&safe_inc))))
+print(inspect(Result::flat_with2(Ok(1), Ok(2), Ok(&safe_add2))))
+print(inspect(Result::flat_with3(Ok(1), Ok(2), Ok(3), Ok(&safe_add3))))
+print(inspect(Result::zip(Ok(1), Ok(2))))
+print(inspect(Result::zip3(Ok(1), Ok(2), Ok(3))))
+print(inspect(Result::all([Ok(1), Ok(2), Ok(3)])))
+print(inspect(Result::all([Ok(1), Err(NoneError), Ok(3)])))
+print(inspect(Result::flatten(Ok(Ok(1)))))
+print(inspect(Result::flatten(Err(NoneError))))
+print(inspect(Result::tap(Ok(1), {|x| print("tap:#{to_string(x)}")})))
+print(inspect(Result::tap_err(Err(NoneError), {|err| print("tap_err:#{inspect(err)}")})))
+print(inspect(Result::then(Ok(1), &emit_next)))
+print(inspect(Result::then(Err(NoneError), &emit_next)))
