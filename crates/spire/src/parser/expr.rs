@@ -33,7 +33,7 @@ impl Parser {
     }
 
     pub(super) fn parse_flow_expr(&mut self) -> Result<Ast, ParseError> {
-        let mut left = self.parse_logical_expr()?;
+        let mut left = self.parse_and_or_expr()?;
         loop {
             self.skip_newlines_before_flow_op();
 
@@ -43,7 +43,7 @@ impl Parser {
             };
             self.advance();
             self.skip_newlines();
-            let right = self.parse_logical_expr()?;
+            let right = self.parse_and_or_expr()?;
             let span = Span {
                 start: left.span().start,
                 end: right.span().end,
@@ -141,6 +141,23 @@ impl Parser {
         }
     }
 
+    pub(super) fn and_or_func_literal_name(body: &str) -> bool {
+        matches!(body, "and" | "or")
+    }
+
+    pub(super) fn comparison_func_literal_name(body: &str) -> bool {
+        // `le` / `ge` are accepted here as comparison-style helper aliases.
+        // They stay normal function calls, but parse at comparison precedence.
+        matches!(
+            body,
+            "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "le" | "ge"
+        )
+    }
+
+    pub(super) fn logical_func_literal_name(body: &str) -> bool {
+        Self::and_or_func_literal_name(body) || Self::comparison_func_literal_name(body)
+    }
+
     pub(super) fn lower_binop(left: Ast, op: BinOp, right: Ast) -> Ast {
         let span = Span {
             start: left.span().start,
@@ -191,7 +208,9 @@ impl Parser {
                 continue;
             }
 
-            if Self::logical_binop_from_func_literal(&body).is_some() {
+            if Self::logical_binop_from_func_literal(&body).is_some()
+                || Self::logical_func_literal_name(&body)
+            {
                 break;
             }
 
@@ -218,12 +237,40 @@ impl Parser {
                 break;
             };
 
-            let Some(op) = Self::logical_binop_from_func_literal(&body) else {
+            if let Some(op) = Self::logical_binop_from_func_literal(&body) {
+                self.advance();
+                let right = self.parse_expr_class_expr()?;
+                left = Self::lower_binop(left, op, right);
+                continue;
+            }
+
+            if Self::comparison_func_literal_name(&body) {
+                let func_span = self.advance().span.clone();
+                let right = self.parse_expr_class_expr()?;
+                left = Self::lower_func_literal_call(left, func_span, body, right);
+                continue;
+            }
+
+            break;
+        }
+
+        Ok(left)
+    }
+
+    pub(super) fn parse_and_or_expr(&mut self) -> Result<Ast, ParseError> {
+        let mut left = self.parse_logical_expr()?;
+
+        loop {
+            let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
                 break;
             };
-            self.advance();
-            let right = self.parse_expr_class_expr()?;
-            left = Self::lower_binop(left, op, right);
+            if !Self::and_or_func_literal_name(&body) {
+                break;
+            }
+
+            let func_span = self.advance().span.clone();
+            let right = self.parse_logical_expr()?;
+            left = Self::lower_func_literal_call(left, func_span, body, right);
         }
 
         Ok(left)

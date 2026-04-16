@@ -13,11 +13,11 @@ print(match 8 {
 })
 
 print(match 5 {
-  num when (0 < num) `and` (num < 10) => "in-range",
+  num when 0 < num `and` num < 10 => "in-range",
   _ => "out-range",
 })
 
 print(match 12 {
-  num when (0 < num) `and` (num < 10) => "in-range",
+  num when 0 < num `and` num < 10 => "in-range",
   _ => "out-range",
 })

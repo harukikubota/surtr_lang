@@ -839,6 +839,92 @@ fn test_func_literal_name_lowers_to_binary_call() {
 }
 
 #[test]
+fn test_func_literal_comparison_name_uses_logical_tier() {
+    let ast = parse("x = a `eq` b + c").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "eq"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "a")
+                            && matches!(
+                                right,
+                                Ast::BinOp(_, BinOp::Add, rl, rr)
+                                    if matches!(rl.as_ref(), Ast::Var(_, name) if name == "b")
+                                        && matches!(rr.as_ref(), Ast::Var(_, name) if name == "c")
+                            )
+                ));
+            }
+            other => panic!("Expected logical-tier comparison helper parse, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_func_literal_and_is_lower_precedence_than_comparison_ops() {
+    let ast = parse("x = 0 < num `and` num < 10").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(
+                            left,
+                            Ast::BinOp(_, BinOp::Lt, ll, lr)
+                                if matches!(ll.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(0))
+                                    && matches!(lr.as_ref(), Ast::Var(_, name) if name == "num")
+                        ) && matches!(
+                            right,
+                            Ast::BinOp(_, BinOp::Lt, rl, rr)
+                                if matches!(rl.as_ref(), Ast::Var(_, name) if name == "num")
+                                    && matches!(rr.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(10))
+                        )
+                ));
+            }
+            other => panic!("Expected and(...) call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_func_literal_and_or_chain_is_left_associative_with_comparisons() {
+    let ast = parse("x = 0 < num `and` num < 10 `or` num == 42").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, or_func, or_args) => {
+                assert!(matches!(or_func.as_ref(), Ast::Var(_, name) if name == "or"));
+                assert!(matches!(
+                    or_args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(
+                            left,
+                            Ast::App(_, and_func, and_args)
+                                if matches!(and_func.as_ref(), Ast::Var(_, name) if name == "and")
+                                    && matches!(
+                                        and_args.as_slice(),
+                                        [RecordLitArg::Positional(_), RecordLitArg::Positional(_)]
+                                    )
+                        ) && matches!(
+                            right,
+                            Ast::BinOp(_, BinOp::Eq, rl, rr)
+                                if matches!(rl.as_ref(), Ast::Var(_, name) if name == "num")
+                                    && matches!(rr.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(42))
+                        )
+                ));
+            }
+            other => panic!("Expected or(...) at top, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_func_literal_operator_lowers_to_binop() {
     let ast = parse("x = left `+` right").unwrap();
     match &ast[0] {
@@ -1911,7 +1997,7 @@ fn test_match_or_pattern_expands_into_multiple_arms() {
 fn test_match_guard_is_parsed_on_each_expanded_or_arm() {
     let ast = parse(
         r#"x = match n {
-  1 | 2 when (0 < n) `and` (n < 10) => n,
+  1 | 2 when 0 < n `and` n < 10 => n,
   _ => 0,
 }"#,
     )
