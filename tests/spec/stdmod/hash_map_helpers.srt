@@ -19,6 +19,8 @@ print(inspect(HashMap::remove(removed, "missing")))
 
 print(to_string(HashMap::keys(from_entries)))
 print(to_string(HashMap::values(from_entries)))
+print(to_string(HashMap::entries(from_entries)))
+print(inspect(HashMap::map_values(from_entries, {|v| v * 10})))
 
 escaped = HashMap::from_entries([
   ("line\nfeed", 1),

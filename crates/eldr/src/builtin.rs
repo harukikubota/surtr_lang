@@ -140,7 +140,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_map_keys,
     },
     BuiltinImpl {
-        func: builtin_map_values,
+        func: builtin_map_values_list,
     },
     BuiltinImpl {
         func: builtin_lens_view,
@@ -811,8 +811,8 @@ fn builtin_map_keys(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     Ok(Value::List(ListHandle::from_items(items)))
 }
 
-fn builtin_map_values(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let map = decode_hash_map_arg(&args[0], "map_values", "map")?;
+fn builtin_map_values_list(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "map_values_list", "map")?;
     Ok(Value::List(ListHandle::from_items(map.values())))
 }
 
@@ -2228,8 +2228,8 @@ mod tests {
             other => panic!("expected List<String>, got {:?}", other),
         }
 
-        let values = call_builtin(&mut vm, builtin_id("map_values"), vec![map.clone()])
-            .expect("map_values should succeed");
+        let values = call_builtin(&mut vm, builtin_id("map_values_list"), vec![map.clone()])
+            .expect("map_values_list should succeed");
         match values {
             Value::List(list) => {
                 let rendered = list

@@ -277,7 +277,7 @@ defmod Result {
   @@doc """
   Observe success values and return the original `Result` unchanged.
   """
-  def tap(value: Result<$A>, f: ($A -> Unit)) -> Result<$A> {
+  def tap_ok(value: Result<$A>, f: ($A -> Unit)) -> Result<$A> {
     match value {
       Ok(v) => {
         f(v)

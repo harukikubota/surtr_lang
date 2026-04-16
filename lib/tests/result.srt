@@ -15,7 +15,7 @@ import Result::{
   lift2,
   lift3,
   map_err,
-  tap,
+  tap_ok,
   tap_err,
   then,
   with,
@@ -179,10 +179,10 @@ test("Result") {
     }
   }
 
-  describe("tap / tap_err / then") {
-    it("tap observes Ok and keeps value") {
+  describe("tap_ok / tap_err / then") {
+    it("tap_ok observes Ok and keeps value") {
       capture_stdout()
-      result = tap(Ok(1), {|x| print("tap:#{to_string(x)}")})
+      result = tap_ok(Ok(1), {|x| print("tap:#{to_string(x)}")})
       assert_eq("Ok(1)", inspect(result))
       assert_stdout_eq(["tap:1"])
     }

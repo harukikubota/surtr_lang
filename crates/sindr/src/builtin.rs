@@ -228,7 +228,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(HashMap<$V>) -> List<String>",
     },
     BuiltinMeta {
-        name: "map_values",
+        name: "map_values_list",
         arity: 1,
         sig_str: "(HashMap<$V>) -> List<$V>",
     },

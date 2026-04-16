@@ -12,6 +12,21 @@ Provides immutable map helpers backed by runtime builtins.
 Keys are always `String`, and insertion order is preserved.
 """
 defmod HashMap {
+  defp _map_values_go(
+    source: HashMap<$A>,
+    remaining_keys: List<String>,
+    f: ($A -> $B),
+    acc: HashMap<$B>,
+  ) -> HashMap<$B> {
+    match remaining_keys {
+      [] => acc,
+      [key, ..tail] => match get(source, key) {
+        Ok(value) => _map_values_go(source, tail, f, insert(acc, key, f(value))),
+        Err(_) => _map_values_go(source, tail, f, acc),
+      },
+    }
+  }
+
   @@doc """
   Return the empty map.
   """
@@ -90,9 +105,24 @@ defmod HashMap {
   @@doc """
   Return values in the same order as `keys(map)`.
   """
-  @@builtin def map_values(map: HashMap<$V>) -> List<$V>
+  @@builtin def map_values_list(map: HashMap<$V>) -> List<$V>
 
   def values(map: HashMap<$V>) -> List<$V> {
-    map_values(map)
+    map_values_list(map)
+  }
+
+  @@doc """
+  Return `(key, value)` entries in insertion order.
+  """
+  def entries(map: HashMap<$V>) -> List<(String, $V)> {
+    List::zip(keys(map), values(map))
+  }
+
+  @@doc """
+  Return a new map with the same keys and transformed values.
+  Key order is preserved.
+  """
+  def map_values(map: HashMap<$A>, f: ($A -> $B)) -> HashMap<$B> {
+    _map_values_go(map, keys(map), f, empty())
   }
 }

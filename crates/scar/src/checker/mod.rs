@@ -340,7 +340,7 @@ fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
                 ret: Box::new(Ty::List(Box::new(Ty::Str))),
             }
         }
-        "map_values" => {
+        "map_values_list" => {
             let value = env.fresh_tyvar();
             Ty::BuiltinFunc {
                 name: meta.name.into(),

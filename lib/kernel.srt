@@ -159,6 +159,15 @@ defmod Kernel {
   @@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>
 
   @@doc """
+  Observe `value` for side effects and return it unchanged.
+  This is useful in pipelines for logging or metrics without changing the data.
+  """
+  def tap(value: $A, f: ($A -> Unit)) -> $A {
+    f(value)
+    value
+  }
+
+  @@doc """
   Decompose a non-empty sequence in MatchBlock positions.
 
   `uncons(term)` is a builtin Extractor used by `=?` and `match`.
