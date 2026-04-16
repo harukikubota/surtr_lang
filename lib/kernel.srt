@@ -63,6 +63,46 @@ defmod Kernel {
   @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
 
   @@doc """
+  Pattern-aware branching expression for a single success path.
+
+  The declared type is:
+  `if_let($A, $Pattern, (-> $B), (-> $B)) -> $B`
+
+  `if_let` evaluates the input value once, checks it against the pattern, and:
+  - evaluates `then_branch` when the pattern matches
+  - evaluates `else_branch` when it does not match
+
+  Any bindings introduced by the pattern are available only inside the
+  successful branch body.
+  """
+  @@builtin def if_let(value: $A, pattern: $Pattern, then_branch: (-> $B), else_branch: (-> $B)) -> $B
+
+  @@doc """
+  Pattern-aware side-effect guard for a single success path.
+
+  The declared type is:
+  `if_let_then($A, $Pattern, (-> Unit)) -> Unit`
+
+  The input value is evaluated once.
+  The branch expression is evaluated only when the pattern matches.
+  Non-match returns `Unit` without evaluating the branch expression.
+  """
+  @@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: (-> Unit)) -> Unit
+
+  @@doc """
+  Boolean predicate for pattern compatibility.
+
+  The declared type is:
+  `is_match($A, $Pattern) -> Boolean`
+
+  Returns `True` when the value matches the pattern, otherwise `False`.
+  This form does not permit binding variables in the pattern argument.
+  Use `_` to ignore values, or switch to `if_let` / `match` when bindings
+  are required.
+  """
+  @@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean
+
+  @@doc """
   Logical conjunction with short-circuit evaluation.
 
   The declared type is:

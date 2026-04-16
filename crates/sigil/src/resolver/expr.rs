@@ -14,6 +14,9 @@ impl Resolver {
         match name {
             "if" => Some(3),
             "if_then" => Some(2),
+            "if_let" => Some(4),
+            "if_let_then" => Some(3),
+            "is_match" => Some(2),
             "assert" => Some(2),
             "ensure" => Some(3),
             "and" | "or" => Some(2),
@@ -303,6 +306,15 @@ impl Resolver {
                     }
                     if name == "if_then" {
                         return self.resolve_if(span, args, IfKind::IfThen2);
+                    }
+                    if name == "if_let" {
+                        return self.resolve_if_let(span, args);
+                    }
+                    if name == "if_let_then" {
+                        return self.resolve_if_let_then(span, args);
+                    }
+                    if name == "is_match" {
+                        return self.resolve_is_match(span, args);
                     }
                     if name == "assert" {
                         return self.resolve_assert(span, args);

@@ -1,0 +1,11 @@
+value = if_let(Ok(41), Ok(n), n + 1, 0)
+print(to_string(value))
+
+fallback = if_let(Err(NoneError), Ok(n), n, -1)
+print(to_string(fallback))
+
+if_let_then(Ok("alice"), Ok(name), print(name))
+if_let_then(Err(NoneError), Ok(name), print(name))
+
+print(to_string(is_match(Ok(1), Ok(_))))
+print(to_string(is_match(Err(NoneError), Ok(_))))

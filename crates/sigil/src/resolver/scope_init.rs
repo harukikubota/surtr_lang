@@ -40,7 +40,17 @@ pub(super) fn is_runtime_builtin_decl(name: &str) -> bool {
 }
 
 pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {
-    matches!(name, "if" | "if_then" | "assert" | "ensure" | "and" | "or")
+    matches!(
+        name,
+        "if" | "if_then"
+            | "if_let"
+            | "if_let_then"
+            | "is_match"
+            | "assert"
+            | "ensure"
+            | "and"
+            | "or"
+    )
 }
 
 pub(super) fn is_doc_only_builtin_decl(name: &str) -> bool {

@@ -8,7 +8,14 @@ impl Checker {
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
-        if Self::is_special_form_builtin_decl_name(&id.name) {
+        let is_kernel_is_match =
+            id.name == "is_match" && id.qualified_name.as_deref() == Some("Kernel::is_match");
+        let is_special_form = if id.name == "is_match" {
+            is_kernel_is_match
+        } else {
+            Self::is_special_form_builtin_decl_name(&id.name)
+        };
+        if is_special_form {
             return self.check_special_form_builtin_decl(span, id, params, ret_ty);
         }
 
@@ -70,6 +77,9 @@ impl Checker {
         let expected_qname = match id.name.as_str() {
             "if" => "Kernel::if",
             "if_then" => "Kernel::if_then",
+            "if_let" => "Kernel::if_let",
+            "if_let_then" => "Kernel::if_let_then",
+            "is_match" => "Kernel::is_match",
             "assert" => "Kernel::assert",
             "ensure" => "Kernel::ensure",
             "and" => "Kernel::and",
@@ -104,6 +114,31 @@ impl Checker {
                     && Self::is_zero_arg_func_to_unit(&params[1].ty)
                     && ret_ty.as_ref().is_some_and(Self::is_unit_type)
             }
+            "if_let" => {
+                params.len() == 4
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "$Pattern")
+                    && Self::is_zero_arg_func_to_named(&params[2].ty, "$B")
+                    && Self::is_zero_arg_func_to_named(&params[3].ty, "$B")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_named_type(ty, "$B"))
+            }
+            "if_let_then" => {
+                params.len() == 3
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "$Pattern")
+                    && Self::is_zero_arg_func_to_unit(&params[2].ty)
+                    && ret_ty.as_ref().is_some_and(Self::is_unit_type)
+            }
+            "is_match" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "$Pattern")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
+            }
             "assert" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "Boolean")
@@ -136,6 +171,9 @@ impl Checker {
             let expected = match id.name.as_str() {
                 "if" => "@@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A",
                 "if_then" => "@@builtin def if_then(flag: Boolean, then_branch: (-> ())) -> ()",
+                "if_let" => "@@builtin def if_let(value: $A, pattern: $Pattern, then_branch: (-> $B), else_branch: (-> $B)) -> $B",
+                "if_let_then" => "@@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: (-> ())) -> ()",
+                "is_match" => "@@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
                 "assert" => "@@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>",
                 "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>",
                 "and" => "@@builtin def and(left: Boolean, right: Boolean) -> Boolean",
@@ -378,6 +416,9 @@ impl Checker {
         matches!(
             name,
             "if" | "if_then"
+                | "if_let"
+                | "if_let_then"
+                | "is_match"
                 | "assert"
                 | "ensure"
                 | "and"

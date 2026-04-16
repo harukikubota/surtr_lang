@@ -135,6 +135,247 @@ impl Resolver {
         ))
     }
 
+    pub(super) fn resolve_if_let(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let positional = collect_positional_args(span.clone(), args, "if_let", 4)?;
+        let mut iter = positional.into_iter();
+        let term = iter.next().expect("checked arg length");
+        let pattern_expr = iter.next().expect("checked arg length");
+        let then_expr = iter.next().expect("checked arg length");
+        let else_expr = iter.next().expect("checked arg length");
+
+        let pattern = self.ast_expr_to_pattern(pattern_expr, "if_let")?;
+        let fallback = AstPattern::Wildcard(span.clone());
+
+        self.resolve_node(Ast::Match(
+            span.clone(),
+            Box::new(term),
+            vec![
+                AstMatchArm {
+                    pattern,
+                    guard: None,
+                    body: then_expr,
+                },
+                AstMatchArm {
+                    pattern: fallback,
+                    guard: None,
+                    body: else_expr,
+                },
+            ],
+        ))
+    }
+
+    pub(super) fn resolve_if_let_then(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let positional = collect_positional_args(span.clone(), args, "if_let_then", 3)?;
+        let mut iter = positional.into_iter();
+        let term = iter.next().expect("checked arg length");
+        let pattern_expr = iter.next().expect("checked arg length");
+        let then_expr = iter.next().expect("checked arg length");
+
+        let pattern = self.ast_expr_to_pattern(pattern_expr, "if_let_then")?;
+        let unit_lit = Ast::Lit(span.clone(), Lit::Unit);
+        let then_block = Ast::Block(
+            span.clone(),
+            vec![then_expr, Ast::Lit(span.clone(), Lit::Unit)],
+        );
+
+        self.resolve_node(Ast::Match(
+            span.clone(),
+            Box::new(term),
+            vec![
+                AstMatchArm {
+                    pattern,
+                    guard: None,
+                    body: then_block,
+                },
+                AstMatchArm {
+                    pattern: AstPattern::Wildcard(span.clone()),
+                    guard: None,
+                    body: unit_lit,
+                },
+            ],
+        ))
+    }
+
+    pub(super) fn resolve_is_match(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let positional = collect_positional_args(span.clone(), args, "is_match", 2)?;
+        let mut iter = positional.into_iter();
+        let term = iter.next().expect("checked arg length");
+        let pattern_expr = iter.next().expect("checked arg length");
+        let pattern = self.ast_expr_to_pattern(pattern_expr, "is_match")?;
+
+        if pattern_has_binding_vars(&pattern) {
+            return Err(ResolveError {
+                message: "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.".into(),
+                span: ast_pattern_span(&pattern).clone(),
+            });
+        }
+
+        self.resolve_node(Ast::Match(
+            span.clone(),
+            Box::new(term),
+            vec![
+                AstMatchArm {
+                    pattern,
+                    guard: None,
+                    body: Ast::Lit(span.clone(), Lit::Bool(true)),
+                },
+                AstMatchArm {
+                    pattern: AstPattern::Wildcard(span.clone()),
+                    guard: None,
+                    body: Ast::Lit(span, Lit::Bool(false)),
+                },
+            ],
+        ))
+    }
+
+    fn ast_expr_to_pattern(
+        &self,
+        expr: Ast,
+        callee_name: &str,
+    ) -> Result<AstPattern, ResolveError> {
+        match expr {
+            Ast::Var(span, name) => {
+                if name == "_" {
+                    Ok(AstPattern::Wildcard(span))
+                } else if Self::is_constructor_style_head(&name) {
+                    Ok(AstPattern::Constructor(span, name, Vec::new()))
+                } else {
+                    Ok(AstPattern::Var(span, name))
+                }
+            }
+            Ast::Path(span, path) => {
+                let full_name = path.segments.join("::");
+                if Self::is_constructor_style_head(&full_name) {
+                    Ok(AstPattern::Constructor(span, full_name, Vec::new()))
+                } else {
+                    Err(ResolveError {
+                        message: "Qualified patterns support constructor forms only".into(),
+                        span,
+                    })
+                }
+            }
+            Ast::Lit(span, lit) => match lit {
+                Lit::Int(n) => Ok(AstPattern::IntLit(span, n)),
+                Lit::Str(s) => Ok(AstPattern::StrLit(span, s)),
+                Lit::Bool(b) => Ok(AstPattern::BoolLit(span, b)),
+                Lit::Float(_) | Lit::Unit => Err(ResolveError {
+                    message: format!(
+                        "{} pattern only supports Int/String/Boolean literals",
+                        callee_name
+                    ),
+                    span,
+                }),
+            },
+            Ast::ListNil(span) => Ok(AstPattern::ListNil(span)),
+            Ast::ListCons(span, head, tail) => Ok(AstPattern::ListCons(
+                span,
+                Box::new(self.ast_expr_to_pattern(*head, callee_name)?),
+                Box::new(self.ast_expr_to_pattern(*tail, callee_name)?),
+            )),
+            Ast::ListLiteral(span, items) => {
+                let pats = items
+                    .into_iter()
+                    .map(|item| self.ast_expr_to_pattern(item, callee_name))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(fixed_pattern_list(span, pats))
+            }
+            Ast::TupleLiteral(span, items) => {
+                if items.len() == 1 {
+                    return Err(ResolveError {
+                        message: "1-tuple patterns are not supported".into(),
+                        span,
+                    });
+                }
+                let pats = items
+                    .into_iter()
+                    .map(|item| self.ast_expr_to_pattern(item, callee_name))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(AstPattern::Tuple(span, pats))
+            }
+            Ast::ConstructorCall(span, name, args) => {
+                let mut inners = Vec::with_capacity(args.len());
+                for arg in args {
+                    match arg {
+                        RecordLitArg::Positional(expr) => {
+                            inners.push(self.ast_expr_to_pattern(expr, callee_name)?)
+                        }
+                        RecordLitArg::Named(name, _) => {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "{} pattern does not accept named argument '{}'",
+                                    callee_name, name
+                                ),
+                                span,
+                            });
+                        }
+                    }
+                }
+                if inners.is_empty() {
+                    Ok(AstPattern::Constructor(span, name, Vec::new()))
+                } else {
+                    Ok(AstPattern::Call(span, name, inners))
+                }
+            }
+            Ast::App(span, func, args) => {
+                let head_name = match *func {
+                    Ast::Var(_, name) => name,
+                    Ast::Path(_, path) => path.segments.join("::"),
+                    other => {
+                        return Err(ResolveError {
+                            message: format!(
+                                "{} pattern head must be an identifier or constructor path",
+                                callee_name
+                            ),
+                            span: other.span().clone(),
+                        });
+                    }
+                };
+                let mut inners = Vec::with_capacity(args.len());
+                for arg in args {
+                    match arg {
+                        RecordLitArg::Positional(expr) => {
+                            inners.push(self.ast_expr_to_pattern(expr, callee_name)?)
+                        }
+                        RecordLitArg::Named(name, _) => {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "{} pattern does not accept named argument '{}'",
+                                    callee_name, name
+                                ),
+                                span,
+                            });
+                        }
+                    }
+                }
+
+                if inners.is_empty() && Self::is_constructor_style_head(&head_name) {
+                    Ok(AstPattern::Constructor(span, head_name, Vec::new()))
+                } else {
+                    Ok(AstPattern::Call(span, head_name, inners))
+                }
+            }
+            other => Err(ResolveError {
+                message: format!(
+                    "{} pattern supports `_`, literals, tuple/list patterns, constructors, and extractor-style calls",
+                    callee_name
+                ),
+                span: other.span().clone(),
+            }),
+        }
+    }
+
     pub(super) fn resolve_logic_call(
         &mut self,
         span: Span,
@@ -196,4 +437,47 @@ fn collect_positional_args(
         }
     }
     Ok(positional)
+}
+
+fn fixed_pattern_list(span: Span, items: Vec<AstPattern>) -> AstPattern {
+    items
+        .into_iter()
+        .rev()
+        .fold(AstPattern::ListNil(span.clone()), |tail, head| {
+            AstPattern::ListCons(span.clone(), Box::new(head), Box::new(tail))
+        })
+}
+
+fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
+    match pattern {
+        AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _) => true,
+        AstPattern::ListCons(_, head, tail) => {
+            pattern_has_binding_vars(head) || pattern_has_binding_vars(tail)
+        }
+        AstPattern::Constructor(_, _, inners)
+        | AstPattern::Call(_, _, inners)
+        | AstPattern::Tuple(_, inners) => inners.iter().any(pattern_has_binding_vars),
+        AstPattern::Wildcard(_)
+        | AstPattern::ListNil(_)
+        | AstPattern::IntLit(_, _)
+        | AstPattern::StrLit(_, _)
+        | AstPattern::BoolLit(_, _) => false,
+    }
+}
+
+fn ast_pattern_span(pattern: &AstPattern) -> &Span {
+    match pattern {
+        AstPattern::Var(span, _)
+        | AstPattern::Annotated(span, _, _)
+        | AstPattern::Wildcard(span)
+        | AstPattern::ListNil(span)
+        | AstPattern::ListCons(span, _, _)
+        | AstPattern::IntLit(span, _)
+        | AstPattern::StrLit(span, _)
+        | AstPattern::BoolLit(span, _)
+        | AstPattern::Constructor(span, _, _)
+        | AstPattern::Call(span, _, _)
+        | AstPattern::Tuple(span, _)
+        | AstPattern::As(span, _, _, _) => span,
+    }
 }

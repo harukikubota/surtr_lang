@@ -673,6 +673,63 @@ fn test_if_then_conversion() {
 }
 
 #[test]
+fn test_if_let_conversion() {
+    let resolved = parse_and_resolve("x = if_let(Ok(1), Ok(v), v, 0)").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => {
+                assert_eq!(arms.len(), 2);
+                assert!(matches!(
+                    &arms[0].pattern,
+                    ResolvedPattern::Constructor(_, _)
+                ));
+                assert!(matches!(&arms[1].pattern, ResolvedPattern::Wildcard(_)));
+            }
+            other => panic!("Expected Match for if_let(...), got {:?}", other),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_if_let_then_conversion() {
+    let resolved = parse_and_resolve("x = if_let_then(Ok(1), Ok(v), print(\"ok\"))").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => {
+                assert_eq!(arms.len(), 2);
+                assert!(matches!(&arms[0].body, Resolved::Block(_, _)));
+                assert!(matches!(&arms[1].body, Resolved::Lit(_, Lit::Unit)));
+            }
+            other => panic!("Expected Match for if_let_then(...), got {:?}", other),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_is_match_conversion() {
+    let resolved = parse_and_resolve("x = is_match(Ok(1), Ok(_))").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => {
+                assert_eq!(arms.len(), 2);
+                assert!(matches!(&arms[0].body, Resolved::Lit(_, Lit::Bool(true))));
+                assert!(matches!(&arms[1].body, Resolved::Lit(_, Lit::Bool(false))));
+            }
+            other => panic!("Expected Match for is_match(...), got {:?}", other),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_is_match_rejects_binding_variable_pattern() {
+    let err = parse_and_resolve("x = is_match(Ok(1), Ok(v))").expect_err("must fail");
+    assert!(err.message.contains("does not allow binding variables"));
+}
+
+#[test]
 fn test_assert_conversion() {
     let resolved = parse_and_resolve(
         r#"deferror SomeError { "boom" }
