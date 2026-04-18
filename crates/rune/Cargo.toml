@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Runtime User-facing Node Entry — the Surtr CLI"
 
+[features]
+default = []
+tui = ["xldr/tui"]
+
 [[bin]]
 name = "surtr"
 path = "src/main.rs"
@@ -20,37 +24,5 @@ xldr  = { path = "../xldr" }
 serde_json = "1.0"
 
 [[test]]
-name = "run_srt"
-path = "../../tests/integration/run_srt.rs"
-
-[[test]]
-name = "run_eldr"
-path = "../../tests/integration/run_eldr.rs"
-
-[[test]]
-name = "build_roundtrip"
-path = "../../tests/integration/build_roundtrip.rs"
-
-[[test]]
-name = "repl"
-path = "../../tests/integration/repl.rs"
-
-[[test]]
-name = "language_features"
-path = "../../tests/integration/language_features.rs"
-
-[[test]]
-name = "module_import_fixtures"
-path = "../../tests/integration/module_import_fixtures.rs"
-
-[[test]]
-name = "private_visibility"
-path = "../../tests/integration/private_visibility.rs"
-
-[[test]]
-name = "test_command"
-path = "../../tests/integration/test_command.rs"
-
-[[test]]
-name = "pending_regressions"
-path = "../../tests/integration/pending_regressions.rs"
+name = "integration"
+path = "../../tests/integration/all.rs"

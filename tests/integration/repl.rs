@@ -1,9 +1,8 @@
+use crate::common::{surtr_bin, unique_temp_dir};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-mod common;
-use common::{surtr_bin, unique_temp_dir};
 
 fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
     run_repl_session_with_args_in_dir(args, input, None)

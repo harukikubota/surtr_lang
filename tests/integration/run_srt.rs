@@ -3,12 +3,11 @@ use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-mod common;
-mod support;
-use common::{
+use crate::common::{
     compile_error_fixtures, extract_phase_tag, normalize_text, parse_compile_error_expectation,
     spec_fixtures,
 };
+use crate::support;
 
 fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
     support::compile_script("fixture.srt", source)

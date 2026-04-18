@@ -3,8 +3,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-mod common;
-use common::{surtr_bin, unique_temp_dir, write_source};
+use crate::common::{surtr_bin, unique_temp_dir, write_source};
 
 #[test]
 fn run_eldr_matches_run_srt_output() {

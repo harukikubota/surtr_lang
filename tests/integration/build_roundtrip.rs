@@ -1,9 +1,8 @@
 use std::fs;
 use std::process::Command;
 
+use crate::common::{surtr_bin, unique_temp_dir, write_source};
 use serde_json::Value;
-mod common;
-use common::{surtr_bin, unique_temp_dir, write_source};
 
 #[test]
 fn build_uses_default_eldr_output_path() {

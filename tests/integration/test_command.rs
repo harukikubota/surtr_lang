@@ -2,8 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
-mod common;
-use common::{surtr_bin, unique_temp_dir, write_source};
+use crate::common::{surtr_bin, unique_temp_dir, write_source};
 
 fn run_surtr(temp: &Path, args: &[&str]) -> Output {
     Command::new(surtr_bin())

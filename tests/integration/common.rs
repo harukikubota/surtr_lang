@@ -7,10 +7,6 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use xldr::ModuleInput;
 
-mod generated_fixture_registry {
-    include!(concat!(env!("OUT_DIR"), "/generated_fixture_registry.rs"));
-}
-
 pub fn repo_root() -> PathBuf {
     static REPO_ROOT: OnceLock<PathBuf> = OnceLock::new();
     REPO_ROOT
@@ -105,125 +101,209 @@ pub struct ModuleCompileErrorFixtureCase {
     pub error_path: PathBuf,
 }
 
+fn read_text(path: &Path) -> String {
+    fs::read_to_string(path).unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e))
+}
+
+fn leak_text(text: String) -> &'static str {
+    Box::leak(text.into_boxed_str())
+}
+
+fn collect_files_with_extension(dir: &Path, ext: &str) -> Vec<PathBuf> {
+    fn walk(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
+        let entries = fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("failed to read fixture dir {}: {}", dir.display(), e));
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, ext, out);
+            } else if path.extension().and_then(|value| value.to_str()) == Some(ext) {
+                out.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    walk(dir, ext, &mut files);
+    files.sort();
+    files
+}
+
+fn sorted_immediate_subdirs(dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("failed to read fixture dir {}: {}", dir.display(), e))
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    dirs.sort();
+    dirs
+}
+
 fn normalize_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn generated_compile_error_expectation(path: &Path) -> Option<CompileErrorExpectation> {
-    let relative = path.strip_prefix(repo_root()).ok()?;
-    let relative = normalize_path(relative);
-    let entry = generated_fixture_registry::GENERATED_COMPILE_ERROR_EXPECTATIONS
-        .iter()
-        .find(|entry| entry.path == relative)?;
-    Some(CompileErrorExpectation {
-        phase: entry.phase.map(ToString::to_string),
-        contains: entry
-            .contains
-            .iter()
-            .map(|item| (*item).to_string())
-            .collect(),
-    })
+fn is_module_fixture(path: &Path) -> bool {
+    normalize_path(path).contains("/modules/")
+}
+
+fn module_path_from_fixture_file(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_else(|| panic!("module file stem must be valid utf-8: {}", path.display()))
+        .replace("__", "::")
+}
+
+fn collect_module_fixture_stages(case_dir: &Path) -> Vec<Vec<ModuleInput>> {
+    let explicit_stage_dirs = sorted_immediate_subdirs(case_dir)
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("stage"))
+        })
+        .collect::<Vec<_>>();
+
+    if explicit_stage_dirs.is_empty() {
+        let stage = collect_files_with_extension(case_dir, "srt")
+            .into_iter()
+            .filter(|path| path.parent() == Some(case_dir))
+            .filter(|path| path.file_name().and_then(|name| name.to_str()) != Some("entry.srt"))
+            .map(|path| ModuleInput {
+                file_name: path.to_string_lossy().into_owned(),
+                source: read_text(&path),
+                module_path: module_path_from_fixture_file(&path),
+            })
+            .collect::<Vec<_>>();
+        if stage.is_empty() {
+            Vec::new()
+        } else {
+            vec![stage]
+        }
+    } else {
+        explicit_stage_dirs
+            .into_iter()
+            .map(|stage_dir| {
+                collect_files_with_extension(&stage_dir, "srt")
+                    .into_iter()
+                    .map(|path| ModuleInput {
+                        file_name: path.to_string_lossy().into_owned(),
+                        source: read_text(&path),
+                        module_path: module_path_from_fixture_file(&path),
+                    })
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 pub fn spec_fixtures() -> Vec<SpecFixture> {
-    generated_fixture_registry::GENERATED_SPEC_FIXTURES
-        .iter()
-        .map(|fixture| SpecFixture {
-            source_path: repo_root().join(fixture.path),
-            source: fixture.source,
-            expected: fixture.expected,
+    static FIXTURES: OnceLock<Vec<SpecFixture>> = OnceLock::new();
+
+    FIXTURES
+        .get_or_init(|| {
+            let spec_root = repo_root().join("tests/spec");
+            let mut fixtures = collect_files_with_extension(&spec_root, "srt")
+                .into_iter()
+                .filter(|path| !is_module_fixture(path))
+                .filter_map(|path| {
+                    let expected_path = path.with_extension("expected");
+                    expected_path.exists().then(|| SpecFixture {
+                        source_path: path.clone(),
+                        source: leak_text(read_text(&path)),
+                        expected: leak_text(read_text(&expected_path)),
+                    })
+                })
+                .collect::<Vec<_>>();
+            fixtures.sort_by(|a, b| a.source_path.cmp(&b.source_path));
+            fixtures
         })
-        .collect()
+        .clone()
 }
 
 pub fn compile_error_fixtures() -> Vec<CompileErrorFixture> {
-    generated_fixture_registry::GENERATED_COMPILE_ERROR_FIXTURES
-        .iter()
-        .map(|fixture| CompileErrorFixture {
-            source_path: repo_root().join(fixture.path),
-            source: fixture.source,
-            error_path: repo_root().join(fixture.error_path),
-        })
-        .collect()
-}
+    static FIXTURES: OnceLock<Vec<CompileErrorFixture>> = OnceLock::new();
 
-fn generated_module_stages(
-    stages: &[generated_fixture_registry::GeneratedModuleStage],
-) -> Vec<Vec<ModuleInput>> {
-    stages
-        .iter()
-        .map(|stage| {
-            stage
-                .files
-                .iter()
-                .map(|file| ModuleInput {
-                    file_name: repo_root()
-                        .join(file.file_name)
-                        .to_string_lossy()
-                        .into_owned(),
-                    source: file.source.to_string(),
-                    module_path: file.module_path.to_string(),
+    FIXTURES
+        .get_or_init(|| {
+            let compile_errors_root = repo_root().join("tests/compile_errors");
+            let mut fixtures = collect_files_with_extension(&compile_errors_root, "srt")
+                .into_iter()
+                .filter(|path| !is_module_fixture(path))
+                .filter_map(|path| {
+                    let error_path = path.with_extension("error");
+                    error_path.exists().then(|| CompileErrorFixture {
+                        source_path: path.clone(),
+                        source: leak_text(read_text(&path)),
+                        error_path,
+                    })
                 })
-                .collect()
+                .collect::<Vec<_>>();
+            fixtures.sort_by(|a, b| a.source_path.cmp(&b.source_path));
+            fixtures
         })
-        .collect()
-}
-
-fn base_module_fixture_case(
-    case_dir: &str,
-    entry_path: &str,
-    entry_source: &'static str,
-) -> ModuleFixtureCase {
-    ModuleFixtureCase {
-        case_dir: repo_root().join(case_dir),
-        entry_path: repo_root().join(entry_path),
-        entry_source,
-        module_stages: Vec::new(),
-    }
+        .clone()
 }
 
 pub fn module_spec_fixtures() -> Vec<ModuleSpecFixtureCase> {
-    generated_fixture_registry::GENERATED_MODULE_SPEC_CASES
-        .iter()
-        .map(|fixture| {
-            let mut case = base_module_fixture_case(
-                fixture.case_dir,
-                fixture.entry_path,
-                fixture.entry_source,
-            );
-            case.module_stages = generated_module_stages(fixture.stages);
-            ModuleSpecFixtureCase {
-                case,
-                expected_path: repo_root().join(fixture.expected_path),
-                expected: fixture.expected,
-            }
+    static FIXTURES: OnceLock<Vec<ModuleSpecFixtureCase>> = OnceLock::new();
+
+    FIXTURES
+        .get_or_init(|| {
+            let modules_root = repo_root().join("tests/spec/modules");
+            let mut fixtures = sorted_immediate_subdirs(&modules_root)
+                .into_iter()
+                .filter_map(|case_dir| {
+                    let entry_path = case_dir.join("entry.srt");
+                    let expected_path = case_dir.join("entry.expected");
+                    expected_path.exists().then(|| ModuleSpecFixtureCase {
+                        case: ModuleFixtureCase {
+                            case_dir: case_dir.clone(),
+                            entry_path: entry_path.clone(),
+                            entry_source: leak_text(read_text(&entry_path)),
+                            module_stages: collect_module_fixture_stages(&case_dir),
+                        },
+                        expected_path: expected_path.clone(),
+                        expected: leak_text(read_text(&expected_path)),
+                    })
+                })
+                .collect::<Vec<_>>();
+            fixtures.sort_by(|a, b| a.case.case_dir.cmp(&b.case.case_dir));
+            fixtures
         })
-        .collect()
+        .clone()
 }
 
 pub fn module_compile_error_fixtures() -> Vec<ModuleCompileErrorFixtureCase> {
-    generated_fixture_registry::GENERATED_MODULE_COMPILE_ERROR_CASES
-        .iter()
-        .map(|fixture| {
-            let mut case = base_module_fixture_case(
-                fixture.case_dir,
-                fixture.entry_path,
-                fixture.entry_source,
-            );
-            case.module_stages = generated_module_stages(fixture.stages);
-            ModuleCompileErrorFixtureCase {
-                case,
-                error_path: repo_root().join(fixture.error_path),
-            }
+    static FIXTURES: OnceLock<Vec<ModuleCompileErrorFixtureCase>> = OnceLock::new();
+
+    FIXTURES
+        .get_or_init(|| {
+            let modules_root = repo_root().join("tests/compile_errors/modules");
+            let mut fixtures = sorted_immediate_subdirs(&modules_root)
+                .into_iter()
+                .filter_map(|case_dir| {
+                    let entry_path = case_dir.join("entry.srt");
+                    let error_path = case_dir.join("entry.error");
+                    error_path.exists().then(|| ModuleCompileErrorFixtureCase {
+                        case: ModuleFixtureCase {
+                            case_dir: case_dir.clone(),
+                            entry_path: entry_path.clone(),
+                            entry_source: leak_text(read_text(&entry_path)),
+                            module_stages: collect_module_fixture_stages(&case_dir),
+                        },
+                        error_path,
+                    })
+                })
+                .collect::<Vec<_>>();
+            fixtures.sort_by(|a, b| a.case.case_dir.cmp(&b.case.case_dir));
+            fixtures
         })
-        .collect()
+        .clone()
 }
 
 pub fn parse_compile_error_expectation(path: &Path) -> CompileErrorExpectation {
-    if let Some(expectation) = generated_compile_error_expectation(path) {
-        return expectation;
-    }
-
     let content = fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
     let mut phase = None;

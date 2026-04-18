@@ -1,10 +1,8 @@
-mod common;
-mod support;
-
-use common::{
+use crate::common::{
     extract_phase_tag, module_compile_error_fixtures, module_spec_fixtures, normalize_text,
     parse_compile_error_expectation, repo_root, ModuleFixtureCase,
 };
+use crate::support;
 
 fn compile_multi_source_case(
     case: &ModuleFixtureCase,

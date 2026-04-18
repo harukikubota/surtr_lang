@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "language_features/core_language.rs"]
 mod core_language;
 #[path = "language_features/harness.rs"]

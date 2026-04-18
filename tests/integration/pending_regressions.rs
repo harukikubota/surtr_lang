@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 
 #[test]
 #[ignore = "pending: stronger closure inference for expected=None without let-generalization"]
