@@ -1,0 +1,11 @@
+include './src/0_types.srt'
+include './src/1_parser.srt'
+include './src/2_normalize.srt'
+include './src/3_solver.srt'
+include './src/4_judge.srt'
+include './src/7_yaku_catalog.srt'
+include './src/5_score.srt'
+include './src/8_view_components.srt'
+include './src/6_cli.srt'
+
+MahjongCli::run(["123m456789p567s11w"])

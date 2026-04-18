@@ -331,6 +331,12 @@ fn shift_span(span: Span, delta: usize) -> Span {
     }
 }
 
+pub fn rebase_ast_spans(ast: Vec<Ast>, delta: usize) -> Vec<Ast> {
+    ast.into_iter()
+        .map(|node| shift_ast_span(node, delta))
+        .collect()
+}
+
 fn ast_ty_span(ty: &AstTy) -> &Span {
     match ty {
         AstTy::Named(span, _)

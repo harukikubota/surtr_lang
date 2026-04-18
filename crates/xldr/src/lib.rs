@@ -13,10 +13,42 @@ pub use loader::{
     ModuleSources, SourceDescriptor, SourceKind, StagedModule,
 };
 
+use diagnostics::SourceId;
 pub use repl::logic::core::{EldrLoadError, ReplEngine};
 pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
 use sindr::ir::{DocEntry, DocKind};
 use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
+
+pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
+
+pub fn module_span_base_for_source(source_id: SourceId) -> usize {
+    (source_id.0 as usize + 1) * MODULE_SPAN_STRIDE
+}
+
+pub fn rebase_module_ast_spans(
+    ast: Vec<spire::ast::Ast>,
+    source_id: SourceId,
+) -> Vec<spire::ast::Ast> {
+    spire::rebase_ast_spans(ast, module_span_base_for_source(source_id))
+}
+
+pub fn decode_rebased_module_span(span: &spire::ast::Span) -> Option<(SourceId, spire::ast::Span)> {
+    if span.start < MODULE_SPAN_STRIDE {
+        return None;
+    }
+    let bucket = span.start / MODULE_SPAN_STRIDE;
+    if bucket == 0 {
+        return None;
+    }
+    let base = bucket * MODULE_SPAN_STRIDE;
+    Some((
+        SourceId((bucket - 1) as u32),
+        spire::ast::Span {
+            start: span.start.saturating_sub(base),
+            end: span.end.saturating_sub(base),
+        },
+    ))
+}
 
 // ── Public types used by other crates ────────────────────────────────────────
 

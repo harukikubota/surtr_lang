@@ -1,0 +1,33 @@
+defmod MahjongNormalize {
+  def normalize_hand14(parsed: ParsedHand14) -> Result<NormalizedHand14> {
+    Ok(NormalizedHand14(raw: parsed.raw, tiles: parsed.tiles))
+  }
+
+  defp _validate_copy_limit(rest: List<Tile>, all: List<Tile>) -> Result<Unit, HandValidationError> {
+    match rest {
+      [] => Ok(()),
+      [head, ..tail] => {
+        key = MahjongTypes::tile_key(head)
+        copies = List::count(all, {|tile|
+          MahjongTypes::tile_key(tile) == key
+        })
+        if(
+          copies <= 4,
+          _validate_copy_limit(tail, all),
+          Err(HandValidationError("tile appears more than 4 copies: " ++ key)),
+        )
+      },
+    }
+  }
+
+  def validate_hand14(normalized: NormalizedHand14) -> Result<ValidHand14> {
+    if(
+      List::len(normalized.tiles) != 14,
+      Err(HandValidationError("hand must contain exactly 14 tiles")),
+      {
+        _ok =? _validate_copy_limit(normalized.tiles, normalized.tiles)
+        Ok(ValidHand14(raw: normalized.raw, tiles: normalized.tiles))
+      },
+    )
+  }
+}

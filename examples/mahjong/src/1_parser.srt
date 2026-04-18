@@ -1,0 +1,182 @@
+import MahjongTypes::tile_kind_count
+
+defmod MahjongParser {
+  defp _in_closed_range(value: Int, min: Int, max: Int) -> Boolean {
+    (value >= min) `and` (value <= max)
+  }
+
+  defp _is_digit_rank(value: Int) -> Boolean {
+    _in_closed_range(value, 1, 9)
+  }
+
+  defp _is_wind_rank(value: Int) -> Boolean {
+    _in_closed_range(value, 1, 4)
+  }
+
+  defp _is_dragon_rank(value: Int) -> Boolean {
+    _in_closed_range(value, 1, 3)
+  }
+
+  defp _is_z_rank(value: Int) -> Boolean {
+    _in_closed_range(value, 1, 7)
+  }
+
+  defp _is_marker(ch: String) -> Boolean {
+    match ch {
+      "m" => True,
+      "p" => True,
+      "s" => True,
+      "w" => True,
+      "d" => True,
+      "z" => True,
+      _ => False,
+    }
+  }
+
+  defp _is_suited_marker(marker: String) -> Boolean {
+    match marker {
+      "m" => True,
+      "p" => True,
+      "s" => True,
+      _ => False,
+    }
+  }
+
+  defp _is_honor_marker(marker: String) -> Boolean {
+    match marker {
+      "w" => True,
+      "d" => True,
+      "z" => True,
+      _ => False,
+    }
+  }
+
+  defp _digit_to_int(ch: String) -> Result<Int, ParseHandError> {
+    try_from(ch, Int)
+    |> map_err(ParseHandError("invalid digit: " ++ ch))
+    |>= ensure(&_is_digit_rank, ParseHandError("digit must be 1..9: " ++ ch))
+  }
+
+  defp _parse_digit_chars(chars: List<String>) -> Result<List<Int>, ParseHandError> {
+    match chars {
+      [] => Ok([]),
+      [head, ..tail] => {
+        num =? _digit_to_int(head)
+        rest =? _parse_digit_chars(tail)
+        Ok([num, ..rest])
+      },
+    }
+  }
+
+  defp _build_suited_tile(rank: Int, marker: String) -> Result<Tile, ParseHandError> {
+    suit =? Suit::from_marker(marker)
+    Ok(Tile::Suited(suit, rank))
+  }
+
+  defp _ensure_honor_rank(marker: String, rank: Int) -> Result<Int, ParseHandError> {
+    match marker {
+      "w" => ensure(rank, &_is_wind_rank, ParseHandError("wind tile must be 1..4")),
+      "d" => ensure(rank, &_is_dragon_rank, ParseHandError("dragon tile must be 1..3")),
+      "z" => ensure(rank, &_is_z_rank, ParseHandError("z tile must be 1..7")),
+      _ => Err(ParseHandError("unknown honor marker: " ++ marker)),
+    }
+  }
+
+  defp _build_honor_tile(rank: Int, marker: String) -> Result<Tile, ParseHandError> {
+    checked =? _ensure_honor_rank(marker, rank)
+    honor =? HonorKind::from_marker_and_rank(marker, checked)
+    Ok(Tile::Honor(honor))
+  }
+
+  defp _build_tile(rank: Int, marker: String) -> Result<Tile, ParseHandError> {
+    match _is_suited_marker(marker) {
+      True => _build_suited_tile(rank, marker),
+      False => match _is_honor_marker(marker) {
+        True => _build_honor_tile(rank, marker),
+        False => Err(ParseHandError("unknown marker: " ++ marker)),
+      },
+    }
+  }
+
+  defp _build_tiles(numbers: List<Int>, marker: String) -> Result<List<Tile>, ParseHandError> {
+    match numbers {
+      [] => Ok([]),
+      [head, ..tail] => {
+        tile =? _build_tile(head, marker)
+        rest =? _build_tiles(tail, marker)
+        Ok([tile, ..rest])
+      },
+    }
+  }
+
+  defp _emit_chunk(chunks_rev: List<String>, pending_digits: String, marker: String) -> List<String> {
+    [pending_digits ++ marker, ..chunks_rev]
+  }
+
+  defp _scan_chunks(chars: List<String>, pending_digits: String, chunks_rev: List<String>) -> Result<List<String>, ParseHandError> {
+    match chars {
+      [] => match pending_digits {
+        "" => Ok(List::reverse(chunks_rev)),
+        _ => Err(ParseHandError("dangling digits at end of hand")),
+      },
+      [head, ..tail] => match _is_marker(head) {
+        True => match pending_digits {
+          "" => Err(ParseHandError("marker appears without numbers: " ++ head)),
+          _ => _scan_chunks(tail, "", _emit_chunk(chunks_rev, pending_digits, head)),
+        },
+        False => match _digit_to_int(head) {
+          Ok(_) => _scan_chunks(tail, pending_digits ++ head, chunks_rev),
+          Err(_) => Err(ParseHandError("invalid token in hand: " ++ head)),
+        },
+      },
+    }
+  }
+
+  defp _split_hand_into_chunks(raw: String) -> Result<List<String>, ParseHandError> {
+    _scan_chunks(String::chars(raw), "", [])
+  }
+
+  def collect_numbers(chunk: String) -> Result<(List<Int>, String), ParseHandError> {
+    chars = String::chars(chunk)
+    marker =? List::last(chars) |>= ensure(&_is_marker, ParseHandError("chunk must end with suit marker: " ++ chunk))
+
+    digit_chars = List::take(chars, List::len(chars) - 1)
+    match digit_chars {
+      [] => Err(ParseHandError("suit marker appears without numbers: " ++ chunk)),
+      _ => {
+        numbers =? _parse_digit_chars(digit_chars)
+        Ok((numbers, marker))
+      },
+    }
+  }
+
+  def gen_tile(part: (List<Int>, String)) -> Result<List<Tile>, ParseHandError> {
+    _build_tiles(part._0, part._1)
+  }
+
+  defp _parse_chunk(chunk: String) -> Result<List<Tile>, ParseHandError> {
+    collect_numbers(chunk) |>= gen_tile()
+  }
+
+  defp _parse_all_chunks(chunks: List<String>) -> Result<List<Tile>, ParseHandError> {
+    match chunks {
+      [] => Ok([]),
+      [chunk, ..tail] => {
+        current =? _parse_chunk(chunk)
+        rest =? _parse_all_chunks(tail)
+        Ok(List::concat([current, rest]))
+      },
+    }
+  }
+
+  def parse_hand14(raw: String) -> Result<ParsedHand14> {
+    match tile_kind_count() {
+      34 => {
+        chunks =? _split_hand_into_chunks(raw)
+        tiles =? _parse_all_chunks(chunks)
+        Ok(ParsedHand14(raw: raw, tiles: tiles))
+      },
+      _ => Err(ParseHandError("invalid tile kind table")),
+    }
+  }
+}

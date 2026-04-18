@@ -1,0 +1,5 @@
+defmod RepoMock {
+  def load_hand() -> String {
+    "123m456789p567s11w"
+  }
+}

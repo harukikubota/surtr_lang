@@ -1,0 +1,22 @@
+import MahjongSolver::solve_winning_shapes
+
+defmod MahjongJudge {
+  defp _shape_to_yaku(shape: String) -> List<String> {
+    match shape {
+      "standard" => ["StandardShape"],
+      "seven_pairs" => ["Chiitoitsu"],
+      "kokushi" => ["KokushiMusou"],
+      _ => [],
+    }
+  }
+
+  def judge_hand(valid: ValidHand14) -> Result<List<String>> {
+    shapes =? solve_winning_shapes(valid)
+    yaku = shapes |> List::flat_map(&_shape_to_yaku) |> List::dedup()
+    if(
+      List::len(yaku) > 0,
+      Ok(yaku),
+      Err(HandValidationError("no yaku resolved from winning shapes")),
+    )
+  }
+}

@@ -1,0 +1,203 @@
+defmod MahjongSolver {
+  defp _tile_id(tile: Tile) -> Int {
+    match tile {
+      Tile::Suited(suit, rank) => match suit {
+        Suit::Man => rank,
+        Suit::Pin => rank + 10,
+        Suit::Sou => rank + 20,
+      },
+      Tile::Honor(kind) => match kind {
+        HonorKind::Wind(wind) => match wind {
+          Wind::East => 31,
+          Wind::South => 32,
+          Wind::West => 33,
+          Wind::North => 34,
+        },
+        HonorKind::Dragon(dragon) => match dragon {
+          Dragon::White => 35,
+          Dragon::Green => 36,
+          Dragon::Red => 37,
+        },
+      },
+    }
+  }
+
+  defp _insert_sorted(ids: List<Int>, value: Int) -> List<Int> {
+    match ids {
+      [] => [value],
+      [head, ..tail] => if(value <= head, [value, ..ids], [head, .._insert_sorted(tail, value)]),
+    }
+  }
+
+  defp _sort_ids(ids: List<Int>) -> List<Int> {
+    List::reduce(ids, [], {|acc, id|
+      _insert_sorted(acc, id)
+    })
+  }
+
+  defp _contains_id(ids: List<Int>, target: Int) -> Boolean {
+    List::any(ids, {|id|
+      id == target
+    })
+  }
+
+  defp _remove_first(ids: List<Int>, target: Int) -> Result<List<Int>> {
+    match ids {
+      [] => Err(NoneError),
+      [head, ..tail] => if(
+        head == target,
+        Ok(tail),
+        {
+          rest =? _remove_first(tail, target)
+          Ok([head, ..rest])
+        },
+      ),
+    }
+  }
+
+  defp _remove_n(ids: List<Int>, target: Int, n: Int) -> Result<List<Int>> {
+    if(
+      n <= 0,
+      Ok(ids),
+      {
+        next =? _remove_first(ids, target)
+        _remove_n(next, target, n - 1)
+      },
+    )
+  }
+
+  defp _is_seven_pairs(ids: List<Int>) -> Boolean {
+    groups = List::group_count(ids)
+    and(
+      List::len(groups) == 7,
+      List::all(groups, {|entry|
+        entry._1 == 2
+      }),
+    )
+  }
+
+  defp _kokushi_required_ids() -> List<Int> {
+    [1, 9, 11, 19, 21, 29, 31, 32, 33, 34, 35, 36, 37]
+  }
+
+  defp _is_kokushi(ids: List<Int>) -> Boolean {
+    required = _kokushi_required_ids()
+    groups = List::group_count(ids)
+    and(
+      List::len(groups) == 13,
+      and(
+        List::all(required, {|need|
+          _contains_id(ids, need)
+        }),
+        and(
+          List::count(groups, {|entry|
+            entry._1 == 2
+          }) == 1,
+          List::all(groups, {|entry|
+            or(entry._1 == 1, entry._1 == 2)
+          }),
+        ),
+      ),
+    )
+  }
+
+  defp _is_suited_id(id: Int) -> Boolean {
+    id < 30
+  }
+
+  defp _suit_base(id: Int) -> Int {
+    if(id <= 9, 0, if(id <= 19, 10, 20))
+  }
+
+  defp _suit_rank(id: Int) -> Int {
+    id - _suit_base(id)
+  }
+
+  defp _can_start_sequence(id: Int) -> Boolean {
+    and(_is_suited_id(id), _suit_rank(id) <= 7)
+  }
+
+  defp _can_form_melds(ids: List<Int>) -> Boolean {
+    match ids {
+      [] => True,
+      [head, .._] => {
+        as_triplet = if(
+          List::count(ids, {|id|
+            id == head
+          }) >= 3,
+          match _remove_n(ids, head, 3) {
+            Ok(rest) => _can_form_melds(rest),
+            Err(_) => False,
+          },
+          False,
+        )
+        if(as_triplet, True, _can_form_head_as_sequence(ids, head))
+      },
+    }
+  }
+
+  defp _can_form_head_as_sequence(ids: List<Int>, head: Int) -> Boolean {
+    if(
+      _can_start_sequence(head),
+      {
+        second = head + 1
+        third = head + 2
+        if(
+          and(_contains_id(ids, second), _contains_id(ids, third)),
+          match _remove_first(ids, head) {
+            Ok(rest1) => match _remove_first(rest1, second) {
+              Ok(rest2) => match _remove_first(rest2, third) {
+                Ok(rest3) => _can_form_melds(rest3),
+                Err(_) => False,
+              },
+              Err(_) => False,
+            },
+            Err(_) => False,
+          },
+          False,
+        )
+      },
+      False,
+    )
+  }
+
+  defp _has_standard_with_pair(ids: List<Int>, groups: List<(Int, Int)>) -> Boolean {
+    match groups {
+      [] => False,
+      [entry, ..tail] => {
+        pair_ok = if(
+          entry._1 >= 2,
+          match _remove_n(ids, entry._0, 2) {
+            Ok(rest) => _can_form_melds(rest),
+            Err(_) => False,
+          },
+          False,
+        )
+        if(pair_ok, True, _has_standard_with_pair(ids, tail))
+      },
+    }
+  }
+
+  defp _is_standard_shape(ids: List<Int>) -> Boolean {
+    sorted = _sort_ids(ids)
+    _has_standard_with_pair(sorted, List::group_count(sorted))
+  }
+
+  defp _collect_winning_labels(ids: List<Int>) -> List<String> {
+    labels0 = []
+    labels1 = if(_is_standard_shape(ids), ["standard", ..labels0], labels0)
+    labels2 = if(_is_seven_pairs(ids), ["seven_pairs", ..labels1], labels1)
+    labels3 = if(_is_kokushi(ids), ["kokushi", ..labels2], labels2)
+    List::reverse(labels3)
+  }
+
+  def solve_winning_shapes(valid: ValidHand14) -> Result<List<String>> {
+    ids = valid.tiles |> List::map(&_tile_id) |> _sort_ids()
+    labels = _collect_winning_labels(ids)
+    if(
+      List::len(labels) > 0,
+      Ok(labels),
+      Err(HandValidationError("hand is not a winning shape")),
+    )
+  }
+}

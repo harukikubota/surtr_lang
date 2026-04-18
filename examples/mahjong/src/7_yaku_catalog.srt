@@ -1,0 +1,53 @@
+defrecord Yaku(yaku_id: String, name: String, han: Int)
+
+defmod MahjongYakuCatalog {
+  def registry() -> HashMap<Yaku> {
+    HashMap::from_entries([
+      (
+        "StandardShape",
+        Yaku(
+          yaku_id: "StandardShape",
+          name: "標準形",
+          han: 1,
+        ),
+      ),
+      (
+        "Chiitoitsu",
+        Yaku(
+          yaku_id: "Chiitoitsu",
+          name: "七対子",
+          han: 2,
+        ),
+      ),
+      (
+        "KokushiMusou",
+        Yaku(
+          yaku_id: "KokushiMusou",
+          name: "国士無双",
+          han: 13,
+        ),
+      ),
+    ])
+  }
+
+  def by_id(yaku_id: String) -> Result<Yaku> {
+    match HashMap::get(registry(), yaku_id) {
+      Ok(yaku) => Ok(yaku),
+      Err(_) => Err(HandValidationError("unknown yaku id: " ++ yaku_id)),
+    }
+  }
+
+  defp _resolve_many_go(ids: List<String>, acc_rev: List<Yaku>) -> Result<List<Yaku>> {
+    match ids {
+      [] => Ok(List::reverse(acc_rev)),
+      [head, ..tail] => {
+        yaku =? by_id(head)
+        _resolve_many_go(tail, [yaku, ..acc_rev])
+      },
+    }
+  }
+
+  def resolve_many(ids: List<String>) -> Result<List<Yaku>> {
+    _resolve_many_go(ids, [])
+  }
+}

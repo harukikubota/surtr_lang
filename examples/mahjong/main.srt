@@ -1,0 +1,5 @@
+defmod Main {
+  def main() -> Result<()> {
+    MahjongCli::run(Project::args())
+  }
+}

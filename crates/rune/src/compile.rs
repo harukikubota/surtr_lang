@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use diagnostics::SourceRegistry;
+use diagnostics::{SourceId, SourceRegistry};
 use forge::bytecode::{
     populate_error_template_lines, stable_hash_hex, synthesize_source_map, SourceFileEntry,
 };
@@ -95,6 +95,59 @@ fn module_source_collection_error_as_rune_error(
         "resolve",
         diagnostics::simple_error("LoadError", message, load_error_span(source), None),
     )
+}
+
+fn source_id_for_span(compile_sources: &xldr::CompileSources, span: &Span) -> SourceId {
+    let mut candidates = compile_sources.module_source_ids.clone();
+    candidates.push(compile_sources.user_source_id);
+    candidates.sort_by_key(|id| id.0);
+    candidates.dedup_by_key(|id| id.0);
+
+    let mut best_code: Option<(SourceId, usize)> = None;
+    let mut best_any: Option<(SourceId, usize)> = None;
+
+    for source_id in candidates {
+        let Some(source) = compile_sources.sources.source(source_id) else {
+            continue;
+        };
+        let chars: Vec<char> = source.chars().collect();
+        let len = chars.len();
+        if len < span.end {
+            continue;
+        }
+        let is_code = chars
+            .get(span.start)
+            .is_some_and(|ch| !ch.is_ascii_whitespace());
+        if is_code {
+            match best_code {
+                None => best_code = Some((source_id, len)),
+                Some((_, best_len)) if len < best_len => best_code = Some((source_id, len)),
+                _ => {}
+            }
+        }
+        match best_any {
+            None => best_any = Some((source_id, len)),
+            Some((_, best_len)) if len < best_len => best_any = Some((source_id, len)),
+            _ => {}
+        }
+    }
+
+    best_code
+        .or(best_any)
+        .map(|(source_id, _)| source_id)
+        .unwrap_or(compile_sources.user_source_id)
+}
+
+fn diagnostic_location_for_span(
+    compile_sources: &xldr::CompileSources,
+    span: &Span,
+) -> (SourceId, Span) {
+    if let Some((source_id, local_span)) = xldr::decode_rebased_module_span(span) {
+        if compile_sources.sources.get(source_id).is_some() {
+            return (source_id, local_span);
+        }
+    }
+    (source_id_for_span(compile_sources, span), span.clone())
 }
 
 pub(crate) fn collect_default_script_compile_sources(
@@ -357,12 +410,13 @@ pub(crate) fn compile_source(
     );
 
     let declaration_index = sigil::precollect_declaration_index(&module_stages).map_err(|e| {
+        let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
         RuneError::diagnostic(
             1,
             sources,
-            user_source_id,
+            source_id,
             "resolve",
-            diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+            diagnostics::simple_error("ResolveError", &e.message, span, None),
         )
     })?;
 
@@ -373,12 +427,13 @@ pub(crate) fn compile_source(
         Some(compile_sources.user_module_path.clone()),
     )
     .map_err(|e| {
+        let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
         RuneError::diagnostic(
             1,
             sources,
-            user_source_id,
+            source_id,
             "resolve",
-            diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+            diagnostics::simple_error("ResolveError", &e.message, span, None),
         )
     })?;
 
@@ -394,22 +449,26 @@ pub(crate) fn compile_source(
         },
     )
     .map_err(|e| {
+        let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
+        let mut local_error = e.clone();
+        local_error.span = span;
         RuneError::diagnostic(
             1,
             sources,
-            user_source_id,
+            source_id,
             "typecheck",
-            diagnostics::type_error_spec_by_id(sources, user_source_id, &e),
+            diagnostics::type_error_spec_by_id(sources, source_id, &local_error),
         )
     })?;
 
     let mut bytecode = forge::codegen(typed).map_err(|e| {
+        let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
         RuneError::diagnostic(
             1,
             sources,
-            user_source_id,
+            source_id,
             "codegen",
-            diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
+            diagnostics::simple_error("CodegenError", &e.message, span, None),
         )
     })?;
 
@@ -575,11 +634,13 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_entrypoint_annotations, is_direct_module_source, load_error_span,
-        module_source_collection_error_as_rune_error, prepare_script_compile_plan,
+        collect_entrypoint_annotations, diagnostic_location_for_span, is_direct_module_source,
+        load_error_span, module_source_collection_error_as_rune_error, prepare_script_compile_plan,
+        source_id_for_span,
     };
     use crate::error::RuneError;
-    use spire::ast::Ast;
+    use spire::ast::{Ast, Span};
+    use xldr::{SourceKind, StagedModule};
 
     #[test]
     fn collect_entrypoint_annotations_strips_annotator_and_keeps_def() {
@@ -701,5 +762,68 @@ print(to_string(1))
             }
             other => panic!("expected diagnostic error, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn diagnostic_location_for_span_decodes_rebased_module_span() {
+        let module_source = "defmod MahjongCli { def render() -> Unit { () } }";
+        let user_source = "MahjongCli::render()";
+        let mut sources = diagnostics::SourceRegistry::new();
+        let module_source_id = sources.register("examples/mahjong/src/6_cli.srt", module_source);
+        let user_source_id = sources.register("examples/mahjong/run.srt", user_source);
+        let compile_sources = xldr::CompileSources {
+            sources,
+            user_source_id,
+            user_module_path: "__Script::examples::mahjong::run".into(),
+            builtin_source_id: module_source_id,
+            builtin_module_path: Some("Bootstrap".into()),
+            module_source_ids: vec![module_source_id],
+            module_stages: vec![vec![StagedModule {
+                source_id: module_source_id,
+                module_path: "MahjongCli".into(),
+                source_kind: SourceKind::Module,
+            }]],
+        };
+        let base = xldr::module_span_base_for_source(module_source_id);
+        let span = Span {
+            start: base + 12,
+            end: base + 18,
+        };
+        let (source_id, local_span) = diagnostic_location_for_span(&compile_sources, &span);
+        assert_eq!(
+            compile_sources.sources.file_name(source_id),
+            Some("examples/mahjong/src/6_cli.srt")
+        );
+        assert_eq!(local_span.start, 12);
+        assert_eq!(local_span.end, 18);
+    }
+
+    #[test]
+    fn source_id_for_span_falls_back_to_user_source_when_module_does_not_cover_span() {
+        let module_source = "defmod MahjongCli { def render() -> Unit { () } }";
+        let user_source =
+            "main = \"................................................................\"";
+        let mut sources = diagnostics::SourceRegistry::new();
+        let module_source_id = sources.register("examples/mahjong/src/6_cli.srt", module_source);
+        let user_source_id = sources.register("examples/mahjong/run.srt", user_source);
+        let compile_sources = xldr::CompileSources {
+            sources,
+            user_source_id,
+            user_module_path: "__Script::examples::mahjong::run".into(),
+            builtin_source_id: module_source_id,
+            builtin_module_path: Some("Bootstrap".into()),
+            module_source_ids: vec![module_source_id],
+            module_stages: vec![vec![StagedModule {
+                source_id: module_source_id,
+                module_path: "MahjongCli".into(),
+                source_kind: SourceKind::Module,
+            }]],
+        };
+        let span = Span { start: 50, end: 51 };
+        let source_id = source_id_for_span(&compile_sources, &span);
+        assert_eq!(
+            compile_sources.sources.file_name(source_id),
+            Some("examples/mahjong/run.srt")
+        );
     }
 }

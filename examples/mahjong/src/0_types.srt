@@ -1,0 +1,141 @@
+defenum Suit {
+  Man,
+  Pin,
+  Sou,
+}
+
+impl Suit {
+  def from_marker(marker: String) -> Result<Self, ParseHandError> {
+    match marker {
+      "m" => Ok(Suit::Man),
+      "p" => Ok(Suit::Pin),
+      "s" => Ok(Suit::Sou),
+      _ => Err(ParseHandError("unknown suit marker: " ++ marker)),
+    }
+  }
+}
+
+defenum Wind {
+  East,
+  South,
+  West,
+  North,
+}
+
+impl Wind {
+  def from_rank(rank: Int) -> Result<Self, ParseHandError> {
+    match rank {
+      1 => Ok(Wind::East),
+      2 => Ok(Wind::South),
+      3 => Ok(Wind::West),
+      4 => Ok(Wind::North),
+      _ => Err(ParseHandError("wind tile must be 1..4")),
+    }
+  }
+}
+
+defenum Dragon {
+  White,
+  Green,
+  Red,
+}
+
+impl Dragon {
+  def from_rank(rank: Int) -> Result<Self, ParseHandError> {
+    match rank {
+      1 => Ok(Dragon::White),
+      2 => Ok(Dragon::Green),
+      3 => Ok(Dragon::Red),
+      _ => Err(ParseHandError("dragon tile must be 1..3")),
+    }
+  }
+}
+
+defenum HonorKind {
+  Wind(Wind),
+  Dragon(Dragon),
+}
+
+impl HonorKind {
+  def from_wind_rank(rank: Int) -> Result<Self, ParseHandError> {
+    wind =? Wind::from_rank(rank)
+    Ok(HonorKind::Wind(wind))
+  }
+
+  def from_dragon_rank(rank: Int) -> Result<Self, ParseHandError> {
+    dragon =? Dragon::from_rank(rank)
+    Ok(HonorKind::Dragon(dragon))
+  }
+
+  def from_z_rank(rank: Int) -> Result<Self, ParseHandError> {
+    match rank {
+      1 => HonorKind::from_wind_rank(1),
+      2 => HonorKind::from_wind_rank(2),
+      3 => HonorKind::from_wind_rank(3),
+      4 => HonorKind::from_wind_rank(4),
+      5 => HonorKind::from_dragon_rank(1),
+      6 => HonorKind::from_dragon_rank(2),
+      7 => HonorKind::from_dragon_rank(3),
+      _ => Err(ParseHandError("z tile must be 1..7")),
+    }
+  }
+
+  def from_marker_and_rank(marker: String, rank: Int) -> Result<Self, ParseHandError> {
+    match marker {
+      "w" => HonorKind::from_wind_rank(rank),
+      "d" => HonorKind::from_dragon_rank(rank),
+      "z" => HonorKind::from_z_rank(rank),
+      _ => Err(ParseHandError("unknown honor marker: " ++ marker)),
+    }
+  }
+}
+
+defenum Tile {
+  Suited(Suit, Int),
+  Honor(HonorKind),
+}
+
+defrecord ParsedHand14(raw: String, tiles: List<Tile>)
+defrecord NormalizedHand14(raw: String, tiles: List<Tile>)
+defrecord ValidHand14(raw: String, tiles: List<Tile>)
+
+deferror ParseHandError(detail: String) {
+  detail
+}
+
+deferror HandValidationError(detail: String) {
+  detail
+}
+
+defmod MahjongTypes {
+  def tile_kind_count() -> Int {
+    34
+  }
+
+  def tile_key(tile: Tile) -> String {
+    match tile {
+      Tile::Suited(suit, num) => match suit {
+        Suit::Man => to_string(num) ++ "m",
+        Suit::Pin => to_string(num) ++ "p",
+        Suit::Sou => to_string(num) ++ "s",
+      },
+      Tile::Honor(kind) => match kind {
+        HonorKind::Wind(wind) => match wind {
+          Wind::East => "1w",
+          Wind::South => "2w",
+          Wind::West => "3w",
+          Wind::North => "4w",
+        },
+        HonorKind::Dragon(dragon) => match dragon {
+          Dragon::White => "1d",
+          Dragon::Green => "2d",
+          Dragon::Red => "3d",
+        },
+      },
+    }
+  }
+
+  def hand_to_text(tiles: List<Tile>) -> String {
+    String::join(List::map(tiles, &tile_key), " ")
+  }
+}
