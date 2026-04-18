@@ -155,11 +155,34 @@ pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
     }
 }
 
+pub fn render_error(file_name: &str, source: &str, spec: &DiagnosticSpec) -> String {
+    let report = build_report(file_name, spec);
+    let mut buf = Vec::new();
+
+    if let Err(err) = report.write((file_name, Source::from(source)), &mut buf) {
+        let _ = write_fallback_diagnostic(&mut buf, file_name, spec, &err);
+    }
+
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 pub fn report_error_by_id(sources: &SourceRegistry, source_id: SourceId, spec: DiagnosticSpec) {
     if let Some(entry) = sources.get(source_id) {
         report_error(&entry.file_name, &entry.source, spec);
     } else {
         report_error("<unknown>", "", spec);
+    }
+}
+
+pub fn render_error_by_id(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    spec: &DiagnosticSpec,
+) -> String {
+    if let Some(entry) = sources.get(source_id) {
+        render_error(&entry.file_name, &entry.source, spec)
+    } else {
+        render_error("<unknown>", "", spec)
     }
 }
 

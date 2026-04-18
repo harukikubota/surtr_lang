@@ -115,6 +115,7 @@ Xldr は対話セッション中に次を保持する。
 | `:quit` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する |
 | `:doc <symbol>` | 現在セッションで見える symbol の doc を表示する |
+| `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 
 ### 5.2 予約済み
 
@@ -148,6 +149,7 @@ Xldr は対話セッション中に次を保持する。
 - 型エラーでは、可能な範囲で関数宣言や `if` / `match` の分岐位置に補助ラベルを付ける
 - REPL 診断は入力継続よりも「その入力単位で失敗してロールバックする」ことを優先する
 - `Bootstrap` / `Kernel` の明示 import や、user chunk での `@@builtin` 利用禁止も通常の compile error と同じ診断経路で表示する
+- `:error summary` では診断の 1 行目のみ表示し、`:error full` では source snippet を含む詳細を表示する
 
 ---
 

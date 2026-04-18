@@ -5,6 +5,6 @@ pub mod vm;
 
 pub use error::{
     format_runtime_error, format_runtime_error_verbose, format_runtime_error_with_location,
-    report_runtime_error, RuntimeError, RuntimeErrorContext,
+    render_runtime_error_report, report_runtime_error, RuntimeError, RuntimeErrorContext,
 };
 pub use vm::VM;

@@ -373,6 +373,65 @@ fn repl_doc_command_shows_builtin_docs() {
 }
 
 #[test]
+fn repl_error_command_switches_display_mode() {
+    let output = run_repl_session(":error\n:error summary\n:error\n:error full\n:error\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("> error display mode: full"),
+        "expected default error display mode to be full, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("> error display mode: summary"),
+        "expected :error summary to update mode, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_error_summary_then_full_changes_diagnostic_detail() {
+    let output = run_repl_session(
+        ":error summary\nbad: Int = \"oops\"\n:error full\nworse: Int = \"oops\"\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    let first_error_pos = stderr
+        .find("Error: TypeError")
+        .expect("expected first TypeError headline");
+    let second_error_pos = stderr[first_error_pos + 1..]
+        .find("Error: TypeError")
+        .map(|offset| first_error_pos + 1 + offset)
+        .expect("expected second TypeError headline");
+
+    let first_block = &stderr[first_error_pos..second_error_pos];
+    let second_block = &stderr[second_error_pos..];
+
+    assert!(
+        !first_block.contains("╭─["),
+        "summary mode should collapse diagnostic to one line, got:\n{}",
+        first_block
+    );
+    assert!(
+        second_block.contains("╭─["),
+        "full mode should include source snippet block, got:\n{}",
+        second_block
+    );
+}
+
+#[test]
 fn repl_displays_bare_std_callable_refs_with_named_inspect_format() {
     let output =
         run_repl_session("&Int::shr\n&Boolean::xor\nprint(inspect(&Boolean::xor))\n:quit\n");

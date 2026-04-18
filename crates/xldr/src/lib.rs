@@ -1,7 +1,9 @@
+pub mod error_display;
 mod loader;
 pub mod repl;
 pub mod tui;
 
+pub use error_display::ErrorDisplayMode;
 pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
     collect_module_sources_with_extra_std_sources, collect_module_sources_with_module_file_stages,

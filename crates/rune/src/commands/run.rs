@@ -200,11 +200,12 @@ fn execute_bytecode(
         vm.enable_observation(eldr::vm::VmObservationOptions::default());
     }
     if let Err(e) = vm.run() {
-        eldr::report_runtime_error(
+        xldr::error_display::emit_runtime_error(
             &e,
             vm.source(),
             vm.source_file(),
             vm.runtime_error_location(),
+            xldr::ErrorDisplayMode::Full,
         );
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
         return Err(RuneError::silent(1));
@@ -354,41 +355,20 @@ fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
     match vm.last_value() {
         Some(Value::Tagged { tag: 1, fields }) => {
             if let Some(err_value) = fields.first() {
-                report_error_value(vm, err_value);
+                xldr::error_display::emit_runtime_value_error_from_vm(
+                    vm,
+                    err_value,
+                    xldr::ErrorDisplayMode::Full,
+                );
             } else {
-                eprintln!("Error: InvalidResult: missing Err payload");
+                xldr::error_display::emit_text(
+                    "Error: InvalidResult: missing Err payload",
+                    xldr::ErrorDisplayMode::Full,
+                );
             }
             true
         }
         _ => false,
-    }
-}
-
-fn report_error_value(vm: &eldr::VM, value: &Value) {
-    match value {
-        Value::Error(rich) => {
-            let start = rich.location.span_start as usize;
-            let mut end = rich.location.span_end as usize;
-            if end <= start {
-                end = start.saturating_add(1);
-            }
-            match (vm.source(), vm.source_file()) {
-                (Some(source), Some(file_name)) => diagnostics::report_error(
-                    file_name,
-                    source,
-                    diagnostics::simple_error(
-                        rich.kind.clone(),
-                        rich.message.clone(),
-                        spire::ast::Span { start, end },
-                        None,
-                    ),
-                ),
-                _ => eprintln!("Error: {}: {}", rich.kind, rich.message),
-            }
-        }
-        other => {
-            eprintln!("Error: {}", eldr::builtin::inspect_value(vm, other));
-        }
     }
 }
 

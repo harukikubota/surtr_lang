@@ -82,15 +82,27 @@ pub fn report_runtime_error(
     fallback_file: Option<&str>,
     location: Option<Location>,
 ) {
-    let mut stderr = io::stderr().lock();
-    let _ = report_runtime_error_to(
-        &mut stderr,
+    let rendered = render_runtime_error_report(
         err,
         source,
         fallback_file,
         location,
         runtime_error_verbose_enabled(),
     );
+    let mut stderr = io::stderr().lock();
+    let _ = write!(stderr, "{}", rendered);
+}
+
+pub fn render_runtime_error_report(
+    err: &RuntimeError,
+    source: Option<&str>,
+    fallback_file: Option<&str>,
+    location: Option<Location>,
+    verbose: bool,
+) -> String {
+    let mut buf = Vec::new();
+    let _ = report_runtime_error_to(&mut buf, err, source, fallback_file, location, verbose);
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 fn report_runtime_error_to(

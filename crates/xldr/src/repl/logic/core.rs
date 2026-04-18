@@ -15,9 +15,10 @@ use super::command::{parse_repl_command, ReplCommand};
 use super::output::{ReplOutput, ReplResult};
 use super::render;
 use crate::loader::{self, StagedModule};
+use crate::ErrorDisplayMode;
 use crate::{
     collect_additional_default_std_module_inputs, derive_parse_rules, derive_runtime_policy,
-    LoadError, ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
+    error_display, LoadError, ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -64,6 +65,7 @@ pub struct ReplEngine {
     symbols: BTreeSet<String>,
     docs: Vec<DocEntry>,
     auto_import_modules: BTreeSet<String>,
+    error_display_mode: ErrorDisplayMode,
 }
 
 impl ReplEngine {
@@ -96,6 +98,7 @@ impl ReplEngine {
                 .collect(),
             docs: Vec::new(),
             auto_import_modules: BTreeSet::new(),
+            error_display_mode: ErrorDisplayMode::Full,
         };
         engine.bootstrap_std_modules()?;
         Ok(engine)
@@ -160,6 +163,7 @@ impl ReplEngine {
             symbols,
             docs,
             auto_import_modules: BTreeSet::new(),
+            error_display_mode: ErrorDisplayMode::Full,
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
         engine
@@ -611,46 +615,39 @@ impl ReplEngine {
         }
     }
 
-    fn report_main_result_error_if_any(&self, value: &Value) -> bool {
+    fn report_main_result_error_if_any(&self, value: &Value) -> Option<Vec<String>> {
         // E-3 note:
         // Unlike CLI `run`, REPL keeps the session alive after `Result::Err`.
         // This stays local to REPL entry handling by design.
         match value {
             Value::Tagged { tag: 1, fields } => {
                 if let Some(err_value) = fields.first() {
-                    self.report_error_value(err_value);
+                    Some(self.report_error_value(err_value))
                 } else {
-                    eprintln!("Error: InvalidResult: missing Err payload");
+                    let text = "Error: InvalidResult: missing Err payload";
+                    error_display::emit_text(text, self.error_display_mode);
+                    Some(error_display::lines_for_mode(text, self.error_display_mode))
                 }
-                true
             }
-            _ => false,
+            _ => None,
         }
     }
 
-    fn report_error_value(&self, value: &Value) {
-        match value {
-            Value::Error(rich) => {
-                let start = rich.location.span_start as usize;
-                let mut end = rich.location.span_end as usize;
-                if end <= start {
-                    end = start.saturating_add(1);
-                }
-                diagnostics::report_error_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    diagnostics::simple_error(
-                        rich.kind.clone(),
-                        rich.message.clone(),
-                        spire::ast::Span { start, end },
-                        None,
-                    ),
-                );
-            }
-            other => {
-                eprintln!("Error: {}", inspect_value(&self.vm, other));
-            }
-        }
+    fn report_error_value(&self, value: &Value) -> Vec<String> {
+        error_display::emit_runtime_value_error_with_registry(
+            &self.vm,
+            value,
+            &self.sources,
+            self.repl_source_id,
+            self.error_display_mode,
+        );
+        error_display::runtime_value_error_lines_with_registry(
+            &self.vm,
+            value,
+            &self.sources,
+            self.repl_source_id,
+            self.error_display_mode,
+        )
     }
 
     fn bump_line(&mut self, value: Option<Value>, meta: Option<forge::ChunkMeta>) {
@@ -699,6 +696,23 @@ impl ReplEngine {
         }
     }
 
+    fn handle_error_mode(&mut self, mode: Option<&str>) -> Vec<String> {
+        let Some(mode) = mode else {
+            return vec![format!(
+                "error display mode: {}",
+                self.error_display_mode.as_str()
+            )];
+        };
+
+        match ErrorDisplayMode::parse(mode.trim()) {
+            Some(parsed) => {
+                self.error_display_mode = parsed;
+                vec![format!("error display mode: {}", parsed.as_str())]
+            }
+            None => vec!["Usage: :error [full|summary]".to_string()],
+        }
+    }
+
     fn append_docs(&mut self, docs: Vec<DocEntry>) {
         for doc in docs {
             let exists = self.docs.iter().any(|existing| {
@@ -729,6 +743,10 @@ impl ReplEngine {
                     }
                     ReplCommand::Doc { symbol } => {
                         return self.handle_doc(&symbol);
+                    }
+                    ReplCommand::Error { mode } => {
+                        let rendered = self.handle_error_mode(mode.as_deref());
+                        return ReplResult::ok(ReplOutput::CommandOutput { rendered });
                     }
                     ReplCommand::ValueRecall { arg } => {
                         let rendered = self.handle_value_recall(&arg);
@@ -768,11 +786,18 @@ impl ReplEngine {
             }
             Err(e) => {
                 let message = e.message();
-                let rendered = vec![format!("ParseError: {}", message)];
-                diagnostics::report_error_by_id(
+                let spec = diagnostics::simple_error("ParseError", message, e.span().clone(), None);
+                let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
-                    diagnostics::simple_error("ParseError", message, e.span().clone(), None),
+                    &spec,
+                    self.error_display_mode,
+                );
+                error_display::emit_diagnostic_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
@@ -799,11 +824,19 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let rendered = vec![format!("ResolveError: {}", e.message)];
-                diagnostics::report_error_by_id(
+                let spec =
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None);
+                let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                    &spec,
+                    self.error_display_mode,
+                );
+                error_display::emit_diagnostic_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
@@ -822,11 +855,19 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let rendered = vec![format!("ResolveError: {}", e.message)];
-                diagnostics::report_error_by_id(
+                let spec =
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None);
+                let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
+                    &spec,
+                    self.error_display_mode,
+                );
+                error_display::emit_diagnostic_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
@@ -854,11 +895,19 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let rendered = vec![format!("TypeError: {}", e.message)];
-                diagnostics::report_error_by_id(
+                let spec =
+                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &e);
+                let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
-                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &e),
+                    &spec,
+                    self.error_display_mode,
+                );
+                error_display::emit_diagnostic_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
@@ -876,11 +925,19 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let rendered = vec![format!("CodegenError: {}", e.message)];
-                diagnostics::report_error_by_id(
+                let spec =
+                    diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None);
+                let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
-                    diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
+                    &spec,
+                    self.error_display_mode,
+                );
+                error_display::emit_diagnostic_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
                 );
                 self.pending.clear();
                 self.bump_line(None, None);
@@ -904,8 +961,7 @@ impl ReplEngine {
         match self.vm.push_atomic(chunk) {
             Ok(value) => {
                 self.sync_scar_fun_index_with_vm();
-                if self.report_main_result_error_if_any(&value) {
-                    let rendered = vec!["Error result".to_string()];
+                if let Some(rendered) = self.report_main_result_error_if_any(&value) {
                     self.bump_line(None, None);
                     self.pending.clear();
                     return ReplResult::ok(ReplOutput::EvalError {
@@ -942,12 +998,20 @@ impl ReplEngine {
                 })
             }
             Err(e) => {
-                let rendered = vec![format!("RuntimeError: {}", e)];
-                eldr::report_runtime_error(
+                let location = self.vm.runtime_error_location();
+                let rendered = error_display::runtime_error_lines(
                     &e,
                     self.vm.source(),
                     self.vm.source_file(),
-                    self.vm.runtime_error_location(),
+                    location.clone(),
+                    self.error_display_mode,
+                );
+                error_display::emit_runtime_error(
+                    &e,
+                    self.vm.source(),
+                    self.vm.source_file(),
+                    location,
+                    self.error_display_mode,
                 );
                 self.bump_line(None, None);
                 self.pending.clear();
@@ -1215,6 +1279,7 @@ mod tests {
                 .collect(),
             docs: Vec::new(),
             auto_import_modules: BTreeSet::new(),
+            error_display_mode: ErrorDisplayMode::Full,
         }
     }
 
