@@ -49,14 +49,16 @@ impl Checker {
         scrut_ty: &Ty,
         arms: &[TypedMatchArm],
     ) -> Result<(), TypeError> {
+        let profile = self.profiler.start();
         if arms
             .iter()
             .any(|arm| arm.guard.is_none() && self.is_match_catch_all(&arm.pattern))
         {
+            self.profiler.finish(ProfileEvent::MatchExhaustive, profile);
             return Ok(());
         }
 
-        match scrut_ty {
+        let result = match scrut_ty {
             Ty::Bool => {
                 let has_true = arms.iter().any(|arm| {
                     arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::BoolLit(true))
@@ -110,24 +112,21 @@ impl Checker {
                 }
             }
             Ty::Enum(enum_name, _) => {
-                let variants = self
-                    .env
-                    .enum_variants_of(enum_name)
-                    .cloned()
-                    .unwrap_or_default();
                 let mut missing = Vec::new();
-                for variant in variants {
-                    let covered = arms.iter().any(|arm| {
-                        if arm.guard.is_some() {
-                            return false;
+                if let Some(variants) = self.lookup_enum_variants_of(enum_name) {
+                    for variant in variants {
+                        let covered = arms.iter().any(|arm| {
+                            if arm.guard.is_some() {
+                                return false;
+                            }
+                            matches!(
+                                &arm.pattern,
+                                TypedMatchPattern::Constructor { tag, .. } if *tag == variant.tag
+                            )
+                        });
+                        if !covered {
+                            missing.push(variant.short_name.clone());
                         }
-                        matches!(
-                            &arm.pattern,
-                            TypedMatchPattern::Constructor { tag, .. } if *tag == variant.tag
-                        )
-                    });
-                    if !covered {
-                        missing.push(variant.short_name);
                     }
                 }
                 if missing.is_empty() {
@@ -203,7 +202,9 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             }),
-        }
+        };
+        self.profiler.finish(ProfileEvent::MatchExhaustive, profile);
+        result
     }
 
     pub(super) fn check_match_arm(
@@ -397,8 +398,7 @@ impl Checker {
                     });
                 };
                 let variant = self
-                    .env
-                    .enum_variant_by_constructor_id(ctor_id.unique_id)
+                    .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
                     .ok_or_else(|| TypeError {
                         message: format!("Unknown constructor: {}", ctor_id.name),
                         span: ctor_id.span.clone(),

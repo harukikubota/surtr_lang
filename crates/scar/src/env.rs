@@ -46,6 +46,12 @@ pub struct EnumVariantInfo {
     pub discriminant: SurtrInt,
 }
 
+#[derive(Debug, Clone)]
+struct VarScopeFrame {
+    touched: HashSet<u32>,
+    undo: Vec<(u32, Option<Ty>)>,
+}
+
 /// Type environment — tracks variable types and type definitions.
 #[derive(Debug, Clone)]
 pub struct TypeEnv {
@@ -71,6 +77,7 @@ pub struct TypeEnv {
     pub enum_variants_by_enum: HashMap<Symbol, Vec<EnumVariantInfo>>,
     /// type declaration bindings usable as type-root lens path heads.
     pub type_constructor_ids: HashSet<u32>,
+    var_scope_frames: Vec<VarScopeFrame>,
 }
 
 impl Default for TypeEnv {
@@ -93,12 +100,45 @@ impl TypeEnv {
             enum_variant_tags: HashMap::new(),
             enum_variants_by_enum: HashMap::new(),
             type_constructor_ids: HashSet::new(),
+            var_scope_frames: Vec::new(),
         }
     }
 
     /// Bind a variable (by unique_id) to a type.
     pub fn bind_var(&mut self, unique_id: u32, ty: Ty) {
+        if let Some(frame) = self.var_scope_frames.last_mut() {
+            if frame.touched.insert(unique_id) {
+                frame
+                    .undo
+                    .push((unique_id, self.vars.get(&unique_id).cloned()));
+            }
+        }
         self.vars.insert(unique_id, ty);
+    }
+
+    /// Open a scoped mutation frame for `vars`.
+    ///
+    /// During an active frame, first writes to each `unique_id` record its
+    /// previous value so `pop_var_scope` can restore the exact prior state.
+    pub fn push_var_scope(&mut self) {
+        self.var_scope_frames.push(VarScopeFrame {
+            touched: HashSet::new(),
+            undo: Vec::new(),
+        });
+    }
+
+    /// Roll back all `bind_var` changes made since the last `push_var_scope`.
+    pub fn pop_var_scope(&mut self) {
+        let Some(frame) = self.var_scope_frames.pop() else {
+            return;
+        };
+        for (unique_id, old) in frame.undo.into_iter().rev() {
+            if let Some(old_ty) = old {
+                self.vars.insert(unique_id, old_ty);
+            } else {
+                self.vars.remove(&unique_id);
+            }
+        }
     }
 
     /// Look up the type of a variable.

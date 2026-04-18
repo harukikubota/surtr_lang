@@ -465,6 +465,42 @@ impl Checker {
         Ok(())
     }
 
+    fn check_body_in_isolated_scope(
+        &mut self,
+        local_bindings: &[(u32, Ty)],
+        function_return_ty: Ty,
+        function_symbol: String,
+        impl_target: Option<String>,
+        body: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let saved_function_return_ty = self.function_return_ty.clone();
+        let saved_current_function_symbol = self.current_function_symbol.clone();
+        let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
+        let saved_closure_depth = self.closure_depth;
+        let saved_lens_bindings = self.lens_bindings.clone();
+
+        self.env.push_var_scope();
+        self.function_return_ty = Some(function_return_ty);
+        self.current_function_symbol = Some(function_symbol);
+        self.current_impl_struct_target = impl_target;
+        for (unique_id, ty) in local_bindings {
+            self.env.bind_var(*unique_id, ty.clone());
+        }
+
+        let result = self
+            .check_node(body)
+            .map(|typed| self.resolve_typed_node(typed));
+
+        self.env.pop_var_scope();
+        self.function_return_ty = saved_function_return_ty;
+        self.current_function_symbol = saved_current_function_symbol;
+        self.current_impl_struct_target = saved_current_impl_struct_target;
+        self.closure_depth = saved_closure_depth;
+        self.lens_bindings = saved_lens_bindings;
+
+        result
+    }
+
     pub(super) fn check_def(
         &mut self,
         span: &Span,
@@ -475,8 +511,8 @@ impl Checker {
         body: &Resolved,
         attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
-        let mut fun_env = self.env.clone();
         let mut typed_params = Vec::new();
+        let mut local_bindings = Vec::new();
         let mut tyvars = HashMap::new();
         self.seed_signature_type_params(type_params, &mut tyvars);
 
@@ -495,7 +531,7 @@ impl Checker {
                     hint: None,
                 });
             }
-            fun_env.bind_var(param.id.unique_id, param_ty.clone());
+            local_bindings.push((param.id.unique_id, param_ty.clone()));
             typed_params.push(TypedFunParam {
                 id: param.id.clone(),
                 ty: param_ty.clone(),
@@ -562,25 +598,24 @@ impl Checker {
             }
         }
 
-        let mut body_checker = self.spawn_child_checker(fun_env);
-        if let Some((impl_target, _method)) = Self::split_impl_method_name(&id.name) {
-            if self
-                .env
-                .lookup_type_def(&impl_target)
-                .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
-            {
-                body_checker.current_impl_struct_target = Some(impl_target);
-            }
-        }
-        body_checker.function_return_ty = Some(expected_ret.clone());
-        body_checker.current_function_symbol = Some(current_symbol);
-        let typed_body = body_checker.check_node(body)?;
-        let typed_body = body_checker.resolve_typed_node(typed_body);
-        self.absorb_child_progress(&body_checker);
+        let impl_target =
+            Self::split_impl_method_name(&id.name).and_then(|(impl_target, _method)| {
+                self.env
+                    .lookup_type_def(&impl_target)
+                    .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
+                    .then_some(impl_target)
+            });
+        let typed_body = self.check_body_in_isolated_scope(
+            &local_bindings,
+            expected_ret.clone(),
+            current_symbol,
+            impl_target,
+            body,
+        )?;
 
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
             let hint = if matches!(typed_body.ty, Ty::Unit) {
-                body_checker.describe_unit_return_hint(&typed_body)
+                self.describe_unit_return_hint(&typed_body)
             } else {
                 None
             };
@@ -598,7 +633,7 @@ impl Checker {
                         self.ty_name(&typed_body.ty)
                     )
                 },
-                span: body_checker.return_mismatch_span(&typed_body),
+                span: self.return_mismatch_span(&typed_body),
                 hint,
             });
         }
@@ -649,7 +684,6 @@ impl Checker {
         body: &Resolved,
         attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
-        let mut fun_env = self.env.clone();
         let mut tyvars = HashMap::new();
         self.seed_signature_type_params(type_params, &mut tyvars);
 
@@ -670,7 +704,7 @@ impl Checker {
                 hint: None,
             });
         }
-        fun_env.bind_var(param.id.unique_id, param_ty.clone());
+        let local_bindings = vec![(param.id.unique_id, param_ty.clone())];
         let typed_param = TypedFunParam {
             id: param.id.clone(),
             ty: param_ty,
@@ -697,16 +731,17 @@ impl Checker {
         )?;
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
-        let mut body_checker = self.spawn_child_checker(fun_env);
-        body_checker.function_return_ty = Some(expected_ret.clone());
-        body_checker.current_function_symbol = Some(current_symbol);
-        let typed_body = body_checker.check_node(body)?;
-        let typed_body = body_checker.resolve_typed_node(typed_body);
-        self.absorb_child_progress(&body_checker);
+        let typed_body = self.check_body_in_isolated_scope(
+            &local_bindings,
+            expected_ret.clone(),
+            current_symbol,
+            None,
+            body,
+        )?;
 
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
             let hint = if matches!(typed_body.ty, Ty::Unit) {
-                body_checker.describe_unit_return_hint(&typed_body)
+                self.describe_unit_return_hint(&typed_body)
             } else {
                 None
             };
@@ -716,7 +751,7 @@ impl Checker {
                     self.ty_name(&expected_ret),
                     self.ty_name(&typed_body.ty)
                 ),
-                span: body_checker.return_mismatch_span(&typed_body),
+                span: self.return_mismatch_span(&typed_body),
                 hint,
             });
         }
@@ -797,18 +832,18 @@ impl Checker {
         }];
 
         for method in methods {
-            let trait_method = trait_info
-                .methods
-                .get(&method.method_name)
-                .cloned()
-                .ok_or_else(|| TypeError {
-                    message: format!(
-                        "Trait impl {} for {} defines unknown method `{}`",
-                        trait_id.name, target_name, method.method_name
-                    ),
-                    span: method.span.clone(),
-                    hint: None,
-                })?;
+            let trait_method =
+                trait_info
+                    .methods
+                    .get(&method.method_name)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "Trait impl {} for {} defines unknown method `{}`",
+                            trait_id.name, target_name, method.method_name
+                        ),
+                        span: method.span.clone(),
+                        hint: None,
+                    })?;
 
             let inline_method = TraitImplMethodInfo {
                 method_name: method.method_name.clone(),
@@ -829,33 +864,32 @@ impl Checker {
                 &trait_method.ret_ty,
             )?;
 
-            let mut fun_env = self.env.clone();
             let mut typed_params = Vec::new();
+            let mut local_bindings = Vec::new();
             for (param, param_ty) in method.params.iter().zip(param_tys.iter()) {
-                fun_env.bind_var(param.id.unique_id, param_ty.clone());
+                local_bindings.push((param.id.unique_id, param_ty.clone()));
                 typed_params.push(TypedFunParam {
                     id: param.id.clone(),
                     ty: param_ty.clone(),
                 });
             }
 
-            let mut body_checker = self.spawn_child_checker(fun_env);
-            if self
+            let impl_target = self
                 .env
                 .lookup_type_def(&target_name)
                 .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
-            {
-                body_checker.current_impl_struct_target = Some(target_name.clone());
-            }
-            body_checker.function_return_ty = Some(expected_ret.clone());
-            body_checker.current_function_symbol = Some(method.function_id.name.clone());
-            let typed_body = body_checker.check_node(&method.body)?;
-            let typed_body = body_checker.resolve_typed_node(typed_body);
-            self.absorb_child_progress(&body_checker);
+                .then_some(target_name.clone());
+            let typed_body = self.check_body_in_isolated_scope(
+                &local_bindings,
+                expected_ret.clone(),
+                method.function_id.name.clone(),
+                impl_target,
+                &method.body,
+            )?;
 
             if !self.types_compatible(&expected_ret, &typed_body.ty) {
                 let hint = if matches!(typed_body.ty, Ty::Unit) {
-                    body_checker.describe_unit_return_hint(&typed_body)
+                    self.describe_unit_return_hint(&typed_body)
                 } else {
                     None
                 };
@@ -865,7 +899,7 @@ impl Checker {
                         self.ty_name(&expected_ret),
                         self.ty_name(&typed_body.ty)
                     ),
-                    span: body_checker.return_mismatch_span(&typed_body),
+                    span: self.return_mismatch_span(&typed_body),
                     hint,
                 });
             }
@@ -993,9 +1027,7 @@ impl Checker {
         variants: &[ResolvedEnumVariant],
     ) -> Result<TypedNode, TypeError> {
         let enum_variants = self
-            .env
-            .enum_variants_of(&id.name)
-            .cloned()
+            .lookup_enum_variants_of(&id.name)
             .ok_or_else(|| TypeError {
                 message: format!("Unknown enum type declaration: {}", id.name),
                 span: span.clone(),
@@ -1011,10 +1043,10 @@ impl Checker {
         }
 
         let typed_variants = enum_variants
-            .into_iter()
+            .iter()
             .map(|variant| TypedEnumVariantDef {
                 tag: variant.tag,
-                constructor_name: variant.constructor_name,
+                constructor_name: variant.constructor_name.clone(),
                 field_names: variant
                     .payload
                     .iter()
@@ -1240,11 +1272,7 @@ impl Checker {
             });
         }
 
-        if let Some(variant) = self
-            .env
-            .enum_variant_by_constructor_id(id.unique_id)
-            .cloned()
-        {
+        if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
             let variant = self.instantiate_enum_variant(&variant);
             if args.len() != variant.payload.len() {
                 return Err(TypeError {

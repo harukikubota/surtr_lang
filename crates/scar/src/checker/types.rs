@@ -1181,9 +1181,10 @@ impl Checker {
     }
 
     pub(super) fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> bool {
+        let profile = self.profiler.start();
         let expected = self.resolve_ty(expected);
         let got = self.resolve_ty(got);
-        match (&expected, &got) {
+        let result = match (&expected, &got) {
             (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
             (Ty::Int, Ty::Int)
             | (Ty::Float, Ty::Float)
@@ -1224,38 +1225,44 @@ impl Checker {
                         .all(|(left, right)| self.types_compatible(left, right))
             }
             _ => false,
-        }
+        };
+        self.profiler.finish(ProfileEvent::TypesCompatible, profile);
+        result
     }
 
     pub(super) fn bind_tyvar(&mut self, var: u32, ty: &Ty) -> bool {
+        let profile = self.profiler.start();
         let ty = self.resolve_ty(ty);
-        if ty == Ty::Var(var) {
-            return true;
-        }
-        if self.ty_contains_var(&ty, var) {
-            return false;
-        }
-        let var_bounds = self.tyvar_bound_names(var);
-        match &ty {
-            Ty::Var(other) => {
-                let mut combined = var_bounds;
-                for bound in self.tyvar_bound_names(*other) {
-                    if !combined.iter().any(|existing| existing == &bound) {
-                        combined.push(bound);
+        let result = if ty == Ty::Var(var) {
+            true
+        } else if self.ty_contains_var(&ty, var) {
+            false
+        } else {
+            let var_bounds = self.tyvar_bound_names(var);
+            match &ty {
+                Ty::Var(other) => {
+                    let mut combined = var_bounds;
+                    for bound in self.tyvar_bound_names(*other) {
+                        if !combined.iter().any(|existing| existing == &bound) {
+                            combined.push(bound);
+                        }
+                    }
+                    combined.sort();
+                    self.tyvar_bounds.insert(var, combined.clone());
+                    self.tyvar_bounds.insert(*other, combined);
+                }
+                _ => {
+                    if !self.ty_satisfies_bounds(&ty, &var_bounds) {
+                        self.profiler.finish(ProfileEvent::BindTyVar, profile);
+                        return false;
                     }
                 }
-                combined.sort();
-                self.tyvar_bounds.insert(var, combined.clone());
-                self.tyvar_bounds.insert(*other, combined);
             }
-            _ => {
-                if !self.ty_satisfies_bounds(&ty, &var_bounds) {
-                    return false;
-                }
-            }
-        }
-        self.substitutions.insert(var, ty);
-        true
+            self.substitutions.insert(var, ty);
+            true
+        };
+        self.profiler.finish(ProfileEvent::BindTyVar, profile);
+        result
     }
 
     pub(super) fn ty_satisfies_bounds(&self, ty: &Ty, bounds: &[String]) -> bool {
@@ -1367,7 +1374,8 @@ impl Checker {
         ty: &Ty,
         fresh: &mut HashMap<u32, Ty>,
     ) -> Ty {
-        match ty {
+        let profile = self.profiler.start();
+        let result = match ty {
             Ty::Var(var) => fresh
                 .entry(*var)
                 .or_insert_with(|| {
@@ -1457,7 +1465,10 @@ impl Checker {
                 Box::new(self.instantiate_ty_with_fresh(err, fresh)),
             ),
             other => other.clone(),
-        }
+        };
+        self.profiler
+            .finish(ProfileEvent::InstantiateTyWithFresh, profile);
+        result
     }
 
     pub(super) fn instantiate_builtin_ty(&mut self, ty: &Ty) -> Ty {
@@ -1469,8 +1480,9 @@ impl Checker {
         &mut self,
         variant: &crate::env::EnumVariantInfo,
     ) -> crate::env::EnumVariantInfo {
+        let profile = self.profiler.start();
         let mut fresh = HashMap::new();
-        crate::env::EnumVariantInfo {
+        let instantiated = crate::env::EnumVariantInfo {
             constructor_name: variant.constructor_name.clone(),
             short_name: variant.short_name.clone(),
             enum_name: variant.enum_name.clone(),
@@ -1482,7 +1494,10 @@ impl Checker {
                 .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
                 .collect(),
             discriminant: variant.discriminant.clone(),
-        }
+        };
+        self.profiler
+            .finish(ProfileEvent::InstantiateEnumVariant, profile);
+        instantiated
     }
 
     pub(super) fn ty_name(&self, ty: &Ty) -> String {

@@ -87,11 +87,7 @@ impl Checker {
                     });
                 }
 
-                if let Some(variant) = self
-                    .env
-                    .enum_variant_by_constructor_id(id.unique_id)
-                    .cloned()
-                {
+                if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
                     let variant = self.instantiate_enum_variant(&variant);
                     if !variant.payload.is_empty() {
                         return Err(TypeError {
@@ -1383,9 +1379,7 @@ impl Checker {
         span: &Span,
     ) -> Result<(u32, u32, u32), TypeError> {
         let variants = self
-            .env
-            .enum_variants_of("MatchResult")
-            .cloned()
+            .lookup_enum_variants_of("MatchResult")
             .ok_or_else(|| TypeError {
                 message: "MatchResult enum is not available in the current environment".into(),
                 span: span.clone(),
@@ -3183,20 +3177,15 @@ impl Checker {
                 ))
             }
             Ty::Enum(enum_name, _) => {
-                let variants = self
-                    .env
-                    .enum_variants_of(&enum_name)
-                    .cloned()
-                    .ok_or_else(|| TypeError {
+                if self.lookup_enum_variants_of(&enum_name).is_none() {
+                    return Err(TypeError {
                         message: format!("No variants found for enum {}", enum_name),
                         span: span.clone(),
                         hint: None,
-                    })?;
-                let variant = variants
-                    .iter()
-                    .find(|candidate| candidate.short_name == field)
-                    .cloned();
-                let Some(variant) = variant else {
+                    });
+                }
+                let Some(variant) = self.lookup_enum_variant_by_short_name(&enum_name, field)
+                else {
                     return Err(TypeError {
                         message: format!(
                             "No variant selector '{}' on {} (use PascalCase constructor names)",

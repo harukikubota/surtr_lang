@@ -1,4 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use sigil::resolved::*;
 use sindr::builtin::{
@@ -20,6 +23,210 @@ mod patterns;
 mod predeclare;
 mod specialize;
 mod types;
+
+#[derive(Debug, Clone, Copy)]
+enum ProfileEvent {
+    TypesCompatible,
+    BindTyVar,
+    InstantiateTyWithFresh,
+    InstantiateEnumVariant,
+    MatchExhaustive,
+    EnumVariantCtorLookup,
+    EnumVariantsLookup,
+    EnumVariantSelectorLookup,
+}
+
+#[derive(Default)]
+struct ProfileCounter {
+    calls: AtomicU64,
+    nanos: AtomicU64,
+}
+
+impl ProfileCounter {
+    fn reset(&self) {
+        self.calls.store(0, Ordering::Relaxed);
+        self.nanos.store(0, Ordering::Relaxed);
+    }
+
+    fn add(&self, elapsed: Duration) {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        self.nanos
+            .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
+    }
+
+    fn snapshot(&self) -> (u64, u64) {
+        (
+            self.calls.load(Ordering::Relaxed),
+            self.nanos.load(Ordering::Relaxed),
+        )
+    }
+}
+
+#[derive(Default)]
+struct ProfileData {
+    types_compatible: ProfileCounter,
+    bind_tyvar: ProfileCounter,
+    instantiate_ty_with_fresh: ProfileCounter,
+    instantiate_enum_variant: ProfileCounter,
+    match_exhaustive: ProfileCounter,
+    enum_variant_ctor_lookup: ProfileCounter,
+    enum_variants_lookup: ProfileCounter,
+    enum_variant_selector_lookup: ProfileCounter,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProfileSnapshot {
+    types_compatible_calls: u64,
+    types_compatible_nanos: u64,
+    bind_tyvar_calls: u64,
+    bind_tyvar_nanos: u64,
+    instantiate_ty_with_fresh_calls: u64,
+    instantiate_ty_with_fresh_nanos: u64,
+    instantiate_enum_variant_calls: u64,
+    instantiate_enum_variant_nanos: u64,
+    match_exhaustive_calls: u64,
+    match_exhaustive_nanos: u64,
+    enum_variant_ctor_lookup_calls: u64,
+    enum_variant_ctor_lookup_nanos: u64,
+    enum_variants_lookup_calls: u64,
+    enum_variants_lookup_nanos: u64,
+    enum_variant_selector_lookup_calls: u64,
+    enum_variant_selector_lookup_nanos: u64,
+}
+
+#[derive(Clone)]
+struct TypecheckProfiler {
+    enabled: bool,
+    data: Arc<ProfileData>,
+}
+
+impl TypecheckProfiler {
+    fn new_from_env() -> Self {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        let enabled = *ENABLED.get_or_init(|| {
+            matches!(
+                std::env::var("SURTR_SCAR_PROFILE").as_deref(),
+                Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+            )
+        });
+        Self {
+            enabled,
+            data: Arc::new(ProfileData::default()),
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn start(&self) -> Option<Instant> {
+        self.enabled.then(Instant::now)
+    }
+
+    fn finish(&self, event: ProfileEvent, start: Option<Instant>) {
+        let Some(start) = start else {
+            return;
+        };
+        let elapsed = start.elapsed();
+        match event {
+            ProfileEvent::TypesCompatible => self.data.types_compatible.add(elapsed),
+            ProfileEvent::BindTyVar => self.data.bind_tyvar.add(elapsed),
+            ProfileEvent::InstantiateTyWithFresh => {
+                self.data.instantiate_ty_with_fresh.add(elapsed)
+            }
+            ProfileEvent::InstantiateEnumVariant => self.data.instantiate_enum_variant.add(elapsed),
+            ProfileEvent::MatchExhaustive => self.data.match_exhaustive.add(elapsed),
+            ProfileEvent::EnumVariantCtorLookup => self.data.enum_variant_ctor_lookup.add(elapsed),
+            ProfileEvent::EnumVariantsLookup => self.data.enum_variants_lookup.add(elapsed),
+            ProfileEvent::EnumVariantSelectorLookup => {
+                self.data.enum_variant_selector_lookup.add(elapsed)
+            }
+        }
+    }
+
+    fn reset(&self) {
+        if !self.enabled {
+            return;
+        }
+        self.data.types_compatible.reset();
+        self.data.bind_tyvar.reset();
+        self.data.instantiate_ty_with_fresh.reset();
+        self.data.instantiate_enum_variant.reset();
+        self.data.match_exhaustive.reset();
+        self.data.enum_variant_ctor_lookup.reset();
+        self.data.enum_variants_lookup.reset();
+        self.data.enum_variant_selector_lookup.reset();
+    }
+
+    fn snapshot(&self) -> ProfileSnapshot {
+        let (types_compatible_calls, types_compatible_nanos) =
+            self.data.types_compatible.snapshot();
+        let (bind_tyvar_calls, bind_tyvar_nanos) = self.data.bind_tyvar.snapshot();
+        let (instantiate_ty_with_fresh_calls, instantiate_ty_with_fresh_nanos) =
+            self.data.instantiate_ty_with_fresh.snapshot();
+        let (instantiate_enum_variant_calls, instantiate_enum_variant_nanos) =
+            self.data.instantiate_enum_variant.snapshot();
+        let (match_exhaustive_calls, match_exhaustive_nanos) =
+            self.data.match_exhaustive.snapshot();
+        let (enum_variant_ctor_lookup_calls, enum_variant_ctor_lookup_nanos) =
+            self.data.enum_variant_ctor_lookup.snapshot();
+        let (enum_variants_lookup_calls, enum_variants_lookup_nanos) =
+            self.data.enum_variants_lookup.snapshot();
+        let (enum_variant_selector_lookup_calls, enum_variant_selector_lookup_nanos) =
+            self.data.enum_variant_selector_lookup.snapshot();
+        ProfileSnapshot {
+            types_compatible_calls,
+            types_compatible_nanos,
+            bind_tyvar_calls,
+            bind_tyvar_nanos,
+            instantiate_ty_with_fresh_calls,
+            instantiate_ty_with_fresh_nanos,
+            instantiate_enum_variant_calls,
+            instantiate_enum_variant_nanos,
+            match_exhaustive_calls,
+            match_exhaustive_nanos,
+            enum_variant_ctor_lookup_calls,
+            enum_variant_ctor_lookup_nanos,
+            enum_variants_lookup_calls,
+            enum_variants_lookup_nanos,
+            enum_variant_selector_lookup_calls,
+            enum_variant_selector_lookup_nanos,
+        }
+    }
+
+    fn print_summary(&self, total: Duration) {
+        if !self.enabled {
+            return;
+        }
+        if total < Duration::from_millis(5) {
+            return;
+        }
+        let snap = self.snapshot();
+        eprintln!(
+            "scar-profile total={:.3}ms | types_compatible={} ({:.3}ms) | bind_tyvar={} ({:.3}ms) | instantiate_ty_with_fresh={} ({:.3}ms) | instantiate_enum_variant={} ({:.3}ms) | match_exhaustive={} ({:.3}ms)",
+            total.as_secs_f64() * 1000.0,
+            snap.types_compatible_calls,
+            snap.types_compatible_nanos as f64 / 1_000_000.0,
+            snap.bind_tyvar_calls,
+            snap.bind_tyvar_nanos as f64 / 1_000_000.0,
+            snap.instantiate_ty_with_fresh_calls,
+            snap.instantiate_ty_with_fresh_nanos as f64 / 1_000_000.0,
+            snap.instantiate_enum_variant_calls,
+            snap.instantiate_enum_variant_nanos as f64 / 1_000_000.0,
+            snap.match_exhaustive_calls,
+            snap.match_exhaustive_nanos as f64 / 1_000_000.0,
+        );
+        eprintln!(
+            "scar-profile enum_lookup ctor={} ({:.3}ms) | variants={} ({:.3}ms) | selector={} ({:.3}ms)",
+            snap.enum_variant_ctor_lookup_calls,
+            snap.enum_variant_ctor_lookup_nanos as f64 / 1_000_000.0,
+            snap.enum_variants_lookup_calls,
+            snap.enum_variants_lookup_nanos as f64 / 1_000_000.0,
+            snap.enum_variant_selector_lookup_calls,
+            snap.enum_variant_selector_lookup_nanos as f64 / 1_000_000.0,
+        );
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TypeSyntaxContext {
@@ -652,6 +859,7 @@ struct Checker {
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    profiler: TypecheckProfiler,
 }
 
 impl Checker {
@@ -674,6 +882,7 @@ impl Checker {
             traits: HashMap::new(),
             trait_impls: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
+            profiler: TypecheckProfiler::new_from_env(),
         }
     }
 
@@ -706,6 +915,7 @@ impl Checker {
             traits,
             trait_impls,
             trait_methods_by_qualified_name,
+            profiler: TypecheckProfiler::new_from_env(),
         }
     }
 
@@ -731,6 +941,7 @@ impl Checker {
         checker.lens_bindings = self.lens_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
+        checker.profiler = self.profiler.clone();
         checker
     }
 
@@ -757,6 +968,48 @@ impl Checker {
         }
     }
 
+    pub(super) fn lookup_enum_variant_by_constructor_id(
+        &self,
+        unique_id: u32,
+    ) -> Option<crate::env::EnumVariantInfo> {
+        let profile = self.profiler.start();
+        let variant = self.env.enum_variant_by_constructor_id(unique_id).cloned();
+        self.profiler
+            .finish(ProfileEvent::EnumVariantCtorLookup, profile);
+        variant
+    }
+
+    pub(super) fn lookup_enum_variants_of<'a>(
+        &'a self,
+        enum_name: &str,
+    ) -> Option<&'a Vec<crate::env::EnumVariantInfo>> {
+        let profile = self.profiler.start();
+        let variants = self.env.enum_variants_of(enum_name);
+        self.profiler
+            .finish(ProfileEvent::EnumVariantsLookup, profile);
+        variants
+    }
+
+    pub(super) fn lookup_enum_variant_by_short_name(
+        &self,
+        enum_name: &str,
+        short_name: &str,
+    ) -> Option<crate::env::EnumVariantInfo> {
+        let profile = self.profiler.start();
+        let variant = self
+            .env
+            .enum_variants_of(enum_name)
+            .and_then(|variants| {
+                variants
+                    .iter()
+                    .find(|candidate| candidate.short_name == short_name)
+            })
+            .cloned();
+        self.profiler
+            .finish(ProfileEvent::EnumVariantSelectorLookup, profile);
+        variant
+    }
+
     fn into_parts(self) -> CheckerParts {
         CheckerParts {
             env: self.env,
@@ -771,23 +1024,207 @@ impl Checker {
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
-        self.predeclare_error_types(&stmts);
-        self.predeclare_type_signatures(&stmts)?;
-        self.predeclare_traits(&stmts)?;
-        self.predeclare_functions(&stmts)?;
-        self.ensure_struct_impl_new_contract(&stmts)?;
-        let mut typed = Vec::new();
-        for stmt in stmts {
-            if let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) = &stmt {
-                let nodes =
-                    self.check_trait_impl_items(span, trait_id, trait_args, target_ty, methods)?;
-                typed.extend(nodes.into_iter().map(|node| self.resolve_typed_node(node)));
-                continue;
-            }
-            let node = self.check_node(&stmt)?;
-            typed.push(self.resolve_typed_node(node));
+        let profile_enabled = self.profiler.enabled();
+        if profile_enabled {
+            self.profiler.reset();
         }
-        self.ensure_builtin_type_contracts()?;
-        self.specialize_program(typed)
+        let profile_start = profile_enabled.then(Instant::now);
+        let mut predeclare_error_types_dur = Duration::ZERO;
+        let mut predeclare_type_signatures_dur = Duration::ZERO;
+        let mut predeclare_traits_dur = Duration::ZERO;
+        let mut predeclare_functions_dur = Duration::ZERO;
+        let mut ensure_struct_impl_new_contract_dur = Duration::ZERO;
+        let mut check_stmt_loop_dur = Duration::ZERO;
+        let mut ensure_builtin_type_contracts_dur = Duration::ZERO;
+        let mut specialize_program_dur = Duration::ZERO;
+        let mut stmt_count = 0usize;
+        let mut slow_stmts = Vec::<(Duration, String)>::new();
+        let mut stmt_kind_totals = HashMap::<String, (u64, Duration)>::new();
+
+        let result = (|| -> Result<Vec<TypedNode>, TypeError> {
+            let t = profile_enabled.then(Instant::now);
+            self.predeclare_error_types(&stmts);
+            if let Some(start) = t {
+                predeclare_error_types_dur = start.elapsed();
+            }
+
+            let t = profile_enabled.then(Instant::now);
+            self.predeclare_type_signatures(&stmts)?;
+            if let Some(start) = t {
+                predeclare_type_signatures_dur = start.elapsed();
+            }
+
+            let t = profile_enabled.then(Instant::now);
+            self.predeclare_traits(&stmts)?;
+            if let Some(start) = t {
+                predeclare_traits_dur = start.elapsed();
+            }
+
+            let t = profile_enabled.then(Instant::now);
+            self.predeclare_functions(&stmts)?;
+            if let Some(start) = t {
+                predeclare_functions_dur = start.elapsed();
+            }
+
+            let t = profile_enabled.then(Instant::now);
+            self.ensure_struct_impl_new_contract(&stmts)?;
+            if let Some(start) = t {
+                ensure_struct_impl_new_contract_dur = start.elapsed();
+            }
+
+            let mut typed = Vec::new();
+            let t = profile_enabled.then(Instant::now);
+            for stmt in stmts {
+                stmt_count += 1;
+                let stmt_label = profile_enabled.then(|| Self::profile_stmt_label(&stmt));
+                let stmt_start = profile_enabled.then(Instant::now);
+                if let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) =
+                    &stmt
+                {
+                    let nodes = self
+                        .check_trait_impl_items(span, trait_id, trait_args, target_ty, methods)?;
+                    typed.extend(nodes.into_iter().map(|node| self.resolve_typed_node(node)));
+                    if let (Some(start), Some(label)) = (stmt_start, stmt_label.as_ref()) {
+                        let elapsed = start.elapsed();
+                        slow_stmts.push((elapsed, label.clone()));
+                        let kind = Self::profile_stmt_kind(&stmt).to_string();
+                        let entry = stmt_kind_totals.entry(kind).or_insert((0, Duration::ZERO));
+                        entry.0 += 1;
+                        entry.1 += elapsed;
+                    }
+                    continue;
+                }
+                let node = self.check_node(&stmt)?;
+                typed.push(self.resolve_typed_node(node));
+                if let (Some(start), Some(label)) = (stmt_start, stmt_label.as_ref()) {
+                    let elapsed = start.elapsed();
+                    slow_stmts.push((elapsed, label.clone()));
+                    let kind = Self::profile_stmt_kind(&stmt).to_string();
+                    let entry = stmt_kind_totals.entry(kind).or_insert((0, Duration::ZERO));
+                    entry.0 += 1;
+                    entry.1 += elapsed;
+                }
+            }
+            if let Some(start) = t {
+                check_stmt_loop_dur = start.elapsed();
+            }
+
+            let t = profile_enabled.then(Instant::now);
+            self.ensure_builtin_type_contracts()?;
+            if let Some(start) = t {
+                ensure_builtin_type_contracts_dur = start.elapsed();
+            }
+
+            let t = profile_enabled.then(Instant::now);
+            let specialized = self.specialize_program(typed)?;
+            if let Some(start) = t {
+                specialize_program_dur = start.elapsed();
+            }
+            Ok(specialized)
+        })();
+
+        if let Some(start) = profile_start {
+            let total = start.elapsed();
+            self.profiler.print_summary(total);
+            if total >= Duration::from_millis(5) {
+                eprintln!(
+                    "scar-phase predeclare_error_types={:.3}ms predeclare_type_signatures={:.3}ms predeclare_traits={:.3}ms predeclare_functions={:.3}ms ensure_struct_impl_new_contract={:.3}ms check_stmt_loop={:.3}ms ensure_builtin_type_contracts={:.3}ms specialize_program={:.3}ms",
+                    predeclare_error_types_dur.as_secs_f64() * 1000.0,
+                    predeclare_type_signatures_dur.as_secs_f64() * 1000.0,
+                    predeclare_traits_dur.as_secs_f64() * 1000.0,
+                    predeclare_functions_dur.as_secs_f64() * 1000.0,
+                    ensure_struct_impl_new_contract_dur.as_secs_f64() * 1000.0,
+                    check_stmt_loop_dur.as_secs_f64() * 1000.0,
+                    ensure_builtin_type_contracts_dur.as_secs_f64() * 1000.0,
+                    specialize_program_dur.as_secs_f64() * 1000.0,
+                );
+                if !slow_stmts.is_empty() {
+                    slow_stmts.sort_by(|a, b| b.0.cmp(&a.0));
+                    let top = slow_stmts
+                        .iter()
+                        .take(8)
+                        .map(|(dur, label)| {
+                            format!("{}:{:.3}ms", label, dur.as_secs_f64() * 1000.0)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    eprintln!("scar-phase stmt_count={} slow_top {}", stmt_count, top);
+                }
+                if !stmt_kind_totals.is_empty() {
+                    let mut kinds = stmt_kind_totals
+                        .iter()
+                        .map(|(kind, (count, dur))| (kind.clone(), *count, *dur))
+                        .collect::<Vec<_>>();
+                    kinds.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+                    let summary = kinds
+                        .iter()
+                        .take(8)
+                        .map(|(kind, count, dur)| {
+                            format!("{}:{} ({:.3}ms)", kind, count, dur.as_secs_f64() * 1000.0)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    eprintln!("scar-phase kind_top {}", summary);
+                }
+            }
+        }
+
+        result
+    }
+
+    fn profile_stmt_label(stmt: &Resolved) -> String {
+        match stmt {
+            Resolved::Def(_, id, ..) => format!("Def {}", id.name),
+            Resolved::ExtractorDef(_, id, ..) => format!("ExtractorDef {}", id.name),
+            Resolved::TraitDef(_, id, ..) => format!("TraitDef {}", id.name),
+            Resolved::TraitImplDef(_, id, ..) => format!("TraitImplDef {}", id.name),
+            Resolved::BuiltinDecl(_, id, ..) => format!("BuiltinDecl {}", id.name),
+            Resolved::BuiltinExtractorDecl(_, id, ..) => {
+                format!("BuiltinExtractorDecl {}", id.name)
+            }
+            Resolved::BuiltinTypeDecl(_, id, ..) => format!("BuiltinTypeDecl {}", id.name),
+            Resolved::ResultCtorDecl(_, id, ..) => format!("ResultCtorDecl {}", id.name),
+            Resolved::StructDef(_, id, ..) => format!("StructDef {}", id.name),
+            Resolved::RecordDef(_, id, ..) => format!("RecordDef {}", id.name),
+            Resolved::DeferrorDef(_, id, ..) => format!("DeferrorDef {}", id.name),
+            Resolved::EnumDef(_, id, ..) => format!("EnumDef {}", id.name),
+            Resolved::Bind(..) => "Bind".to_string(),
+            Resolved::SafeBind(..) => "SafeBind".to_string(),
+            Resolved::Match(..) => "Match".to_string(),
+            Resolved::Block(..) => "Block".to_string(),
+            Resolved::App(..) => "App".to_string(),
+            Resolved::If(..) => "If".to_string(),
+            Resolved::Ensure(..) => "Ensure".to_string(),
+            Resolved::Assert(..) => "Assert".to_string(),
+            Resolved::Semi(..) => "Semi".to_string(),
+            _ => "Expr".to_string(),
+        }
+    }
+
+    fn profile_stmt_kind(stmt: &Resolved) -> &'static str {
+        match stmt {
+            Resolved::Def(..) => "Def",
+            Resolved::ExtractorDef(..) => "ExtractorDef",
+            Resolved::TraitDef(..) => "TraitDef",
+            Resolved::TraitImplDef(..) => "TraitImplDef",
+            Resolved::BuiltinDecl(..) => "BuiltinDecl",
+            Resolved::BuiltinExtractorDecl(..) => "BuiltinExtractorDecl",
+            Resolved::BuiltinTypeDecl(..) => "BuiltinTypeDecl",
+            Resolved::ResultCtorDecl(..) => "ResultCtorDecl",
+            Resolved::StructDef(..) => "StructDef",
+            Resolved::RecordDef(..) => "RecordDef",
+            Resolved::DeferrorDef(..) => "DeferrorDef",
+            Resolved::EnumDef(..) => "EnumDef",
+            Resolved::Bind(..) => "Bind",
+            Resolved::SafeBind(..) => "SafeBind",
+            Resolved::Match(..) => "Match",
+            Resolved::Block(..) => "Block",
+            Resolved::App(..) => "App",
+            Resolved::If(..) => "If",
+            Resolved::Ensure(..) => "Ensure",
+            Resolved::Assert(..) => "Assert",
+            Resolved::Semi(..) => "Semi",
+            _ => "Expr",
+        }
     }
 }
