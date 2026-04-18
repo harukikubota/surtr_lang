@@ -179,6 +179,24 @@ fn runtime_file_name(location: &sindr::runtime::Location, fallback_file: Option<
     }
 }
 
+fn fallback_span_from_source(source: &str) -> Span {
+    let len = source.chars().count();
+    if len == 0 {
+        Span { start: 0, end: 0 }
+    } else {
+        Span { start: 0, end: 1 }
+    }
+}
+
+fn invalid_result_spec(span: Span) -> DiagnosticSpec {
+    diagnostics::simple_error(
+        "InvalidResult",
+        "missing Err payload",
+        span,
+        Some("Result::Err must carry one payload value.".into()),
+    )
+}
+
 pub fn runtime_error_text(
     err: &eldr::RuntimeError,
     source: Option<&str>,
@@ -247,6 +265,49 @@ pub fn emit_runtime_error(
 ) {
     emit_text(
         &runtime_error_text(err, source, fallback_file, location),
+        mode,
+    );
+}
+
+pub fn invalid_result_missing_payload_text(
+    source: Option<&str>,
+    fallback_file: Option<&str>,
+    location: Option<sindr::runtime::Location>,
+) -> String {
+    match source {
+        Some(source) => {
+            let (file_name, span) = match location.as_ref() {
+                Some(location) => {
+                    let start = location.span_start as usize;
+                    let end = if location.span_end > location.span_start {
+                        location.span_end as usize
+                    } else {
+                        start.saturating_add(1)
+                    };
+                    (
+                        runtime_file_name(location, fallback_file),
+                        Span { start, end },
+                    )
+                }
+                None => (
+                    fallback_file.unwrap_or("<runtime>").to_string(),
+                    fallback_span_from_source(source),
+                ),
+            };
+            diagnostics::render_error(&file_name, source, &invalid_result_spec(span))
+        }
+        None => "Error: InvalidResult: missing Err payload".to_string(),
+    }
+}
+
+pub fn emit_invalid_result_missing_payload(
+    source: Option<&str>,
+    fallback_file: Option<&str>,
+    location: Option<sindr::runtime::Location>,
+    mode: ErrorDisplayMode,
+) {
+    emit_text(
+        &invalid_result_missing_payload_text(source, fallback_file, location),
         mode,
     );
 }
@@ -335,7 +396,9 @@ pub fn emit_runtime_value_error_with_registry(
 
 #[cfg(test)]
 mod tests {
-    use super::{runtime_error_text, runtime_value_error_text_from_vm};
+    use super::{
+        invalid_result_missing_payload_text, runtime_error_text, runtime_value_error_text_from_vm,
+    };
     use eldr::{error::RuntimeErrorContext, VM};
     use sindr::ir::Bytecode;
     use sindr::runtime::{Location, RichError, Value};
@@ -425,5 +488,23 @@ mod tests {
             Some(value) => std::env::set_var("SURTR_VERBOSE_RUNTIME_ERROR", value),
             None => std::env::remove_var("SURTR_VERBOSE_RUNTIME_ERROR"),
         }
+    }
+
+    #[test]
+    fn invalid_result_missing_payload_uses_diagnostic_shape_when_source_exists() {
+        let text = invalid_result_missing_payload_text(
+            Some("main()"),
+            Some("main.srt"),
+            Some(Location {
+                file: "main.srt".into(),
+                func: "<runtime>".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 6,
+            }),
+        );
+        assert!(text.contains("InvalidResult: missing Err payload"));
+        assert!(text.contains("main.srt"));
     }
 }

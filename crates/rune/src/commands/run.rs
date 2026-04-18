@@ -404,8 +404,10 @@ fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
                     xldr::ErrorDisplayMode::Full,
                 );
             } else {
-                xldr::error_display::emit_text(
-                    "Error: InvalidResult: missing Err payload",
+                xldr::error_display::emit_invalid_result_missing_payload(
+                    vm.source(),
+                    vm.source_file(),
+                    vm.runtime_error_location(),
                     xldr::ErrorDisplayMode::Full,
                 );
             }

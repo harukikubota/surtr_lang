@@ -624,9 +624,16 @@ impl ReplEngine {
                 if let Some(err_value) = fields.first() {
                     Some(self.report_error_value(err_value))
                 } else {
-                    let text = "Error: InvalidResult: missing Err payload";
-                    error_display::emit_text(text, self.error_display_mode);
-                    Some(error_display::lines_for_mode(text, self.error_display_mode))
+                    let text = error_display::invalid_result_missing_payload_text(
+                        self.vm.source(),
+                        self.vm.source_file(),
+                        self.vm.runtime_error_location(),
+                    );
+                    error_display::emit_text(&text, self.error_display_mode);
+                    Some(error_display::lines_for_mode(
+                        &text,
+                        self.error_display_mode,
+                    ))
                 }
             }
             _ => None,

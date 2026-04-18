@@ -66,6 +66,37 @@ pub(crate) fn script_plan_error_as_rune_error(
     )
 }
 
+fn load_error_span(source: &str) -> Span {
+    let len = source.chars().count();
+    if len == 0 {
+        return Span { start: 0, end: 0 };
+    }
+    let start = source
+        .chars()
+        .position(|ch| !ch.is_ascii_whitespace())
+        .unwrap_or(0);
+    Span {
+        start,
+        end: (start + 1).min(len),
+    }
+}
+
+fn module_source_collection_error_as_rune_error(
+    file_path: &str,
+    source: &str,
+    message: impl Into<String>,
+) -> RuneError {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register(file_path, source.to_string());
+    RuneError::diagnostic(
+        1,
+        &sources,
+        source_id,
+        "resolve",
+        diagnostics::simple_error("LoadError", message, load_error_span(source), None),
+    )
+}
+
 pub(crate) fn collect_default_script_compile_sources(
     env: ExecutionEnv,
     file_path: &str,
@@ -73,8 +104,9 @@ pub(crate) fn collect_default_script_compile_sources(
     include_directives: &[IncludeDirective],
 ) -> RuneResult<xldr::CompileSources> {
     let module_inputs = xldr::collect_additional_default_std_module_inputs().map_err(|e| {
-        RuneError::message(
-            1,
+        module_source_collection_error_as_rune_error(
+            file_path,
+            source,
             format!(
                 "{}: failed to collect module sources: {}",
                 env.command_name(),
@@ -91,8 +123,9 @@ pub(crate) fn collect_default_script_compile_sources(
 
     let module_sources = xldr::collect_module_sources_with_module_stages(&module_input_stages)
         .map_err(|e| {
-            RuneError::message(
-                1,
+            module_source_collection_error_as_rune_error(
+                file_path,
+                source,
                 format!(
                     "{}: failed to collect module sources: {}",
                     env.command_name(),
@@ -542,8 +575,10 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_entrypoint_annotations, is_direct_module_source, prepare_script_compile_plan,
+        collect_entrypoint_annotations, is_direct_module_source, load_error_span,
+        module_source_collection_error_as_rune_error, prepare_script_compile_plan,
     };
+    use crate::error::RuneError;
     use spire::ast::Ast;
 
     #[test]
@@ -639,5 +674,32 @@ print(to_string(1))
 
         assert!(matches!(ast.last(), Some(Ast::App(_, _, _))));
         assert!(!is_direct_module_source(&ast));
+    }
+
+    #[test]
+    fn load_error_span_uses_first_non_whitespace_character() {
+        let span = load_error_span("\n  print(\"ok\")\n");
+        assert_eq!(span.start, 3);
+        assert_eq!(span.end, 4);
+    }
+
+    #[test]
+    fn module_source_collection_error_returns_diagnostic_variant() {
+        let err = module_source_collection_error_as_rune_error(
+            "main.srt",
+            "print(\"ok\")\n",
+            "run: failed to collect module sources: broken",
+        );
+        match err {
+            RuneError::Diagnostic { diagnostic, .. } => {
+                assert_eq!(diagnostic.phase, "resolve");
+                assert_eq!(diagnostic.spec.kind, "LoadError");
+                assert!(diagnostic
+                    .spec
+                    .message
+                    .contains("failed to collect module sources"));
+            }
+            other => panic!("expected diagnostic error, got {:?}", other),
+        }
     }
 }
