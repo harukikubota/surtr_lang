@@ -116,19 +116,113 @@ fn runtime_error_verbose_enabled() -> bool {
     )
 }
 
+fn runtime_error_help_lines(err: &eldr::RuntimeError) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(pc) = err.context.pc {
+        lines.push(format!("pc: {}", pc));
+    }
+    if let Some(opcode) = err.context.opcode.as_deref() {
+        lines.push(format!("opcode: {}", opcode));
+    }
+    if let Some(function) = err.context.function.as_deref() {
+        lines.push(format!("function: {}", function));
+    }
+    if let Some(location) = err.context.call_site.as_ref() {
+        lines.push(format!(
+            "call_site: {}:{}:{}",
+            location.file, location.line, location.column
+        ));
+    }
+    for detail in &err.context.details {
+        lines.push(format!("detail: {}", detail));
+    }
+    lines
+}
+
+fn runtime_error_help(err: &eldr::RuntimeError) -> Option<String> {
+    let lines = runtime_error_help_lines(err);
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn runtime_error_spec(
+    err: &eldr::RuntimeError,
+    location: &sindr::runtime::Location,
+    include_help: bool,
+) -> DiagnosticSpec {
+    let start = location.span_start as usize;
+    let mut end = location.span_end as usize;
+    if end <= start {
+        end = start.saturating_add(1);
+    }
+
+    diagnostics::simple_error(
+        "RuntimeError",
+        err.message.clone(),
+        Span { start, end },
+        if include_help {
+            runtime_error_help(err)
+        } else {
+            None
+        },
+    )
+}
+
+fn runtime_file_name(location: &sindr::runtime::Location, fallback_file: Option<&str>) -> String {
+    if location.file.is_empty() {
+        fallback_file.unwrap_or("<runtime>").to_string()
+    } else {
+        location.file.clone()
+    }
+}
+
 pub fn runtime_error_text(
     err: &eldr::RuntimeError,
     source: Option<&str>,
     fallback_file: Option<&str>,
     location: Option<sindr::runtime::Location>,
 ) -> String {
-    eldr::render_runtime_error_report(
-        err,
-        source,
-        fallback_file,
-        location,
-        runtime_error_verbose_enabled(),
-    )
+    let verbose = runtime_error_verbose_enabled();
+    match (source, location.as_ref()) {
+        (Some(source), Some(location)) => {
+            let file_name = runtime_file_name(location, fallback_file);
+            let spec = runtime_error_spec(err, location, verbose);
+            diagnostics::render_error(&file_name, source, &spec)
+        }
+        _ => {
+            let mut rendered = eldr::format_runtime_error_with_location(err, location.as_ref());
+            if verbose {
+                if let Some(help) = runtime_error_help(err) {
+                    if !rendered.ends_with('\n') {
+                        rendered.push('\n');
+                    }
+                    for line in help.lines() {
+                        rendered.push_str("help: ");
+                        rendered.push_str(line);
+                        rendered.push('\n');
+                    }
+                }
+            }
+            rendered
+        }
+    }
+}
+
+fn runtime_value_cause_help(value: &sindr::runtime::RichError) -> Option<String> {
+    let mut lines = Vec::new();
+    let mut next = value.cause.as_deref();
+    while let Some(cause) = next {
+        lines.push(format!("Caused by: {}: {}", cause.kind, cause.message));
+        next = cause.cause.as_deref();
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
 }
 
 pub fn runtime_error_lines(
@@ -168,7 +262,7 @@ fn error_spec_from_value_error(value: &sindr::runtime::RichError) -> DiagnosticS
         value.kind.clone(),
         value.message.clone(),
         Span { start, end },
-        None,
+        runtime_value_cause_help(value),
     )
 }
 
@@ -237,4 +331,99 @@ pub fn emit_runtime_value_error_with_registry(
         &runtime_value_error_text_with_registry(vm, value, sources, source_id),
         mode,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{runtime_error_text, runtime_value_error_text_from_vm};
+    use eldr::{error::RuntimeErrorContext, VM};
+    use sindr::ir::Bytecode;
+    use sindr::runtime::{Location, RichError, Value};
+
+    #[test]
+    fn runtime_error_text_uses_runtimeerror_headline_with_message() {
+        let err = eldr::RuntimeError::new("division by zero");
+        let text = runtime_error_text(
+            &err,
+            Some("safe_mod(10, 0)"),
+            Some("main.srt"),
+            Some(Location {
+                file: "main.srt".into(),
+                func: "<runtime>".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 14,
+            }),
+        );
+        assert!(text.contains("RuntimeError: division by zero"));
+        assert!(text.contains("main.srt"));
+    }
+
+    #[test]
+    fn runtime_value_error_text_includes_cause_chain_as_help() {
+        let vm = VM::new(Bytecode::default()).with_source("main()".into(), "main.srt".into());
+        let value = Value::Error(Box::new(RichError {
+            kind: "Higher".into(),
+            message: "higher".into(),
+            location: Location {
+                file: "main.srt".into(),
+                func: "<runtime>".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 6,
+            },
+            cause: Some(Box::new(RichError {
+                kind: "Lower".into(),
+                message: "lower".into(),
+                location: Location {
+                    file: "main.srt".into(),
+                    func: "<runtime>".into(),
+                    line: 1,
+                    column: 1,
+                    span_start: 0,
+                    span_end: 6,
+                },
+                cause: None,
+            })),
+        }));
+
+        let text = runtime_value_error_text_from_vm(&vm, &value);
+        assert!(text.contains("Higher: higher"));
+        assert!(text.contains("Caused by: Lower: lower"));
+    }
+
+    #[test]
+    fn runtime_error_text_fallback_keeps_context_help_when_verbose_is_enabled() {
+        static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let env_lock = ENV_LOCK.get_or_init(|| std::sync::Mutex::new(()));
+        let _guard = env_lock.lock().expect("lock should succeed");
+        let previous = std::env::var("SURTR_VERBOSE_RUNTIME_ERROR").ok();
+        std::env::set_var("SURTR_VERBOSE_RUNTIME_ERROR", "1");
+
+        let err = eldr::RuntimeError::new("boom").with_context(RuntimeErrorContext {
+            pc: Some(9),
+            opcode: Some("AddInt".into()),
+            function: Some("fun#1".into()),
+            call_site: Some(Location {
+                file: "main.srt".into(),
+                func: "<runtime>".into(),
+                line: 2,
+                column: 3,
+                span_start: 3,
+                span_end: 5,
+            }),
+            details: vec!["stack_depth=1".into()],
+        });
+        let text = runtime_error_text(&err, None, None, None);
+        assert!(text.contains("RuntimeError: boom"));
+        assert!(text.contains("help: pc: 9"));
+        assert!(text.contains("help: opcode: AddInt"));
+
+        match previous {
+            Some(value) => std::env::set_var("SURTR_VERBOSE_RUNTIME_ERROR", value),
+            None => std::env::remove_var("SURTR_VERBOSE_RUNTIME_ERROR"),
+        }
+    }
 }

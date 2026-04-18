@@ -87,6 +87,16 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
     ),
     ("lens.srt", include_str!("../../../lib/lens.srt"), "Lens"),
     ("float.srt", include_str!("../../../lib/float.srt"), "Float"),
+    (
+        "Config.srt",
+        include_str!("../../../lib/Config.srt"),
+        "Config",
+    ),
+    (
+        "Project.srt",
+        include_str!("../../../lib/Project.srt"),
+        "Project",
+    ),
 ];
 const REPL_MODULE_NAME: &str = "REPL";
 const SCRIPT_PSEUDO_MODULE_PREFIX: &str = "__Script";
@@ -740,6 +750,8 @@ mod tests {
                 "Result",
                 "Lens",
                 "Float",
+                "Config",
+                "Project",
             ]
         );
     }
@@ -851,6 +863,8 @@ mod tests {
                 "Result",
                 "Lens",
                 "Float",
+                "Config",
+                "Project",
             ]
         );
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");

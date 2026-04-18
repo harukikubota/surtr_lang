@@ -347,6 +347,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 1,
         sig_str: "(RegexMatch) -> Int",
     },
+    BuiltinMeta {
+        name: "project_args",
+        arity: 0,
+        sig_str: "() -> List<String>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

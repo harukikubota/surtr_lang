@@ -26,6 +26,7 @@ struct VmDumpOptions {
 pub(crate) struct RunOptions {
     pub(crate) file_path: String,
     pub(crate) entry: Option<String>,
+    pub(crate) cli_args: Vec<String>,
     vm_dump: Option<VmDumpOptions>,
 }
 
@@ -41,11 +42,16 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
 
     let file_path = args[0].clone();
     let mut entry = None;
+    let mut cli_args = Vec::new();
     let mut vm_dump_path = None;
     let mut vm_dump_mode = VmDumpMode::Error;
     let mut i = 1usize;
     while i < args.len() {
         match args[i].as_str() {
+            "--" => {
+                cli_args.extend_from_slice(&args[i + 1..]);
+                break;
+            }
             "--entry" => {
                 i += 1;
                 if i >= args.len() {
@@ -108,6 +114,7 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
     Ok(RunOptions {
         file_path,
         entry,
+        cli_args,
         vm_dump: vm_dump_path.map(|path| VmDumpOptions {
             path,
             mode: vm_dump_mode,
@@ -123,11 +130,17 @@ fn run_command(options: RunOptions, env: ExecutionEnv) -> RuneResult<()> {
                 "run: --entry is only supported for .srt input",
             ));
         }
-        run_eldr_file(&options.file_path, env, options.vm_dump.as_ref())
+        run_eldr_file(
+            &options.file_path,
+            env,
+            &options.cli_args,
+            options.vm_dump.as_ref(),
+        )
     } else {
         run_source_file(
             &options.file_path,
             options.entry.as_deref(),
+            &options.cli_args,
             env,
             options.vm_dump.as_ref(),
         )
@@ -137,6 +150,7 @@ fn run_command(options: RunOptions, env: ExecutionEnv) -> RuneResult<()> {
 fn run_source_file(
     file_path: &str,
     cli_entry: Option<&str>,
+    cli_args: &[String],
     env: ExecutionEnv,
     vm_dump: Option<&VmDumpOptions>,
 ) -> RuneResult<()> {
@@ -156,6 +170,7 @@ fn run_source_file(
     execute_bytecode(
         env,
         bytecode,
+        cli_args,
         compile_sources
             .sources
             .owned_context(compile_sources.user_source_id),
@@ -166,6 +181,7 @@ fn run_source_file(
 fn run_eldr_file(
     file_path: &str,
     env: ExecutionEnv,
+    cli_args: &[String],
     vm_dump: Option<&VmDumpOptions>,
 ) -> RuneResult<()> {
     let bytes = fs::read(file_path)
@@ -183,19 +199,46 @@ fn run_eldr_file(
         )
     })?;
 
-    execute_bytecode(env, bytecode, None, vm_dump)
+    let source_context = embedded_source_context_from_bytecode(&bytecode);
+    execute_bytecode(env, bytecode, cli_args, source_context, vm_dump)
+}
+
+fn embedded_source_context_from_bytecode(
+    bytecode: &forge::bytecode::Bytecode,
+) -> Option<(String, String)> {
+    bytecode
+        .sources
+        .iter()
+        .filter_map(|entry| {
+            entry.text.as_ref().map(|text| {
+                let file_name = entry
+                    .normalized_path
+                    .clone()
+                    .unwrap_or_else(|| entry.path.clone());
+                let file_name = if file_name.is_empty() {
+                    "<embedded>".to_string()
+                } else {
+                    file_name
+                };
+                (entry.source_id, text.clone(), file_name)
+            })
+        })
+        .max_by_key(|(source_id, _, _)| *source_id)
+        .map(|(_, source, file_name)| (source, file_name))
 }
 
 fn execute_bytecode(
     env: ExecutionEnv,
     bytecode: forge::bytecode::Bytecode,
+    cli_args: &[String],
     source_context: Option<(String, String)>,
     vm_dump: Option<&VmDumpOptions>,
 ) -> RuneResult<()> {
     let mut vm = match source_context {
         Some((source, file_path)) => eldr::VM::new(bytecode).with_source(source, file_path),
         None => eldr::VM::new(bytecode),
-    };
+    }
+    .with_cli_args(cli_args.to_vec());
     if vm_dump.is_some() {
         vm.enable_observation(eldr::vm::VmObservationOptions::default());
     }
@@ -375,6 +418,7 @@ fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{parse_run_options, VmDumpMode};
+    use forge::bytecode::{Bytecode, SourceFileEntry};
 
     #[test]
     fn run_options_parses_entry() {
@@ -386,6 +430,7 @@ mod tests {
         .expect("run options must parse");
         assert_eq!(opts.file_path, "main.srt");
         assert_eq!(opts.entry.as_deref(), Some("start"));
+        assert!(opts.cli_args.is_empty());
         assert!(opts.vm_dump.is_none());
     }
 
@@ -402,6 +447,7 @@ mod tests {
         let vm_dump = opts.vm_dump.expect("vm dump options must exist");
         assert_eq!(vm_dump.path, "artifacts/vm.json");
         assert_eq!(vm_dump.mode, VmDumpMode::Always);
+        assert!(opts.cli_args.is_empty());
     }
 
     #[test]
@@ -413,5 +459,79 @@ mod tests {
         ])
         .expect_err("vm dump on without vm dump must fail");
         assert_eq!(err.summary(), "run: --vm-dump-on requires --vm-dump");
+    }
+
+    #[test]
+    fn embedded_source_context_prefers_latest_source_id_with_text() {
+        let bytecode = Bytecode {
+            sources: vec![
+                SourceFileEntry {
+                    source_id: 10,
+                    path: "mod_a.srt".to_string(),
+                    normalized_path: None,
+                    content_hash: None,
+                    text: Some("a".to_string()),
+                },
+                SourceFileEntry {
+                    source_id: 20,
+                    path: "mod_b.srt".to_string(),
+                    normalized_path: None,
+                    content_hash: None,
+                    text: None,
+                },
+                SourceFileEntry {
+                    source_id: 30,
+                    path: "main.srt".to_string(),
+                    normalized_path: Some("/tmp/main.srt".to_string()),
+                    content_hash: None,
+                    text: Some("main()".to_string()),
+                },
+            ],
+            ..Bytecode::default()
+        };
+
+        let context = super::embedded_source_context_from_bytecode(&bytecode)
+            .expect("embedded context should be resolved");
+        assert!(
+            context.0.contains("main"),
+            "expected embedded source text to include main call"
+        );
+        assert!(
+            context.1.contains("main.srt"),
+            "expected file hint to include main.srt"
+        );
+    }
+
+    #[test]
+    fn embedded_source_context_returns_none_when_no_embedded_text_exists() {
+        let bytecode = Bytecode {
+            sources: vec![SourceFileEntry {
+                source_id: 1,
+                path: "main.srt".to_string(),
+                normalized_path: None,
+                content_hash: None,
+                text: None,
+            }],
+            ..Bytecode::default()
+        };
+        assert!(super::embedded_source_context_from_bytecode(&bytecode).is_none());
+    }
+
+    #[test]
+    fn run_options_collects_cli_args_after_separator() {
+        let opts = parse_run_options(&[
+            "main.srt".to_string(),
+            "--entry".to_string(),
+            "start".to_string(),
+            "--".to_string(),
+            "--dry-run".to_string(),
+            "input.txt".to_string(),
+        ])
+        .expect("run options must parse cli args");
+        assert_eq!(opts.entry.as_deref(), Some("start"));
+        assert_eq!(
+            opts.cli_args,
+            vec!["--dry-run".to_string(), "input.txt".to_string()]
+        );
     }
 }

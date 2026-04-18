@@ -1,0 +1,27 @@
+defstruct Project {
+  entries: List<Config>,
+}
+
+impl Project {
+  def new(entries: List<Config>) -> Self {
+    Project { entries: entries }
+  }
+
+  def args() -> List<String> {
+    Kernel::project_args()
+  }
+
+  def empty() -> Self {
+    Project::new([])
+  }
+
+  def config(builder: (Project -> Project)) -> Self {
+    builder(Project::empty())
+  }
+
+  def entrypoint(project: Self, name: String, builder: (Config -> Config)) -> Self {
+    base = Config::new(name)
+    configured = builder(base)
+    Project::new(List::append(project.entries, [configured]))
+  }
+}

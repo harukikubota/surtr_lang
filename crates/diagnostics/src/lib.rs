@@ -147,7 +147,7 @@ pub fn type_error_spec_by_id(
 }
 
 pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
-    let report = build_report(file_name, &spec);
+    let report = build_report(file_name, source, &spec);
 
     if let Err(err) = report.eprint((file_name, Source::from(source))) {
         let mut stderr = io::stderr().lock();
@@ -156,7 +156,7 @@ pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
 }
 
 pub fn render_error(file_name: &str, source: &str, spec: &DiagnosticSpec) -> String {
-    let report = build_report(file_name, spec);
+    let report = build_report(file_name, source, spec);
     let mut buf = Vec::new();
 
     if let Err(err) = report.write((file_name, Source::from(source)), &mut buf) {
@@ -188,22 +188,22 @@ pub fn render_error_by_id(
 
 fn build_report<'a>(
     file_name: &'a str,
+    source: &str,
     spec: &'a DiagnosticSpec,
 ) -> Report<'a, (&'a str, std::ops::Range<usize>)> {
-    let mut builder = Report::build(
-        ReportKind::Error,
-        (file_name, spec.primary_span.start..spec.primary_span.end),
-    )
-    .with_message(format!("{}: {}", spec.kind, spec.message))
-    .with_label(
-        Label::new((file_name, spec.primary_span.start..spec.primary_span.end))
-            .with_message(&spec.message)
-            .with_color(Color::Red),
-    );
+    let primary = normalized_span(source, &spec.primary_span);
+    let mut builder = Report::build(ReportKind::Error, (file_name, primary.start..primary.end))
+        .with_message(format!("{}: {}", spec.kind, spec.message))
+        .with_label(
+            Label::new((file_name, primary.start..primary.end))
+                .with_message(&spec.message)
+                .with_color(Color::Red),
+        );
 
     for label in &spec.labels {
+        let span = normalized_span(source, &label.span);
         builder = builder.with_label(
-            Label::new((file_name, label.span.start..label.span.end))
+            Label::new((file_name, span.start..span.end))
                 .with_message(&label.message)
                 .with_color(label.color),
         );
@@ -214,6 +214,25 @@ fn build_report<'a>(
     }
 
     builder.finish()
+}
+
+fn normalized_span(source: &str, span: &Span) -> Span {
+    let source_len = source.chars().count();
+    if source_len == 0 {
+        return Span { start: 0, end: 0 };
+    }
+
+    let mut start = span.start.min(source_len.saturating_sub(1));
+    let mut end = span.end.min(source_len);
+    if end <= start {
+        end = (start + 1).min(source_len);
+    }
+    if end <= start {
+        start = 0;
+        end = 1.min(source_len);
+    }
+
+    Span { start, end }
 }
 
 fn write_fallback_diagnostic(
@@ -853,5 +872,40 @@ mod tests {
             .expect("registered source should exist");
         assert_eq!(context.0, "print(\"ok\")");
         assert_eq!(context.1, "script.srt");
+    }
+
+    #[test]
+    fn render_error_normalizes_out_of_range_span_to_keep_source_snippet() {
+        let spec = simple_error(
+            "TypeError",
+            "expected Int, got String",
+            Span {
+                start: 9999,
+                end: 10000,
+            },
+            None,
+        );
+        let rendered = render_error("main.srt", "bad: Int = \"x\"", &spec);
+        assert!(
+            rendered.contains("TypeError: expected Int, got String"),
+            "expected headline in rendered diagnostic"
+        );
+        assert!(
+            rendered.contains("main.srt"),
+            "expected file label in rendered diagnostic"
+        );
+    }
+
+    #[test]
+    fn render_error_normalizes_empty_span_to_single_point_label() {
+        let spec = simple_error(
+            "ParseError",
+            "unexpected token",
+            Span { start: 4, end: 4 },
+            None,
+        );
+        let rendered = render_error("main.srt", "abcde", &spec);
+        assert!(rendered.contains("ParseError: unexpected token"));
+        assert!(rendered.contains("main.srt"));
     }
 }

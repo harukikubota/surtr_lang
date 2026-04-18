@@ -195,6 +195,8 @@ pub struct VM {
     source: Option<String>,
     /// Source file name
     source_file: Option<String>,
+    /// Command-line arguments passed by the Rune `run` command.
+    cli_args: Vec<String>,
     /// Captured stdout (for testing). `None` = print to real stdout.
     pub output: Option<Vec<String>>,
     /// Captured stderr (for testing). `None` = print to real stderr.
@@ -231,6 +233,7 @@ impl VM {
             pc: 0,
             source: None,
             source_file: None,
+            cli_args: Vec::new(),
             output: None,
             error_output: None,
             io_policy: VmIoPolicy::default(),
@@ -263,6 +266,19 @@ impl VM {
     pub fn set_source(&mut self, source: String, file: String) {
         self.source = Some(source);
         self.source_file = Some(file);
+    }
+
+    pub fn with_cli_args(mut self, cli_args: Vec<String>) -> Self {
+        self.cli_args = cli_args;
+        self
+    }
+
+    pub fn set_cli_args(&mut self, cli_args: Vec<String>) {
+        self.cli_args = cli_args;
+    }
+
+    pub fn cli_args(&self) -> &[String] {
+        &self.cli_args
     }
 
     /// Access source text if attached.

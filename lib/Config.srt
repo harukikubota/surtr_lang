@@ -1,0 +1,23 @@
+defstruct Config {
+  name: String,
+  entrypoint: String,
+  paths: List<String>,
+}
+
+impl Config {
+  def new(name: String) -> Self {
+    Config { name: name, entrypoint: "Main::main", paths: [] }
+  }
+
+  def entry_fun(self: Self, symbol: String) -> Self {
+    Config { name: self.name, entrypoint: symbol, paths: self.paths }
+  }
+
+  def add_path(self: Self, path: String) -> Self {
+    Config {
+      name: self.name,
+      entrypoint: self.entrypoint,
+      paths: List::append(self.paths, [path]),
+    }
+  }
+}

@@ -213,6 +213,13 @@ defmod Kernel {
   surface instead of a primitive-type module.
   """
   @@builtin def set_exit_code(code: Int) -> Unit
+
+  @@doc """
+  Return CLI arguments passed after `--` in `surtr run`.
+  This allows zero-argument `main()` entrypoints to read runtime arguments
+  through module-level helpers.
+  """
+  @@builtin def project_args() -> List<String>
 }
 
 impl Show for Unit {

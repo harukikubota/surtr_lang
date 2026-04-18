@@ -211,6 +211,9 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_regex_match_end,
     },
+    BuiltinImpl {
+        func: builtin_project_args,
+    },
 ];
 
 const _: () = {
@@ -1053,6 +1056,16 @@ fn builtin_regex_match_end(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
     Ok(Value::Int(int(matched.end as u64)))
 }
 
+fn builtin_project_args(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let args = vm
+        .cli_args()
+        .iter()
+        .cloned()
+        .map(Value::Str)
+        .collect::<Vec<_>>();
+    Ok(Value::List(ListHandle::from_items(args)))
+}
+
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     if let Value::Callable(callable) = value {
         if let Some(display) = inspect_callable(vm, callable) {
@@ -1562,14 +1575,6 @@ mod tests {
     }
 
     /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
-    fn parse_decl_name(def_rest: &str) -> &str {
-        def_rest
-            .split_once('(')
-            .map(|(name, _)| name.trim())
-            .expect("def declaration must include params")
-    }
-
-    /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
     fn parse_def_signature(def_rest: &str) -> (String, u8, String) {
         let (name, after_name) = def_rest
             .split_once('(')
@@ -1678,9 +1683,15 @@ mod tests {
             let line = all_lines[i];
             if let Some(rest) = line.strip_prefix("@@builtin def ") {
                 // Inline form: @@builtin def name(params) -> ret
-                if builtin_meta_by_name(parse_decl_name(rest)).is_some() {
-                    let entry = parse_def_signature(rest);
-                    entries.push(entry);
+                let entry = parse_def_signature(rest);
+                if let Some(meta) = builtin_meta_by_name(&entry.0) {
+                    // Keep only declarations that map to a concrete runtime
+                    // builtin contract. Some same-name surface declarations
+                    // are lowered as special forms and intentionally have
+                    // different signatures.
+                    if meta.arity == entry.1 && meta.sig_str == entry.2 {
+                        entries.push(entry);
+                    }
                 }
             } else if line == "@@builtin" {
                 // Standalone form: find the next `def` line.
@@ -1688,9 +1699,11 @@ mod tests {
                 while j < all_lines.len() {
                     let next = all_lines[j];
                     if let Some(rest) = next.strip_prefix("def ") {
-                        if builtin_meta_by_name(parse_decl_name(rest)).is_some() {
-                            let entry = parse_def_signature(rest);
-                            entries.push(entry);
+                        let entry = parse_def_signature(rest);
+                        if let Some(meta) = builtin_meta_by_name(&entry.0) {
+                            if meta.arity == entry.1 && meta.sig_str == entry.2 {
+                                entries.push(entry);
+                            }
                         }
                         break;
                     }
@@ -2413,6 +2426,40 @@ mod tests {
         let huge = Value::Int(int(999999999999999999_i128));
         let err = call_builtin(&mut vm, 6, vec![huge]).expect_err("must reject large exit codes");
         assert!(err.message.contains("set_exit_code out of range for i32"));
+    }
+
+    #[test]
+    fn project_args_returns_vm_cli_arguments() {
+        let mut vm = test_vm();
+        vm.set_cli_args(vec![
+            "--mode".to_string(),
+            "score".to_string(),
+            "123m456p789s11z".to_string(),
+        ]);
+
+        let value = call_builtin(&mut vm, builtin_id("project_args"), vec![])
+            .expect("project_args should succeed");
+
+        match value {
+            Value::List(list) => {
+                let actual = list
+                    .iter()
+                    .map(|value| match value {
+                        Value::Str(text) => text,
+                        other => panic!("expected String value, got {:?}", other),
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    actual,
+                    vec![
+                        "--mode".to_string(),
+                        "score".to_string(),
+                        "123m456p789s11z".to_string()
+                    ]
+                );
+            }
+            other => panic!("expected List<String>, got {:?}", other),
+        }
     }
 
     #[test]
