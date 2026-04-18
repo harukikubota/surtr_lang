@@ -1,16 +1,19 @@
 use super::harness::{assert_compile_error, assert_output};
 
 #[test]
+#[ignore = "bucketed"]
 fn bindings_basic_print() {
     assert_output("num = 10\nnum2 = 5\nprint(to_string(num))", &["10"]);
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn bindings_shadowing_last_wins() {
     assert_output("x = 10\nx = 20\nprint(to_string(x))", &["20"]);
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn annotations_accept_matching_types() {
     assert_output(
         "num: Int = 10\nname: String = \"hello\"\nprint(to_string(num))\nprint(name)",
@@ -19,11 +22,13 @@ fn annotations_accept_matching_types() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn annotations_reject_type_mismatch() {
     assert_compile_error("bad: Int = \"not an int\"", "expected Int, got String");
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn primitives_render_to_string() {
     assert_output(
         r#"int_val = 42
@@ -43,6 +48,7 @@ print(to_string(unit_val))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn inspect_builtin_quotes_strings_and_preserves_error_rendering() {
     assert_output(
         r#"text = "hello"
@@ -65,6 +71,7 @@ print(inspect(Err(MyError)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn regex_generated_literal_and_builtin_wrappers_work_end_to_end() {
     assert_output(
         r#"rx =? re"(?<name>[A-Za-z]+)-(?<id>[0-9]+)"
@@ -87,11 +94,13 @@ print(Regex::replace_all(rx, "alice-42 bob-7", "X"))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn int_negative_literal() {
     assert_output("x = -5\nprint(to_string(x))", &["-5"]);
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn arithmetic_int_ops() {
     assert_output(
         "print(to_string(10 + 5))\nprint(to_string(10 - 3))\nprint(to_string(4 * 3))\nprint(inspect(safe_div(10, 3)))\nprint(inspect(safe_mod(10, 3)))",
@@ -100,6 +109,7 @@ fn arithmetic_int_ops() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn arithmetic_float_ops() {
     assert_output(
         "print(to_string(1.5 + 2.5))\nprint(inspect(safe_div(10.0, 3.0)))",
@@ -108,6 +118,7 @@ fn arithmetic_float_ops() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn safe_xxx_zero_returns_zero_division_error_display() {
     assert_output(
         "print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))",
@@ -119,6 +130,7 @@ fn safe_xxx_zero_returns_zero_division_error_display() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn comparison_int_ops() {
     assert_output(
         "print(to_string(10 > 5))\nprint(to_string(10 < 5))\nprint(to_string(10 == 10))",
@@ -127,16 +139,19 @@ fn comparison_int_ops() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn equality_string() {
     assert_output(r#"print(to_string("abc" == "abc"))"#, &["True"]);
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn inequality_boolean() {
     assert_output("print(to_string(True != False))", &["True"]);
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn kernel_and_or_short_circuit() {
     assert_output(
         r#"def log_true(label: String) -> Boolean {
@@ -158,6 +173,7 @@ print(to_string(or(True, log_false("or-skip"))))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn kernel_eq_neq_helpers_match_operator_behavior() {
     assert_output(
         r#"defenum Flag {
@@ -175,6 +191,7 @@ print(to_string(neq(Flag::On, Flag::Off)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn kernel_ordering_and_concat_helpers_match_operator_behavior() {
     assert_output(
         r#"print(to_string(compare(1, 2)))
@@ -199,26 +216,31 @@ print(to_string(lt(1.5, 2.0)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn concat_strings() {
     assert_output(r#"print("hello" ++ " world")"#, &["hello world"]);
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn arithmetic_precedence() {
     assert_output("print(to_string(2 + 3 * 4))", &["20"]);
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn equality_reject_mixed_types() {
     assert_compile_error("x = 1 == \"one\"", "Cannot compare");
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn list_literal_int() {
     assert_output("nums = [1, 2, 3]\nprint(to_string(nums))", &["[1, 2, 3]"]);
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn list_literal_string() {
     assert_output(
         r#"strs = ["a", "b", "c"]
@@ -228,11 +250,13 @@ print(to_string(strs))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn list_empty_with_annotation() {
     assert_output("empty: List<Int> = []\nprint(to_string(empty))", &["[]"]);
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn list_cons_expr() {
     assert_output(
         "tail: List<Int> = [2, 3]\nnums = [1, ..tail]\nprint(to_string(nums))",
@@ -241,16 +265,19 @@ fn list_cons_expr() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn list_reject_mixed_types() {
     assert_compile_error(r#"mixed = [1, "two"]"#, "expected Int, got String");
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn list_cons_rejects_non_list_tail() {
     assert_compile_error("nums = [1, ..2]", "list tail must be List<...>");
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn closure_literal_invocation() {
     assert_output(
         r#"add1: (Int -> Int) = {|x| x + 1}
@@ -260,6 +287,7 @@ print(to_string(add1(2)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn closure_argument_type_infers_from_add_constraint() {
     assert_output(
         r#"x = 10
@@ -270,6 +298,7 @@ print(to_string(fun(3)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn closure_builtin_capture() {
     assert_output(
         r#"printer = &print
@@ -279,6 +308,7 @@ printer("hello")"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn func_literal_infix_invocation_works() {
     assert_output(
         r#"def eq(left: Int, right: Int) -> Boolean {
@@ -292,6 +322,7 @@ print(to_string(7 `eq` 7))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn expr_class_operators_are_same_precedence() {
     assert_output(
         r#"print(to_string(2 + 3 * 4))
@@ -301,6 +332,7 @@ print(to_string(2 `*` 3 + 4))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_partial_application_composition() {
     assert_output(
         r#"def inc(x: Int) -> Int { x + 1 }
@@ -316,6 +348,7 @@ print(to_string(apply_inc(&times2, 10)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_partial_application_type_error() {
     assert_compile_error(
         r#"def inc(x: Int) -> Int { x + 1 }
@@ -329,6 +362,7 @@ bad = &compose(inc(1))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_forward_reference_succeeds() {
     assert_output(
         r#"print(to_string(double(21)))
@@ -339,6 +373,7 @@ def double(x: Int) -> Int { x * 2 }"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn struct_definition_and_field_access() {
     assert_output(
         r#"defstruct User {
@@ -361,6 +396,7 @@ print(to_string(user.age))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn record_constructor_positional() {
     assert_output(
         r#"defrecord Point(x: Float, y: Float)
@@ -372,6 +408,7 @@ print(to_string(point.x))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn record_constructor_named_args() {
     assert_output(
         r#"defrecord Point(x: Float, y: Float)
@@ -382,6 +419,7 @@ print(to_string(point2.x))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn struct_record_forward_references_and_type_annotation_succeed() {
     assert_output(
         r#"user: User = make_user("alice")
@@ -411,6 +449,7 @@ defrecord Point(x: Float, y: Float)"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn struct_property_update_via_associated_functions() {
     assert_output(
         r#"defstruct User {
@@ -445,6 +484,7 @@ print(to_string(renamed.age))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn struct_constructor_sugar_mixed_named_positional_error() {
     assert_compile_error(
         r#"defstruct User {
@@ -464,6 +504,7 @@ user = User("alice", age: 30)"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn impl_method_call_mixed_named_positional_error() {
     assert_compile_error(
         r#"defstruct User {
@@ -488,6 +529,7 @@ updated = User::with_name_and_age(user, "bob", age: 31)"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn enum_state_transition_via_associated_functions() {
     assert_output(
         r#"defenum Light {
@@ -536,6 +578,7 @@ print(to_string(Light::is_stop(rebound)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn enum_impl_method_call_mixed_named_positional_error() {
     assert_compile_error(
         r#"defenum Light {
@@ -557,6 +600,7 @@ bad = Light::with_steps(light, steps: 1)"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn enum_self_rebinding_requires_self_type() {
     assert_compile_error(
         r#"defenum Light {
@@ -575,6 +619,7 @@ impl Light {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_named_args_reordered() {
     assert_output(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -584,6 +629,7 @@ print(to_string(add(y: 2, x: 1)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_named_args_mixed_with_positional_first() {
     assert_compile_error(
         r#"def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
@@ -593,6 +639,7 @@ print(to_string(add3(1, z: 3, y: 2)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_named_args_unknown_name_error() {
     assert_compile_error(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -602,6 +649,7 @@ print(to_string(add(z: 1, y: 2)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_named_args_duplicate_error() {
     assert_compile_error(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -611,6 +659,7 @@ print(to_string(add(1, x: 2)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_named_args_positional_after_named_error() {
     assert_compile_error(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -620,6 +669,7 @@ print(to_string(add(y: 2, 1)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_duplicate_name_is_compile_error() {
     assert_compile_error(
         r#"def f() -> Int { 1 }
@@ -629,6 +679,7 @@ def f() -> Int { 2 }"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn top_level_name_collision_between_struct_and_def_is_compile_error() {
     assert_compile_error(
         r#"defstruct User {
@@ -640,6 +691,7 @@ def User() -> Int { 1 }"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn if_expression_with_else() {
     assert_output(
         r#"flag = True
@@ -650,6 +702,7 @@ print(greeting)"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn if_expression_without_else_returns_unit() {
     assert_output(
         r#"flag = True
@@ -659,6 +712,7 @@ if_then(flag, print("flag is true"))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_boolean_exhaustive() {
     assert_output(
         r#"flag = True
@@ -671,6 +725,7 @@ print(to_string(match flag {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_result_exhaustive() {
     assert_output(
         r#"result: Result<Int> = Ok(42)
@@ -683,6 +738,7 @@ match result {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_boolean_wildcard_arm() {
     assert_output(
         r#"flag = True
@@ -695,6 +751,7 @@ print(match flag {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_int_literal_patterns() {
     assert_output(
         r#"n = 2
@@ -708,6 +765,7 @@ print(match n {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_string_literal_patterns() {
     assert_output(
         r#"s = "b"
@@ -721,6 +779,7 @@ print(match s {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_list_patterns() {
     assert_output(
         r#"nums: List<Int> = [1, 2, 3]
@@ -733,6 +792,7 @@ print(match nums {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_boolean_non_exhaustive_error() {
     assert_compile_error(
         r#"flag = True
@@ -744,6 +804,7 @@ print(match flag {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_result_non_exhaustive_error() {
     assert_compile_error(
         r#"r: Result<Int> = Ok(1)
@@ -755,6 +816,7 @@ print(match r {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_int_non_exhaustive_error() {
     assert_compile_error(
         r#"n = 1
@@ -766,6 +828,7 @@ print(match n {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn cond_selects_first_true_branch_and_skips_later_branches() {
     assert_output(
         r#"print(to_string(cond {
@@ -778,6 +841,7 @@ fn cond_selects_first_true_branch_and_skips_later_branches() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn cond_allows_block_bodies() {
     assert_output(
         r#"print(to_string(cond {
@@ -789,6 +853,7 @@ fn cond_allows_block_bodies() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn cond_condition_must_be_boolean() {
     assert_compile_error(
         r#"print(to_string(cond {
@@ -800,6 +865,7 @@ fn cond_condition_must_be_boolean() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn cond_branch_types_must_match() {
     assert_compile_error(
         r#"print(to_string(cond {
@@ -811,6 +877,7 @@ fn cond_branch_types_must_match() {
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn string_interpolation_basic() {
     assert_output(
         r#"name = "alice"
@@ -822,6 +889,7 @@ print("score=#{score + 2}")"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn string_interpolation_result_type_error() {
     assert_compile_error(
         r#"r: Result<Int> = Ok(1)
@@ -831,6 +899,7 @@ print("r=#{r}")"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_definition_minimal() {
     assert_output(
         r#"def noop() {()}
@@ -843,6 +912,7 @@ def add(x: Int, y: Int) -> Int { x + y }"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_call_locals_are_isolated() {
     assert_output(
         r#"def outer(x: Int, y: Int) -> Int {
@@ -863,6 +933,7 @@ print(to_string(outer(1, 2)))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_call_missing_return_reports_unit_hint() {
     assert_compile_error(
         r#"def outer(x: Int, y: Int) -> Int {
@@ -883,6 +954,7 @@ print(to_string(ret))"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn function_zero_arg_call() {
     assert_output(
         r#"def sf() -> Result<String> {
@@ -898,4 +970,238 @@ match ret {
 }"#,
         &["ok"],
     );
+}
+
+pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
+    let cases: &[(&str, fn())] = &[
+        ("bindings_basic_print", bindings_basic_print as fn()),
+        (
+            "bindings_shadowing_last_wins",
+            bindings_shadowing_last_wins as fn(),
+        ),
+        (
+            "annotations_accept_matching_types",
+            annotations_accept_matching_types as fn(),
+        ),
+        (
+            "annotations_reject_type_mismatch",
+            annotations_reject_type_mismatch as fn(),
+        ),
+        (
+            "primitives_render_to_string",
+            primitives_render_to_string as fn(),
+        ),
+        (
+            "inspect_builtin_quotes_strings_and_preserves_error_rendering",
+            inspect_builtin_quotes_strings_and_preserves_error_rendering as fn(),
+        ),
+        (
+            "regex_generated_literal_and_builtin_wrappers_work_end_to_end",
+            regex_generated_literal_and_builtin_wrappers_work_end_to_end as fn(),
+        ),
+        ("int_negative_literal", int_negative_literal as fn()),
+        ("arithmetic_int_ops", arithmetic_int_ops as fn()),
+        ("arithmetic_float_ops", arithmetic_float_ops as fn()),
+        (
+            "safe_xxx_zero_returns_zero_division_error_display",
+            safe_xxx_zero_returns_zero_division_error_display as fn(),
+        ),
+        ("comparison_int_ops", comparison_int_ops as fn()),
+        ("equality_string", equality_string as fn()),
+        ("inequality_boolean", inequality_boolean as fn()),
+        (
+            "kernel_and_or_short_circuit",
+            kernel_and_or_short_circuit as fn(),
+        ),
+        (
+            "kernel_eq_neq_helpers_match_operator_behavior",
+            kernel_eq_neq_helpers_match_operator_behavior as fn(),
+        ),
+        (
+            "kernel_ordering_and_concat_helpers_match_operator_behavior",
+            kernel_ordering_and_concat_helpers_match_operator_behavior as fn(),
+        ),
+        ("concat_strings", concat_strings as fn()),
+        ("arithmetic_precedence", arithmetic_precedence as fn()),
+        (
+            "equality_reject_mixed_types",
+            equality_reject_mixed_types as fn(),
+        ),
+        ("list_literal_int", list_literal_int as fn()),
+        ("list_literal_string", list_literal_string as fn()),
+        (
+            "list_empty_with_annotation",
+            list_empty_with_annotation as fn(),
+        ),
+        ("list_cons_expr", list_cons_expr as fn()),
+        ("list_reject_mixed_types", list_reject_mixed_types as fn()),
+        (
+            "list_cons_rejects_non_list_tail",
+            list_cons_rejects_non_list_tail as fn(),
+        ),
+        (
+            "closure_literal_invocation",
+            closure_literal_invocation as fn(),
+        ),
+        (
+            "closure_argument_type_infers_from_add_constraint",
+            closure_argument_type_infers_from_add_constraint as fn(),
+        ),
+        ("closure_builtin_capture", closure_builtin_capture as fn()),
+        (
+            "func_literal_infix_invocation_works",
+            func_literal_infix_invocation_works as fn(),
+        ),
+        (
+            "expr_class_operators_are_same_precedence",
+            expr_class_operators_are_same_precedence as fn(),
+        ),
+        (
+            "function_partial_application_composition",
+            function_partial_application_composition as fn(),
+        ),
+        (
+            "function_partial_application_type_error",
+            function_partial_application_type_error as fn(),
+        ),
+        (
+            "function_forward_reference_succeeds",
+            function_forward_reference_succeeds as fn(),
+        ),
+        (
+            "struct_definition_and_field_access",
+            struct_definition_and_field_access as fn(),
+        ),
+        (
+            "record_constructor_positional",
+            record_constructor_positional as fn(),
+        ),
+        (
+            "record_constructor_named_args",
+            record_constructor_named_args as fn(),
+        ),
+        (
+            "struct_record_forward_references_and_type_annotation_succeed",
+            struct_record_forward_references_and_type_annotation_succeed as fn(),
+        ),
+        (
+            "struct_property_update_via_associated_functions",
+            struct_property_update_via_associated_functions as fn(),
+        ),
+        (
+            "struct_constructor_sugar_mixed_named_positional_error",
+            struct_constructor_sugar_mixed_named_positional_error as fn(),
+        ),
+        (
+            "impl_method_call_mixed_named_positional_error",
+            impl_method_call_mixed_named_positional_error as fn(),
+        ),
+        (
+            "enum_state_transition_via_associated_functions",
+            enum_state_transition_via_associated_functions as fn(),
+        ),
+        (
+            "enum_impl_method_call_mixed_named_positional_error",
+            enum_impl_method_call_mixed_named_positional_error as fn(),
+        ),
+        (
+            "enum_self_rebinding_requires_self_type",
+            enum_self_rebinding_requires_self_type as fn(),
+        ),
+        (
+            "function_named_args_reordered",
+            function_named_args_reordered as fn(),
+        ),
+        (
+            "function_named_args_mixed_with_positional_first",
+            function_named_args_mixed_with_positional_first as fn(),
+        ),
+        (
+            "function_named_args_unknown_name_error",
+            function_named_args_unknown_name_error as fn(),
+        ),
+        (
+            "function_named_args_duplicate_error",
+            function_named_args_duplicate_error as fn(),
+        ),
+        (
+            "function_named_args_positional_after_named_error",
+            function_named_args_positional_after_named_error as fn(),
+        ),
+        (
+            "function_duplicate_name_is_compile_error",
+            function_duplicate_name_is_compile_error as fn(),
+        ),
+        (
+            "top_level_name_collision_between_struct_and_def_is_compile_error",
+            top_level_name_collision_between_struct_and_def_is_compile_error as fn(),
+        ),
+        ("if_expression_with_else", if_expression_with_else as fn()),
+        (
+            "if_expression_without_else_returns_unit",
+            if_expression_without_else_returns_unit as fn(),
+        ),
+        ("match_boolean_exhaustive", match_boolean_exhaustive as fn()),
+        ("match_result_exhaustive", match_result_exhaustive as fn()),
+        (
+            "match_boolean_wildcard_arm",
+            match_boolean_wildcard_arm as fn(),
+        ),
+        (
+            "match_int_literal_patterns",
+            match_int_literal_patterns as fn(),
+        ),
+        (
+            "match_string_literal_patterns",
+            match_string_literal_patterns as fn(),
+        ),
+        ("match_list_patterns", match_list_patterns as fn()),
+        (
+            "match_boolean_non_exhaustive_error",
+            match_boolean_non_exhaustive_error as fn(),
+        ),
+        (
+            "match_result_non_exhaustive_error",
+            match_result_non_exhaustive_error as fn(),
+        ),
+        (
+            "match_int_non_exhaustive_error",
+            match_int_non_exhaustive_error as fn(),
+        ),
+        (
+            "cond_selects_first_true_branch_and_skips_later_branches",
+            cond_selects_first_true_branch_and_skips_later_branches as fn(),
+        ),
+        ("cond_allows_block_bodies", cond_allows_block_bodies as fn()),
+        (
+            "cond_condition_must_be_boolean",
+            cond_condition_must_be_boolean as fn(),
+        ),
+        (
+            "cond_branch_types_must_match",
+            cond_branch_types_must_match as fn(),
+        ),
+        (
+            "string_interpolation_basic",
+            string_interpolation_basic as fn(),
+        ),
+        (
+            "string_interpolation_result_type_error",
+            string_interpolation_result_type_error as fn(),
+        ),
+        (
+            "function_definition_minimal",
+            function_definition_minimal as fn(),
+        ),
+        (
+            "function_call_locals_are_isolated",
+            function_call_locals_are_isolated as fn(),
+        ),
+        (
+            "function_call_missing_return_reports_unit_hint",
+            function_call_missing_return_reports_unit_hint as fn(),
+        ),
+        ("function_zero_arg_call", function_zero_arg_call as fn()),
+    ];
+    super::run_bucket_cases("core_language", cases, bucket, bucket_count);
 }

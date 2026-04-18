@@ -729,8 +729,6 @@ impl Checker {
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
         checker.closure_depth = self.closure_depth;
         checker.lens_bindings = self.lens_bindings.clone();
-        checker.impl_method_uids = self.impl_method_uids.clone();
-        checker.function_ids_by_name = self.function_ids_by_name.clone();
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker
@@ -741,11 +739,22 @@ impl Checker {
         self.tyvar_bounds = child.tyvar_bounds.clone();
         self.env.next_tyvar = self.env.next_tyvar.max(child.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(child.env.next_tag);
-        self.seen_builtin_type_decls = child.seen_builtin_type_decls.clone();
-        self.impl_method_uids = child.impl_method_uids.clone();
-        self.traits = child.traits.clone();
-        self.trait_impls = child.trait_impls.clone();
-        self.trait_methods_by_qualified_name = child.trait_methods_by_qualified_name.clone();
+        if self.seen_builtin_type_decls.len() != child.seen_builtin_type_decls.len() {
+            self.seen_builtin_type_decls = child.seen_builtin_type_decls.clone();
+        }
+        if self.impl_method_uids.len() != child.impl_method_uids.len() {
+            self.impl_method_uids = child.impl_method_uids.clone();
+        }
+        if self.traits.len() != child.traits.len() {
+            self.traits = child.traits.clone();
+        }
+        if self.trait_impls.len() != child.trait_impls.len() {
+            self.trait_impls = child.trait_impls.clone();
+        }
+        if self.trait_methods_by_qualified_name.len() != child.trait_methods_by_qualified_name.len()
+        {
+            self.trait_methods_by_qualified_name = child.trait_methods_by_qualified_name.clone();
+        }
     }
 
     fn into_parts(self) -> CheckerParts {

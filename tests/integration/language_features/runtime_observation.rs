@@ -1,6 +1,7 @@
 use super::harness::observe_surtr;
 
 #[test]
+#[ignore = "bucketed"]
 fn tail_recursive_function_reuses_single_non_top_level_frame() {
     let observation = observe_surtr(
         r#"def fib_tail(n: Int, a: Int, b: Int) -> Int {
@@ -17,6 +18,7 @@ fib_tail(50, 0, 1)"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn match_arm_tail_calls_are_optimized() {
     let observation = observe_surtr(
         r#"def sum_list(values: List<Int>, acc: Int) -> Int {
@@ -34,6 +36,7 @@ sum_list([1, 2, 3, 4, 5], 0)"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn mutual_tail_recursion_is_optimized() {
     let observation = observe_surtr(
         r#"def even(n: Int) -> Boolean {
@@ -54,6 +57,7 @@ even(100)"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn non_tail_recursion_keeps_growing_frames() {
     let observation = observe_surtr(
         r#"def sum_non_tail(n: Int) -> Int {
@@ -70,6 +74,7 @@ sum_non_tail(200)"#,
 }
 
 #[test]
+#[ignore = "bucketed"]
 fn generator_fibonacci_resume_consumer_uses_tail_calls() {
     let observation = observe_surtr(
         r#"def fib_generator(count: Int) -> Generator<(Int, Int), Int> {
@@ -119,4 +124,30 @@ Generator::idx(fib150)"#,
         "expected generator resume flow to use tail-call optimization, stats={:?}",
         observation.stats
     );
+}
+
+pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
+    let cases: &[(&str, fn())] = &[
+        (
+            "tail_recursive_function_reuses_single_non_top_level_frame",
+            tail_recursive_function_reuses_single_non_top_level_frame as fn(),
+        ),
+        (
+            "match_arm_tail_calls_are_optimized",
+            match_arm_tail_calls_are_optimized as fn(),
+        ),
+        (
+            "mutual_tail_recursion_is_optimized",
+            mutual_tail_recursion_is_optimized as fn(),
+        ),
+        (
+            "non_tail_recursion_keeps_growing_frames",
+            non_tail_recursion_keeps_growing_frames as fn(),
+        ),
+        (
+            "generator_fibonacci_resume_consumer_uses_tail_calls",
+            generator_fibonacci_resume_consumer_uses_tail_calls as fn(),
+        ),
+    ];
+    super::run_bucket_cases("runtime_observation", cases, bucket, bucket_count);
 }

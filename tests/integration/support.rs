@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use forge::bytecode::{populate_error_template_lines, Bytecode};
 use sindr::policy::{CompileUnitKind, RuntimeSourcePolicy};
@@ -41,6 +41,11 @@ impl CompileFailurePhase {
 struct CachedModulePipeline {
     module_asts: Vec<Vec<sigil::StagedModuleAst>>,
     declaration_index: sigil::DeclarationIndex,
+}
+
+struct CachedPhaseSessions {
+    sigil_session: sigil::SigilSession,
+    scar_session: scar::ScarSession,
 }
 
 #[allow(dead_code)]
@@ -114,6 +119,17 @@ fn typecheck_context_for_mode(mode: TestCompileMode) -> scar::TypecheckContext {
             }
             TestCompileMode::Project => RuntimeSourcePolicy::project(),
         },
+        enforce_builtin_type_contracts: true,
+    }
+}
+
+fn std_typecheck_context_for_mode(mode: TestCompileMode) -> scar::TypecheckContext {
+    scar::TypecheckContext {
+        runtime_policy: xldr::derive_runtime_policy(
+            compile_unit_kind_for_mode(mode),
+            SourceKind::StdModule,
+            None,
+        ),
         enforce_builtin_type_contracts: true,
     }
 }
@@ -376,19 +392,84 @@ fn cached_module_pipeline(
     Ok(pipeline)
 }
 
+fn phase_session_cache_key(compile_sources: &CompileSources, mode: TestCompileMode) -> String {
+    let mut key = module_pipeline_cache_key(compile_sources, mode);
+    key.push('\x1f');
+    key.push_str(&compile_sources.user_module_path);
+    key
+}
+
+fn cached_phase_sessions(
+    compile_sources: &CompileSources,
+    mode: TestCompileMode,
+) -> Result<Arc<Mutex<CachedPhaseSessions>>, String> {
+    static PHASE_SESSION_CACHE: OnceLock<
+        Mutex<HashMap<String, Result<Arc<Mutex<CachedPhaseSessions>>, String>>>,
+    > = OnceLock::new();
+
+    let cache = PHASE_SESSION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache_key = phase_session_cache_key(compile_sources, mode);
+
+    if let Some(cached) = cache
+        .lock()
+        .expect("phase session cache poisoned")
+        .get(&cache_key)
+    {
+        return cached.clone();
+    }
+
+    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
+    let std_resolved = sigil::resolve_staged_program(
+        &cached_modules.module_asts,
+        Vec::new(),
+        &cached_modules.declaration_index,
+        None,
+    )
+    .map_err(|e| format!("phase=resolve; message={}", e))?;
+
+    let mut scar_session = scar::ScarSession::new();
+    scar_session
+        .typecheck_with_context(std_resolved, std_typecheck_context_for_mode(mode))
+        .map_err(|e| format!("phase=typecheck; message={}", e))?;
+
+    let scope = sigil::build_scope_for_module(
+        &cached_modules.module_asts,
+        Some(compile_sources.user_module_path.as_str()),
+        cached_modules.module_asts.len(),
+    )
+    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    let mut sigil_session =
+        sigil::SigilSession::with_module_path(Some(compile_sources.user_module_path.clone()));
+    sigil_session.replace_scope_with_declarations(scope, &cached_modules.declaration_index);
+
+    let sessions = Arc::new(Mutex::new(CachedPhaseSessions {
+        sigil_session,
+        scar_session,
+    }));
+
+    cache
+        .lock()
+        .expect("phase session cache poisoned")
+        .insert(cache_key, Ok(Arc::clone(&sessions)));
+    Ok(sessions)
+}
+
 fn resolve_sources_with_mode(
     compile_sources: &CompileSources,
     mode: TestCompileMode,
 ) -> Result<(), String> {
-    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
     let user_ast = parse_user_program(compile_sources, mode)?;
-    sigil::resolve_staged_program(
-        &cached_modules.module_asts,
-        user_ast,
-        &cached_modules.declaration_index,
-        Some(compile_sources.user_module_path.clone()),
-    )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    let sessions = cached_phase_sessions(compile_sources, mode)?;
+    let mut sessions = sessions
+        .lock()
+        .map_err(|_| "phase=resolve; message=phase session cache poisoned".to_string())?;
+    let sigil_checkpoint = sessions.sigil_session.checkpoint();
+    let resolved_result = sessions
+        .sigil_session
+        .resolve(user_ast)
+        .map_err(|e| format!("phase=resolve; message={}", e));
+    sessions.sigil_session.rollback(sigil_checkpoint);
+    resolved_result?;
     Ok(())
 }
 
@@ -396,17 +477,28 @@ fn typecheck_sources_with_mode(
     compile_sources: &CompileSources,
     mode: TestCompileMode,
 ) -> Result<(), String> {
-    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
     let user_ast = parse_user_program(compile_sources, mode)?;
-    let resolved = sigil::resolve_staged_program(
-        &cached_modules.module_asts,
-        user_ast,
-        &cached_modules.declaration_index,
-        Some(compile_sources.user_module_path.clone()),
-    )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
-    scar::typecheck_with_context(resolved, typecheck_context_for_mode(mode))
-        .map_err(|e| format!("phase=typecheck; message={}", e))?;
+    let sessions = cached_phase_sessions(compile_sources, mode)?;
+    let mut sessions = sessions
+        .lock()
+        .map_err(|_| "phase=typecheck; message=phase session cache poisoned".to_string())?;
+    let sigil_checkpoint = sessions.sigil_session.checkpoint();
+    let scar_checkpoint = sessions.scar_session.checkpoint();
+    let resolved_result = sessions
+        .sigil_session
+        .resolve(user_ast)
+        .map_err(|e| format!("phase=resolve; message={}", e));
+    let typecheck_result = match resolved_result {
+        Ok(resolved) => sessions
+            .scar_session
+            .typecheck_with_context(resolved, typecheck_context_for_mode(mode))
+            .map(|_| ())
+            .map_err(|e| format!("phase=typecheck; message={}", e)),
+        Err(e) => Err(e),
+    };
+    sessions.sigil_session.rollback(sigil_checkpoint);
+    sessions.scar_session.rollback(scar_checkpoint);
+    typecheck_result?;
     Ok(())
 }
 
