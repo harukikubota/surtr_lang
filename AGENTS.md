@@ -208,6 +208,173 @@ Error: TypeMismatch
 
 ---
 
+## Codex App 運用ガイド（2026-04 反映）
+
+`2026-04-16` の Codex 大型アップデート（computer use / 複数エージェント並列 / plugin 連携 / automations / memory）を前提に、Surtr では次の運用を標準とする。
+
+### 1. タスク分解
+
+- 1タスクは「1時間程度 or 数百行程度」で完了する粒度に分ける
+- 仕様確認タスク（Ask）と実装タスク（Code）を分離する
+- ブロッカー直結タスクは手元で先に処理し、独立サブタスクを並列化する
+
+### 2. 並列エージェントの担当境界
+
+- 書き込み対象をクレート単位で明示して競合を避ける
+- 例:
+  - Agent A: `crates/spire/**`
+  - Agent B: `crates/sigil/**`
+  - Agent C: `tests/**` と `doc/**` の最小更新
+- 同一ファイルを複数エージェントに同時に触らせない
+
+### 3. Computer Use の適用範囲
+
+- API 非対応ツール操作、UI/フロントの手動確認、E2E 的な画面確認で使用する
+- コンパイラ本体の編集・検証は従来どおりリポジトリ中心（CLI / テスト）で行う
+- destructive 操作（大量削除・履歴破壊）は必ず人間確認を挟む
+
+### 4. Plugins / 連携
+
+- 開発管理情報は plugin 経由で収集し、実装前に要件を固定する
+- PR コメント対応はレビュー指摘を収集してから実装修正に入る
+- 外部情報を取り込んだ変更は、最終的に Surtr の正本仕様（`doc/`）に整合させる
+
+### 5. 長期タスク運用（automations / memory）
+
+- 継続タスクは自動再開可能な単位でチェックポイントを残す
+- 中断時は「次の1手」を明文化してスレッドに残す
+- 個人設定依存の判断は `AGENTS.md` と issue 記述に寄せ、暗黙メモリ依存を避ける
+
+### 6. 完了条件（Definition of Done）
+
+- 実装: 仕様差分が説明可能
+- テスト: 最低 `cargo nextest run --workspace`、必要に応じ `cargo nextest run -p rune --test run_srt`
+- 共有: 変更理由・影響範囲・未解決事項を PR/ログに明記
+
+---
+
+## REPL 操作セッション運用（必須）
+
+- REPL 操作セッションは iTerm2 プロファイル `Codex` を使用する
+- セッション作成時は、人間が同じ画面を確認できる参加コマンドを必ず提示する
+  - 例: `tmux attach -t surtr-repl`
+- セッション継続運用時は detach 手順も併記する
+  - 例: `Ctrl-b` → `d`
+- REPL 関連改修（`crates/xldr/**`, `crates/rune/**` の REPL 経路, `doc/Xldr_spec.md`, REPL 統合テスト）ではこのフローを必ず適用する
+
+---
+
+## 作業フロー集約（旧 `作業フロー.md`）
+
+`作業フロー.md` は tmp 扱いとし、運用上の正本はこの `AGENTS.md` に集約する。
+
+### 現在地（2026-04-18）
+
+- `Int = BigInt`
+- runtime 内部 ID の分離
+- `type` の予約語化
+- `AstTy::Generic`
+- match arm LHS の `SafeBind` 系統一
+- closure 引数型注釈の任意化
+- `@@builtin type` 受理
+- `@@doc """..."""` の導入
+- `.srt -> .eldr` の doc metadata 持ち運び
+- 標準モジュールの type 単位分割
+
+### 今回完了した実装単位
+
+#### 1. Frontend / AST
+
+- `@@doc """..."""` を `defmod` / `def` / `@@builtin type` / `@@builtin def` の直前で受理
+- triple-quoted doc string を raw text として保持
+- `BuiltinTypeHead` を generic parameter 付きで保持
+- `type` を予約語として固定
+
+#### 2. Builtin type 契約
+
+- compiler が canonical head を内部固定で保持
+- 標準モジュール source は次と完全一致でなければ compile error
+  - `Int`
+  - `Float`
+  - `String`
+  - `Boolean`
+  - `Unit`
+  - `Error`
+  - `List<$A>`
+  - `Result<$T>`
+- `Result<T, E>` は戻り値位置専用の補助表記として維持
+
+#### 3. 標準モジュール再編
+
+- load order を `Bootstrap -> [Kernel, Int, String, Boolean, Error, List, Result, Float] -> user` に固定
+- cross-cutting builtin 関数は `lib/kernel.srt` の `defmod Kernel` 配下に置く
+- canonical builtin type 宣言は各対応 file のトップレベルに置く
+  - `Unit` は `lib/kernel.srt`
+  - `Int` は `lib/int.srt`
+  - `String` は `lib/string.srt`
+  - `Boolean` は `lib/boolean.srt`
+  - `Error` は `lib/error.srt`
+  - `List<$A>` は `lib/list.srt`
+  - `Result<$T>` は `lib/result.srt`
+  - `Float` は `lib/float.srt`
+- type ごとの標準モジュールを追加
+  - `lib/int.srt`
+  - `lib/string.srt`
+  - `lib/boolean.srt`
+  - `lib/error.srt`
+  - `lib/list.srt`
+  - `lib/result.srt`
+  - `lib/float.srt`
+- 新設標準モジュールには module-level `@@doc` と `dummy()` を配置
+
+#### 4. `.eldr` doc metadata
+
+- `Bytecode.docs` を追加
+- `.eldr` に optional な `Docs` chunk を追加
+- 旧 `.eldr` は `Docs` chunk なしでも decode 可能
+- `surtr dump --format json` で `doc_count` を確認可能
+
+#### 5. REPL / Xldr
+
+- session が std module / live chunk / `.eldr` の doc metadata を保持
+- `:doc <symbol>` を実装
+- `push_atomic` は checkpoint + append/rollback 方式へ移行済み
+
+#### 6. 正本ドキュメントの再配置
+
+- `doc/` は正本だけを残す
+- `docs/` は補助資料・公開ガイドに限定
+- `lib/*.srt` は利用者向け標準モジュールドキュメント
+- `crates/**` は rustdoc による実装境界の記録先
+
+### 参照先
+
+- 言語仕様: `doc/要件定義v9.md`
+- VM 仕様: `doc/EldrVM_spec.md`
+- REPL 仕様: `doc/Xldr_spec.md`
+- テスト方針: `doc/テスト方針.md`
+- 将来課題: `doc/open-issues.md`
+- `Float` 暫定メモ: `doc/float.md`
+
+### 将来課題
+
+- `Float` の厳密契約
+- project runner
+- REPL command 拡張
+- macro
+- closure の `expected=None` 推論強化
+- OOM / host failure の詳細契約
+- Enum 設計
+
+### 次に着手するときの入口
+
+1. 仕様を変えるなら `doc/要件定義v9.md` と `doc/open-issues.md` を先に更新する
+2. 標準ライブラリの利用者向け説明は `lib/*.srt` の `@@doc` を更新する
+3. バイトコードや REPL まわりを変えるときは `doc/EldrVM_spec.md` と `doc/Xldr_spec.md` を一緒に見る
+4. 将来仕様の先置きは `tests/integration/pending_regressions.rs` に `#[ignore]` で残す
+
+---
+
 ## Crate Naming Rationale
 
 | クレート | 名前 | 由来 |

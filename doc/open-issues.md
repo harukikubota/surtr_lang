@@ -7,7 +7,7 @@
 
 2026-04-09 整理メモ:
 
-- `BigInt` 採用、runtime 内部 ID 分離、`Float` 切り出しは open issue ではなく、`doc/要件定義v9.md` と `/Users/haruca/work/rust/surtr/作業フロー.md` 側で追跡する
+- `BigInt` 採用、runtime 内部 ID 分離、`Float` 切り出しは open issue ではなく、`doc/要件定義v9.md` と `AGENTS.md` 側で追跡する
 - `@@doc`, `.eldr` の `Docs` chunk, 標準モジュール分割, `@@builtin type` 契約は今回の baseline で確定したため、本ファイルでは追跡しない
 - 本ファイルは引き続き「宣言収集 / fixpoint / 循環依存 / マクロ段階 / 将来 UX」の未解決論点に限定する
 

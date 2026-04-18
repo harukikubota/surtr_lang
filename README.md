@@ -93,7 +93,7 @@ cargo clean
   - [Crate reference](./docs/site/crate-reference.md)
 - Standard-library docs live in `lib/*.srt` via `@@doc`
 - Implementation contracts live in Rust doc comments under `crates/**`
-- Working ledger: [作業フロー.md](./作業フロー.md)
+- Working ledger: [AGENTS.md](./AGENTS.md)
 
 ## Status
 

@@ -857,7 +857,10 @@ fn test_func_literal_comparison_name_uses_logical_tier() {
                             )
                 ));
             }
-            other => panic!("Expected logical-tier comparison helper parse, got {:?}", other),
+            other => panic!(
+                "Expected logical-tier comparison helper parse, got {:?}",
+                other
+            ),
         },
         other => panic!("Expected bind, got {:?}", other),
     }
