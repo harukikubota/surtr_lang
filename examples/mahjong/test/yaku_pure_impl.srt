@@ -1,0 +1,186 @@
+defmod MahjongYakuPureTest {
+  defp _judge_ids(raw: String) -> Result<List<String>> {
+    parsed =? MahjongParser::parse_hand14(raw)
+    normalized =? MahjongNormalize::normalize_hand14(parsed)
+    valid =? MahjongNormalize::validate_hand14(normalized)
+    MahjongJudge::judge_hand(valid)
+  }
+
+  defp _has_yaku(ids: List<String>, yaku_id: String) -> Boolean {
+    List::any(ids, {|id|
+      id == yaku_id
+    })
+  }
+
+  defp _assert_expected(hand: String, ids: List<String>, expected: List<String>) -> Result<()> {
+    match expected {
+      [] => Ok(()),
+      [head, ..tail] => {
+        _ok =? assert(
+          _has_yaku(ids, head),
+          HandValidationError("missing yaku `" ++ head ++ "` for hand `" ++ hand ++ "`: " ++ inspect(ids)),
+        )
+        _assert_expected(hand, ids, tail)
+      },
+    }
+  }
+
+  defp _assert_absent(hand: String, ids: List<String>, absent: List<String>) -> Result<()> {
+    match absent {
+      [] => Ok(()),
+      [head, ..tail] => {
+        _ok =? assert(
+          Boolean::not(_has_yaku(ids, head)),
+          HandValidationError("unexpected yaku `" ++ head ++ "` for hand `" ++ hand ++ "`: " ++ inspect(ids)),
+        )
+        _assert_absent(hand, ids, tail)
+      },
+    }
+  }
+
+  defp _run_case(case: (String, String, List<String>)) -> Result<()> {
+    name = case._0
+    hand = case._1
+    expected = case._2
+    ids =? _judge_ids(hand)
+    _ok =? _assert_expected(hand, ids, expected)
+    print("[PASS] " ++ name ++ " -> " ++ inspect(expected))
+    Ok(())
+  }
+
+  defp _run_cases(cases: List<(String, String, List<String>)>) -> Result<Int> {
+    match cases {
+      [] => Ok(0),
+      [head, ..tail] => {
+        _ok =? _run_case(head)
+        done =? _run_cases(tail)
+        Ok(done + 1)
+      },
+    }
+  }
+
+  defp _run_case_without(name: String, hand: String, expected: List<String>, absent: List<String>) -> Result<()> {
+    ids =? _judge_ids(hand)
+    _ok1 =? _assert_expected(hand, ids, expected)
+    _ok2 =? _assert_absent(hand, ids, absent)
+    print("[PASS] " ++ name ++ " -> expected=" ++ inspect(expected) ++ ", absent=" ++ inspect(absent))
+    Ok(())
+  }
+
+  defp _suited_success(ids: List<Int>) -> Result<List<ExtractBranch>> {
+    match MahjongExtractor::suited_branches(ids) {
+      MatchResult::Success(branches) => Ok(branches),
+      MatchResult::NoMatch => Err(HandValidationError("extractor no-match: " ++ inspect(ids))),
+      MatchResult::Err(err) => Err(HandValidationError("extractor failed: " ++ inspect(err))),
+    }
+  }
+
+  defp _is_sequence(meld: ExtractedMeld) -> Boolean {
+    match meld.kind {
+      ExtractMeldKind::Sequence => True,
+      _ => False,
+    }
+  }
+
+  defp _is_triplet(meld: ExtractedMeld) -> Boolean {
+    match meld.kind {
+      ExtractMeldKind::Triplet => True,
+      _ => False,
+    }
+  }
+
+  defp _branch_has_sequence(branch: ExtractBranch) -> Boolean {
+    List::any(branch.mentsu, &_is_sequence)
+  }
+
+  defp _branch_has_triplet(branch: ExtractBranch) -> Boolean {
+    List::any(branch.mentsu, &_is_triplet)
+  }
+
+  defp _branch_unresolved_eq(branch: ExtractBranch, expected: List<Int>) -> Boolean {
+    inspect(branch.unresolved) == inspect(expected)
+  }
+
+  defp _branch_has_two_sequence_start(branch: ExtractBranch, start_rank: Int) -> Boolean {
+    List::count(branch.mentsu, {|meld|
+      and(_is_sequence(meld), meld.rank == start_rank)
+    }) >= 2
+  }
+
+  defp _run_extractor_cases() -> Result<Int> {
+    b1 =? _suited_success([1, 1, 2, 2, 2, 3, 3, 3])
+    _ok1 =? assert(
+      List::any(b1, {|branch|
+        and(_branch_has_triplet(branch), _branch_unresolved_eq(branch, [1, 1]))
+      }),
+      HandValidationError("extractor case failed: 11222333 should detect triplet"),
+    )
+    print("[PASS] extractor 11222333 -> 刻子")
+
+    b2 =? _suited_success([1, 2, 2, 3, 3, 3, 3, 4, 4])
+    _ok2 =? assert(
+      List::any(b2, &_branch_has_sequence),
+      HandValidationError("extractor case failed: 122333344 should detect sequence"),
+    )
+    print("[PASS] extractor 122333344 -> 順子")
+
+    b3 =? _suited_success([1, 1, 1, 2, 3])
+    _ok3 =? assert(
+      List::any(b3, {|branch|
+        and(_branch_has_sequence(branch), _branch_unresolved_eq(branch, [1, 1]))
+      }),
+      HandValidationError("extractor case failed: 11123 should detect sequence + pair"),
+    )
+    print("[PASS] extractor 11123 -> 順子＋対子")
+
+    b4 =? _suited_success([1, 1, 1, 1, 2, 3])
+    _ok4 =? assert(
+      List::any(b4, {|branch|
+        and(
+          _branch_has_triplet(branch),
+          and(_branch_has_sequence(branch), _branch_unresolved_eq(branch, [])),
+        )
+      }),
+      HandValidationError("extractor case failed: 111123 should detect triplet + sequence"),
+    )
+    print("[PASS] extractor 111123 -> 刻子＋順子")
+
+    b5 =? _suited_success([1, 1, 1, 1, 2, 2, 3, 3])
+    _ok5 =? assert(
+      List::any(b5, {|branch|
+        and(
+          _branch_has_two_sequence_start(branch, 1),
+          _branch_unresolved_eq(branch, [1, 1]),
+        )
+      }),
+      HandValidationError("extractor case failed: 11112233 should detect iipeikou + pair"),
+    )
+    print("[PASS] extractor 11112233 -> 一盃口＋対子")
+
+    Ok(5)
+  }
+
+  def run() -> Result<()> {
+    cases = [
+      ("タンヤオ", "234345m22456p678s", ["Tanyao"]),
+      ("一盃口", "123123m456p789s11w", ["Iipeikou"]),
+      ("一気通貫", "123456789m111p22s", ["Ittsu"]),
+      ("役牌(白)", "111d234m567p789s22m", ["YakuhaiWhite"]),
+      ("役牌(發)", "222d234m567p789s22m", ["YakuhaiGreen"]),
+      ("役牌(中)", "333d234m567p789s22m", ["YakuhaiRed"]),
+      ("対々和", "111m222p333s111d22m", ["Toitoi"]),
+      ("三元牌の複合", "111d222d333m444p55s", ["YakuhaiWhite", "YakuhaiGreen"]),
+    ]
+
+    total =? _run_cases(cases)
+    extractor_total =? _run_extractor_cases()
+    _ok =? _run_case_without(
+      "対々和は順子系と同時判定しない",
+      "111222333444m55p",
+      ["Toitoi"],
+      ["Iipeikou", "Ittsu"],
+    )
+    print("[OK] Mahjong yaku pure tests passed: " ++ to_string(total + 1 + extractor_total))
+    Ok(())
+  }
+}

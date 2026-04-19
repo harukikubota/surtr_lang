@@ -1,22 +1,190 @@
 import MahjongSolver::solve_winning_shapes
+import MahjongExtractor::extract_standard_shapes
+import MahjongExtractor::sequence_starts_by_suit
+import MahjongYakuCatalog::registry
 
 defmod MahjongJudge {
-  defp _shape_to_yaku(shape: String) -> List<String> {
-    match shape {
-      "standard" => ["StandardShape"],
-      "seven_pairs" => ["Chiitoitsu"],
+  defp _id_count(ids: List<Int>, target: Int) -> Int {
+    List::count(ids, {|id|
+      id == target
+    })
+  }
+
+  defp _has_shape(shapes: List<String>, target: String) -> Boolean {
+    List::any(shapes, {|shape|
+      shape == target
+    })
+  }
+
+  defp _is_terminal_or_honor(tile: Tile) -> Boolean {
+    match tile {
+      Tile::Suited(_, rank) => or(rank == 1, rank == 9),
+      Tile::Honor(_) => True,
+    }
+  }
+
+  defp _is_tanyao(valid: ValidHand14) -> Boolean {
+    List::all(valid.tiles, {|tile|
+      Boolean::not(_is_terminal_or_honor(tile))
+    })
+  }
+
+  defp _count_rank(ranks: List<Int>, target: Int) -> Int {
+    List::count(ranks, {|rank|
+      rank == target
+    })
+  }
+
+  defp _has_rank(ranks: List<Int>, target: Int) -> Boolean {
+    List::any(ranks, {|rank|
+      rank == target
+    })
+  }
+
+  defp _has_double_sequence_in_starts(starts: List<Int>) -> Boolean {
+    or(
+      _count_rank(starts, 1) >= 2,
+      or(
+        _count_rank(starts, 2) >= 2,
+        or(
+          _count_rank(starts, 3) >= 2,
+          or(
+            _count_rank(starts, 4) >= 2,
+            or(_count_rank(starts, 5) >= 2, _count_rank(starts, 6) >= 2),
+          ),
+        ),
+      ),
+    )
+  }
+
+  defp _shape_has_iipeikou(shape: ExtractedShape) -> Boolean {
+    starts0 = sequence_starts_by_suit(shape, 0)
+    starts1 = sequence_starts_by_suit(shape, 1)
+    starts2 = sequence_starts_by_suit(shape, 2)
+    or(
+      _has_double_sequence_in_starts(starts0),
+      or(_has_double_sequence_in_starts(starts1), _has_double_sequence_in_starts(starts2)),
+    )
+  }
+
+  defp _has_123_456_789(starts: List<Int>) -> Boolean {
+    and(_has_rank(starts, 1), and(_has_rank(starts, 4), _has_rank(starts, 7)))
+  }
+
+  defp _shape_has_ittsu(shape: ExtractedShape) -> Boolean {
+    starts0 = sequence_starts_by_suit(shape, 0)
+    starts1 = sequence_starts_by_suit(shape, 1)
+    starts2 = sequence_starts_by_suit(shape, 2)
+    or(_has_123_456_789(starts0), or(_has_123_456_789(starts1), _has_123_456_789(starts2)))
+  }
+
+  defp _shape_has_toitoi(shape: ExtractedShape) -> Boolean {
+    List::all(shape.melds, {|meld|
+      match meld.kind {
+        ExtractMeldKind::Triplet => True,
+        _ => False,
+      }
+    })
+  }
+
+  defp _dragon_yaku_ids(ids: List<Int>) -> List<String> {
+    y0 = []
+    y1 = if(_id_count(ids, 35) >= 3, ["YakuhaiWhite", ..y0], y0)
+    y2 = if(_id_count(ids, 36) >= 3, ["YakuhaiGreen", ..y1], y1)
+    y3 = if(_id_count(ids, 37) >= 3, ["YakuhaiRed", ..y2], y2)
+    List::reverse(y3)
+  }
+
+  defp _standard_candidate_ids(valid: ValidHand14, ids: List<Int>, shape: ExtractedShape) -> List<String> {
+    y0 = ["StandardShape"]
+    y1 = if(_is_tanyao(valid), ["Tanyao", ..y0], y0)
+    y2 = if(_shape_has_iipeikou(shape), ["Iipeikou", ..y1], y1)
+    y3 = if(_shape_has_ittsu(shape), ["Ittsu", ..y2], y2)
+    y4 = if(_shape_has_toitoi(shape), ["Toitoi", ..y3], y3)
+    List::concat([
+      List::reverse(y4),
+      _dragon_yaku_ids(ids),
+    ])
+    |> List::dedup()
+  }
+
+  defp _nonstandard_candidate_ids(valid: ValidHand14, label: String) -> List<String> {
+    match label {
+      "seven_pairs" => {
+        base = ["Chiitoitsu"]
+        with_tanyao = if(_is_tanyao(valid), ["Tanyao", ..base], base)
+        List::reverse(with_tanyao)
+      },
       "kokushi" => ["KokushiMusou"],
       _ => [],
     }
   }
 
+  defp _standard_candidates(valid: ValidHand14, ids: List<Int>) -> Result<List<List<String>>> {
+    shapes =? extract_standard_shapes(valid)
+    Ok(List::map(shapes, {|shape|
+      _standard_candidate_ids(valid, ids, shape)
+    }))
+  }
+
+  defp _nonstandard_candidates(valid: ValidHand14, shape_labels: List<String>) -> List<List<String>> {
+    shape_labels |> List::flat_map({|label|
+      ids = _nonstandard_candidate_ids(valid, label)
+      if(List::len(ids) > 0, [ids], [])
+    })
+  }
+
+  defp _sum_han_go(ids: List<String>, table: HashMap<Yaku>, acc: Int) -> Result<Int> {
+    match ids {
+      [] => Ok(acc),
+      [head, ..tail] => match HashMap::get(table, head) {
+        Ok(yaku) => _sum_han_go(tail, table, acc + yaku.han),
+        Err(_) => Err(HandValidationError("unknown yaku id: " ++ head)),
+      },
+    }
+  }
+
+  defp _sum_han(ids: List<String>) -> Result<Int> {
+    _sum_han_go(ids, registry(), 0)
+  }
+
+  defp _pick_best_candidate_go(rest: List<List<String>>, best_ids: List<String>, best_han: Int) -> Result<List<String>> {
+    match rest {
+      [] => Ok(best_ids),
+      [head, ..tail] => {
+        han =? _sum_han(head)
+        if(
+          han > best_han,
+          _pick_best_candidate_go(tail, head, han),
+          _pick_best_candidate_go(tail, best_ids, best_han),
+        )
+      },
+    }
+  }
+
+  defp _pick_best_candidate(candidates: List<List<String>>) -> Result<List<String>> {
+    match candidates {
+      [] => Err(HandValidationError("no yaku candidate found")),
+      [head, ..tail] => {
+        head_han =? _sum_han(head)
+        _pick_best_candidate_go(tail, head, head_han)
+      },
+    }
+  }
+
   def judge_hand(valid: ValidHand14) -> Result<List<String>> {
-    shapes =? solve_winning_shapes(valid)
-    yaku = shapes |> List::flat_map(&_shape_to_yaku) |> List::dedup()
-    if(
-      List::len(yaku) > 0,
-      Ok(yaku),
-      Err(HandValidationError("no yaku resolved from winning shapes")),
+    shape_labels =? solve_winning_shapes(valid)
+    ids = List::map(valid.tiles, &MahjongTypes::tile_id)
+
+    standard_candidates =? if(
+      _has_shape(shape_labels, "standard"),
+      _standard_candidates(valid, ids),
+      Ok([]),
     )
+    |> map_err(HandValidationError("standard decomposition failed"))
+
+    nonstandard_candidates = _nonstandard_candidates(valid, shape_labels)
+    candidates = List::concat([standard_candidates, nonstandard_candidates])
+    _pick_best_candidate(candidates)
   }
 }

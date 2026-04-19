@@ -112,6 +112,49 @@ defmod MahjongTypes {
     34
   }
 
+  def tile_id(tile: Tile) -> Int {
+    match tile {
+      Tile::Suited(suit, rank) => match suit {
+        Suit::Man => rank,
+        Suit::Pin => rank + 10,
+        Suit::Sou => rank + 20,
+      },
+      Tile::Honor(kind) => match kind {
+        HonorKind::Wind(wind) => match wind {
+          Wind::East => 31,
+          Wind::South => 32,
+          Wind::West => 33,
+          Wind::North => 34,
+        },
+        HonorKind::Dragon(dragon) => match dragon {
+          Dragon::White => 35,
+          Dragon::Green => 36,
+          Dragon::Red => 37,
+        },
+      },
+    }
+  }
+
+  def is_suited_id(id: Int) -> Boolean {
+    id < 30
+  }
+
+  def suit_base_from_id(id: Int) -> Int {
+    if(id <= 9, 0, if(id <= 19, 10, if(id <= 29, 20, 30)))
+  }
+
+  def suit_rank_from_id(id: Int) -> Int {
+    id - suit_base_from_id(id)
+  }
+
+  def suit_index_from_id(id: Int) -> Int {
+    if(id <= 9, 0, if(id <= 19, 1, if(id <= 29, 2, 3)))
+  }
+
+  def can_start_sequence_id(id: Int) -> Boolean {
+    and(is_suited_id(id), suit_rank_from_id(id) <= 7)
+  }
+
   def tile_key(tile: Tile) -> String {
     match tile {
       Tile::Suited(suit, num) => match suit {

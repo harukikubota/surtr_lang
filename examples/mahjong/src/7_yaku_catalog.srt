@@ -27,6 +27,62 @@ defmod MahjongYakuCatalog {
           han: 13,
         ),
       ),
+      (
+        "Tanyao",
+        Yaku(
+          yaku_id: "Tanyao",
+          name: "タンヤオ",
+          han: 1,
+        ),
+      ),
+      (
+        "Iipeikou",
+        Yaku(
+          yaku_id: "Iipeikou",
+          name: "一盃口",
+          han: 1,
+        ),
+      ),
+      (
+        "Ittsu",
+        Yaku(
+          yaku_id: "Ittsu",
+          name: "一気通貫",
+          han: 2,
+        ),
+      ),
+      (
+        "YakuhaiWhite",
+        Yaku(
+          yaku_id: "YakuhaiWhite",
+          name: "役牌(白)",
+          han: 1,
+        ),
+      ),
+      (
+        "YakuhaiGreen",
+        Yaku(
+          yaku_id: "YakuhaiGreen",
+          name: "役牌(發)",
+          han: 1,
+        ),
+      ),
+      (
+        "YakuhaiRed",
+        Yaku(
+          yaku_id: "YakuhaiRed",
+          name: "役牌(中)",
+          han: 1,
+        ),
+      ),
+      (
+        "Toitoi",
+        Yaku(
+          yaku_id: "Toitoi",
+          name: "対々和",
+          han: 2,
+        ),
+      ),
     ])
   }
 
