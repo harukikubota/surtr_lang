@@ -1,0 +1,28 @@
+def singleton(word: String) -> List<String> {
+  [word]
+}
+
+def aliases(word: String) -> List<String> {
+  [word, word ++ "_alt"]
+}
+
+def bracket(word: String) -> String {
+  "[" ++ word ++ "]"
+}
+
+def shout(word: String) -> String {
+  word ++ "!"
+}
+
+decorate = &bracket >> &shout
+decorate_aliases = &aliases >* {|word| decorate(word) }
+seed_and_expand = &singleton >=> &aliases >* {|word| decorate(word) }
+
+words: List<String> = ["surtr", "vm"]
+  |>= aliases()
+  |*> {|word| decorate(word) }
+
+print(to_string(words))
+print(to_string("result" |> &singleton))
+print(to_string(decorate_aliases("bind")))
+print(to_string(seed_and_expand("flow")))

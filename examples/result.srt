@@ -1,0 +1,32 @@
+def parse_count(text: String) -> Result<Int> {
+  if(eq(text, "7"), Ok(7),
+    if(eq(text, "12"), Ok(12), Err(IndexOutOfBounds("unsupported input: " ++ text))))
+}
+
+def require_small(n: Int) -> Result<Int> {
+  if(n < 10, Ok(n), Err(IndexOutOfBounds("too large: " ++ to_string(n))))
+}
+
+def double(n: Int) -> Int {
+  n * 2
+}
+
+def render(n: Int) -> String {
+  "count=" ++ to_string(n)
+}
+
+format_count = &double >> &render
+parsed_label = &parse_count >* &render
+checked_label = &parse_count >=> &require_small >* {|n| format_count(n) }
+
+from_pipe: Result<String> = "7"
+  |> &parse_count
+  |>= require_small()
+  |*> {|n| format_count(n) }
+
+print(inspect(from_pipe))
+print(format_count(3))
+print(inspect(parsed_label("12")))
+print(inspect(checked_label("7")))
+print(inspect(checked_label("12")))
+print(inspect(checked_label("bad")))
