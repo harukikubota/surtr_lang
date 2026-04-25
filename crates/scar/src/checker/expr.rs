@@ -491,14 +491,21 @@ impl Checker {
         op_name: &str,
     ) -> Result<TypedNode, TypeError> {
         match node {
-            Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
+            Resolved::Capture(_, _, _)
+            | Resolved::Closure(_, _, _, _)
+            | Resolved::Compose(_, _, _)
+            | Resolved::LiftedCompose(_, _, _)
+            | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
+            Resolved::Var(_, _) | Resolved::Grouped(_, _) => {
+                self.check_function_value_operand(node, op_name)
+            }
             _ => Err(TypeError {
                 message: format!(
-                    "{} requires a closure or capture (`&f`, `&Type::method`, or closure)",
+                    "{} requires a function value",
                     op_name
                 ),
                 span: self.resolved_span(node).clone(),
-                hint: None,
+                hint: Some("Use `&f`, a closure, a function-typed variable, a grouped function-valued expression, or another compose expression.".into()),
             }),
         }
     }
@@ -509,7 +516,11 @@ impl Checker {
         op_name: &str,
     ) -> Result<TypedNode, TypeError> {
         match node {
-            Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
+            Resolved::Capture(_, _, _)
+            | Resolved::Closure(_, _, _, _)
+            | Resolved::Compose(_, _, _)
+            | Resolved::LiftedCompose(_, _, _)
+            | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
             Resolved::Var(_, _) | Resolved::Grouped(_, _) => {
                 self.check_function_value_operand(node, op_name)
             }

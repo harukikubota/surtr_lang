@@ -283,6 +283,32 @@ match lifted("x") {
     );
 }
 
+fn compose_chains_accept_prior_compose_expressions_and_function_value_variables() {
+    assert_output(
+        r#"def parse(text: String) -> Result<Int> {
+  if(eq(text, "7"), Ok(7), Err(IndexOutOfBounds("bad")))
+}
+
+def require_small(n: Int) -> Result<Int> {
+  if(n < 10, Ok(n), Err(IndexOutOfBounds("too large")))
+}
+
+def double(n: Int) -> Int {
+  n * 2
+}
+
+def render(n: Int) -> String {
+  "count=" ++ to_string(n)
+}
+
+format_count: (Int -> String) = &double >> &render
+checked_label: (String -> Result<String>) = &parse >=> &require_small >* format_count
+
+print(inspect(checked_label("7")))"#,
+        &["Ok(\"count=14\")"],
+    );
+}
+
 fn flow_operators_reject_naked_function_refs() {
     assert_compile_error(
         r#"def inc(x: Int) -> Int {
@@ -650,6 +676,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
         (
             "compose_builds_callable_from_capture_only",
             compose_builds_callable_from_capture_only as fn(),
+        ),
+        (
+            "compose_chains_accept_prior_compose_expressions_and_function_value_variables",
+            compose_chains_accept_prior_compose_expressions_and_function_value_variables as fn(),
         ),
         (
             "flow_operators_reject_naked_function_refs",

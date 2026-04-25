@@ -16,8 +16,8 @@ def render(n: Int) -> String {
 }
 
 format_count: (Int) -> String = &double >> &render
-parsed_label: (String) -> Result<String> = &parse_count >* &render
-checked_label: (String) -> Result<String> = &parse_count >=> &require_small >* format_count
+parsed_label: (String -> Result<String>) = &parse_count >* &render
+checked_label: (String -> Result<String>) = &parse_count >=> &require_small >* format_count
 
 from_pipe: Result<String> = "7"
   |> &parse_count

@@ -14,9 +14,9 @@ def shout(word: String) -> String {
   word ++ "!"
 }
 
-decorate: (String) -> String = &bracket >> &shout
-decorate_aliases: (String) -> List<String> = &aliases >* decorate
-seed_and_expand: (String) -> List<String> = &singleton >=> &aliases >* decorate
+decorate: (String -> String) = &bracket >> &shout
+decorate_aliases: (String -> List<String>) = &aliases >* decorate
+seed_and_expand: (String -> List<String>) = &singleton >=> &aliases >* decorate
 
 words: List<String> = ["surtr", "vm"]
   |>= aliases()
