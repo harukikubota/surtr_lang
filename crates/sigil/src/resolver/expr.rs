@@ -466,6 +466,12 @@ impl Resolver {
                 Ok(Resolved::Compose(span, Box::new(l), Box::new(r)))
             }
 
+            Ast::LiftedCompose(span, left, right) => {
+                let l = self.resolve_node(*left)?;
+                let r = self.resolve_node(*right)?;
+                Ok(Resolved::LiftedCompose(span, Box::new(l), Box::new(r)))
+            }
+
             Ast::KleisliCompose(span, left, right) => {
                 let l = self.resolve_node(*left)?;
                 let r = self.resolve_node(*right)?;

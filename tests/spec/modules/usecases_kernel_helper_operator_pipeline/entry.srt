@@ -35,7 +35,7 @@ def render(user: User) -> String {
   user.name `concat` ":" `concat` age_band(user) `concat` ":" `concat` visibility
 }
 
-lookup = &parse_key |=> &load_user
+lookup = &parse_key >=> &load_user
 
 match lookup("alice") |>= allow() |*> render() {
   Ok(v) => print(v),

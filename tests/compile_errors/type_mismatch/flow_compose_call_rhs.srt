@@ -6,4 +6,4 @@ def render(x: Int) -> Result<String> {
   Ok(to_string(x))
 }
 
-pipeline = parse() |=> render()
+pipeline = parse() >=> render()

@@ -52,6 +52,9 @@ pub enum Resolved {
     /// Plain function composition
     Compose(Span, Box<Resolved>, Box<Resolved>),
 
+    /// Lifted composition
+    LiftedCompose(Span, Box<Resolved>, Box<Resolved>),
+
     /// Kleisli composition
     KleisliCompose(Span, Box<Resolved>, Box<Resolved>),
 

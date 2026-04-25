@@ -210,6 +210,9 @@ impl Checker {
             Resolved::ContextMap(span, left, right) => self.check_context_map(span, left, right),
             Resolved::ContextBind(span, left, right) => self.check_context_bind(span, left, right),
             Resolved::Compose(span, left, right) => self.check_compose(span, left, right),
+            Resolved::LiftedCompose(span, left, right) => {
+                self.check_lifted_compose(span, left, right)
+            }
             Resolved::KleisliCompose(span, left, right) => {
                 self.check_kleisli_compose(span, left, right)
             }
@@ -527,6 +530,7 @@ impl Checker {
             | Resolved::ContextMap(span, _, _)
             | Resolved::ContextBind(span, _, _)
             | Resolved::Compose(span, _, _)
+            | Resolved::LiftedCompose(span, _, _)
             | Resolved::KleisliCompose(span, _, _)
             | Resolved::ListNil(span)
             | Resolved::ListCons(span, _, _)
@@ -1332,25 +1336,98 @@ impl Checker {
         })
     }
 
+    pub(super) fn check_lifted_compose(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_left = self.check_compose_callable(left, "`>*`")?;
+        let typed_right = self.check_compose_callable(right, "`>*`")?;
+        let (left_in, left_out) =
+            self.unary_function_parts(&typed_left.ty, "`>*`", &typed_left.span)?;
+        let (right_in, right_out) =
+            self.unary_function_parts(&typed_right.ty, "`>*`", &typed_right.span)?;
+        self.ensure_plain_map_output(&right_out, "`>*`", &typed_right.span)?;
+        match self.resolve_ty(&left_out) {
+            Ty::Result(ok, err) => {
+                if !self.types_compatible(ok.as_ref(), &right_in) {
+                    return Err(TypeError {
+                        message:
+                            "`>*` requires the left contextual output to match the right input type"
+                                .into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                Ok(TypedNode {
+                    ty: Ty::Func(
+                        vec![left_in],
+                        Box::new(Ty::Result(
+                            Box::new(self.resolve_ty(&right_out)),
+                            Box::new(self.resolve_ty(err.as_ref())),
+                        )),
+                    ),
+                    span: span.clone(),
+                    node: TypedInner::Compose(
+                        ComposeFlavor::ResultMap,
+                        Box::new(typed_left),
+                        Box::new(typed_right),
+                    ),
+                })
+            }
+            Ty::List(item) => {
+                if !self.types_compatible(item.as_ref(), &right_in) {
+                    return Err(TypeError {
+                        message:
+                            "`>*` requires the left contextual output to match the right input type"
+                                .into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                Ok(TypedNode {
+                    ty: Ty::Func(
+                        vec![left_in],
+                        Box::new(Ty::List(Box::new(self.resolve_ty(&right_out)))),
+                    ),
+                    span: span.clone(),
+                    node: TypedInner::Compose(
+                        ComposeFlavor::ListMap {
+                            helper: self.list_helper_ref_by_name("List::map", span)?,
+                        },
+                        Box::new(typed_left),
+                        Box::new(typed_right),
+                    ),
+                })
+            }
+            _ => Err(TypeError {
+                message: "`>*` requires Result or List on the left-hand side".into(),
+                span: span.clone(),
+                hint: None,
+            }),
+        }
+    }
+
     pub(super) fn check_kleisli_compose(
         &mut self,
         span: &Span,
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_compose_callable(left, "`|=>`")?;
-        let typed_right = self.check_compose_callable(right, "`|=>`")?;
+        let typed_left = self.check_compose_callable(left, "`>=>`")?;
+        let typed_right = self.check_compose_callable(right, "`>=>`")?;
         let (left_in, left_out) =
-            self.unary_function_parts(&typed_left.ty, "`|=>`", &typed_left.span)?;
+            self.unary_function_parts(&typed_left.ty, "`>=>`", &typed_left.span)?;
         let (right_in, right_out) =
-            self.unary_function_parts(&typed_right.ty, "`|=>`", &typed_right.span)?;
+            self.unary_function_parts(&typed_right.ty, "`>=>`", &typed_right.span)?;
         match (self.resolve_ty(&left_out), self.resolve_ty(&right_out)) {
             (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
                 if !self.types_compatible(ok.as_ref(), &right_in)
                     || !self.types_compatible(err.as_ref(), next_err.as_ref())
                 {
                     return Err(TypeError {
-                        message: "`|=>` requires matching Result context on both sides".into(),
+                        message: "`>=>` requires matching Result context on both sides".into(),
                         span: span.clone(),
                         hint: None,
                     });
@@ -1374,7 +1451,7 @@ impl Checker {
             (Ty::List(item), Ty::List(next_item)) => {
                 if !self.types_compatible(item.as_ref(), &right_in) {
                     return Err(TypeError {
-                        message: "`|=>` requires matching List element types across both sides"
+                        message: "`>=>` requires matching List element types across both sides"
                             .into(),
                         span: span.clone(),
                         hint: None,
@@ -1396,7 +1473,7 @@ impl Checker {
                 })
             }
             _ => Err(TypeError {
-                message: "`|=>` requires matching Result or List context on both sides".into(),
+                message: "`>=>` requires matching Result or List context on both sides".into(),
                 span: span.clone(),
                 hint: None,
             }),

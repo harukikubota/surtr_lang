@@ -42,8 +42,8 @@ fn flow_operators_allow_multiline_elixir_style_layout() {
   Ok(2)
 }
 
-def render(x: Int) -> Result<String> {
-  Ok(to_string(x + 3))
+def render(x: Int) -> String {
+  to_string(x + 3)
 }
 
 def inc(x: Int) -> Int {
@@ -59,7 +59,7 @@ value = 4
   |> double()
 
 pipeline = &parse
-  |=> &render
+  >* &render
 
 plain = &inc
   >> &double
@@ -178,7 +178,7 @@ def singleton(x: Int) -> List<Int> {
 }
 
 nums: List<Int> = [1, 2, 3]
-expand = &singleton |=> &dup
+expand = &singleton >=> &dup
 
 print(to_string(singleton(5)))
 print(to_string(nums |*> inc()))
@@ -198,13 +198,23 @@ def render(x: Int) -> Result<String> {
   Ok(to_string(x + 2))
 }
 
-pipeline = &parse |=> &render
+def show(x: Int) -> String {
+  "value:" ++ to_string(x + 2)
+}
+
+pipeline = &parse >=> &render
+lifted = &parse >* &show
 
 match pipeline("x") {
   Ok(v) => print(v),
   Err(e) => print("err"),
+}
+
+match lifted("x") {
+  Ok(v) => print(v),
+  Err(e) => print("err"),
 }"#,
-        &["3"],
+        &["3", "value:3"],
     );
 }
 
@@ -227,7 +237,7 @@ def render(x: Int) -> Result<String> {
   Ok(to_string(x))
 }
 
-pipeline = parse |=> render"#,
+pipeline = parse >=> render"#,
         "requires a closure or capture",
     );
 }
@@ -242,7 +252,20 @@ def render(x: Int) -> Result<String> {
   Ok(to_string(x))
 }
 
-pipeline = parse() |=> render()"#,
+pipeline = parse() >=> render()"#,
+        "requires a closure or capture",
+    );
+
+    assert_compile_error(
+        r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> String {
+  to_string(x)
+}
+
+pipeline = parse() >* render()"#,
         "requires a closure or capture",
     );
 
@@ -276,6 +299,19 @@ value: Result<Int> = Ok(1)
 bad = value |>= expand()"#,
         "cannot mix Result and List context",
     );
+
+    assert_compile_error(
+        r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+pipeline = &parse >* &render"#,
+        "expects a plain function on the right-hand side",
+    );
 }
 
 fn result_pipeline_usecase_user_lookup_and_render() {
@@ -307,7 +343,7 @@ def render(user: User) -> String {
   user.name ++ ":" ++ to_string(user.age)
 }
 
-lookup = &parse_id |=> &load_user
+lookup = &parse_id >=> &load_user
 summary: Result<String> = lookup("7") |>= ensure_adult() |*> render()
 
 match summary {
@@ -373,7 +409,7 @@ def render(user: User) -> String {
   user.name `concat` ":" `concat` age_band(user) `concat` ":" `concat` visibility
 }
 
-lookup = &parse_key |=> &load_user
+lookup = &parse_key >=> &load_user
 
 match lookup("alice") |>= allow() |*> render() {
   Ok(v) => print(v),
@@ -435,7 +471,7 @@ def singleton(word: String) -> List<String> {
   [word]
 }
 
-lift_and_expand = &singleton |=> &aliases
+lift_and_expand = &singleton >=> &aliases
 
 words: List<String> = ["surtr", "vm"]
 print(to_string(words |>= aliases() |*> wrap_bracket()))

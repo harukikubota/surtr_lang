@@ -253,7 +253,10 @@ pub enum Ast {
     /// Plain function composition: `f >> g`
     Compose(Span, Box<Ast>, Box<Ast>),
 
-    /// Kleisli composition: `f |=> g`
+    /// Lifted composition: `f >* g`
+    LiftedCompose(Span, Box<Ast>, Box<Ast>),
+
+    /// Kleisli composition: `f >=> g`
     KleisliCompose(Span, Box<Ast>, Box<Ast>),
 
     /// Empty list literal: `[]`

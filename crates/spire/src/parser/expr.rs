@@ -11,7 +11,8 @@ impl Parser<'_> {
             Token::PipeMap => Some(1),
             Token::PipeBind => Some(2),
             Token::Compose => Some(3),
-            Token::PipeCompose => Some(4),
+            Token::LiftCompose => Some(4),
+            Token::KleisliCompose => Some(5),
             _ => None,
         }
     }
@@ -53,7 +54,8 @@ impl Parser<'_> {
                 1 => Ast::ContextMap(span, Box::new(left), Box::new(right)),
                 2 => Ast::ContextBind(span, Box::new(left), Box::new(right)),
                 3 => Ast::Compose(span, Box::new(left), Box::new(right)),
-                4 => Ast::KleisliCompose(span, Box::new(left), Box::new(right)),
+                4 => Ast::LiftedCompose(span, Box::new(left), Box::new(right)),
+                5 => Ast::KleisliCompose(span, Box::new(left), Box::new(right)),
                 _ => unreachable!("validated flow token"),
             };
         }

@@ -464,7 +464,8 @@ Surtr のパイプ系は大きく 2 種類あります。
   - `|>=`
 - compose 系
   - `>>`
-  - `|=>`
+  - `>*`
+  - `>=>`
 
 ### 10.1 `|>` は「値を流す」
 
@@ -539,27 +540,30 @@ def expand(n: Int) -> List<Int> { [n, n + 10] }
 print(to_string([1, 2, 3] |>= expand()))
 ```
 
-### 10.4 `>>` と `|=>` は「関数値をつなぐ」
+### 10.4 `>>`, `>*`, `>=>` は「関数値をつなぐ」
 
 ここが apply 系との一番大きな違いです。  
 compose 系は「値」ではなく「関数値」をつなぎます。
 
 ```surtr
 pipeline = &trim >> &render
-result_pipeline = &parse |=> &validate
+result_pipeline = &parse >=> &validate
+lifted_pipeline = &parse >* &render
 ```
 
 Surtr では、compose の左右は capture か closure だけです。
 
 ```surtr
-&parse |=> &validate
-{|x| parse(x)} |=> {|y| validate(y)}
+&parse >=> &validate
+{|x| parse(x)} >=> {|y| validate(y)}
+&parse >* &render
 ```
 
 次のような call 式は compose できません。
 
 ```surtr
-parse() |=> validate()   # 不可
+parse() >=> validate()   # 不可
+parse() >* render()      # 不可
 inc() >> render()        # 不可
 ```
 
@@ -571,14 +575,14 @@ Surtr では裸の関数参照を関数値として扱いません。
 
 ```surtr
 value |> normalize       # 不可
-pipeline = parse |=> validate  # 不可
+pipeline = parse >=> validate  # 不可
 ```
 
 関数値がほしいなら `&` を付けます。
 
 ```surtr
 value |> &normalize
-pipeline = &parse |=> &validate
+pipeline = &parse >=> &validate
 ```
 
 ### 10.6 Backtick FuncLiteral

@@ -10,7 +10,7 @@ def inc(x: Int) -> Int {
   x + 1
 }
 
-pipeline = &parse |=> &render
+pipeline = &parse >=> &render
 plain = &inc >> &inc
 
 match pipeline("x") {

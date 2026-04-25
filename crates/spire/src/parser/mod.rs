@@ -575,6 +575,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*left, delta)),
             Box::new(shift_ast_span(*right, delta)),
         ),
+        Ast::LiftedCompose(span, left, right) => Ast::LiftedCompose(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
         Ast::KleisliCompose(span, left, right) => Ast::KleisliCompose(
             shift_span(span, delta),
             Box::new(shift_ast_span(*left, delta)),
@@ -883,6 +888,7 @@ impl Ast {
             | Ast::ContextMap(s, _, _)
             | Ast::ContextBind(s, _, _)
             | Ast::Compose(s, _, _)
+            | Ast::LiftedCompose(s, _, _)
             | Ast::KleisliCompose(s, _, _)
             | Ast::ListNil(s)
             | Ast::ListCons(s, _, _)

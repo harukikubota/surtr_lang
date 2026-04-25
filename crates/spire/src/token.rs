@@ -61,8 +61,9 @@ pub enum Token {
     PipeApply,   // |>
     PipeMap,     // |*>
     PipeBind,    // |>=
-    PipeCompose, // |=>
     Compose,     // >>
+    LiftCompose, // >*
+    KleisliCompose, // >=>
     Amp,         // &
     Dollar,      // $
 

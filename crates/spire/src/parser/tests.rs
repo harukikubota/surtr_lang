@@ -1292,7 +1292,7 @@ fn test_pipe_rhs_call_stays_as_app() {
 #[test]
 fn test_flow_operators_allow_elixir_style_line_breaks() {
     let ast = parse(
-        "out = value\n|> trim()\n|*> normalize()\npipeline = &parse\n|=> &render\nplain = &inc >>\n&inc",
+        "out = value\n|> trim()\n|*> normalize()\npipeline = &parse\n>* &render\nplain = &inc >>\n&inc",
     )
     .expect("flow operators should continue across newlines");
 
@@ -1308,9 +1308,9 @@ fn test_flow_operators_allow_elixir_style_line_breaks() {
 
     match &ast[1] {
         Ast::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Ast::KleisliCompose(_, _, _)));
+            assert!(matches!(rhs.as_ref(), Ast::LiftedCompose(_, _, _)));
         }
-        other => panic!("Expected multiline kleisli compose, got {:?}", other),
+        other => panic!("Expected multiline lifted compose, got {:?}", other),
     }
 
     match &ast[2] {
@@ -1365,7 +1365,7 @@ fn test_qualified_partial_capture_parses() {
 #[test]
 fn test_compose_chain_is_left_associative_at_same_precedence() {
     let ast =
-        parse("pipeline = parse() |=> validate() >> render()").expect("compose chain should parse");
+        parse("pipeline = parse() >=> validate() >> render()").expect("compose chain should parse");
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Compose(_, left, right) => {
@@ -1376,6 +1376,11 @@ fn test_compose_chain_is_left_associative_at_same_precedence() {
         },
         other => panic!("Expected bind, got {:?}", other),
     }
+}
+
+#[test]
+fn test_legacy_pipe_compose_operator_is_rejected() {
+    parse("pipeline = &parse |=> &render").expect_err("legacy pipe compose should be rejected");
 }
 
 #[test]

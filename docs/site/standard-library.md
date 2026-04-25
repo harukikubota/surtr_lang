@@ -352,7 +352,7 @@ ret = List::reverse(acc)
 @@builtin type Err(Error) -> Result<$T>
 ```
 
-現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `|=>` の言語構文と型規則ですが、
+現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `>*`, `>=>` の言語構文と型規則ですが、
 `Result::is_ok(...)` / `Result::is_err(...)` で variant 判定だけを簡潔に書けます。
 
 ## 11. `Option` module の位置づけ
@@ -367,7 +367,7 @@ defenum Option<$T> {
 }
 ```
 
-`Option` は `=?`、`|*>`、`|>=`、`|=>` の `Result` 文脈サポートを受けません。
+`Option` は `=?`、`|*>`、`|>=`、`>*`、`>=>` の `Result` / `List` 文脈サポートを受けません。
 失敗伝播へ載せたい場合は `Option::to_result(value, err)`、値として分岐したい場合は `match` を使います。
 `Option::from_result(value)` は `Err(_)` を `None` に畳み込む明示変換です。
 
@@ -538,7 +538,8 @@ name = Lens::view(lens, user)
 | `x |> f(1)` | call 式への第一引数注入 |
 | `list |*> f()` | `List::map` と同じ方向の変換 |
 | `list |>= f()` | `List` の bind 方向の変換 |
-| `&f |=> &g` | `List` または `Result` を返す関数の合成 |
+| `&f >* &g` | 文脈付き関数の後ろに pure function をつなぐ lifted compose |
+| `&f >=> &g` | `List` または `Result` を返す関数どうしの Kleisli 合成 |
 
 重要なのは、compose 系の実装詳細ではなく surface contract です。
 

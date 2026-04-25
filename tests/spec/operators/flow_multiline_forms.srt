@@ -2,8 +2,8 @@ def parse(text: String) -> Result<Int> {
   Ok(2)
 }
 
-def render(x: Int) -> Result<String> {
-  Ok(to_string(x + 3))
+def render(x: Int) -> String {
+  to_string(x + 3)
 }
 
 def inc(x: Int) -> Int {
@@ -19,7 +19,7 @@ value = 4
   |> double()
 
 pipeline = &parse
-  |=> &render
+  >* &render
 
 plain = &inc
   >> &double

@@ -233,7 +233,7 @@ enum SyntaxSurface {
 - unary minus は numeric literal のみ許可する
 - `FuncLiteral` は infix 専用
 - `value._0` は許可、`.0` は不許可
-- `parse() |=> validate()` など compose chain は引き続き左結合
+- `parse() >=> validate()` や `parse() >* render()` など compose chain は引き続き左結合
 - trailing block sugar は named arg と共存させない
 
 ### 6.4 pattern parser

@@ -202,7 +202,8 @@ False
 - `|*>`
 - `|>=`
 - `>>`
-- `|=>`
+- `>*`
+- `>=>`
 - `=?`
 
 #### `|>` 値 apply
@@ -270,19 +271,33 @@ pipeline = &trim >> &render
 左右とも closure value でなければなりません。  
 `trim() >> render()` のような call 式は不許可です。
 
-#### `|=>` Kleisli 合成
+#### `>*` Lifted 合成
 
-`|=>` は `Result` / `List` を返す関数同士を合成します。
+`>*` は `Result` / `List` を返す関数の後ろへ pure function を接続します。
 
 ```surtr
-pipeline = &parse |=> &validate
+pipeline = &parse >* &render
 ```
 
-- `Result` なら `(A -> Result<B>) |=> (B -> Result<C>)`
-- `List` なら `(A -> List<B>) |=> (B -> List<C>)`
+- `Result` なら `(A -> Result<B>) >* (B -> C)`
+- `List` なら `(A -> List<B>) >* (B -> C)`
+
+右辺は plain function でなければなりません。これも compose なので、左右とも capture または closure に限ります。  
+`parse() >* render()` は不許可です。
+
+#### `>=>` Kleisli 合成
+
+`>=>` は `Result` / `List` を返す関数同士を合成します。
+
+```surtr
+pipeline = &parse >=> &validate
+```
+
+- `Result` なら `(A -> Result<B>) >=> (B -> Result<C>)`
+- `List` なら `(A -> List<B>) >=> (B -> List<C>)`
 
 これも compose なので、左右とも capture または closure に限ります。  
-`parse() |=> validate()` は不許可です。
+`parse() >=> validate()` は不許可です。
 
 #### `=?` SafeBind
 
@@ -305,7 +320,7 @@ value: Int =? parse_int("1")
 
 - 裸の関数参照は許可しない
 - `value |> normalize` は不許可
-- `pipeline = parse |=> validate` も不許可
+- `pipeline = parse >=> validate` も不許可
 - 関数値として保持できるのは capture または closure
 - backtick FuncLiteral は中置位置専用で、値にはならない
 - ``left `name` right`` は `name(left, right)` に lower される
@@ -315,8 +330,8 @@ value: Int =? parse_int("1")
 - `&` 側で operator を capture する構文と placeholder capture (`&1`) は未実装
 - bare capture を `inspect` / `to_string` すると、metadata があれば
   `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
-- `Result` と `List` を `|*>`, `|>=`, `|=>` で混在させない
-- `|>`, `|*>`, `|>=`, `|=>`, `=?` は同一優先度・左結合
+- `Result` と `List` を `|*>`, `|>=`, `>*`, `>=>` で混在させない
+- `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
 - 結合優先度は `Bind < Apply=Compose < Logical < Expr`
 - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
 - comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
