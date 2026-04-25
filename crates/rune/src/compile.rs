@@ -62,7 +62,7 @@ pub(crate) fn script_plan_error_as_rune_error(
         &sources,
         source_id,
         "parse",
-        diagnostics::simple_error("ParseError", &error.message, error.span, None),
+        diagnostics::parse_error_spec(source, &error.message, error.span),
     )
 }
 
@@ -306,7 +306,11 @@ fn parse_program_with_module_sources(
                     sources,
                     e.source_id,
                     "parse",
-                    diagnostics::simple_error("ParseError", e.message(), e.span(), None),
+                    diagnostics::parse_error_spec(
+                        sources.source(e.source_id).unwrap_or(""),
+                        e.message(),
+                        e.span(),
+                    ),
                 )
             })?;
 
@@ -324,11 +328,10 @@ fn parse_program_with_module_sources(
                     sources,
                     user_source_id,
                     "parse",
-                    diagnostics::simple_error(
-                        "ParseError",
+                    diagnostics::parse_error_spec(
+                        user_source,
                         script_err.message(),
                         script_err.span().clone(),
-                        None,
                     ),
                 ));
             }
@@ -344,7 +347,7 @@ fn parse_program_with_module_sources(
                     sources,
                     user_source_id,
                     "parse",
-                    diagnostics::simple_error("ParseError", e.message(), e.span().clone(), None),
+                    diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
                 )
             })?
         }
@@ -425,7 +428,11 @@ pub(crate) fn compile_source(
             sources,
             source_id,
             "resolve",
-            diagnostics::simple_error("ResolveError", &e.message, span, None),
+            diagnostics::resolve_error_spec(
+                sources.source(source_id).unwrap_or(""),
+                &e.message,
+                span,
+            ),
         )
     })?;
 
@@ -442,7 +449,11 @@ pub(crate) fn compile_source(
             sources,
             source_id,
             "resolve",
-            diagnostics::simple_error("ResolveError", &e.message, span, None),
+            diagnostics::resolve_error_spec(
+                sources.source(source_id).unwrap_or(""),
+                &e.message,
+                span,
+            ),
         )
     })?;
 

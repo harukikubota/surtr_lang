@@ -1,3 +1,5 @@
 phase: typecheck
 contains: `|>` type mismatch: expected Int, got Result<Int>
-contains: Use `|*>` to apply a plain function to the Ok value
+contains: `|>` signature rule
+contains: LHS: Result<Int>
+contains: RHS: (Int -> Int)

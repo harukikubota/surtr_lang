@@ -1439,7 +1439,7 @@ impl Checker {
                 }
                 Ty::UserFunc { params, ret, .. } => {
                     let typed_args =
-                        self.typecheck_user_function_args(span, id.unique_id, params, args)?;
+                        self.typecheck_user_function_args(span, id.unique_id, params, args, None)?;
                     return Ok(TypedNode {
                         ty: ret.as_ref().clone(),
                         span: span.clone(),
@@ -1576,7 +1576,8 @@ impl Checker {
                 }
             };
 
-            let typed_args = self.typecheck_user_function_args(span, new_uid, &params, args)?;
+            let typed_args =
+                self.typecheck_user_function_args(span, new_uid, &params, args, None)?;
             let expected_self_ty = Ty::Struct(id.name.clone(), def.fields.clone());
             if !self.types_compatible(&expected_self_ty, &ret_ty) {
                 return Err(TypeError {

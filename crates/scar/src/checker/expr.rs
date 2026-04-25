@@ -661,6 +661,64 @@ impl Checker {
             .map(|sig| format!("Callable type signature: {}", sig))
     }
 
+    pub(super) fn callable_definition_signature_hint(
+        &self,
+        func: &TypedNode,
+        params: &[Ty],
+        ret: &Ty,
+    ) -> Option<String> {
+        let TypedInner::Var(id) = &func.node else {
+            return None;
+        };
+        let qualified_name = id.qualified_name.as_deref().unwrap_or(&id.name);
+        let display_name = callable_definition_display_name(qualified_name, &id.name);
+        let mut hint = format!(
+            "Callable definition signature: {}",
+            self.callable_definition_signature(&display_name, id.unique_id, params, ret)
+        );
+        if let Some(def_span) = self
+            .function_ids_by_name
+            .values()
+            .find(|decl| decl.unique_id == id.unique_id)
+            .map(|decl| decl.span.clone())
+        {
+            hint.push_str(&format!(
+                "\nCallable definition span: {}..{}",
+                def_span.start, def_span.end
+            ));
+        }
+        Some(hint)
+    }
+
+    fn callable_definition_signature(
+        &self,
+        qualified_name: &str,
+        uid: u32,
+        params: &[Ty],
+        ret: &Ty,
+    ) -> String {
+        let param_names = self.user_func_params.get(&uid);
+        let param_list = params
+            .iter()
+            .enumerate()
+            .map(|(idx, ty)| {
+                let name = param_names
+                    .and_then(|names| names.get(idx))
+                    .map(String::as_str)
+                    .unwrap_or("_");
+                format!("{}: {}", name, self.ty_name(ty))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let ret = self.ty_name(ret);
+
+        if let Some(display) = trait_impl_signature_display(qualified_name, &param_list, &ret) {
+            return display;
+        }
+
+        format!("{}({}) -> {}", qualified_name, param_list, ret)
+    }
+
     pub(super) fn operator_type_display(&self, ty: &Ty) -> String {
         self.callable_signature_for_ty(ty)
             .unwrap_or_else(|| self.ty_name(ty))
@@ -686,24 +744,6 @@ impl Checker {
             hint.push_str(&extra);
         }
         hint
-    }
-
-    pub(super) fn result_map_hint_for_plain_apply(
-        &self,
-        op_name: &str,
-        lhs_ty: &Ty,
-        rhs_in: &Ty,
-    ) -> Option<String> {
-        match self.resolve_ty(lhs_ty) {
-            Ty::Result(ok, _) if self.resolve_ty(ok.as_ref()) == self.resolve_ty(rhs_in) => Some(
-                format!(
-                    "{} sees the evaluated LHS as Result<{}>. Use `|*>` to apply a plain function to the Ok value.",
-                    op_name,
-                    self.ty_name(ok.as_ref())
-                ),
-            ),
-            _ => None,
-        }
     }
 
     pub(super) fn unary_function_parts(
@@ -1397,7 +1437,6 @@ impl Checker {
         let typed_right = self.check_apply_callable(right, "`|>`")?;
         let (param, ret) = self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
         if !self.types_compatible(&param, &typed_left.ty) {
-            let extra = self.result_map_hint_for_plain_apply("`|>`", &typed_left.ty, &param);
             return Err(TypeError {
                 message: format!(
                     "`|>` type mismatch: expected {}, got {}",
@@ -1410,7 +1449,7 @@ impl Checker {
                     "LHS: A; RHS: (A -> B); result: B",
                     &typed_left.ty,
                     &typed_right.ty,
-                    extra,
+                    None,
                 )),
             });
         }
@@ -2073,6 +2112,7 @@ impl Checker {
         callee_uid: u32,
         params: &[Ty],
         args: &[ResolvedRecordLitArg],
+        callable_hint: Option<&str>,
     ) -> Result<Vec<TypedNode>, TypeError> {
         let has_named = args
             .iter()
@@ -2149,7 +2189,7 @@ impl Checker {
                             self.ty_name(&typed.ty)
                         ),
                         span: typed.span.clone(),
-                        hint: None,
+                        hint: callable_hint.map(str::to_string),
                     });
                 }
                 typed_args.push(typed);
@@ -2183,7 +2223,7 @@ impl Checker {
                         self.ty_name(&typed.ty)
                     ),
                     span: typed.span.clone(),
-                    hint: None,
+                    hint: callable_hint.map(str::to_string),
                 });
             }
             typed_args.push(typed);
@@ -2794,8 +2834,15 @@ impl Checker {
                         });
                     }
                 };
-                let typed_args =
-                    self.typecheck_user_function_args(span, callee_uid, params, args)?;
+                let callable_hint =
+                    self.callable_definition_signature_hint(&typed_func, params, ret.as_ref());
+                let typed_args = self.typecheck_user_function_args(
+                    span,
+                    callee_uid,
+                    params,
+                    args,
+                    callable_hint.as_deref(),
+                )?;
                 self.ensure_no_runtime_lens_args(&typed_args, span, "Function call")?;
 
                 Ok(TypedNode {
@@ -3019,10 +3066,14 @@ impl Checker {
                 });
             }
         };
-        let callable_hint = Some(format!(
-            "Callable type signature: {}",
-            self.callable_signature_from_parts(&params, &ret)
-        ));
+        let callable_hint = self
+            .callable_definition_signature_hint(&typed_target, &params, &ret)
+            .or_else(|| {
+                Some(format!(
+                    "Callable type signature: {}",
+                    self.callable_signature_from_parts(&params, &ret)
+                ))
+            });
 
         if args.len() > params.len() {
             return Err(TypeError {
@@ -4043,5 +4094,72 @@ impl Checker {
         field: &str,
     ) -> Result<TypedNode, TypeError> {
         self.check_field_access_with_expected(span, expr, field, None)
+    }
+}
+
+fn trait_impl_signature_display(
+    qualified_name: &str,
+    param_list: &str,
+    ret: &str,
+) -> Option<String> {
+    let (_, rest) = qualified_name.split_once("::__traitimpl__::")?;
+    let mut parts = rest.rsplitn(4, "::").collect::<Vec<_>>();
+    if parts.len() != 4 {
+        return None;
+    }
+    parts.reverse();
+    let trait_name = parts[0];
+    let target = parts[1];
+    let method = parts[2];
+    Some(format!(
+        "impl {} for {} {{ def {}({}) -> {} }}",
+        trait_name, target, method, param_list, ret
+    ))
+}
+
+fn callable_definition_display_name(qualified_name: &str, local_name: &str) -> String {
+    let local_tail = local_name.rsplit("::").next().unwrap_or(local_name);
+    if let Some((_prefix, rest)) = qualified_name.split_once("::__traitimpl__::") {
+        let mut parts = rest.rsplitn(4, "::").collect::<Vec<_>>();
+        if parts.len() == 4 {
+            parts.reverse();
+            if parts[2] == local_tail {
+                return qualified_name.to_string();
+            }
+        }
+        return local_name.to_string();
+    }
+
+    let display_name = if qualified_name
+        .rsplit("::")
+        .next()
+        .is_some_and(|tail| tail == local_tail)
+    {
+        qualified_name.to_string()
+    } else {
+        local_name.to_string()
+    };
+    trim_script_qualified_display_name(&display_name)
+}
+
+fn trim_script_qualified_display_name(qualified_name: &str) -> String {
+    let Some(rest) = qualified_name.strip_prefix("__Script::") else {
+        return qualified_name.to_string();
+    };
+    let segments = rest.split("::").collect::<Vec<_>>();
+    if segments.len() < 2 {
+        return qualified_name.to_string();
+    }
+
+    let name = segments[segments.len() - 1];
+    let parent = segments[segments.len() - 2];
+    if parent
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_uppercase())
+    {
+        format!("{}::{}", parent, name)
+    } else {
+        format!("__Script::{}::{}", parent, name)
     }
 }

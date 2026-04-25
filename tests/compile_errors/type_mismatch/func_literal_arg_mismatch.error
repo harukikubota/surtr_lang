@@ -1,0 +1,4 @@
+phase: typecheck
+contains: Cannot apply Add to Int and String
+contains: Operator `Add` requires compatible operand types
+contains: Left operand is Int, right operand is String

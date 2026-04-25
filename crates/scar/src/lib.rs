@@ -226,6 +226,13 @@ defmod Generator {}"#;
     fn resolve_with_builtin_prelude_in_script_module(
         source: &str,
     ) -> Result<Vec<sigil::resolved::Resolved>, sigil::error::ResolveError> {
+        resolve_with_builtin_prelude_in_module(source, "__Script::fixture")
+    }
+
+    fn resolve_with_builtin_prelude_in_module(
+        source: &str,
+        module_path: &str,
+    ) -> Result<Vec<sigil::resolved::Resolved>, sigil::error::ResolveError> {
         let module_stages = std_module_stages();
         let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
             .expect("source should parse");
@@ -235,7 +242,7 @@ defmod Generator {}"#;
             &module_stages,
             user_ast,
             &declaration_index,
-            Some("__Script::fixture".to_string()),
+            Some(module_path.to_string()),
         )
     }
 
@@ -1575,16 +1582,44 @@ answer = inc("oops")"#,
 
     #[test]
     fn capture_application_mismatch_reports_callable_type_signature() {
-        let resolved = resolve_with_builtin_prelude(
+        let resolved = resolve_with_builtin_prelude_in_script_module(
             r#"def add(x: Int, y: Int) -> Int {
   x + y
 }
 bad = &add("oops")"#,
-        );
+        )
+        .expect("source should resolve");
         let err = typecheck(resolved).expect_err("capture application should fail");
         assert!(err.message.contains("expected Int, got String"));
-        let hint = err.hint.as_deref().expect("callable signature hint");
-        assert!(hint.contains("Callable type signature: (Int, Int -> Int)"));
+        let hint = err
+            .hint
+            .as_deref()
+            .expect("callable definition signature hint");
+        assert!(hint.contains(
+            "Callable definition signature: __Script::fixture::add(x: Int, y: Int) -> Int"
+        ));
+    }
+
+    #[test]
+    fn script_callable_signature_omits_file_path_segments() {
+        let resolved = resolve_with_builtin_prelude_in_module(
+            r#"def add_one(x: Int) -> Int {
+  x + 1
+}
+result = add_one("oops")"#,
+            "__Script::Users::haruca::work::rust::surtr::surtr_compile_error_cases::type_call_arg_mismatch",
+        )
+        .expect("source should resolve");
+        let err = typecheck(resolved).expect_err("function call should fail");
+        let hint = err
+            .hint
+            .as_deref()
+            .expect("callable definition signature hint");
+        assert!(hint.contains(
+            "Callable definition signature: __Script::type_call_arg_mismatch::add_one(x: Int) -> Int"
+        ));
+        assert!(!hint.contains("__Script::Users::haruca"));
+        assert!(hint.contains("Callable definition span: 0.."));
     }
 
     #[test]
@@ -1609,7 +1644,7 @@ bad = &text >> &inc"#,
     }
 
     #[test]
-    fn pipe_plain_apply_over_result_suggests_result_map_operator() {
+    fn pipe_plain_apply_over_result_reports_whole_lhs_mismatch() {
         let resolved = resolve_with_builtin_prelude(
             r#"def parse(x: Int) -> Result<Int> {
   Ok(x)
@@ -1625,7 +1660,9 @@ bad = parse(1) |> &inc"#,
         assert!(err.message.contains("expected Int, got Result<Int>"));
         let hint = err.hint.as_deref().expect("operator rule hint");
         assert!(hint.contains("`|>` signature rule"));
-        assert!(hint.contains("Use `|*>` to apply a plain function to the Ok value"));
+        assert!(hint.contains("LHS: Result<Int>"));
+        assert!(hint.contains("RHS: (Int -> Int)"));
+        assert!(!hint.contains("`|*>`"));
     }
 
     #[test]
