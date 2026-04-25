@@ -1,0 +1,2 @@
+phase: typecheck
+contains: MatchResult values are extractor-only

@@ -31,7 +31,7 @@ impl Checker {
             }
             ResolvedPattern::Annotated(id, ast_ty) => {
                 let expected =
-                    self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                    self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                 if !self.types_compatible(&expected, rhs_ty) {
                     return Err(TypeError {
                         message: format!(
@@ -50,7 +50,7 @@ impl Checker {
                 let (typed_inner, inner_ty) = self.check_pattern(inner, rhs_ty, span)?;
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
                     let expected =
-                        self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                        self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     if !self.types_compatible(&expected, &inner_ty) {
                         return Err(TypeError {
                             message: format!(

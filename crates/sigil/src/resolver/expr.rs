@@ -253,6 +253,19 @@ impl Resolver {
                 let qualified_name = (uid != TUPLE_TYPE_ROOT_UID)
                     .then(|| self.declaration_fq_name_for_uid(uid))
                     .flatten();
+                if self
+                    .declaration_uid_kinds
+                    .get(&uid)
+                    .is_some_and(|kind| matches!(kind, DeclarationKind::Extractor))
+                {
+                    return Err(ResolveError {
+                        message: format!(
+                            "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it on the left side of match, =?, or =. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
+                            name
+                        ),
+                        span,
+                    });
+                }
                 Ok(Resolved::Var(
                     span.clone(),
                     ResolvedId {
@@ -287,6 +300,19 @@ impl Resolver {
                             .unwrap_or_else(|| name.clone()),
                     )
                 };
+                if self
+                    .declaration_uid_kinds
+                    .get(&uid)
+                    .is_some_and(|kind| matches!(kind, DeclarationKind::Extractor))
+                {
+                    return Err(ResolveError {
+                        message: format!(
+                            "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it on the left side of match, =?, or =. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
+                            name
+                        ),
+                        span,
+                    });
+                }
                 Ok(Resolved::Var(
                     span.clone(),
                     ResolvedId {

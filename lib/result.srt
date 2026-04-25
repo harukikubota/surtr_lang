@@ -10,9 +10,11 @@ dedicated built-in abstraction rather than exposing it as the future general
 @@builtin type Result<$T>
 
 @@doc """
-MatchBlock / Extractor が返す列挙結果。
+Extractor が MatchBlock evaluator へ返す内部制御用の列挙結果。
 surface 上の canonical な型位置は `MatchResult<$Value, Error>` だが、
 error 側は抽象型 `Error` に固定される。
+`MatchResult` は `defextractor` / `@@builtin defextractor` の戻り値と
+Extractor 本文内でだけ使える。通常 API は `Result`, `Option`, user-defined enum を返す。
 """
 defenum MatchResult<$Value> {
   Success($Value),

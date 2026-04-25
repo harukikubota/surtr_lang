@@ -1,6 +1,18 @@
 use super::*;
 
 impl Checker {
+    pub(super) fn match_result_value_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "MatchResult values are extractor-only and can only be constructed inside extractor definitions"
+                .into(),
+            span: span.clone(),
+            hint: Some(
+                "Use MatchResult::Success, MatchResult::NoMatch, or MatchResult::Err only in a defextractor body. Ordinary APIs should return Result, Option, or a user-defined enum explicitly."
+                    .into(),
+            ),
+        }
+    }
+
     fn parse_standalone_tuple_root_index(name: &str) -> Option<usize> {
         let suffix = name.strip_prefix('_')?;
         if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
@@ -89,6 +101,9 @@ impl Checker {
 
                 if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
                     let variant = self.instantiate_enum_variant(&variant);
+                    if variant.enum_name == "MatchResult" && !self.in_extractor_body {
+                        return Err(self.match_result_value_not_allowed_error(span));
+                    }
                     if !variant.payload.is_empty() {
                         return Err(TypeError {
                             message: format!(
@@ -151,7 +166,7 @@ impl Checker {
                 }
                 let typed_rhs = if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let expected =
-                        self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                        self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     self.check_node_with_expected(rhs, Some(&expected))?
                 } else {
                     self.check_node(rhs)?
@@ -387,6 +402,16 @@ impl Checker {
             });
         }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
+        if matches!(&rhs_ty, Ty::Enum(name, _) if name == "Option") {
+            return Err(TypeError {
+                message: "Option is not a SafeBind target; `=?` propagates Result-style failures, not optional values.".into(),
+                span: typed_rhs.span.clone(),
+                hint: Some(
+                    "Convert explicitly with Option::to_result(value, err) before using `=?`."
+                        .into(),
+                ),
+            });
+        }
         let pattern_can_nomatch = !Self::is_total_bind_pattern(pat);
         let (ok_ty, mut propagated_err_tys) = match rhs_ty {
             Ty::Result(ok, err) => {
@@ -2395,9 +2420,10 @@ impl Checker {
             None => params
                 .iter()
                 .map(|param| match &param.ty {
-                    Some(ast_ty) => {
-                        body_checker.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)
-                    }
+                    Some(ast_ty) => body_checker.resolve_ast_ty_in_context(
+                        ast_ty,
+                        body_checker.local_type_syntax_context(),
+                    ),
                     None => Ok(body_checker.env.fresh_tyvar()),
                 })
                 .collect::<Result<Vec<_>, _>>()?,
@@ -2405,8 +2431,8 @@ impl Checker {
 
         for (param, param_ty) in params.iter().zip(param_tys.iter()) {
             let param_ty = if let Some(ast_ty) = &param.ty {
-                let annotated =
-                    body_checker.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                let annotated = body_checker
+                    .resolve_ast_ty_in_context(ast_ty, body_checker.local_type_syntax_context())?;
                 if !body_checker.types_compatible(param_ty, &annotated) {
                     return Err(TypeError {
                         message: format!(

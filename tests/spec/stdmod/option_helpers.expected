@@ -1,0 +1,6 @@
+7
+none
+Ok(7)
+Err(NoneError("None Value."))
+Option::Some(9)
+Option::None

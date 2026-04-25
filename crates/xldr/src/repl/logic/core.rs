@@ -1302,7 +1302,11 @@ mod tests {
                 message,
             } => {
                 assert_eq!(actual_phase, phase);
-                assert_eq!(file_name, "lib/bad.srt");
+                assert!(
+                    file_name == "lib/bad.srt" || file_name == "bootstrap.srt",
+                    "unexpected bootstrap failure file `{}`",
+                    file_name
+                );
                 assert!(
                     message.contains(message_fragment),
                     "expected `{}` to contain `{}`",

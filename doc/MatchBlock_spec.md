@@ -93,6 +93,7 @@ Surtr では、builtin Extractor と user-defined Extractor を
 - 同じ `User(...)` でも BlockKind によって実体を切り替える
 - ExprBlock では `User::new(...)` の sugar として扱う
 - MatchBlock では attached extractor `User::deconstruct(...)` の sugar として扱う
+  - attached extractor は `impl User { defextractor deconstruct(...) ... }` として定義する
 
 ---
 
@@ -226,6 +227,9 @@ tuple 自体は user code でも使えるが、extractor 契約では「分解�
 - `Success(T)` または `Success((...))` を保持できる
 - `NoMatch` を保持できる
 - `Err(Error)` を保持できる
+- `MatchResult` は Extractor 専用であり、通常の `def` の戻り値・引数・field・local annotation には書けない
+- `MatchResult::Success` / `MatchResult::NoMatch` / `MatchResult::Err` は Extractor 本文内だけで構築できる
+- `Seq` は現時点では surface 型として導入しない。複数値は tuple payload で表す
 
 ---
 
@@ -331,7 +335,7 @@ MatchBlock 文脈では、これらは通常 call ではなく matcher invocatio
 
 - constructor-style な head は通常の `defextractor` 名としては宣言しない
 - 構造体名は import 対象ではない。`import User` は無効で、struct head `User` は宣言名として直接見える
-- `User(name, age)` のような struct head は、`User::deconstruct(...)` が定義されていれば attached extractor として解決する
+- `User(name, age)` のような struct head は、`impl User { defextractor deconstruct(...) ... }` が定義されていれば attached extractor として解決する
 - `Ok(value)` / `Err(err)` は Extractor call ではなく constructor pattern として扱う
 
 意味:
@@ -509,6 +513,8 @@ Extractor の責務は次に限定する。
 
 Extractor は、抽出後の再帰束縛には関与しない。
 抽出後の subpattern 適用は compiler 側の MatchBlock evaluator が担う。
+Extractor 自体は LHS / MatchBlock 専用であり、通常の式・RHS・引数位置では呼び出せない。
+値レベル API が必要な場合は、`Result` / `Option` / user-defined enum を返す通常の `def` として別に定義する。
 
 ### 10.3 `NoMatch` を返すべきケース
 
@@ -594,12 +600,6 @@ defstruct User {
   name: String,
   age: Int,
 }
-
-impl User {
-  def deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
-    MatchResult::Err(UserMatchError("not yet implemented in surface"))
-  }
-}
 ```
 
 補足:
@@ -610,9 +610,8 @@ impl User {
 - `uncons` は code-level に宣言があっても、内部実装は compiler-special のままでよい
 - Pattern 位置の `[head, ..tail]` は `List` / `String` に対して `uncons(head, tail)` の alias として扱ってよい
 - Expr 位置の `["t", ..source]` は引き続き list 構築であり、String 構築 sugar にはしない
-- constructor-style な head は `defextractor` 名ではなく attached extractor sugar として使う
 - `defextractor` / `@@builtin defextractor` は module / impl の下でのみ宣言する
-- `User(...)` は `User::deconstruct(...)` が定義されているときだけ Extractor call として成立する
+- constructor-style な head を attached extractor sugar として扱う設計は将来課題とし、通常の `def` で `MatchResult` を返す形にはしない
 - 構造体 head `User` 自体は import しない
 
 ---

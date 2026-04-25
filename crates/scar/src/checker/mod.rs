@@ -232,6 +232,8 @@ impl TypecheckProfiler {
 enum TypeSyntaxContext {
     General,
     FunctionReturn,
+    ExtractorReturn,
+    ExtractorBody,
     ErrorMarker,
 }
 
@@ -846,6 +848,7 @@ struct Checker {
     function_return_ty: Option<Ty>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
+    in_extractor_body: bool,
     closure_depth: usize,
     lens_bindings: HashMap<u32, TypedLensPath>,
     user_func_params: HashMap<u32, Vec<String>>,
@@ -869,6 +872,7 @@ impl Checker {
             function_return_ty: None,
             current_function_symbol: None,
             current_impl_struct_target: None,
+            in_extractor_body: false,
             closure_depth: 0,
             lens_bindings: HashMap::new(),
             user_func_params: HashMap::new(),
@@ -902,6 +906,7 @@ impl Checker {
             function_return_ty: None,
             current_function_symbol: None,
             current_impl_struct_target: None,
+            in_extractor_body: false,
             closure_depth: 0,
             lens_bindings: HashMap::new(),
             user_func_params,
@@ -937,6 +942,7 @@ impl Checker {
         checker.function_return_ty = self.function_return_ty.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
+        checker.in_extractor_body = self.in_extractor_body;
         checker.closure_depth = self.closure_depth;
         checker.lens_bindings = self.lens_bindings.clone();
         checker.substitutions = self.substitutions.clone();

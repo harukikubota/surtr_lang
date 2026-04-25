@@ -408,6 +408,8 @@ def pick() -> Result<Int> {
 
 `=?` は Result 専用というより、Surtr では「失敗を伝播する束縛」の入口です。  
 現在きちんと使える対象は `Result`、`List`、`String` です。
+`Option` は標準 enum として存在しますが、`=?` や Result 文脈の関数演算子では特別扱いしません。
+必要な場合は `Option::to_result(value, err)` で明示的に `Result` へ変換します。
 
 ```surtr
 [head, ..tail] =? [1, 2, 3]
@@ -633,7 +635,7 @@ f = &`+`   # 未実装
 現在の Surtr では、標準モジュールを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。

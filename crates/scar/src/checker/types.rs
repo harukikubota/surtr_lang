@@ -1,6 +1,44 @@
 use super::*;
 
 impl Checker {
+    fn match_result_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "MatchResult is extractor-only and can only be used in extractor definitions"
+                .into(),
+            span: span.clone(),
+            hint: Some(
+                "Use MatchResult only as a defextractor / @@builtin defextractor return type or inside an extractor body. Ordinary APIs should return Result, Option, or a user-defined enum explicitly."
+                    .into(),
+            ),
+        }
+    }
+
+    fn seq_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Seq is not a surface type in this version of Surtr".into(),
+            span: span.clone(),
+            hint: Some(
+                "Use tuple payloads for extractor success values, such as MatchResult<(A, B), Error>."
+                    .into(),
+            ),
+        }
+    }
+
+    fn match_result_type_allowed(&self, context: TypeSyntaxContext) -> bool {
+        matches!(
+            context,
+            TypeSyntaxContext::ExtractorReturn | TypeSyntaxContext::ExtractorBody
+        ) || self.in_extractor_body
+    }
+
+    pub(super) fn local_type_syntax_context(&self) -> TypeSyntaxContext {
+        if self.in_extractor_body {
+            TypeSyntaxContext::ExtractorBody
+        } else {
+            TypeSyntaxContext::General
+        }
+    }
+
     fn type_ref_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             message:
@@ -160,6 +198,7 @@ impl Checker {
 
         match ast_ty {
             AstTy::Named(span, name) => match name.as_str() {
+                "Seq" => Err(self.seq_not_allowed_error(span)),
                 "Int" => Ok(Ty::Int),
                 "Float" => Ok(Ty::Float),
                 "String" => Ok(Ty::Str),
@@ -207,8 +246,12 @@ impl Checker {
             AstTy::Generic(span, name, _) if name == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
+            AstTy::Generic(span, name, _) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::Generic(span, name, args) => match name.as_str() {
                 "MatchResult" => {
+                    if !self.match_result_type_allowed(context) {
+                        return Err(self.match_result_not_allowed_error(span));
+                    }
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
                             message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
@@ -411,6 +454,7 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
+            AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::ImplTrait(_, trait_name) => {
                 if context == TypeSyntaxContext::ErrorMarker {
                     return Err(TypeError {
@@ -430,6 +474,7 @@ impl Checker {
             AstTy::Generic(span, name, _) if name == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
             }
+            AstTy::Generic(span, name, _) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::Generic(span, name, args) if name == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
@@ -501,6 +546,9 @@ impl Checker {
                 Ok(Ty::Lens(Box::new(source), Box::new(focus)))
             }
             AstTy::Generic(span, name, args) if name == "MatchResult" => {
+                if !self.match_result_type_allowed(context) {
+                    return Err(self.match_result_not_allowed_error(span));
+                }
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
                         message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
@@ -688,6 +736,7 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
+            AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::ImplTrait(span, trait_name) => Err(TypeError {
                 message: format!(
                     "`impl {}` is not supported inside trait method signatures",
@@ -699,6 +748,7 @@ impl Checker {
             AstTy::Generic(span, name, _) if name == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
             }
+            AstTy::Generic(span, name, _) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::Generic(span, name, args) if name == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
@@ -776,6 +826,9 @@ impl Checker {
                 Ok(Ty::Lens(Box::new(source), Box::new(focus)))
             }
             AstTy::Generic(span, name, args) if name == "MatchResult" => {
+                if !self.match_result_type_allowed(context) {
+                    return Err(self.match_result_not_allowed_error(span));
+                }
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
                         message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
@@ -953,11 +1006,16 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
+            AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::Generic(span, name, _) if name == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
+            AstTy::Generic(span, name, _) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::Generic(span, name, args) => match name.as_str() {
                 "MatchResult" => {
+                    if !self.match_result_type_allowed(context) {
+                        return Err(self.match_result_not_allowed_error(span));
+                    }
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
                             message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),

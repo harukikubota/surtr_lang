@@ -1,0 +1,40 @@
+@@doc """
+Standard `Option` enum.
+`Option<$T>` represents an optional value in user code.
+It is not part of Surtr's failure-propagation machinery: `=?` and the
+Result-oriented function operators do not treat `Option` like `Result`.
+Convert explicitly when a missing value should participate in Result control
+flow.
+"""
+defenum Option<$T> {
+  Some($T),
+  None,
+}
+
+@@doc """
+Option module.
+Helpers here keep conversion between `Option` and `Result` explicit.
+"""
+defmod Option {
+  @@doc """
+  Convert `Option<$T>` to `Result<$T>`.
+  `Some(value)` becomes `Ok(value)`, and `None` becomes `Err(err)`.
+  """
+  def to_result(value: Option<$T>, err: Error) -> Result<$T> {
+    match value {
+      Option::Some(inner) => Ok(inner),
+      Option::None => Err(err),
+    }
+  }
+
+  @@doc """
+  Convert `Result<$T>` to `Option<$T>`.
+  `Ok(value)` becomes `Some(value)`, and `Err(_)` becomes `None`.
+  """
+  def from_result(value: Result<$T>) -> Option<$T> {
+    match value {
+      Ok(inner) => Option::Some(inner),
+      Err(_) => Option::None,
+    }
+  }
+}

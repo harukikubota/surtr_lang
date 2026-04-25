@@ -1202,7 +1202,7 @@ impl Checker {
                     };
                     let ret = self.resolve_builtin_ast_ty_in_context(
                         ret_ty,
-                        TypeSyntaxContext::FunctionReturn,
+                        TypeSyntaxContext::ExtractorReturn,
                         &mut tyvars,
                     )?;
                     self.env.bind_var(
@@ -1276,7 +1276,7 @@ impl Checker {
                     };
                     let ret = self.resolve_signature_ast_ty_in_context(
                         ret_ty,
-                        TypeSyntaxContext::FunctionReturn,
+                        TypeSyntaxContext::ExtractorReturn,
                         &mut tyvars,
                     )?;
                     let type_params = tyvars

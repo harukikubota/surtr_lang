@@ -38,6 +38,7 @@ mod tests {
 defmod Generator {}"#;
     const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
+    const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/option.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
 
@@ -193,6 +194,10 @@ defmod Generator {}"#;
                 (
                     "Result",
                     pick_override("Result", RESULT_MODULE_SOURCE, overrides),
+                ),
+                (
+                    "Option",
+                    pick_override("Option", OPTION_MODULE_SOURCE, overrides),
                 ),
                 ("Lens", pick_override("Lens", LENS_MODULE_SOURCE, overrides)),
                 (
@@ -950,7 +955,7 @@ impl Single {
     Single { value: value }
   }
 
-  def deconstruct(self: Self) -> MatchResult<Int, Error> {
+  defextractor deconstruct(self: Self) -> MatchResult<Int, Error> {
     MatchResult::Success(self.value)
   }
 }
@@ -976,7 +981,7 @@ impl User {
   def new(name: String, age: Int) -> Self {
     User { name: name, age: age }
   }
-  def deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
+  defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
     MatchResult::NoMatch
   }
 }

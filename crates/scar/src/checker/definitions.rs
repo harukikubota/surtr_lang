@@ -291,7 +291,7 @@ impl Checker {
         };
         let ret = self.resolve_builtin_ast_ty_in_context(
             ret_ty,
-            TypeSyntaxContext::FunctionReturn,
+            TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
         self.require_match_result_seq_ty(&ret, &param.id.span, &format!("Extractor {}", id.name))?;
@@ -471,11 +471,13 @@ impl Checker {
         function_return_ty: Ty,
         function_symbol: String,
         impl_target: Option<String>,
+        in_extractor_body: bool,
         body: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let saved_function_return_ty = self.function_return_ty.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
+        let saved_in_extractor_body = self.in_extractor_body;
         let saved_closure_depth = self.closure_depth;
         let saved_lens_bindings = self.lens_bindings.clone();
 
@@ -483,6 +485,7 @@ impl Checker {
         self.function_return_ty = Some(function_return_ty);
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
+        self.in_extractor_body = in_extractor_body;
         for (unique_id, ty) in local_bindings {
             self.env.bind_var(*unique_id, ty.clone());
         }
@@ -495,6 +498,7 @@ impl Checker {
         self.function_return_ty = saved_function_return_ty;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
+        self.in_extractor_body = saved_in_extractor_body;
         self.closure_depth = saved_closure_depth;
         self.lens_bindings = saved_lens_bindings;
 
@@ -610,6 +614,7 @@ impl Checker {
             expected_ret.clone(),
             current_symbol,
             impl_target,
+            false,
             body,
         )?;
 
@@ -712,7 +717,7 @@ impl Checker {
 
         let expected_ret = self.resolve_signature_ast_ty_in_context(
             ret_ty,
-            TypeSyntaxContext::FunctionReturn,
+            TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
         if self.ty_contains_lens(&expected_ret) {
@@ -736,6 +741,7 @@ impl Checker {
             expected_ret.clone(),
             current_symbol,
             None,
+            true,
             body,
         )?;
 
@@ -884,6 +890,7 @@ impl Checker {
                 expected_ret.clone(),
                 method.function_id.name.clone(),
                 impl_target,
+                false,
                 &method.body,
             )?;
 
@@ -1248,7 +1255,7 @@ impl Checker {
                         ),
                     });
                 }
-                if !self.is_concrete_error_value(&inner) {
+                if self.is_abstract_error_marker_value(&inner) {
                     return Err(TypeError {
                         message: "Error is abstract and cannot be constructed directly.".into(),
                         span: inner.span.clone(),
@@ -1274,6 +1281,9 @@ impl Checker {
 
         if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
             let variant = self.instantiate_enum_variant(&variant);
+            if variant.enum_name == "MatchResult" && !self.in_extractor_body {
+                return Err(self.match_result_value_not_allowed_error(span));
+            }
             if args.len() != variant.payload.len() {
                 return Err(TypeError {
                     message: format!(
@@ -1838,6 +1848,10 @@ impl Checker {
             },
             _ => false,
         }
+    }
+
+    pub(super) fn is_abstract_error_marker_value(&self, node: &TypedNode) -> bool {
+        matches!(&node.node, TypedInner::Var(id) if id.name == "Error" && !self.env.is_error_constructor(id.unique_id))
     }
 
     pub(super) fn ensure_guard_error_value(

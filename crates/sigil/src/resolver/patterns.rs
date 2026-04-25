@@ -115,7 +115,7 @@ impl Resolver {
                         if Self::is_constructor_style_head(&head_name) {
                             return Err(ResolveError {
                                 message: format!(
-                                    "Extractor names must not use constructor-style names like `{}`; implement `{}`::deconstruct(...) instead",
+                                    "Extractor names must not use constructor-style names like `{}`; implement `impl {} {{ defextractor deconstruct(...) ... }}` instead",
                                     head_name, head_name
                                 ),
                                 span,
@@ -138,13 +138,10 @@ impl Resolver {
                                 span,
                             });
                         };
-                        if !matches!(
-                            extractor_kind,
-                            DeclarationKind::ImplMethod | DeclarationKind::Def
-                        ) {
+                        if !matches!(extractor_kind, DeclarationKind::Extractor) {
                             return Err(ResolveError {
                                 message: format!(
-                                    "Attached extractor for `{}` must be implemented as `impl {} {{ def deconstruct(...) ... }}`",
+                                    "Attached extractor for `{}` must be implemented as `impl {} {{ defextractor deconstruct(...) ... }}`",
                                     head_name, head_name
                                 ),
                                 span,

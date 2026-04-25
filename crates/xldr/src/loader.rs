@@ -85,6 +85,11 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         include_str!("../../../lib/result.srt"),
         "Result",
     ),
+    (
+        "option.srt",
+        include_str!("../../../lib/option.srt"),
+        "Option",
+    ),
     ("lens.srt", include_str!("../../../lib/lens.srt"), "Lens"),
     ("float.srt", include_str!("../../../lib/float.srt"), "Float"),
     (
@@ -748,6 +753,7 @@ mod tests {
                 "Generator",
                 "HashMap",
                 "Result",
+                "Option",
                 "Lens",
                 "Float",
                 "Config",
@@ -861,6 +867,7 @@ mod tests {
                 "Generator",
                 "HashMap",
                 "Result",
+                "Option",
                 "Lens",
                 "Float",
                 "Config",

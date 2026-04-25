@@ -1,0 +1,17 @@
+some: Option<Int> = Option::Some(7)
+none: Option<Int> = Option::None
+
+print(match some {
+  Option::Some(value) => to_string(value),
+  Option::None => "none",
+})
+
+print(match none {
+  Option::Some(value) => to_string(value),
+  Option::None => "none",
+})
+
+print(inspect(Option::to_result(some, NoneError)))
+print(inspect(Option::to_result(none, NoneError)))
+print(inspect(Option::from_result(Ok(9))))
+print(inspect(Option::from_result(Err(NoneError))))

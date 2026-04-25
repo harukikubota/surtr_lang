@@ -51,7 +51,7 @@ Xldr は対話セッション中に次を保持する。
 
 ### 3.2 初期化
 
-- セッション開始時に標準 module source を `Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float]` の順で読み込む
+- セッション開始時に標準 module source を `Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float]` の順で読み込む
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin と、トップレベルの `Unit` type 宣言を登録する
 - 各 type file の top-level では対応する canonical builtin type head を登録する

@@ -906,53 +906,89 @@ impl Resolver {
                     }
 
                     for method in methods {
-                        let Ast::Def(
-                            method_span,
-                            method_name,
-                            type_params,
-                            params,
-                            ret_ty,
-                            body,
-                            attrs,
-                        ) = method
-                        else {
-                            return Err(ResolveError {
-                                message: "impl body may only contain `def` declarations"
-                                    .to_string(),
-                                span: span.clone(),
-                            });
-                        };
+                        match method {
+                            Ast::Def(
+                                method_span,
+                                method_name,
+                                type_params,
+                                params,
+                                ret_ty,
+                                body,
+                                attrs,
+                            ) => {
+                                if method_name == "new"
+                                    && !matches!(target_kind, &DeclarationKind::Struct)
+                                {
+                                    return Err(ResolveError {
+                                        message:
+                                            "`new` is only allowed in impl blocks for struct types"
+                                                .to_string(),
+                                        span: method_span,
+                                    });
+                                }
 
-                        if method_name == "new" && !matches!(target_kind, &DeclarationKind::Struct)
-                        {
-                            return Err(ResolveError {
-                                message: "`new` is only allowed in impl blocks for struct types"
-                                    .to_string(),
-                                span: method_span,
-                            });
+                                let lowered_name =
+                                    normalize_impl_method_name(&target, &method_name);
+                                let lowered_params = params
+                                    .into_iter()
+                                    .map(|param| FunParam {
+                                        name: param.name,
+                                        ty: rewrite_self_type(param.ty, &target),
+                                        span: param.span,
+                                    })
+                                    .collect::<Vec<_>>();
+                                let lowered_ret_ty =
+                                    ret_ty.map(|ty| rewrite_self_type(ty, &target));
+                                let lowered_body = rewrite_self_ast(*body, &target);
+
+                                lowered.push(Ast::Def(
+                                    method_span,
+                                    lowered_name,
+                                    type_params,
+                                    lowered_params,
+                                    lowered_ret_ty,
+                                    Box::new(lowered_body),
+                                    attrs,
+                                ));
+                            }
+                            Ast::ExtractorDef(
+                                method_span,
+                                method_name,
+                                type_params,
+                                param,
+                                ret_ty,
+                                body,
+                                attrs,
+                            ) => {
+                                let lowered_name =
+                                    normalize_impl_method_name(&target, &method_name);
+                                let lowered_param = ExtractorParam {
+                                    name: param.name,
+                                    ty: param.ty.map(|ty| rewrite_self_type(ty, &target)),
+                                    span: param.span,
+                                };
+                                let lowered_ret_ty = rewrite_self_type(ret_ty, &target);
+                                let lowered_body = rewrite_self_ast(*body, &target);
+
+                                lowered.push(Ast::ExtractorDef(
+                                    method_span,
+                                    lowered_name,
+                                    type_params,
+                                    lowered_param,
+                                    lowered_ret_ty,
+                                    Box::new(lowered_body),
+                                    attrs,
+                                ));
+                            }
+                            _ => {
+                                return Err(ResolveError {
+                                    message:
+                                        "impl body may only contain `def` / `defextractor` declarations"
+                                            .to_string(),
+                                    span: span.clone(),
+                                });
+                            }
                         }
-
-                        let lowered_name = normalize_impl_method_name(&target, &method_name);
-                        let lowered_params = params
-                            .into_iter()
-                            .map(|param| FunParam {
-                                name: param.name,
-                                ty: rewrite_self_type(param.ty, &target),
-                                span: param.span,
-                            })
-                            .collect::<Vec<_>>();
-                        let lowered_ret_ty = ret_ty.map(|ty| rewrite_self_type(ty, &target));
-                        let lowered_body = rewrite_self_ast(*body, &target);
-
-                        lowered.push(Ast::Def(
-                            method_span,
-                            lowered_name,
-                            type_params,
-                            lowered_params,
-                            lowered_ret_ty,
-                            Box::new(lowered_body),
-                            attrs,
-                        ));
                     }
                 }
                 other => lowered.push(other),

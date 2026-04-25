@@ -298,6 +298,7 @@ value: Int =? parse_int("1")
 - `pattern =? Result<T, E>` は `Ok` を束縛し、`Err` を早期伝播する
 - `pattern =? expr` は SafeBind 対象の失敗しうるパターン入力を扱う
 - 現時点の対象は `Result`、`List`、`String`
+- `Option` は SafeBind 対象ではない。`Option::to_result(value, err)` で明示的に変換してから使う
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
 #### 共通制約
@@ -429,7 +430,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 現在の標準モジュール層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> ユーザ拡張
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> ユーザ拡張
 ```
 
 ### auto import

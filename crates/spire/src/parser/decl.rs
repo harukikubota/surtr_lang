@@ -248,9 +248,9 @@ impl Parser {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            if !matches!(self.peek(), Token::Def | Token::Defp) {
+            if !matches!(self.peek(), Token::Def | Token::Defp | Token::Defextractor) {
                 return Err(ParseError::syntax(
-                    "impl body may only contain `def` / `defp` declarations",
+                    "impl body may only contain `def` / `defp` / `defextractor` declarations",
                     self.peek_span(),
                 ));
             }
@@ -274,6 +274,10 @@ impl Parser {
     }
 
     pub(super) fn parse_impl_method(&mut self, target: &str) -> Result<Ast, ParseError> {
+        if matches!(self.peek(), Token::Defextractor) {
+            return self.parse_impl_extractor_method(target);
+        }
+
         let sp = self.peek_span();
         let visibility = match self.peek() {
             Token::Def => {
@@ -399,6 +403,44 @@ impl Parser {
                 visibility,
                 ..DeclAttrs::default()
             },
+        ))
+    }
+
+    pub(super) fn parse_impl_extractor_method(&mut self, target: &str) -> Result<Ast, ParseError> {
+        self.impl_target_stack.push(target.to_string());
+        let (sp, name, type_params, param, ret_ty) = self.parse_extractor_signature()?;
+
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        let body_stmts = self.parse_block_stmts();
+        self.impl_target_stack.pop();
+        let body_stmts = body_stmts?;
+        if body_stmts.is_empty() {
+            return Err(ParseError::syntax(
+                "Extractor body must not be empty",
+                self.peek_span(),
+            ));
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let body = Ast::Block(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            body_stmts,
+        );
+
+        Ok(Ast::ExtractorDef(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            name,
+            type_params,
+            param,
+            ret_ty,
+            Box::new(body),
+            DeclAttrs::default(),
         ))
     }
 
@@ -1091,7 +1133,7 @@ impl Parser {
         if Self::is_constructor_style_name(&name) {
             return Err(ParseError::syntax(
                 format!(
-                    "Extractor names must not use constructor-style names like `{}`; implement `{}`::deconstruct(...) instead",
+                    "Extractor names must not use constructor-style names like `{}`; implement `impl {} {{ defextractor deconstruct(...) ... }}` instead",
                     name, name
                 ),
                 name_span,

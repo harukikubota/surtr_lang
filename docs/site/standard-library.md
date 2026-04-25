@@ -17,7 +17,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 標準モジュールの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap` と `Kernel` だけです。  
@@ -355,7 +355,23 @@ ret = List::reverse(acc)
 現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `|=>` の言語構文と型規則ですが、
 `Result::is_ok(...)` / `Result::is_err(...)` で variant 判定だけを簡潔に書けます。
 
-## 11. `Lens` module の位置づけ
+## 11. `Option` module の位置づけ
+
+`Option` は user-facing な補助 enum です。
+`Some(value)` / `None` 相当の値を表せますが、Surtr の失敗伝播の主軸ではありません。
+
+```surtr
+defenum Option<$T> {
+  Some($T),
+  None,
+}
+```
+
+`Option` は `=?`、`|*>`、`|>=`、`|=>` の `Result` 文脈サポートを受けません。
+失敗伝播へ載せたい場合は `Option::to_result(value, err)`、値として分岐したい場合は `match` を使います。
+`Option::from_result(value)` は `Err(_)` を `None` に畳み込む明示変換です。
+
+## 12. `Lens` module の位置づけ
 
 `Lens` は runtime の first-class value ではなく、compile-time にだけ存在する
 path capability です。
@@ -513,7 +529,7 @@ name = Lens::view(lens, user)
 
 関数境界を越えたいときは `Lens` 自体ではなく、`Lens::view(...)` 済みの値を渡します。
 
-## 12. パイプ / bind 系と標準モジュールの関係
+## 13. パイプ / bind 系と標準モジュールの関係
 
 標準モジュール側から見ると、各演算子との対応は次です。
 
