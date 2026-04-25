@@ -145,13 +145,22 @@ impl Checker {
                 })
             }
 
-            Resolved::TypeRefWitness(span, ast_ty) => Ok(TypedNode {
-                ty: Ty::TypeRef(Box::new(
-                    self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?,
-                )),
-                span: span.clone(),
-                node: TypedInner::Lit(Lit::Unit),
-            }),
+            Resolved::TypeRefWitness(span, ast_ty) => {
+                let target_ty = match ast_ty {
+                    spire::ast::AstTy::Named(_, name) if name == "Result" => {
+                        Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error))
+                    }
+                    spire::ast::AstTy::Named(_, name) if name == "Option" => {
+                        Ty::Enum("Option".into(), vec![self.env.fresh_tyvar()])
+                    }
+                    _ => self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?,
+                };
+                Ok(TypedNode {
+                    ty: Ty::TypeRef(Box::new(target_ty)),
+                    span: span.clone(),
+                    node: TypedInner::Lit(Lit::Unit),
+                })
+            }
 
             Resolved::Bind(span, pat, rhs) => {
                 if !Self::is_total_bind_pattern(pat) {
@@ -756,10 +765,20 @@ impl Checker {
     }
 
     pub(super) fn trait_dispatch_target(
-        &self,
+        &mut self,
         trait_name: &str,
         method_name: &str,
         receiver_ty: &Ty,
+    ) -> Option<TraitDispatch> {
+        self.trait_dispatch_target_for_args(trait_name, method_name, receiver_ty, &[])
+    }
+
+    pub(super) fn trait_dispatch_target_for_args(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+        requested_trait_args: &[Ty],
     ) -> Option<TraitDispatch> {
         let receiver_ty = self.resolve_ty(receiver_ty);
         match receiver_ty {
@@ -799,10 +818,79 @@ impl Checker {
                         }));
                     }
                 }
+                if let Some(dispatch) = self.generic_trait_dispatch_target(
+                    trait_name,
+                    method_name,
+                    &concrete,
+                    requested_trait_args,
+                ) {
+                    return Some(dispatch);
+                }
                 self.compiler_trait_dispatch_target(trait_name, method_name, &concrete)
                     .map(TraitDispatch::Static)
             }
         }
+    }
+
+    fn generic_trait_dispatch_target(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+        requested_trait_args: &[Ty],
+    ) -> Option<TraitDispatch> {
+        let base_trait_name = trait_name
+            .split_once('<')
+            .map_or(trait_name, |(base, _)| base);
+        let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+        for impl_info in impls {
+            if self.trait_key(&impl_info.trait_id) != base_trait_name {
+                continue;
+            }
+            let Some(method) = impl_info.methods.get(method_name) else {
+                continue;
+            };
+            if impl_info.trait_arg_tys.len() != requested_trait_args.len() {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let impl_trait_args = impl_info
+                .trait_arg_tys
+                .iter()
+                .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
+                .collect::<Vec<_>>();
+            let before = self.substitutions.clone();
+            let target_matches = self.types_compatible(&impl_target, receiver_ty);
+            let args_match = target_matches
+                && impl_trait_args
+                    .iter()
+                    .zip(requested_trait_args.iter())
+                    .all(|(expected, actual)| self.types_compatible(expected, actual));
+            self.substitutions = before;
+            if !args_match {
+                continue;
+            }
+
+            if let Some(dispatch_override) = &method.dispatch_override {
+                return Some(TraitDispatch::Static(dispatch_override.clone()));
+            }
+            let function_key = method
+                .function_id
+                .qualified_name
+                .as_ref()
+                .unwrap_or(&method.function_id.name);
+            let function_id = self.function_ids_by_name.get(function_key)?;
+            let function_ty = self.env.lookup_var(function_id.unique_id)?;
+            let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                return None;
+            };
+            return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                name: method.function_id.name.clone(),
+                fun_idx: *fun_idx,
+            }));
+        }
+        None
     }
 
     fn opposite_conversion_hint(
@@ -1016,7 +1104,12 @@ impl Checker {
             &receiver_span,
         ) {
             if self
-                .trait_dispatch_target(&trait_call_name, method_name, &receiver_ty)
+                .trait_dispatch_target_for_args(
+                    &trait_call_name,
+                    method_name,
+                    &receiver_ty,
+                    &trait_arg_tys,
+                )
                 .is_none()
             {
                 return Err(err);
@@ -1024,7 +1117,12 @@ impl Checker {
         }
 
         let dispatch = self
-            .trait_dispatch_target(&trait_call_name, method_name, &receiver_ty)
+            .trait_dispatch_target_for_args(
+                &trait_call_name,
+                method_name,
+                &receiver_ty,
+                &trait_arg_tys,
+            )
             .ok_or_else(|| TypeError {
                 message: format!(
                     "{}::{} requires a receiver type implementing {}, got {}. {}",

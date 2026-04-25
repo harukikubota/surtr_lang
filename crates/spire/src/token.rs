@@ -49,23 +49,23 @@ pub enum Token {
     RBrace, // }
 
     // ── Punctuation ──
-    Comma,       // ,
-    Colon,       // :
-    At,          // @
-    Dot,         // .
-    DotDot,      // ..
-    FatArrow,    // =>
-    Arrow,       // ->
-    Semicolon,   // ;
-    Pipe,        // |
-    PipeApply,   // |>
-    PipeMap,     // |*>
-    PipeBind,    // |>=
-    Compose,     // >>
-    LiftCompose, // >*
+    Comma,          // ,
+    Colon,          // :
+    At,             // @
+    Dot,            // .
+    DotDot,         // ..
+    FatArrow,       // =>
+    Arrow,          // ->
+    Semicolon,      // ;
+    Pipe,           // |
+    PipeApply,      // |>
+    PipeMap,        // |*>
+    PipeBind,       // |>=
+    Compose,        // >>
+    LiftCompose,    // >*
     KleisliCompose, // >=>
-    Amp,         // &
-    Dollar,      // $
+    Amp,            // &
+    Dollar,         // $
 
     // ── Statement separators ──
     Newline,

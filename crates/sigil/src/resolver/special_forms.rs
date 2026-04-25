@@ -143,10 +143,8 @@ impl Resolver {
         let positional = collect_positional_args(span.clone(), args, "recover_kind", 3)?;
         let mut iter = positional.into_iter();
         let value = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let marker = self.resolve_error_marker(
-            iter.next().expect("checked arg length"),
-            "recover_kind",
-        )?;
+        let marker =
+            self.resolve_error_marker(iter.next().expect("checked arg length"), "recover_kind")?;
         let handler = self.resolve_node(iter.next().expect("checked arg length"))?;
         Ok(Resolved::RecoverKind(
             span,

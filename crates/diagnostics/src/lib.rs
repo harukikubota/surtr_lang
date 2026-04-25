@@ -239,10 +239,8 @@ fn normalized_char_span(source: &str, span: &Span) -> Span {
 
 fn char_span_to_byte_range(source: &str, span: &Span) -> std::ops::Range<usize> {
     let normalized = normalized_char_span(source, span);
-    char_offset_to_byte_offset(source, normalized.start)..char_offset_to_byte_offset(
-        source,
-        normalized.end,
-    )
+    char_offset_to_byte_offset(source, normalized.start)
+        ..char_offset_to_byte_offset(source, normalized.end)
 }
 
 fn char_offset_to_byte_offset(source: &str, offset: usize) -> usize {
@@ -936,7 +934,12 @@ mod tests {
     fn serializable_report_uses_character_offsets_for_utf8_source() {
         let mut sources = SourceRegistry::new();
         let source_id = sources.register("main.srt", "あx");
-        let spec = simple_error("TypeError", "expected Int, got String", Span { start: 1, end: 2 }, None);
+        let spec = simple_error(
+            "TypeError",
+            "expected Int, got String",
+            Span { start: 1, end: 2 },
+            None,
+        );
 
         let report = serializable_report_by_id(&sources, source_id, "typecheck", &spec);
         assert_eq!(report.errors[0].line, 1);

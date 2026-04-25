@@ -447,16 +447,7 @@ impl Parser<'_> {
     pub(super) fn trait_impl_self_target_name(&self, ty: &AstTy) -> Result<String, ParseError> {
         match ty {
             AstTy::Named(_, name) => Ok(name.clone()),
-            AstTy::Generic(_, name, args) => {
-                if args.is_empty() {
-                    Ok(name.clone())
-                } else {
-                    Err(ParseError::syntax(
-                        "trait impl target must be a concrete named type in V1",
-                        ast_ty_span(ty).clone(),
-                    ))
-                }
-            }
+            AstTy::Generic(_, name, _) => Ok(name.clone()),
             _ => Err(ParseError::syntax(
                 "trait impl target must be a concrete named type in V1",
                 ast_ty_span(ty).clone(),

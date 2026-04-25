@@ -379,13 +379,16 @@ impl Checker {
                 Ok(TypedMatchPattern::Or(typed_items))
             }
             ResolvedPattern::Constructor(ctor_id, inner_pats) => {
-                if matches!(expected_ty, Ty::Error) && self.env.is_error_constructor(ctor_id.unique_id)
+                if matches!(expected_ty, Ty::Error)
+                    && self.env.is_error_constructor(ctor_id.unique_id)
                 {
                     if !inner_pats.is_empty() {
                         return Err(TypeError {
                             message: "Error kind patterns do not destructure payloads yet.".into(),
                             span: ctor_id.span.clone(),
-                            hint: Some("Use `Kind @ err: Error` and inspect the Error value.".into()),
+                            hint: Some(
+                                "Use `Kind @ err: Error` and inspect the Error value.".into(),
+                            ),
                         });
                     }
                     return Ok(TypedMatchPattern::ErrorKind(ctor_id.name.clone()));
@@ -610,18 +613,18 @@ impl Checker {
         match pat {
             TypedMatchPattern::Binding(_) => true,
             TypedMatchPattern::As(_, _) => true,
-            TypedMatchPattern::Tuple(items) | TypedMatchPattern::Or(items) => {
-                items.iter().any(|item| self.match_pattern_has_bindings(item))
-            }
-            TypedMatchPattern::Constructor { fields, .. } => {
-                fields.iter().any(|item| self.match_pattern_has_bindings(item))
-            }
+            TypedMatchPattern::Tuple(items) | TypedMatchPattern::Or(items) => items
+                .iter()
+                .any(|item| self.match_pattern_has_bindings(item)),
+            TypedMatchPattern::Constructor { fields, .. } => fields
+                .iter()
+                .any(|item| self.match_pattern_has_bindings(item)),
             TypedMatchPattern::ListCons(head, tail) => {
                 self.match_pattern_has_bindings(head) || self.match_pattern_has_bindings(tail)
             }
-            TypedMatchPattern::Extractor { items, .. } => {
-                items.iter().any(|item| self.match_pattern_has_bindings(item))
-            }
+            TypedMatchPattern::Extractor { items, .. } => items
+                .iter()
+                .any(|item| self.match_pattern_has_bindings(item)),
             TypedMatchPattern::Wildcard
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)

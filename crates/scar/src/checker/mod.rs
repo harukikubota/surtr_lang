@@ -274,8 +274,11 @@ struct TraitImplMethodInfo {
 struct TraitImplInfo {
     trait_id: ResolvedId,
     trait_args: Vec<AstTy>,
+    trait_arg_tys: Vec<Ty>,
     target_name: String,
+    target_ast_ty: AstTy,
     target_ty: Ty,
+    type_param_vars: Vec<u32>,
     methods: HashMap<String, TraitImplMethodInfo>,
 }
 
@@ -379,7 +382,10 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
         let ret = self.parse_type()?;
         self.skip_ws();
         if !self.is_eof() {
-            return Err(format!("unexpected trailing input `{}`", &self.input[self.pos..]));
+            return Err(format!(
+                "unexpected trailing input `{}`",
+                &self.input[self.pos..]
+            ));
         }
         Ok((params, ret))
     }

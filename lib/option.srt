@@ -11,29 +11,36 @@ defenum Option<$T> {
   None,
 }
 
-@@doc """
-Option module.
-Helpers here keep conversion between `Option` and `Result` explicit.
-"""
-defmod Option {
-  @@doc """
-  Convert `Option<$T>` to `Result<$T>`.
-  `Some(value)` becomes `Ok(value)`, and `None` becomes `Err(err)`.
-  """
-  def to_result(value: Option<$T>, err: Error) -> Result<$T> {
+impl Option {
+  def is_some(value: Option<$T>) -> Boolean {
     match value {
-      Option::Some(inner) => Ok(inner),
-      Option::None => Err(err),
+      Option::Some(_) => True,
+      Option::None => False,
     }
   }
 
-  @@doc """
-  Convert `Result<$T>` to `Option<$T>`.
-  `Ok(value)` becomes `Some(value)`, and `Err(_)` becomes `None`.
-  """
-  def from_result(value: Result<$T>) -> Option<$T> {
-    match value {
-      Ok(inner) => Option::Some(inner),
+  def is_none(value: Option<$T>) -> Boolean {
+    Boolean::not(Option::is_some(value))
+  }
+
+  def wrap(value: $T) -> Option<$T> {
+    Option::Some(value)
+  }
+}
+
+impl From<Result<$T>> for Option<$T> {
+  def from(self: Self, to: TypeRef<Result<$T>>) -> Result<$T> {
+    match self {
+      Option::Some(value) => Ok(value),
+      Option::None => Err(NoneError),
+    }
+  }
+}
+
+impl From<Option<$T>> for Result<$T> {
+  def from(self: Self, to: TypeRef<Option<$T>>) -> Option<$T> {
+    match self {
+      Ok(value) => Option::Some(value),
       Err(_) => Option::None,
     }
   }

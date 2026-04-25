@@ -18,8 +18,12 @@ impl Checker {
         // Pass 1: reserve deterministic tags for all user-defined types.
         for stmt in stmts {
             let maybe_decl = match stmt {
-                Resolved::StructDef(_, id, _) => Some((&id.name, &id.span, TypeKind::Struct, Vec::new())),
-                Resolved::RecordDef(_, id, _) => Some((&id.name, &id.span, TypeKind::Record, Vec::new())),
+                Resolved::StructDef(_, id, _) => {
+                    Some((&id.name, &id.span, TypeKind::Struct, Vec::new()))
+                }
+                Resolved::RecordDef(_, id, _) => {
+                    Some((&id.name, &id.span, TypeKind::Record, Vec::new()))
+                }
                 Resolved::DeferrorDef(_, id, _, _) => {
                     Some((&id.name, &id.span, TypeKind::Error, Vec::new()))
                 }
@@ -621,6 +625,76 @@ impl Checker {
         }
     }
 
+    fn collect_ty_vars(ty: &Ty, out: &mut Vec<u32>) {
+        match ty {
+            Ty::Var(var) => {
+                if !out.contains(var) {
+                    out.push(*var);
+                }
+            }
+            Ty::List(inner) | Ty::TypeRef(inner) => Self::collect_ty_vars(inner, out),
+            Ty::Lens(source, focus) | Ty::Result(source, focus) => {
+                Self::collect_ty_vars(source, out);
+                Self::collect_ty_vars(focus, out);
+            }
+            Ty::Tuple(items) | Ty::Enum(_, items) => {
+                for item in items {
+                    Self::collect_ty_vars(item, out);
+                }
+            }
+            Ty::Func(params, ret) => {
+                for param in params {
+                    Self::collect_ty_vars(param, out);
+                }
+                Self::collect_ty_vars(ret, out);
+            }
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                for param in params {
+                    Self::collect_ty_vars(param, out);
+                }
+                Self::collect_ty_vars(ret, out);
+            }
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => {
+                for (_, field_ty) in fields {
+                    Self::collect_ty_vars(field_ty, out);
+                }
+            }
+            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error => {}
+        }
+    }
+
+    pub(super) fn resolve_trait_impl_head_tys(
+        &mut self,
+        trait_args: &[AstTy],
+        target_ast_ty: &AstTy,
+    ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
+        let mut tyvars = HashMap::new();
+        let placeholder_self = self.env.fresh_tyvar();
+        let target_ty = self.resolve_trait_signature_ast_ty_in_context(
+            target_ast_ty,
+            TypeSyntaxContext::General,
+            &placeholder_self,
+            &mut tyvars,
+        )?;
+        let trait_arg_tys = trait_args
+            .iter()
+            .map(|arg| {
+                self.resolve_trait_signature_ast_ty_in_context(
+                    arg,
+                    TypeSyntaxContext::General,
+                    &target_ty,
+                    &mut tyvars,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut type_param_vars = Vec::new();
+        for ty in &trait_arg_tys {
+            Self::collect_ty_vars(ty, &mut type_param_vars);
+        }
+        Self::collect_ty_vars(&target_ty, &mut type_param_vars);
+        Ok((trait_arg_tys, target_ty, type_param_vars))
+    }
+
     fn compiler_trait_target_names(&self, trait_name: &str) -> &'static [&'static str] {
         if self.trait_matches_short_name(trait_name, "Numeric") {
             return &["Float", "Int"];
@@ -685,8 +759,9 @@ impl Checker {
             Ty::Bool => Some("Boolean".into()),
             Ty::Unit => Some("Unit".into()),
             Ty::Error => Some("Error".into()),
+            Ty::Result(_, _) => Some("Result".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
-            Ty::Enum(name, args) if args.is_empty() => Some(name),
+            Ty::Enum(name, _) => Some(name),
             _ => None,
         }
     }
@@ -851,7 +926,7 @@ impl Checker {
         trait_info: &TraitInfo,
         trait_args: &[AstTy],
         method: &TraitImplMethodInfo,
-        self_ty: &Ty,
+        target_ast_ty: &AstTy,
         fallback_ret_ty: &AstTy,
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
         if trait_info.type_params.len() != trait_args.len() {
@@ -868,12 +943,25 @@ impl Checker {
         }
 
         let mut trait_head_bindings = HashMap::new();
+        let mut tyvars = HashMap::new();
+        let placeholder_self = self.env.fresh_tyvar();
+        let self_ty = self.resolve_trait_signature_ast_ty_in_context(
+            target_ast_ty,
+            TypeSyntaxContext::General,
+            &placeholder_self,
+            &mut tyvars,
+        )?;
         for (param, arg) in trait_info.type_params.iter().zip(trait_args.iter()) {
-            let resolved = self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?;
+            let resolved = self.resolve_trait_signature_ast_ty_in_context(
+                arg,
+                TypeSyntaxContext::General,
+                &self_ty,
+                &mut tyvars,
+            )?;
             trait_head_bindings.insert(param.name.clone(), resolved);
         }
 
-        let mut tyvars = trait_head_bindings.clone();
+        tyvars.extend(trait_head_bindings.clone());
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
         let params = method
             .params
@@ -883,7 +971,7 @@ impl Checker {
                     &param.ty,
                     &trait_head_bindings,
                     true,
-                    self_ty,
+                    &self_ty,
                     &mut tyvars,
                 )? {
                     Ok(ty)
@@ -891,7 +979,7 @@ impl Checker {
                     self.resolve_trait_signature_ast_ty_in_context(
                         &param.ty,
                         TypeSyntaxContext::General,
-                        self_ty,
+                        &self_ty,
                         &mut tyvars,
                     )
                 }
@@ -901,17 +989,25 @@ impl Checker {
         let ret = self.resolve_trait_signature_ast_ty_in_context(
             ret_source,
             TypeSyntaxContext::FunctionReturn,
-            self_ty,
+            &self_ty,
             &mut tyvars,
         )?;
-        let type_params = method
+        let mut type_params = Vec::new();
+        for ty in tyvars.values() {
+            Self::collect_ty_vars(ty, &mut type_params);
+        }
+        for var in method
             .type_params
             .iter()
             .filter_map(|param| match tyvars.get(&param.name) {
                 Some(Ty::Var(var)) => Some(*var),
                 _ => None,
             })
-            .collect::<Vec<_>>();
+        {
+            if !type_params.contains(&var) {
+                type_params.push(var);
+            }
+        }
         Ok((params, ret, type_params))
     }
 
@@ -980,8 +1076,8 @@ impl Checker {
                 });
             }
             let trait_instance_key = self.trait_instance_key(trait_id, trait_args);
-            let target_ty =
-                self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+            let (trait_arg_tys, target_ty, type_param_vars) =
+                self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
                 message: "trait impl target must be a concrete named type".into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
@@ -1058,7 +1154,7 @@ impl Checker {
                     &trait_info,
                     trait_args,
                     impl_method,
-                    &target_ty,
+                    target_ast_ty,
                     &trait_method.ret_ty,
                 )?;
 
@@ -1161,8 +1257,11 @@ impl Checker {
                 TraitImplInfo {
                     trait_id: trait_id.clone(),
                     trait_args: trait_args.clone(),
+                    trait_arg_tys,
                     target_name,
+                    target_ast_ty: target_ast_ty.clone(),
                     target_ty,
+                    type_param_vars,
                     methods: method_map,
                 },
             );
@@ -1402,7 +1501,7 @@ impl Checker {
                     &trait_info,
                     &trait_impl.trait_args,
                     method,
-                    &trait_impl.target_ty,
+                    &trait_impl.target_ast_ty,
                     &trait_method.ret_ty,
                 )?;
                 let param_names = method

@@ -835,8 +835,7 @@ impl Checker {
         target_ast_ty: &AstTy,
         methods: &[ResolvedTraitImplMethod],
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let target_ty =
-            self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+        let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
@@ -892,7 +891,7 @@ impl Checker {
                 &trait_info,
                 trait_args,
                 &inline_method,
-                &target_ty,
+                target_ast_ty,
                 &trait_method.ret_ty,
             )?;
 
@@ -983,8 +982,7 @@ impl Checker {
         target_ast_ty: &AstTy,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<TypedNode, TypeError> {
-        let target_ty =
-            self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+        let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
