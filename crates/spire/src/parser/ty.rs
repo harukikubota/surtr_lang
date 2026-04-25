@@ -70,17 +70,28 @@ impl Parser<'_> {
             }
 
             let end = self.expect(&Token::RParen)?;
-            return if params.len() == 1 {
-                Ok(params.into_iter().next().expect("single grouped type"))
-            } else {
-                Ok(AstTy::Tuple(
+            if params.len() == 1 {
+                self.skip_newlines();
+                let message = if matches!(self.peek(), Token::Arrow) {
+                    "Parenthesized type signatures must choose tuple or function syntax after the first element: use `,` and another type for a tuple, or put `->` before `)` for a function type (for example, `(Int -> String)`, not `(Int) -> String`)."
+                } else {
+                    "Parenthesized type annotations with one element are not supported: use the type without parentheses, `(T, U)` for a tuple, or `(T -> R)` for a function type."
+                };
+                return Err(ParseError::syntax(
+                    message,
                     Span {
                         start: sp.start,
                         end: end.end,
                     },
-                    params,
-                ))
-            };
+                ));
+            }
+            return Ok(AstTy::Tuple(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                params,
+            ));
         }
 
         if matches!(self.peek(), Token::Dollar) {

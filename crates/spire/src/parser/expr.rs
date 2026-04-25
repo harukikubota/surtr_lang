@@ -699,6 +699,12 @@ impl Parser<'_> {
         if matches!(self.peek(), Token::Colon) {
             self.advance();
             let ty = self.parse_type()?;
+            if matches!(self.peek(), Token::Arrow) {
+                return Err(ParseError::syntax(
+                    "Parenthesized type signatures must choose tuple or function syntax after the first element: use `,` and another type for a tuple, or put `->` before `)` for a function type (for example, `(Int -> String)`, not `(Int) -> String`).",
+                    self.peek_span(),
+                ));
+            }
             let assign_tok = self.peek().clone();
             match assign_tok {
                 Token::Bind | Token::SafeBind => {

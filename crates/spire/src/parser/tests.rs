@@ -1707,6 +1707,26 @@ fn test_function_type_annotation_is_not_tuple_type() {
 }
 
 #[test]
+fn test_function_type_annotation_arrow_outside_parens_has_guided_error() {
+    let err = parse("fun: (Int) -> String = value").expect_err("Expected parse error");
+    let message = err.message();
+    assert!(message.contains("choose tuple or function syntax"));
+    assert!(message.contains("`, `") || message.contains("`,`"));
+    assert!(message.contains("`->`"));
+    assert!(message.contains("(Int -> String)"));
+}
+
+#[test]
+fn test_parenthesized_single_type_annotation_is_rejected() {
+    let err = parse("value: (Int) = input").expect_err("Expected parse error");
+    let message = err.message();
+    assert!(message.contains("one element"));
+    assert!(message.contains("without parentheses"));
+    assert!(message.contains("(T, U)"));
+    assert!(message.contains("(T -> R)"));
+}
+
+#[test]
 fn test_field_access() {
     let ast = parse("user.name").unwrap();
     assert!(matches!(&ast[0], Ast::FieldAccess(_, _, ref f) if f == "name"));
