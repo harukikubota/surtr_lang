@@ -1,0 +1,9 @@
+def parse(x: Int) -> Result<Int> {
+  Ok(x)
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+bad = parse(1) |> &inc

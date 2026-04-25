@@ -1,0 +1,3 @@
+inc = {|n: Int| n + 1 }
+
+result = inc("oops")

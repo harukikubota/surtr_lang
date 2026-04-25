@@ -1,0 +1,6 @@
+import Matchers::one
+
+print(match "oops" {
+  one(value) => value,
+  _ => "fallback",
+})

@@ -1,0 +1,3 @@
+phase: typecheck
+contains: `|>` type mismatch: expected Int, got String
+contains: `|>` signature rule

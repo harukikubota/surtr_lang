@@ -1,0 +1,3 @@
+phase: typecheck
+contains: `>*` requires Result or List on the left-hand side
+contains: Use `>>` for plain composition

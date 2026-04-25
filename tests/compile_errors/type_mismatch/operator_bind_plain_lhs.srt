@@ -1,0 +1,5 @@
+def inc(x: Int) -> Result<Int> {
+  Ok(x + 1)
+}
+
+bad = 1 |>= &inc

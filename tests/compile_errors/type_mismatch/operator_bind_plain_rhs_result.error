@@ -1,0 +1,3 @@
+phase: typecheck
+contains: requires the right-hand side to return Result, got Int
+contains: Use `|*>`
