@@ -502,6 +502,11 @@ impl Resolver {
                 Ok(Resolved::TupleLiteral(span, resolved))
             }
 
+            Ast::Grouped(span, inner) => {
+                let inner = self.resolve_node(*inner)?;
+                Ok(Resolved::Grouped(span, Box::new(inner)))
+            }
+
             Ast::InterpolatedStr(span, parts) => {
                 let mut resolved_parts = Vec::new();
                 for part in parts {

@@ -109,6 +109,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(elem, bound, free);
             }
         }
+        Resolved::Grouped(_, inner) => collect_captures_inner(inner, bound, free),
         Resolved::InterpolatedStr(_, parts) => {
             for part in parts {
                 if let ResolvedInterpolatedPart::Expr(expr) = part {

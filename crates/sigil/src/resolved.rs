@@ -70,6 +70,9 @@ pub enum Resolved {
     /// Tuple literal
     TupleLiteral(Span, Vec<Resolved>),
 
+    /// Parenthesized expression preserved for operator RHS disambiguation.
+    Grouped(Span, Box<Resolved>),
+
     /// Interpolated string
     InterpolatedStr(Span, Vec<ResolvedInterpolatedPart>),
 

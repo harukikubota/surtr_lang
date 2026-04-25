@@ -271,6 +271,9 @@ pub enum Ast {
     /// Tuple literal: `(1, 2, 3)`
     TupleLiteral(Span, Vec<Ast>),
 
+    /// Parenthesized expression preserved for operator RHS disambiguation.
+    Grouped(Span, Box<Ast>),
+
     /// Interpolated string: `"hi #{name}"`
     InterpolatedStr(Span, Vec<InterpolatedPart>),
 

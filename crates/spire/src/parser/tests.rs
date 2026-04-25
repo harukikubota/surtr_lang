@@ -1634,8 +1634,27 @@ fn test_parenthesized_expression_is_not_tuple_literal() {
     let ast = parse("value = (1)").unwrap();
     match &ast[0] {
         Ast::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1)));
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Grouped(_, inner)
+                    if matches!(inner.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1))
+            ));
         }
+        other => panic!("Expected Bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_grouped_pipe_rhs_preserves_callable_returning_call() {
+    let ast = parse("out = value |> (make_closure(1))").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Pipe(_, _, right) => assert!(matches!(
+                right.as_ref(),
+                Ast::Grouped(_, inner) if matches!(inner.as_ref(), Ast::App(_, _, _))
+            )),
+            other => panic!("Expected pipe node, got {:?}", other),
+        },
         other => panic!("Expected Bind, got {:?}", other),
     }
 }

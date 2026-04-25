@@ -100,6 +100,71 @@ match bound {
     );
 }
 
+fn flow_operators_accept_function_value_variables_and_grouped_calls() {
+    assert_output(
+        r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+def double(x: Int) -> Int {
+  x * 2
+}
+
+def show(x: Int) -> String {
+  to_string(x)
+}
+
+def check(x: Int) -> Result<Int> {
+  Ok(x + 10)
+}
+
+def mk_add(n: Int) -> (Int -> Int) {
+  {|x| x + n}
+}
+
+def mk_check(n: Int) -> (Int -> Result<Int>) {
+  {|x| Ok(x + n)}
+}
+
+f: (Int -> Int) = &inc
+g: (Int -> Int) = &double
+show_fn: (Int -> String) = &show
+check_fn: (Int -> Result<Int>) = &check
+
+print(to_string(1 |> f))
+print(to_string(1 |> (mk_add(2))))
+
+plain = f >> g
+print(to_string(plain(3)))
+
+render = g >> show_fn
+print(render(4))
+
+mapped: Result<Int> = Ok(1) |*> f
+mapped_grouped: Result<Int> = Ok(1) |*> (mk_add(4))
+bound: Result<Int> = Ok(1) |>= check_fn
+bound_grouped: Result<Int> = Ok(1) |>= (mk_check(5))
+
+match mapped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped err"),
+}
+match mapped_grouped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped grouped err"),
+}
+match bound {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("bound err"),
+}
+match bound_grouped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("bound grouped err"),
+}"#,
+        &["2", "3", "8", "8", "2", "5", "11", "6"],
+    );
+}
+
 fn result_pipeline_injects_left_value_into_call_rhs() {
     assert_output(
         r#"deferror TooSmall {
@@ -225,7 +290,7 @@ fn flow_operators_reject_naked_function_refs() {
 }
 
 value = 1 |> inc"#,
-        "requires `&f`, closure, or a function call like `f(...)`",
+        "requires a function value",
     );
 
     assert_compile_error(
@@ -238,7 +303,7 @@ def render(x: Int) -> Result<String> {
 }
 
 pipeline = parse >=> render"#,
-        "requires a closure or capture",
+        "requires a function value",
     );
 }
 
@@ -253,7 +318,7 @@ def render(x: Int) -> Result<String> {
 }
 
 pipeline = parse() >=> render()"#,
-        "requires a closure or capture",
+        "requires a function value",
     );
 
     assert_compile_error(
@@ -266,7 +331,7 @@ def render(x: Int) -> String {
 }
 
 pipeline = parse() >* render()"#,
-        "requires a closure or capture",
+        "requires a function value",
     );
 
     assert_compile_error(
@@ -275,7 +340,7 @@ pipeline = parse() >* render()"#,
 }
 
 plain = inc() >> inc()"#,
-        "requires a closure or capture",
+        "requires a function value",
     );
 }
 
@@ -565,6 +630,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
         (
             "result_pipeline_map_and_bind_work",
             result_pipeline_map_and_bind_work as fn(),
+        ),
+        (
+            "flow_operators_accept_function_value_variables_and_grouped_calls",
+            flow_operators_accept_function_value_variables_and_grouped_calls as fn(),
         ),
         (
             "result_pipeline_injects_left_value_into_call_rhs",

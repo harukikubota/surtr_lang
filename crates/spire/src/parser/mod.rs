@@ -605,6 +605,10 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|e| shift_ast_span(e, delta))
                 .collect(),
         ),
+        Ast::Grouped(span, inner) => Ast::Grouped(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*inner, delta)),
+        ),
         Ast::InterpolatedStr(span, parts) => Ast::InterpolatedStr(
             shift_span(span, delta),
             parts
@@ -894,6 +898,7 @@ impl Ast {
             | Ast::ListCons(s, _, _)
             | Ast::ListLiteral(s, _)
             | Ast::TupleLiteral(s, _)
+            | Ast::Grouped(s, _)
             | Ast::InterpolatedStr(s, _)
             | Ast::Match(s, _, _)
             | Ast::FieldAccess(s, _, _)

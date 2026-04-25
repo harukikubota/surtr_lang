@@ -486,6 +486,19 @@ print(to_string(4 |> &add(1)))
 print(to_string(4 |> {|x| x + 1}))
 ```
 
+関数値を変数に束縛して渡すこともできます。
+
+```surtr
+inc_fn: (Int -> Int) = &inc
+print(to_string(4 |> inc_fn))
+```
+
+call 式が関数値を返す場合は、括弧で囲むと「返ってきた関数へ適用する」という意味になります。
+
+```surtr
+print(to_string(4 |> (make_adder(10))))
+```
+
 bare capture を値として観察したいときは `inspect(...)` を使います。
 
 ```surtr
@@ -551,12 +564,15 @@ result_pipeline = &parse >=> &validate
 lifted_pipeline = &parse >* &render
 ```
 
-Surtr では、compose の左右は capture か closure だけです。
+Surtr では、compose の左右は関数値です。capture、closure、または関数型の変数を渡せます。
 
 ```surtr
 &parse >=> &validate
 {|x| parse(x)} >=> {|y| validate(y)}
 &parse >* &render
+parser = &parse
+validator = &validate
+parser >=> validator
 ```
 
 次のような call 式は compose できません。
@@ -567,7 +583,7 @@ parse() >* render()      # 不可
 inc() >> render()        # 不可
 ```
 
-理由は単純で、`parse()` は関数そのものではなく「実行結果の値」だからです。
+理由は単純で、`parse()` は compose 位置では関数値として扱わないからです。関数値を返す call 式を使いたい場合は `(make_parser()) >=> (make_validator())` のように括弧で明示します。
 
 ### 10.5 裸の関数参照は使わない
 

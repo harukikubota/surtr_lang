@@ -426,6 +426,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|arg| rewrite_self_ast(arg, target))
                 .collect(),
         ),
+        Ast::Grouped(span, inner) => Ast::Grouped(span, Box::new(rewrite_self_ast(*inner, target))),
         Ast::Semi(span, inner) => Ast::Semi(span, Box::new(rewrite_self_ast(*inner, target))),
         other => other,
     }

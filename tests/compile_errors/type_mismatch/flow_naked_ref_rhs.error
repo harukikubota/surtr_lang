@@ -1,2 +1,2 @@
 phase: typecheck
-contains: requires `&f`, closure, or a function call like `f(...)`
+contains: requires a function value

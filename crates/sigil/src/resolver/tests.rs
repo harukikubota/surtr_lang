@@ -1443,6 +1443,25 @@ g = &print(1)"#,
 }
 
 #[test]
+fn test_grouped_pipe_rhs_resolution_preserves_call_marker() {
+    let resolved = parse_and_resolve(
+        r#"def mk() -> (Int -> Int) { {|x| x} }
+out = 1 |> (mk())"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Pipe(_, _, right) => assert!(matches!(
+                right.as_ref(),
+                Resolved::Grouped(_, inner) if matches!(inner.as_ref(), Resolved::App(_, _, _))
+            )),
+            other => panic!("Expected Pipe, got {:?}", other),
+        },
+        other => panic!("Expected Bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_safebind_resolution() {
     let resolved = parse_and_resolve("num =? Ok(1)").unwrap();
     match &resolved[0] {

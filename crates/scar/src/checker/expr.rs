@@ -221,6 +221,11 @@ impl Checker {
             Resolved::ListCons(span, head, tail) => self.check_list_cons(span, head, tail),
             Resolved::ListLiteral(span, elems) => self.check_list_literal(span, elems),
             Resolved::TupleLiteral(span, elems) => self.check_tuple_literal(span, elems),
+            Resolved::Grouped(span, inner) => {
+                let mut typed = self.check_node(inner)?;
+                typed.span = span.clone();
+                Ok(typed)
+            }
 
             Resolved::InterpolatedStr(span, parts) => self.check_interpolated_str(span, parts),
 
@@ -498,6 +503,24 @@ impl Checker {
         }
     }
 
+    pub(super) fn check_operator_compose_callable(
+        &mut self,
+        node: &Resolved,
+        op_name: &str,
+    ) -> Result<TypedNode, TypeError> {
+        match node {
+            Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
+            Resolved::Var(_, _) | Resolved::Grouped(_, _) => {
+                self.check_function_value_operand(node, op_name)
+            }
+            _ => Err(TypeError {
+                message: format!("{} requires a function value", op_name),
+                span: self.resolved_span(node).clone(),
+                hint: Some("Use `&f`, a closure, a function-typed variable, or a parenthesized expression that evaluates to a function value.".into()),
+            }),
+        }
+    }
+
     pub(super) fn check_apply_callable(
         &mut self,
         node: &Resolved,
@@ -505,15 +528,35 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         match node {
             Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
+            Resolved::Var(_, _) | Resolved::Grouped(_, _) => {
+                self.check_function_value_operand(node, op_name)
+            }
             Resolved::App(span, func, args) => self.check_injected_call(span, func, args, op_name),
             _ => Err(TypeError {
                 message: format!(
-                    "{} requires `&f`, closure, or a function call like `f(...)`",
+                    "{} requires a function value or a function call like `f(...)`",
                     op_name
                 ),
                 span: self.resolved_span(node).clone(),
-                hint: None,
+                hint: Some("Use `&f`, a closure, a function-typed variable, or wrap a callable-returning call in parentheses.".into()),
             }),
+        }
+    }
+
+    pub(super) fn check_function_value_operand(
+        &mut self,
+        node: &Resolved,
+        op_name: &str,
+    ) -> Result<TypedNode, TypeError> {
+        let typed = self.check_node(node)?;
+        if matches!(self.resolve_ty(&typed.ty), Ty::Func(_, _)) {
+            Ok(typed)
+        } else {
+            Err(TypeError {
+                message: format!("{} requires a function value", op_name),
+                span: typed.span,
+                hint: Some("Bare function names are not function values; use `&name`, a closure, a function-typed variable, or `(call_returning_function(...))`.".into()),
+            })
         }
     }
 
@@ -536,6 +579,7 @@ impl Checker {
             | Resolved::ListCons(span, _, _)
             | Resolved::ListLiteral(span, _)
             | Resolved::TupleLiteral(span, _)
+            | Resolved::Grouped(span, _)
             | Resolved::InterpolatedStr(span, _)
             | Resolved::If(span, _, _, _)
             | Resolved::Assert(span, _, _)
@@ -1312,8 +1356,8 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_compose_callable(left, "`>>`")?;
-        let typed_right = self.check_compose_callable(right, "`>>`")?;
+        let typed_left = self.check_operator_compose_callable(left, "`>>`")?;
+        let typed_right = self.check_operator_compose_callable(right, "`>>`")?;
         let (left_in, left_out) =
             self.unary_function_parts(&typed_left.ty, "`>>`", &typed_left.span)?;
         let (right_in, right_out) =
@@ -1342,8 +1386,8 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_compose_callable(left, "`>*`")?;
-        let typed_right = self.check_compose_callable(right, "`>*`")?;
+        let typed_left = self.check_operator_compose_callable(left, "`>*`")?;
+        let typed_right = self.check_operator_compose_callable(right, "`>*`")?;
         let (left_in, left_out) =
             self.unary_function_parts(&typed_left.ty, "`>*`", &typed_left.span)?;
         let (right_in, right_out) =
@@ -1415,8 +1459,8 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_compose_callable(left, "`>=>`")?;
-        let typed_right = self.check_compose_callable(right, "`>=>`")?;
+        let typed_left = self.check_operator_compose_callable(left, "`>=>`")?;
+        let typed_right = self.check_operator_compose_callable(right, "`>=>`")?;
         let (left_in, left_out) =
             self.unary_function_parts(&typed_left.ty, "`>=>`", &typed_left.span)?;
         let (right_in, right_out) =

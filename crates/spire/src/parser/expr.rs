@@ -432,8 +432,14 @@ impl Parser<'_> {
                         items,
                     ))
                 } else {
-                    self.expect(&Token::RParen)?;
-                    Ok(first)
+                    let end = self.expect(&Token::RParen)?;
+                    Ok(Ast::Grouped(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        Box::new(first),
+                    ))
                 }
             }
 

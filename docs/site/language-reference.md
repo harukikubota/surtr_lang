@@ -211,10 +211,13 @@ False
 `|>` は左辺の値を右辺へ流します。
 
 - 右辺が capture / closure の場合は unary callable として適用する
+- 右辺が関数型の変数または括弧付きの関数値式の場合も unary callable として適用する
 - 右辺が call 式の場合は、左辺値を第一引数へ注入する
 
 ```surtr
 value |> &normalize
+value |> normalizer
+value |> (make_normalizer(10))
 value |> normalize(10)
 user |> User::get_name()
 ```
@@ -224,6 +227,7 @@ user |> User::get_name()
 ```surtr
 value |> normalize(10)      # => normalize(value, 10)
 user |> User::get_name()    # => User::get_name(user)
+value |> (make_normalizer(10)) # => make_normalizer(10)(value)
 ```
 
 #### `|*>` 文脈 map
@@ -268,7 +272,7 @@ Ok(11) |>= require_at_least(10)   # => require_at_least(11, 10)
 pipeline = &trim >> &render
 ```
 
-左右とも closure value でなければなりません。  
+左右とも関数値でなければなりません。
 `trim() >> render()` のような call 式は不許可です。
 
 #### `>*` Lifted 合成
@@ -282,7 +286,7 @@ pipeline = &parse >* &render
 - `Result` なら `(A -> Result<B>) >* (B -> C)`
 - `List` なら `(A -> List<B>) >* (B -> C)`
 
-右辺は plain function でなければなりません。これも compose なので、左右とも capture または closure に限ります。  
+右辺は plain function でなければなりません。これも compose なので、左右とも関数値に限ります。
 `parse() >* render()` は不許可です。
 
 #### `>=>` Kleisli 合成
@@ -296,7 +300,7 @@ pipeline = &parse >=> &validate
 - `Result` なら `(A -> Result<B>) >=> (B -> Result<C>)`
 - `List` なら `(A -> List<B>) >=> (B -> List<C>)`
 
-これも compose なので、左右とも capture または closure に限ります。  
+これも compose なので、左右とも関数値に限ります。
 `parse() >=> validate()` は不許可です。
 
 #### `=?` SafeBind
@@ -321,7 +325,7 @@ value: Int =? parse_int("1")
 - 裸の関数参照は許可しない
 - `value |> normalize` は不許可
 - `pipeline = parse >=> validate` も不許可
-- 関数値として保持できるのは capture または closure
+- 関数値として保持できるのは capture、closure、または `Ty::Func` を持つ変数・式
 - backtick FuncLiteral は中置位置専用で、値にはならない
 - ``left `name` right`` は `name(left, right)` に lower される
 - ``left `operator` right`` は対応する通常演算に lower される
