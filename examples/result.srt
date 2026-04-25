@@ -15,14 +15,14 @@ def render(n: Int) -> String {
   "count=" ++ to_string(n)
 }
 
-format_count = &double >> &render
-parsed_label = &parse_count >* &render
-checked_label = &parse_count >=> &require_small >* {|n| format_count(n) }
+format_count: (Int) -> String = &double >> &render
+parsed_label: (String) -> Result<String> = &parse_count >* &render
+checked_label: (String) -> Result<String> = &parse_count >=> &require_small >* format_count
 
 from_pipe: Result<String> = "7"
   |> &parse_count
   |>= require_small()
-  |*> {|n| format_count(n) }
+  |*> format_count
 
 print(inspect(from_pipe))
 print(format_count(3))
