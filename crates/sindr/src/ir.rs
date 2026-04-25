@@ -514,10 +514,8 @@ pub fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
     let mut line = 1u32;
     let mut column = 1u32;
 
-    for (idx, ch) in source.char_indices() {
-        if idx >= offset {
-            break;
-        }
+    let limit = offset.min(source.chars().count());
+    for ch in source.chars().take(limit) {
         if ch == '\n' {
             line += 1;
             column = 1;
@@ -1436,8 +1434,8 @@ mod tests {
     #[test]
     fn line_column_for_offset_tracks_utf8_columns() {
         let source = "あい\nうえお";
-        assert_eq!(line_column_for_offset(source, "あ".len()), (1, 2));
-        assert_eq!(line_column_for_offset(source, "あい\nう".len()), (2, 2));
+        assert_eq!(line_column_for_offset(source, 1), (1, 2));
+        assert_eq!(line_column_for_offset(source, 4), (2, 2));
     }
 
     #[test]

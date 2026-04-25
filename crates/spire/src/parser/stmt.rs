@@ -5,7 +5,7 @@ use crate::token::Token;
 use super::context::{DeclLevel, ParseUnitKind, TopLevelDeclKind};
 use super::{validate, ParseRules, Parser};
 
-impl Parser {
+impl Parser<'_> {
     pub(super) fn parse_stmt(&mut self) -> Result<Ast, ParseError> {
         self.skip_newlines();
 

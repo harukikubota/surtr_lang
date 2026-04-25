@@ -136,6 +136,7 @@ Eldr が扱う値の概念カテゴリ:
 - cause がある場合、次行以降を `|_ ...` でネスト表示する
 - `inspect(Result::Err(...))` も同じ tree を使うが、先頭行だけ `Err(...)` で包む
 - `inspect(HashMap)` / `to_string(HashMap)` は `HashMap("key" => value, ...)` 形式で、key は `String` literal と同じ escaping で表示する
+- `inspect(HashMap)` / `to_string(HashMap)` / `map_keys` / `map_values_list` はキー昇順の deterministic order を使う
 - `eprint(Error)` は先頭行を `Error: Kind: message`、以降を `Caused by: Kind: message` で出力する
 - `Error::kind(Error)` は `RichError.kind`、`Error::message(Error)` は `RichError.message` を `String` として返す
 - `Error::format(Error)` は `eprint(Error)` と同じ行列を stderr へ出さず、`\n` join した `String` として返す
@@ -199,7 +200,7 @@ Opcode は以下のカテゴリを持つ。
 - `Error::kind` / `Error::message` / `Error::format` は `Error` 値を introspection / 表示文字列化する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
-- `HashMap` の runtime 表現は immutable な insertion-order `Vec<(String, Value)>` を基準にし、duplicate key 更新時は値のみ差し替えて順序を維持する
+- `HashMap` の runtime 表現は immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
 - `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>`, `input: String` を保持する
 - `Float` の厳密契約は `doc/float.md` を参照する
@@ -264,6 +265,7 @@ Opcode は以下のカテゴリを持つ。
 - `SpnT` は span 正本
 - `PcSp` は `pc -> span id`
 - `SrcP` は path / normalized path / content hash / optional source text を持つ
+- `.eldr` の `span_start` / `span_end` と line / column 算出は character offset 契約に従う
 
 現行実装では Surtr の span 自体は source id を持たないため、`Line` / `SpnT` / `PcSp` / `SrcP` は単一 source を主対象にした viewer 情報として扱う。  
 call opcode / error template / function span を使って source 対応を補完する。

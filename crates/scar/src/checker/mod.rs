@@ -343,366 +343,237 @@ fn initialize_env() -> TypeEnv {
 }
 
 fn builtin_ty_from_meta(meta: &BuiltinMeta, env: &mut TypeEnv) -> Ty {
-    match meta.name {
-        "print" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Str],
-            ret: Box::new(Ty::Unit),
-        },
-        "to_string" => {
-            let a = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![a],
-                ret: Box::new(Ty::Str),
+    let mut parser = BuiltinSignatureParser::new(meta.sig_str, env);
+    let (params, ret) = parser
+        .parse_signature()
+        .unwrap_or_else(|err| panic!("invalid builtin signature for `{}`: {}", meta.name, err));
+    Ty::BuiltinFunc {
+        name: meta.name.into(),
+        params,
+        ret: Box::new(ret),
+    }
+}
+
+struct BuiltinSignatureParser<'a, 'env> {
+    input: &'a str,
+    pos: usize,
+    env: &'env mut TypeEnv,
+    tyvars: HashMap<String, Ty>,
+}
+
+impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
+    fn new(input: &'a str, env: &'env mut TypeEnv) -> Self {
+        Self {
+            input,
+            pos: 0,
+            env,
+            tyvars: HashMap::new(),
+        }
+    }
+
+    fn parse_signature(&mut self) -> Result<(Vec<Ty>, Ty), String> {
+        self.skip_ws();
+        let params = self.parse_param_list()?;
+        self.skip_ws();
+        self.expect("->")?;
+        let ret = self.parse_type()?;
+        self.skip_ws();
+        if !self.is_eof() {
+            return Err(format!("unexpected trailing input `{}`", &self.input[self.pos..]));
+        }
+        Ok((params, ret))
+    }
+
+    fn parse_param_list(&mut self) -> Result<Vec<Ty>, String> {
+        self.expect("(")?;
+        self.skip_ws();
+        if self.consume(")") {
+            return Ok(Vec::new());
+        }
+        let mut params = vec![self.parse_type()?];
+        loop {
+            self.skip_ws();
+            if self.consume(")") {
+                break;
+            }
+            self.expect(",")?;
+            params.push(self.parse_type()?);
+        }
+        Ok(params)
+    }
+
+    fn parse_type(&mut self) -> Result<Ty, String> {
+        self.skip_ws();
+        if self.consume("(") {
+            self.skip_ws();
+            if self.consume(")") {
+                return Ok(Ty::Unit);
+            }
+            if self.consume("->") {
+                let ret = self.parse_type()?;
+                self.skip_ws();
+                self.expect(")")?;
+                return Ok(Ty::Func(Vec::new(), Box::new(ret)));
+            }
+
+            let first = self.parse_type()?;
+            self.skip_ws();
+            let mut items = vec![first];
+            while self.consume(",") {
+                items.push(self.parse_type()?);
+                self.skip_ws();
+            }
+            if self.consume("->") {
+                let ret = self.parse_type()?;
+                self.skip_ws();
+                self.expect(")")?;
+                return Ok(Ty::Func(items, Box::new(ret)));
+            }
+            self.expect(")")?;
+            return if items.len() == 1 {
+                Ok(items.pop().expect("single grouped type"))
+            } else {
+                Ok(Ty::Tuple(items))
+            };
+        }
+
+        let ident = self.parse_ident()?;
+        self.skip_ws();
+        if self.consume("<") {
+            let mut args = vec![self.parse_type()?];
+            loop {
+                self.skip_ws();
+                if self.consume(">") {
+                    break;
+                }
+                self.expect(",")?;
+                args.push(self.parse_type()?);
+            }
+            return self.build_generic_type(&ident, args);
+        }
+
+        self.build_named_type(&ident)
+    }
+
+    fn build_named_type(&mut self, ident: &str) -> Result<Ty, String> {
+        Ok(match ident {
+            "Int" => Ty::Int,
+            "Float" => Ty::Float,
+            "String" => Ty::Str,
+            "Boolean" => Ty::Bool,
+            "Unit" => Ty::Unit,
+            "Error" => Ty::Error,
+            name if name.starts_with('$') => self
+                .tyvars
+                .entry(name.to_string())
+                .or_insert_with(|| self.env.fresh_tyvar())
+                .clone(),
+            other => Ty::Enum(other.to_string(), Vec::new()),
+        })
+    }
+
+    fn build_generic_type(&mut self, ident: &str, args: Vec<Ty>) -> Result<Ty, String> {
+        Ok(match ident {
+            "List" => {
+                let [inner] = args.as_slice() else {
+                    return Err("List requires exactly 1 type argument".into());
+                };
+                Ty::List(Box::new(inner.clone()))
+            }
+            "Result" => match args.as_slice() {
+                [ok] => Ty::Result(Box::new(ok.clone()), Box::new(Ty::Error)),
+                [ok, _err] => Ty::Result(Box::new(ok.clone()), Box::new(Ty::Error)),
+                _ => return Err("Result requires 1 or 2 type arguments".into()),
+            },
+            "Lens" => {
+                let [source, focus] = args.as_slice() else {
+                    return Err("Lens requires exactly 2 type arguments".into());
+                };
+                Ty::Lens(Box::new(source.clone()), Box::new(focus.clone()))
+            }
+            "TypeRef" => {
+                let [inner] = args.as_slice() else {
+                    return Err("TypeRef requires exactly 1 type argument".into());
+                };
+                Ty::TypeRef(Box::new(inner.clone()))
+            }
+            other => Ty::Enum(other.to_string(), args),
+        })
+    }
+
+    fn parse_ident(&mut self) -> Result<String, String> {
+        self.skip_ws();
+        let start = self.pos;
+        while let Some(ch) = self.peek_char() {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '$' {
+                self.pos += ch.len_utf8();
+            } else {
+                break;
             }
         }
-        "inspect" => {
-            let a = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![a],
-                ret: Box::new(Ty::Str),
+        if self.pos == start {
+            Err(format!("expected type identifier at byte {}", self.pos))
+        } else {
+            Ok(self.input[start..self.pos].to_string())
+        }
+    }
+
+    fn expect(&mut self, needle: &str) -> Result<(), String> {
+        self.skip_ws();
+        if self.consume(needle) {
+            Ok(())
+        } else {
+            Err(format!("expected `{}` at byte {}", needle, self.pos))
+        }
+    }
+
+    fn consume(&mut self, needle: &str) -> bool {
+        if self.input[self.pos..].starts_with(needle) {
+            self.pos += needle.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn skip_ws(&mut self) {
+        while let Some(ch) = self.peek_char() {
+            if ch.is_whitespace() {
+                self.pos += ch.len_utf8();
+            } else {
+                break;
             }
         }
-        "safe_div" => {
-            let a = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![a.clone(), a.clone()],
-                ret: Box::new(Ty::Result(Box::new(a), Box::new(Ty::Error))),
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        self.input[self.pos..].chars().next()
+    }
+
+    fn is_eof(&self) -> bool {
+        self.pos >= self.input.len()
+    }
+}
+
+#[cfg(test)]
+mod builtin_signature_tests {
+    use super::{builtin_ty_from_meta, TypeEnv};
+    use crate::types::Ty;
+    use sindr::builtin::BUILTIN_METAS;
+
+    #[test]
+    fn builtin_meta_signatures_bootstrap_into_type_env() {
+        let mut env = TypeEnv::new();
+        for meta in BUILTIN_METAS {
+            let ty = builtin_ty_from_meta(meta, &mut env);
+            match ty {
+                Ty::BuiltinFunc { name, params, .. } => {
+                    assert_eq!(name, meta.name);
+                    assert_eq!(params.len(), meta.arity as usize);
+                }
+                other => panic!("expected builtin function type, got {:?}", other),
             }
         }
-        "safe_mod" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Int, Ty::Int],
-            ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
-        },
-        "eprint" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Error],
-            ret: Box::new(Ty::Unit),
-        },
-        "set_exit_code" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Int],
-            ret: Box::new(Ty::Unit),
-        },
-        "shl" | "shr" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Int, Ty::Int],
-            ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
-        },
-        "bit_and" | "bit_or" | "bit_xor" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Int, Ty::Int],
-            ret: Box::new(Ty::Int),
-        },
-        "bit_not" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Int],
-            ret: Box::new(Ty::Int),
-        },
-        "test_bit" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Int, Ty::Int],
-            ret: Box::new(Ty::Result(Box::new(Ty::Bool), Box::new(Ty::Error))),
-        },
-        "set_bit" | "clear_bit" | "toggle_bit" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Int, Ty::Int],
-            ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
-        },
-        "codepoints" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Str, Ty::Enum("StringEncoding".into(), Vec::new())],
-            ret: Box::new(Ty::Result(
-                Box::new(Ty::List(Box::new(Ty::Int))),
-                Box::new(Ty::Error),
-            )),
-        },
-        "from_codepoints" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![
-                Ty::List(Box::new(Ty::Int)),
-                Ty::Enum("StringEncoding".into(), Vec::new()),
-            ],
-            ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
-        },
-        "len" => {
-            let a = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::List(Box::new(a))],
-                ret: Box::new(Ty::Int),
-            }
-        }
-        "gen_make" => {
-            let state = env.fresh_tyvar();
-            let item = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::Int, Ty::List(Box::new(item.clone()))],
-                ret: Box::new(Ty::Enum("Generator".into(), vec![state, item])),
-            }
-        }
-        "gen_idx" => {
-            let state = env.fresh_tyvar();
-            let item = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::Enum("Generator".into(), vec![state, item])],
-                ret: Box::new(Ty::Int),
-            }
-        }
-        "gen_items" => {
-            let state = env.fresh_tyvar();
-            let item = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::Enum("Generator".into(), vec![state, item.clone()])],
-                ret: Box::new(Ty::List(Box::new(item))),
-            }
-        }
-        "group_count" => {
-            let a = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::List(Box::new(a.clone()))],
-                ret: Box::new(Ty::List(Box::new(Ty::Tuple(vec![a, Ty::Int])))),
-            }
-        }
-        "zip" => {
-            let a = env.fresh_tyvar();
-            let b = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::List(Box::new(a.clone())), Ty::List(Box::new(b.clone()))],
-                ret: Box::new(Ty::List(Box::new(Ty::Tuple(vec![a, b])))),
-            }
-        }
-        "empty_map" => {
-            let value = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: Vec::new(),
-                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
-            }
-        }
-        "map_from_entries" => {
-            let value = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::List(Box::new(Ty::Tuple(vec![Ty::Str, value.clone()])))],
-                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
-            }
-        }
-        "map_len" => {
-            let value = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::Enum("HashMap".into(), vec![value])],
-                ret: Box::new(Ty::Int),
-            }
-        }
-        "map_contains_key" => {
-            let value = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::Enum("HashMap".into(), vec![value]), Ty::Str],
-                ret: Box::new(Ty::Bool),
-            }
-        }
-        "map_get" => {
-            let value = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::Enum("HashMap".into(), vec![value.clone()]), Ty::Str],
-                ret: Box::new(Ty::Result(Box::new(value), Box::new(Ty::Error))),
-            }
-        }
-        "map_insert" => {
-            let value = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![
-                    Ty::Enum("HashMap".into(), vec![value.clone()]),
-                    Ty::Str,
-                    value.clone(),
-                ],
-                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
-            }
-        }
-        "map_remove" => {
-            let value = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::Enum("HashMap".into(), vec![value.clone()]), Ty::Str],
-                ret: Box::new(Ty::Enum("HashMap".into(), vec![value])),
-            }
-        }
-        "map_keys" => {
-            let value = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::Enum("HashMap".into(), vec![value])],
-                ret: Box::new(Ty::List(Box::new(Ty::Str))),
-            }
-        }
-        "map_values_list" => {
-            let value = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![Ty::Enum("HashMap".into(), vec![value.clone()])],
-                ret: Box::new(Ty::List(Box::new(value))),
-            }
-        }
-        "view" => {
-            let source = env.fresh_tyvar();
-            let focus = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![
-                    Ty::Lens(Box::new(source.clone()), Box::new(focus.clone())),
-                    source,
-                ],
-                ret: Box::new(Ty::Result(Box::new(focus), Box::new(Ty::Error))),
-            }
-        }
-        "compose" => {
-            let source = env.fresh_tyvar();
-            let middle = env.fresh_tyvar();
-            let focus = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![
-                    Ty::Lens(Box::new(source.clone()), Box::new(middle.clone())),
-                    Ty::Lens(Box::new(middle), Box::new(focus.clone())),
-                ],
-                ret: Box::new(Ty::Lens(Box::new(source), Box::new(focus))),
-            }
-        }
-        "set" => {
-            let source = env.fresh_tyvar();
-            let focus = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![
-                    Ty::Lens(Box::new(source.clone()), Box::new(focus.clone())),
-                    source.clone(),
-                    focus,
-                ],
-                ret: Box::new(Ty::Result(Box::new(source), Box::new(Ty::Error))),
-            }
-        }
-        "over" => {
-            let source = env.fresh_tyvar();
-            let focus = env.fresh_tyvar();
-            Ty::BuiltinFunc {
-                name: meta.name.into(),
-                params: vec![
-                    Ty::Lens(Box::new(source.clone()), Box::new(focus.clone())),
-                    source.clone(),
-                    Ty::Func(
-                        vec![focus.clone()],
-                        Box::new(Ty::Result(Box::new(focus), Box::new(Ty::Error))),
-                    ),
-                ],
-                ret: Box::new(Ty::Result(Box::new(source), Box::new(Ty::Error))),
-            }
-        }
-        "compile" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Str],
-            ret: Box::new(Ty::Result(
-                Box::new(Ty::Enum("Regex".into(), Vec::new())),
-                Box::new(Ty::Error),
-            )),
-        },
-        "is_match" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
-            ret: Box::new(Ty::Bool),
-        },
-        "captures" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
-            ret: Box::new(Ty::Result(
-                Box::new(Ty::Enum("RegexCaptures".into(), Vec::new())),
-                Box::new(Ty::Error),
-            )),
-        },
-        "whole" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new())],
-            ret: Box::new(Ty::Str),
-        },
-        "capture_count" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new())],
-            ret: Box::new(Ty::Int),
-        },
-        "get" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new()), Ty::Int],
-            ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
-        },
-        "get_name" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("RegexCaptures".into(), Vec::new()), Ty::Str],
-            ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
-        },
-        "find" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
-            ret: Box::new(Ty::Result(
-                Box::new(Ty::Enum("RegexMatch".into(), Vec::new())),
-                Box::new(Ty::Error),
-            )),
-        },
-        "find_all" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
-            ret: Box::new(Ty::List(Box::new(Ty::Enum(
-                "RegexMatch".into(),
-                Vec::new(),
-            )))),
-        },
-        "split" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str],
-            ret: Box::new(Ty::List(Box::new(Ty::Str))),
-        },
-        "replace" | "replace_all" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("Regex".into(), Vec::new()), Ty::Str, Ty::Str],
-            ret: Box::new(Ty::Str),
-        },
-        "escape" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Str],
-            ret: Box::new(Ty::Str),
-        },
-        "group_names" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("Regex".into(), Vec::new())],
-            ret: Box::new(Ty::List(Box::new(Ty::Str))),
-        },
-        "text" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("RegexMatch".into(), Vec::new())],
-            ret: Box::new(Ty::Str),
-        },
-        "start" | "end" => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Enum("RegexMatch".into(), Vec::new())],
-            ret: Box::new(Ty::Int),
-        },
-        _ => Ty::BuiltinFunc {
-            name: meta.name.into(),
-            params: vec![Ty::Unit; meta.arity as usize],
-            ret: Box::new(Ty::Unit),
-        },
     }
 }
 

@@ -4,7 +4,7 @@ use crate::token::Token;
 
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
     fn flow_op_kind(tok: &Token) -> Option<u8> {
         match tok {
             Token::PipeApply => Some(0),

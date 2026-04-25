@@ -1117,13 +1117,13 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
             }
 
             let inner = handle
-                .entries
-                .iter()
+                .sorted_entries()
+                .into_iter()
                 .map(|(key, value)| {
                     format!(
                         "{} => {}",
-                        quote_surtr_string_literal(key),
-                        inspect_non_callable_value(vm, value)
+                        quote_surtr_string_literal(&key),
+                        inspect_non_callable_value(vm, &value)
                     )
                 })
                 .collect::<Vec<_>>()

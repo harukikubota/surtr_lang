@@ -10,7 +10,7 @@ print(to_string(HashMap::contains_key(map, "z")))
 print(to_string(HashMap::get(map, "a")))
 print(to_string(HashMap::get(map, "z")))
 
-from_entries = HashMap::from_entries([("a", 1), ("b", 2), ("a", 3)])
+from_entries = HashMap::from_entries([("b", 2), ("a", 1), ("a", 3)])
 print(inspect(from_entries))
 
 removed = HashMap::remove(from_entries, "b")

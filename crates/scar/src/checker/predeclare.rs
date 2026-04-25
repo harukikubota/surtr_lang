@@ -1,4 +1,5 @@
 use super::*;
+use sindr::builtin::builtin_type_meta_by_name;
 
 impl Checker {
     pub(super) fn predeclare_error_types(&mut self, stmts: &[Resolved]) {
@@ -13,30 +14,59 @@ impl Checker {
         &mut self,
         stmts: &[Resolved],
     ) -> Result<(), TypeError> {
+        let mut seen_type_spans: HashMap<String, Span> = HashMap::new();
         // Pass 1: reserve deterministic tags for all user-defined types.
         for stmt in stmts {
-            match stmt {
-                Resolved::StructDef(_, id, _) => {
-                    self.env
-                        .predeclare_type_def(id.name.clone(), TypeKind::Struct, Vec::new());
-                }
-                Resolved::RecordDef(_, id, _) => {
-                    self.env
-                        .predeclare_type_def(id.name.clone(), TypeKind::Record, Vec::new());
-                }
+            let maybe_decl = match stmt {
+                Resolved::StructDef(_, id, _) => Some((&id.name, &id.span, TypeKind::Struct, Vec::new())),
+                Resolved::RecordDef(_, id, _) => Some((&id.name, &id.span, TypeKind::Record, Vec::new())),
                 Resolved::DeferrorDef(_, id, _, _) => {
-                    self.env
-                        .predeclare_type_def(id.name.clone(), TypeKind::Error, Vec::new());
+                    Some((&id.name, &id.span, TypeKind::Error, Vec::new()))
                 }
-                Resolved::EnumDef(_, id, type_params, _) => {
-                    self.env.predeclare_type_def(
-                        id.name.clone(),
-                        TypeKind::Enum,
-                        type_params.iter().map(|param| param.name.clone()).collect(),
-                    );
-                }
-                _ => {}
+                Resolved::EnumDef(_, id, type_params, _) => Some((
+                    &id.name,
+                    &id.span,
+                    TypeKind::Enum,
+                    type_params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect::<Vec<_>>(),
+                )),
+                _ => None,
+            };
+
+            let Some((name, span, kind, type_params)) = maybe_decl else {
+                continue;
+            };
+
+            if builtin_type_meta_by_name(name).is_some() {
+                return Err(TypeError {
+                    message: format!(
+                        "Type name `{}` is reserved by a canonical builtin type declaration",
+                        name
+                    ),
+                    span: span.clone(),
+                    hint: Some("Builtin and canonical type names cannot be redefined.".into()),
+                });
             }
+
+            if let Some(first_span) = seen_type_spans.get(name) {
+                return Err(TypeError {
+                    message: format!(
+                        "Duplicate visible type name `{}` in the flat type namespace",
+                        name
+                    ),
+                    span: span.clone(),
+                    hint: Some(format!(
+                        "The first declaration was at {}..{}.",
+                        first_span.start, first_span.end
+                    )),
+                });
+            }
+            seen_type_spans.insert(name.clone(), span.clone());
+
+            self.env
+                .predeclare_type_def(name.clone(), kind, type_params);
         }
 
         self.ensure_no_type_cycles(stmts)?;

@@ -4,7 +4,7 @@ use crate::token::Token;
 
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
     // ── Type annotation parsing ──
 
     pub(super) fn parse_type(&mut self) -> Result<AstTy, ParseError> {

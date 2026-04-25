@@ -191,19 +191,21 @@ fn build_report<'a>(
     source: &str,
     spec: &'a DiagnosticSpec,
 ) -> Report<'a, (&'a str, std::ops::Range<usize>)> {
-    let primary = normalized_span(source, &spec.primary_span);
-    let mut builder = Report::build(ReportKind::Error, (file_name, primary.start..primary.end))
+    let primary = normalized_char_span(source, &spec.primary_span);
+    let primary_range = char_span_to_byte_range(source, &primary);
+    let mut builder = Report::build(ReportKind::Error, (file_name, primary_range.clone()))
         .with_message(format!("{}: {}", spec.kind, spec.message))
         .with_label(
-            Label::new((file_name, primary.start..primary.end))
+            Label::new((file_name, primary_range))
                 .with_message(&spec.message)
                 .with_color(Color::Red),
         );
 
     for label in &spec.labels {
-        let span = normalized_span(source, &label.span);
+        let span = normalized_char_span(source, &label.span);
+        let range = char_span_to_byte_range(source, &span);
         builder = builder.with_label(
-            Label::new((file_name, span.start..span.end))
+            Label::new((file_name, range))
                 .with_message(&label.message)
                 .with_color(label.color),
         );
@@ -216,7 +218,7 @@ fn build_report<'a>(
     builder.finish()
 }
 
-fn normalized_span(source: &str, span: &Span) -> Span {
+fn normalized_char_span(source: &str, span: &Span) -> Span {
     let source_len = source.chars().count();
     if source_len == 0 {
         return Span { start: 0, end: 0 };
@@ -233,6 +235,29 @@ fn normalized_span(source: &str, span: &Span) -> Span {
     }
 
     Span { start, end }
+}
+
+fn char_span_to_byte_range(source: &str, span: &Span) -> std::ops::Range<usize> {
+    let normalized = normalized_char_span(source, span);
+    char_offset_to_byte_offset(source, normalized.start)..char_offset_to_byte_offset(
+        source,
+        normalized.end,
+    )
+}
+
+fn char_offset_to_byte_offset(source: &str, offset: usize) -> usize {
+    if offset == 0 {
+        return 0;
+    }
+    let char_len = source.chars().count();
+    if offset >= char_len {
+        return source.len();
+    }
+    source
+        .char_indices()
+        .nth(offset)
+        .map(|(idx, _)| idx)
+        .unwrap_or(source.len())
 }
 
 fn write_fallback_diagnostic(
@@ -366,10 +391,8 @@ fn infer_type_error_template(source: &str, focus: &Span, message: &str) -> Optio
 fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
     let mut line = 1u32;
     let mut column = 1u32;
-    for (idx, ch) in source.char_indices() {
-        if idx >= offset {
-            break;
-        }
+    let limit = offset.min(source.chars().count());
+    for ch in source.chars().take(limit) {
         if ch == '\n' {
             line += 1;
             column = 1;
@@ -907,5 +930,23 @@ mod tests {
         let rendered = render_error("main.srt", "abcde", &spec);
         assert!(rendered.contains("ParseError: unexpected token"));
         assert!(rendered.contains("main.srt"));
+    }
+
+    #[test]
+    fn serializable_report_uses_character_offsets_for_utf8_source() {
+        let mut sources = SourceRegistry::new();
+        let source_id = sources.register("main.srt", "あx");
+        let spec = simple_error("TypeError", "expected Int, got String", Span { start: 1, end: 2 }, None);
+
+        let report = serializable_report_by_id(&sources, source_id, "typecheck", &spec);
+        assert_eq!(report.errors[0].line, 1);
+        assert_eq!(report.errors[0].column, 2);
+        assert_eq!(report.errors[0].span, [1, 2]);
+    }
+
+    #[test]
+    fn char_span_to_byte_range_converts_only_at_render_boundary() {
+        let range = char_span_to_byte_range("あx", &Span { start: 1, end: 2 });
+        assert_eq!(range, "あ".len().."あx".len());
     }
 }

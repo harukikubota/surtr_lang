@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::error::ParseError;
 use crate::lexer::tokenize;
 use crate::token::{Spanned, Token};
+use std::collections::VecDeque;
 
 mod chumsky_program;
 mod completion;
@@ -142,18 +143,20 @@ pub fn collect_entrypoint_annotations(
     Ok((chars.into_iter().collect::<String>(), annotations))
 }
 
-struct Parser {
-    tokens: Vec<Spanned<Token>>,
+struct Parser<'a> {
+    tokens: &'a [Spanned<Token>],
+    synthetic_tokens: VecDeque<Spanned<Token>>,
     pos: usize,
     context: ParserContext,
     impl_target_stack: Vec<Symbol>,
     allow_trailing_call_block: bool,
 }
 
-impl Parser {
-    fn new(tokens: Vec<Spanned<Token>>, context: ParserContext) -> Self {
+impl<'a> Parser<'a> {
+    fn new(tokens: &'a [Spanned<Token>], context: ParserContext) -> Self {
         Self {
             tokens,
+            synthetic_tokens: VecDeque::new(),
             pos: 0,
             context,
             impl_target_stack: Vec::new(),
@@ -164,21 +167,39 @@ impl Parser {
     // ── Helpers ──
 
     fn peek(&self) -> &Token {
-        &self.tokens[self.pos].token
+        if let Some(token) = self.synthetic_tokens.front() {
+            &token.token
+        } else {
+            &self.tokens[self.pos].token
+        }
     }
 
     fn peek_n(&self, n: usize) -> Option<&Token> {
-        self.tokens.get(self.pos + n).map(|sp| &sp.token)
+        if n < self.synthetic_tokens.len() {
+            self.synthetic_tokens.get(n).map(|sp| &sp.token)
+        } else {
+            self.tokens
+                .get(self.pos + n - self.synthetic_tokens.len())
+                .map(|sp| &sp.token)
+        }
     }
 
     fn peek_span(&self) -> Span {
-        self.tokens[self.pos].span.clone()
+        if let Some(token) = self.synthetic_tokens.front() {
+            token.span.clone()
+        } else {
+            self.tokens[self.pos].span.clone()
+        }
     }
 
-    fn advance(&mut self) -> &Spanned<Token> {
-        let t = &self.tokens[self.pos];
-        self.pos += 1;
-        t
+    fn advance(&mut self) -> Spanned<Token> {
+        if let Some(token) = self.synthetic_tokens.pop_front() {
+            token
+        } else {
+            let token = self.tokens[self.pos].clone();
+            self.pos += 1;
+            token
+        }
     }
 
     fn expected_token_name(expected: &Token) -> &'static str {
@@ -218,7 +239,7 @@ impl Parser {
                 Ok(sp)
             }
             Token::Compose => {
-                let composed = self.advance().span.clone();
+                let composed = self.advance().span;
                 let first = Span {
                     start: composed.start,
                     end: composed.start + 1,
@@ -227,13 +248,10 @@ impl Parser {
                     start: composed.start + 1,
                     end: composed.end,
                 };
-                self.tokens.insert(
-                    self.pos,
-                    Spanned {
-                        token: Token::Gt,
-                        span: second,
-                    },
-                );
+                self.synthetic_tokens.push_front(Spanned {
+                    token: Token::Gt,
+                    span: second,
+                });
                 Ok(first)
             }
             Token::Eof => Err(ParseError::incomplete(">", sp)),

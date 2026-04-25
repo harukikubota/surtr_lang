@@ -4,7 +4,7 @@ use crate::token::Token;
 
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
     pub(super) fn parse_pattern_bind_stmt(&mut self) -> Result<Ast, ParseError> {
         let pat = self.parse_bind_pattern()?;
         let assign_tok = self.peek().clone();

@@ -6,7 +6,7 @@ use super::ast_ty_span;
 use super::context::{DeclLevel, TopLevelDeclKind};
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
     pub(super) fn parse_field_visibility(&mut self) -> Visibility {
         if matches!(self.peek(), Token::Private) {
             self.advance();

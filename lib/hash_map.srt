@@ -1,6 +1,6 @@
 @@doc """
 Standard `HashMap` type declaration.
-`HashMap<$V>` is an immutable insertion-ordered map with `String` keys and
+`HashMap<$V>` is an immutable map with `String` keys and
 value-only generics.
 The canonical builtin head is fixed to this shape.
 """
@@ -9,7 +9,8 @@ The canonical builtin head is fixed to this shape.
 @@doc """
 HashMap module.
 Provides immutable map helpers backed by runtime builtins.
-Keys are always `String`, and insertion order is preserved.
+Keys are always `String`.
+Visible ordering is deterministic and sorted by key.
 """
 defmod HashMap {
   defp _map_values_go(
@@ -38,7 +39,7 @@ defmod HashMap {
 
   @@doc """
   Build a map from `(String, value)` entries.
-  Later duplicates overwrite values while preserving first-key order.
+  Later duplicates overwrite values.
   """
   @@builtin def map_from_entries(entries: List<(String, $V)>) -> HashMap<$V>
 
@@ -75,7 +76,6 @@ defmod HashMap {
 
   @@doc """
   Return a new map with `key` set to `value`.
-  Existing key order is preserved.
   """
   @@builtin def map_insert(map: HashMap<$V>, key: String, value: $V) -> HashMap<$V>
 
@@ -94,7 +94,7 @@ defmod HashMap {
   }
 
   @@doc """
-  Return keys in insertion order.
+  Return keys in deterministic key-sorted order.
   """
   @@builtin def map_keys(map: HashMap<$V>) -> List<String>
 
@@ -103,7 +103,7 @@ defmod HashMap {
   }
 
   @@doc """
-  Return values in the same order as `keys(map)`.
+  Return values in the same deterministic order as `keys(map)`.
   """
   @@builtin def map_values_list(map: HashMap<$V>) -> List<$V>
 
@@ -112,7 +112,7 @@ defmod HashMap {
   }
 
   @@doc """
-  Return `(key, value)` entries in insertion order.
+  Return `(key, value)` entries in deterministic key-sorted order.
   """
   def entries(map: HashMap<$V>) -> List<(String, $V)> {
     List::zip(keys(map), values(map))
@@ -120,7 +120,7 @@ defmod HashMap {
 
   @@doc """
   Return a new map with the same keys and transformed values.
-  Key order is preserved.
+  The visible order remains deterministic and sorted by key.
   """
   def map_values(map: HashMap<$A>, f: ($A -> $B)) -> HashMap<$B> {
     _map_values_go(map, keys(map), f, empty())

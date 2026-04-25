@@ -2411,3 +2411,14 @@ fn test_assignment_is_rejected_in_argument_position() {
     let err = parse("f(x: y = 1)").expect_err("Expected parse error");
     assert!(err.message().contains("cannot appear in argument position"));
 }
+
+#[test]
+fn test_many_top_level_declarations_parse_successfully() {
+    let mut source = String::new();
+    for idx in 0..256 {
+        source.push_str(&format!("def value_{idx}() -> Int {{ {idx} }}\n"));
+    }
+
+    let ast = parse(&source).expect("many top-level declarations should parse");
+    assert_eq!(ast.len(), 256);
+}

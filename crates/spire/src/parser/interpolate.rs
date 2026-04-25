@@ -3,7 +3,7 @@ use crate::error::ParseError;
 
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
     pub(super) fn parse_string_or_interpolated(
         &mut self,
         span: Span,

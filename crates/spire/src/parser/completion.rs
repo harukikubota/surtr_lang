@@ -72,7 +72,7 @@ pub fn parse_incomplete_expr(
     let tokens = tokenize(source)?;
     context.level = DeclLevel::Expr;
 
-    let mut parser = Parser::new(tokens, context);
+    let mut parser = Parser::new(&tokens, context);
     match parser.parse_expr() {
         Ok(_) => Err(ParseError::syntax(
             "input is already complete",

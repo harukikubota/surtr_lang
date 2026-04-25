@@ -82,10 +82,10 @@ pub struct RegexMatchHandle {
     pub end: usize,
 }
 
-/// Shared runtime handle for immutable insertion-ordered string-keyed maps.
+/// Shared runtime handle for immutable string-keyed maps.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HashMapHandle {
-    pub entries: Vec<(String, Value)>,
+    pub entries: HashMap<String, Value>,
 }
 
 pub type ListRef = Option<Rc<ListNode>>;
@@ -154,12 +154,12 @@ impl Value {
                     return "HashMap()".to_string();
                 }
                 let inner = handle
-                    .entries
-                    .iter()
+                    .sorted_entries()
+                    .into_iter()
                     .map(|(key, value)| {
                         format!(
                             "{} => {}",
-                            quote_surtr_string_literal(key),
+                            quote_surtr_string_literal(&key),
                             value.to_display_string(registry)
                         )
                     })
@@ -265,7 +265,7 @@ fn quote_surtr_string_literal(input: &str) -> String {
 impl HashMapHandle {
     pub fn empty() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: HashMap::new(),
         }
     }
 
@@ -282,60 +282,50 @@ impl HashMapHandle {
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
-        self.entries.iter().any(|(existing, _)| existing == key)
+        self.entries.contains_key(key)
     }
 
     pub fn get(&self, key: &str) -> Option<Value> {
-        self.entries
-            .iter()
-            .find_map(|(existing, value)| (existing == key).then(|| value.clone()))
+        self.entries.get(key).cloned()
     }
 
     pub fn insert(&self, key: String, value: Value) -> Self {
         let mut entries = self.entries.clone();
-        if let Some((_, existing_value)) = entries.iter_mut().find(|(existing, _)| existing == &key)
-        {
-            *existing_value = value;
-        } else {
-            entries.push((key, value));
-        }
+        entries.insert(key, value);
         Self { entries }
     }
 
     pub fn remove(&self, key: &str) -> Self {
-        let mut removed = false;
-        let entries = self
-            .entries
-            .iter()
-            .filter_map(|(existing_key, existing_value)| {
-                if !removed && existing_key == key {
-                    removed = true;
-                    None
-                } else {
-                    Some((existing_key.clone(), existing_value.clone()))
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if removed {
-            Self { entries }
-        } else {
-            self.clone()
+        if !self.entries.contains_key(key) {
+            return self.clone();
         }
+        let mut entries = self.entries.clone();
+        entries.remove(key);
+        Self { entries }
     }
 
     pub fn keys(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>()
+        self.sorted_entries()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect()
     }
 
     pub fn values(&self) -> Vec<Value> {
-        self.entries
+        self.sorted_entries()
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect()
+    }
+
+    pub fn sorted_entries(&self) -> Vec<(String, Value)> {
+        let mut entries = self
+            .entries
             .iter()
-            .map(|(_, value)| value.clone())
-            .collect::<Vec<_>>()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
     }
 }
 
@@ -619,11 +609,11 @@ mod tests {
     }
 
     #[test]
-    fn hash_map_handle_insert_overwrite_and_remove_keep_order() {
+    fn hash_map_handle_insert_overwrite_and_remove_use_sorted_key_order() {
         let empty = HashMapHandle::empty();
-        let with_a = empty.insert("a".into(), Value::Int(int(1)));
-        let with_ab = with_a.insert("b".into(), Value::Int(int(2)));
-        let with_overwrite = with_ab.insert("a".into(), Value::Int(int(3)));
+        let with_b = empty.insert("b".into(), Value::Int(int(2)));
+        let with_ba = with_b.insert("a".into(), Value::Int(int(1)));
+        let with_overwrite = with_ba.insert("a".into(), Value::Int(int(3)));
 
         assert_eq!(with_overwrite.len(), 2);
         assert_eq!(

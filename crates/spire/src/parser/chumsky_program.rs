@@ -81,9 +81,8 @@ fn parse_stmt_prefix(
     tokens: &[Spanned<Token>],
     context: ParserContext,
 ) -> Result<(Ast, usize), ParseError> {
-    let mut parser = Parser::new(tokens.to_vec(), context);
+    let mut parser = Parser::new(tokens, context);
     let stmt = parser.parse_stmt()?;
     parser.ensure_stmt_boundary(&stmt, false)?;
-    let synthetic_tokens = parser.tokens.len().saturating_sub(tokens.len());
-    Ok((stmt, parser.pos.saturating_sub(synthetic_tokens)))
+    Ok((stmt, parser.pos))
 }
