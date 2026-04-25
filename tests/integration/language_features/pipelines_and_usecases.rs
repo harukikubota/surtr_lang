@@ -1,7 +1,5 @@
 use super::harness::{assert_compile_error, assert_output};
 
-#[test]
-#[ignore = "bucketed"]
 fn pipe_accepts_capture_and_injected_call() {
     assert_output(
         r#"def add(x: Int, y: Int) -> Int {
@@ -14,8 +12,6 @@ print(to_string(4 |> &add(1)))"#,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn pipe_accepts_qualified_capture_and_injected_call() {
     assert_output(
         r#"defstruct User {
@@ -40,8 +36,6 @@ print(user |> User::get_name())"#,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn flow_operators_allow_multiline_elixir_style_layout() {
     assert_output(
         r#"def parse(text: String) -> Result<Int> {
@@ -80,8 +74,6 @@ print(to_string(plain(4)))"#,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn result_pipeline_map_and_bind_work() {
     assert_output(
         r#"def inc(x: Int) -> Int {
@@ -108,8 +100,6 @@ match bound {
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn result_pipeline_injects_left_value_into_call_rhs() {
     assert_output(
         r#"deferror TooSmall {
@@ -140,8 +130,6 @@ match bound {
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping() {
     assert_output(
         r#"deferror ParseHandError(detail: String) {
@@ -175,8 +163,6 @@ print(inspect(parse_hand("x")))"#,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn list_pipeline_helpers_and_compose_work() {
     assert_output(
         r#"def inc(x: Int) -> Int {
@@ -202,8 +188,6 @@ print(to_string(expand(2)))"#,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn compose_builds_callable_from_capture_only() {
     assert_output(
         r#"def parse(text: String) -> Result<Int> {
@@ -224,8 +208,6 @@ match pipeline("x") {
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn flow_operators_reject_naked_function_refs() {
     assert_compile_error(
         r#"def inc(x: Int) -> Int {
@@ -250,8 +232,6 @@ pipeline = parse |=> render"#,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn compose_rejects_call_expressions() {
     assert_compile_error(
         r#"def parse(text: String) -> Result<Int> {
@@ -276,8 +256,6 @@ plain = inc() >> inc()"#,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn flow_operators_reject_context_mismatch_and_monadic_map_rhs() {
     assert_compile_error(
         r#"def lift(x: Int) -> Result<Int> {
@@ -300,8 +278,6 @@ bad = value |>= expand()"#,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn result_pipeline_usecase_user_lookup_and_render() {
     assert_output(
         r#"defstruct User {
@@ -342,8 +318,6 @@ match summary {
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn kernel_helper_usecase_works_with_funcliteral_and_flow_ops() {
     assert_output(
         r#"defstruct User {
@@ -419,8 +393,6 @@ match lookup("guest") |>= allow() |*> render() {
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn safebind_usecase_result_and_list_pipeline() {
     assert_output(
         r##"def parse_csv(text: String) -> Result<List<Int>> {
@@ -449,8 +421,6 @@ print(to_string((head |> singleton()) |*> show()))"##,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn list_pipeline_usecase_expand_and_present_keywords() {
     assert_output(
         r#"def aliases(word: String) -> List<String> {
@@ -477,8 +447,6 @@ print(to_string(lift_and_expand("bind") |*> wrap_bracket()))"#,
     );
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn language_goal_combined() {
     assert_output(
         r#"num = 10

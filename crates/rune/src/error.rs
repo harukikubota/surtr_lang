@@ -1,4 +1,5 @@
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
+#[cfg(test)]
 use forge::bytecode::line_column_for_offset;
 use sindr::policy::CompileUnitKind;
 
@@ -190,6 +191,7 @@ impl RuneError {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn summary(&self) -> String {
         match self {
             Self::Usage { message } => {

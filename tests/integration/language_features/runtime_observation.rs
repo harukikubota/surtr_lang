@@ -1,7 +1,5 @@
 use super::harness::observe_surtr;
 
-#[test]
-#[ignore = "bucketed"]
 fn tail_recursive_function_reuses_single_non_top_level_frame() {
     let observation = observe_surtr(
         r#"def fib_tail(n: Int, a: Int, b: Int) -> Int {
@@ -17,8 +15,6 @@ fib_tail(50, 0, 1)"#,
     assert_eq!(observation.stats.tail_calls_optimized, 50);
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn match_arm_tail_calls_are_optimized() {
     let observation = observe_surtr(
         r#"def sum_list(values: List<Int>, acc: Int) -> Int {
@@ -35,8 +31,6 @@ sum_list([1, 2, 3, 4, 5], 0)"#,
     assert_eq!(observation.stats.tail_calls_optimized, 5);
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn mutual_tail_recursion_is_optimized() {
     let observation = observe_surtr(
         r#"def even(n: Int) -> Boolean {
@@ -56,8 +50,6 @@ even(100)"#,
     assert_eq!(observation.stats.tail_calls_optimized, 100);
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn non_tail_recursion_keeps_growing_frames() {
     let observation = observe_surtr(
         r#"def sum_non_tail(n: Int) -> Int {
@@ -73,8 +65,6 @@ sum_non_tail(200)"#,
     assert_eq!(observation.stats.return_count, 201);
 }
 
-#[test]
-#[ignore = "bucketed"]
 fn generator_fibonacci_resume_consumer_uses_tail_calls() {
     let observation = observe_surtr(
         r#"def fib_generator(count: Int) -> Generator<(Int, Int), Int> {
