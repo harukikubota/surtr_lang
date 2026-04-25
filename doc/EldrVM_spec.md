@@ -137,6 +137,8 @@ Eldr が扱う値の概念カテゴリ:
 - `inspect(Result::Err(...))` も同じ tree を使うが、先頭行だけ `Err(...)` で包む
 - `inspect(HashMap)` / `to_string(HashMap)` は `HashMap("key" => value, ...)` 形式で、key は `String` literal と同じ escaping で表示する
 - `eprint(Error)` は先頭行を `Error: Kind: message`、以降を `Caused by: Kind: message` で出力する
+- `Error::kind(Error)` は `RichError.kind`、`Error::message(Error)` は `RichError.message` を `String` として返す
+- `Error::format(Error)` は `eprint(Error)` と同じ行列を stderr へ出さず、`\n` join した `String` として返す
 
 ---
 
@@ -194,6 +196,8 @@ Opcode は以下のカテゴリを持つ。
 - `Lens::view` / `Lens::set` / `Lens::over` / `Lens::compose` は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
 - Lens の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
+- `Error::kind` / `Error::message` / `Error::format` は `Error` 値を introspection / 表示文字列化する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
+- `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は immutable な insertion-order `Vec<(String, Value)>` を基準にし、duplicate key 更新時は値のみ差し替えて順序を維持する
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す

@@ -79,6 +79,9 @@ pub enum Resolved {
     /// `ensure(value, pred, err)` special form
     Ensure(Span, Box<Resolved>, Box<Resolved>, Box<Resolved>),
 
+    /// `Result::recover_kind(value, ErrorKind, handler)` special form
+    RecoverKind(Span, Box<Resolved>, ResolvedId, Box<Resolved>),
+
     /// Match expression
     Match(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
 
@@ -222,6 +225,7 @@ pub enum ResolvedPattern {
     Constructor(ResolvedId, Vec<ResolvedPattern>),
     Extractor(ResolvedId, Vec<ResolvedPattern>),
     Tuple(Vec<ResolvedPattern>),
+    Or(Vec<ResolvedPattern>),
     As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
 }
 

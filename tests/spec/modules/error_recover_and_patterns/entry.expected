@@ -1,0 +1,13 @@
+Timeout
+timeout
+Error: Timeout: timeout
+Ok("ok")
+fallback
+Ok("fallback")
+Ok("ok")
+retry:Timeout
+Error: Timeout: timeout
+Ok("retry")
+Err(DnsFailure("dns failure"))
+matched:ConnectionReset
+Error: ConnectionReset: connection reset

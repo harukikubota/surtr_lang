@@ -214,6 +214,15 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         func: builtin_project_args,
     },
+    BuiltinImpl {
+        func: builtin_error_kind,
+    },
+    BuiltinImpl {
+        func: builtin_error_message,
+    },
+    BuiltinImpl {
+        func: builtin_error_format,
+    },
 ];
 
 const _: () = {
@@ -264,6 +273,21 @@ fn builtin_to_string(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
 
 fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     Ok(Value::Str(inspect_value(vm, &args[0])))
+}
+
+fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rich = decode_error_arg(&args[0], "kind", "err")?;
+    Ok(Value::Str(rich.kind))
+}
+
+fn builtin_error_message(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rich = decode_error_arg(&args[0], "message", "err")?;
+    Ok(Value::Str(rich.message))
+}
+
+fn builtin_error_format(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rich = decode_error_arg(&args[0], "format", "err")?;
+    Ok(Value::Str(rich.to_eprint_lines().join("\n")))
 }
 
 fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

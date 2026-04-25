@@ -1,0 +1,5 @@
+def bad_retry(err: Error) -> String {
+  "bad"
+}
+
+value = Result::recover_kind(Err(Timeout), Timeout, &bad_retry)

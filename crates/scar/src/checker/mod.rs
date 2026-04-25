@@ -1202,6 +1202,7 @@ impl Checker {
             Resolved::If(..) => "If".to_string(),
             Resolved::Ensure(..) => "Ensure".to_string(),
             Resolved::Assert(..) => "Assert".to_string(),
+            Resolved::RecoverKind(..) => "RecoverKind".to_string(),
             Resolved::Semi(..) => "Semi".to_string(),
             _ => "Expr".to_string(),
         }
@@ -1229,6 +1230,7 @@ impl Checker {
             Resolved::If(..) => "If",
             Resolved::Ensure(..) => "Ensure",
             Resolved::Assert(..) => "Assert",
+            Resolved::RecoverKind(..) => "RecoverKind",
             Resolved::Semi(..) => "Semi",
             _ => "Expr",
         }

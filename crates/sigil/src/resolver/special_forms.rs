@@ -135,6 +135,50 @@ impl Resolver {
         ))
     }
 
+    pub(super) fn resolve_recover_kind(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let positional = collect_positional_args(span.clone(), args, "recover_kind", 3)?;
+        let mut iter = positional.into_iter();
+        let value = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let marker = self.resolve_error_marker(
+            iter.next().expect("checked arg length"),
+            "recover_kind",
+        )?;
+        let handler = self.resolve_node(iter.next().expect("checked arg length"))?;
+        Ok(Resolved::RecoverKind(
+            span,
+            Box::new(value),
+            marker,
+            Box::new(handler),
+        ))
+    }
+
+    fn resolve_error_marker(&self, expr: Ast, form_name: &str) -> Result<ResolvedId, ResolveError> {
+        let (span, name) = match expr {
+            Ast::Var(span, name) => (span, name),
+            Ast::Path(span, path) => (span, path.segments.join("::")),
+            other => {
+                return Err(ResolveError {
+                    message: format!("{} marker must be a deferror name", form_name),
+                    span: other.span().clone(),
+                });
+            }
+        };
+        let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
+            message: format!("Undefined error marker: {}", name),
+            span: span.clone(),
+        })?;
+        Ok(ResolvedId {
+            name,
+            qualified_name: self.declaration_fq_name_for_uid(uid),
+            unique_id: uid,
+            span,
+        })
+    }
+
     pub(super) fn resolve_if_let(
         &mut self,
         span: Span,
@@ -456,7 +500,8 @@ fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
         }
         AstPattern::Constructor(_, _, inners)
         | AstPattern::Call(_, _, inners)
-        | AstPattern::Tuple(_, inners) => inners.iter().any(pattern_has_binding_vars),
+        | AstPattern::Tuple(_, inners)
+        | AstPattern::Or(_, inners) => inners.iter().any(pattern_has_binding_vars),
         AstPattern::Wildcard(_)
         | AstPattern::ListNil(_)
         | AstPattern::IntLit(_, _)
@@ -478,6 +523,7 @@ fn ast_pattern_span(pattern: &AstPattern) -> &Span {
         | AstPattern::Constructor(span, _, _)
         | AstPattern::Call(span, _, _)
         | AstPattern::Tuple(span, _)
+        | AstPattern::Or(span, _)
         | AstPattern::As(span, _, _, _) => span,
     }
 }

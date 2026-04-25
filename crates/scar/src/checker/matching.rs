@@ -354,7 +354,42 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::StrLit(s.clone()))
             }
+            ResolvedPattern::Or(items) => {
+                if items.is_empty() {
+                    return Err(TypeError {
+                        message: "empty pattern alternative".into(),
+                        span: Span { start: 0, end: 0 },
+                        hint: None,
+                    });
+                }
+                let mut typed_items = Vec::with_capacity(items.len());
+                for item in items {
+                    let typed_item = self.check_match_subpattern(item, expected_ty)?;
+                    if self.match_pattern_has_bindings(&typed_item) {
+                        return Err(TypeError {
+                            message: "Pattern alternatives cannot bind names directly.".into(),
+                            span: Span { start: 0, end: 0 },
+                            hint: Some(
+                                "Use an outer as-pattern such as `A | B @ err: Error`.".into(),
+                            ),
+                        });
+                    }
+                    typed_items.push(typed_item);
+                }
+                Ok(TypedMatchPattern::Or(typed_items))
+            }
             ResolvedPattern::Constructor(ctor_id, inner_pats) => {
+                if matches!(expected_ty, Ty::Error) && self.env.is_error_constructor(ctor_id.unique_id)
+                {
+                    if !inner_pats.is_empty() {
+                        return Err(TypeError {
+                            message: "Error kind patterns do not destructure payloads yet.".into(),
+                            span: ctor_id.span.clone(),
+                            hint: Some("Use `Kind @ err: Error` and inspect the Error value.".into()),
+                        });
+                    }
+                    return Ok(TypedMatchPattern::ErrorKind(ctor_id.name.clone()));
+                }
                 if matches!(expected_ty, Ty::Result(_, _)) {
                     let tag = match ctor_id.name.as_str() {
                         "Ok" => 0u32,
@@ -556,16 +591,43 @@ impl Checker {
         match pat {
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => true,
             TypedMatchPattern::As(inner, _) => self.is_match_catch_all(inner),
+            TypedMatchPattern::Or(items) => items.iter().any(|item| self.is_match_catch_all(item)),
             TypedMatchPattern::Tuple(items) => {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
             TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::ErrorKind(_)
             | TypedMatchPattern::Constructor { .. }
             | TypedMatchPattern::ListNil
             | TypedMatchPattern::ListCons(_, _)
             | TypedMatchPattern::Extractor { .. } => false,
+        }
+    }
+
+    fn match_pattern_has_bindings(&self, pat: &TypedMatchPattern) -> bool {
+        match pat {
+            TypedMatchPattern::Binding(_) => true,
+            TypedMatchPattern::As(_, _) => true,
+            TypedMatchPattern::Tuple(items) | TypedMatchPattern::Or(items) => {
+                items.iter().any(|item| self.match_pattern_has_bindings(item))
+            }
+            TypedMatchPattern::Constructor { fields, .. } => {
+                fields.iter().any(|item| self.match_pattern_has_bindings(item))
+            }
+            TypedMatchPattern::ListCons(head, tail) => {
+                self.match_pattern_has_bindings(head) || self.match_pattern_has_bindings(tail)
+            }
+            TypedMatchPattern::Extractor { items, .. } => {
+                items.iter().any(|item| self.match_pattern_has_bindings(item))
+            }
+            TypedMatchPattern::Wildcard
+            | TypedMatchPattern::BoolLit(_)
+            | TypedMatchPattern::IntLit(_)
+            | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::ErrorKind(_)
+            | TypedMatchPattern::ListNil => false,
         }
     }
 }

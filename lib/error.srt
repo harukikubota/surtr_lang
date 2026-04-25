@@ -9,6 +9,27 @@ shared abstraction.
 """
 @@builtin type Error
 
+@@doc """
+Error module.
+Provides runtime inspection helpers for abstract `Error` values.
+"""
+defmod Error {
+  @@doc """
+  Return the concrete `deferror` kind name stored in an `Error` value.
+  """
+  @@builtin def kind(err: Error) -> String
+
+  @@doc """
+  Return the human message stored in an `Error` value.
+  """
+  @@builtin def message(err: Error) -> String
+
+  @@doc """
+  Render an `Error` into the same human-oriented multiline text used by `eprint`.
+  """
+  @@builtin def format(err: Error) -> String
+}
+
 impl Show for Error {
   def to_string(self: Self) -> String {
     inspect(self)

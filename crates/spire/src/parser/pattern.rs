@@ -100,7 +100,23 @@ impl Parser {
     }
 
     fn parse_bind_pattern(&mut self) -> Result<AstPattern, ParseError> {
-        let mut pat = self.parse_bind_pattern_atom()?;
+        let mut alts = vec![self.parse_bind_pattern_atom()?];
+        loop {
+            self.skip_newlines();
+            if !matches!(self.peek(), Token::Pipe) {
+                break;
+            }
+            self.advance();
+            self.skip_newlines();
+            alts.push(self.parse_bind_pattern_atom()?);
+        }
+        let mut pat = if alts.len() == 1 {
+            alts.pop().expect("one pattern alternative")
+        } else {
+            let start = super::pattern_span(alts.first().expect("pattern alternative")).start;
+            let end = super::pattern_span(alts.last().expect("pattern alternative")).end;
+            AstPattern::Or(Span { start, end }, alts)
+        };
         loop {
             self.skip_newlines();
             if !matches!(self.peek(), Token::At) {

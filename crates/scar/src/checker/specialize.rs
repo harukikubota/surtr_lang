@@ -486,6 +486,25 @@ impl Checker {
                     generated_defs,
                 )?),
             ),
+            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
+                Box::new(self.rewrite_specializations_in_node(
+                    *value,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                marker,
+                Box::new(self.rewrite_specializations_in_node(
+                    *handler,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.rewrite_specializations_in_node(
                     *scrutinee,
@@ -1023,6 +1042,10 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(pred, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
+            TypedInner::RecoverKind(value, _, handler) => {
+                self.collect_bound_tyvars_in_node(value, ordered, seen);
+                self.collect_bound_tyvars_in_node(handler, ordered, seen);
+            }
             TypedInner::Match(scrutinee, arms) => {
                 self.collect_bound_tyvars_in_node(scrutinee, ordered, seen);
                 for arm in arms {
@@ -1256,6 +1279,11 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*pred, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
+            ),
+            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
+                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                marker,
+                Box::new(self.substitute_typed_node_with_mapping(*handler, mapping)),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.substitute_typed_node_with_mapping(*scrutinee, mapping)),
@@ -1529,6 +1557,13 @@ impl Checker {
             TypedMatchPattern::BoolLit(value) => TypedMatchPattern::BoolLit(value),
             TypedMatchPattern::IntLit(value) => TypedMatchPattern::IntLit(value),
             TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
+            TypedMatchPattern::ErrorKind(value) => TypedMatchPattern::ErrorKind(value),
+            TypedMatchPattern::Or(items) => TypedMatchPattern::Or(
+                items
+                    .into_iter()
+                    .map(|item| self.substitute_typed_match_pattern_with_mapping(item, mapping))
+                    .collect(),
+            ),
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()
@@ -1714,6 +1749,10 @@ impl Checker {
                 Self::typed_node_has_pending_trait_call(value)
                     || Self::typed_node_has_pending_trait_call(pred)
                     || Self::typed_node_has_pending_trait_call(err)
+            }
+            TypedInner::RecoverKind(value, _, handler) => {
+                Self::typed_node_has_pending_trait_call(value)
+                    || Self::typed_node_has_pending_trait_call(handler)
             }
             TypedInner::Match(scrutinee, arms) => {
                 Self::typed_node_has_pending_trait_call(scrutinee)

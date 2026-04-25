@@ -1939,6 +1939,9 @@ largest = Numeric::max(1.5, 2.5)"#,
                         || has_pending_trait_call(pred)
                         || has_pending_trait_call(err)
                 }
+                TypedInner::RecoverKind(value, _, handler) => {
+                    has_pending_trait_call(value) || has_pending_trait_call(handler)
+                }
                 TypedInner::Match(scrutinee, arms) => {
                     has_pending_trait_call(scrutinee)
                         || arms.iter().any(|arm| {

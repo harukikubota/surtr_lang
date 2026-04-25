@@ -1702,6 +1702,9 @@ impl Codegen {
             TypedInner::Ensure(value, pred, err) => {
                 self.emit_ensure(node, value, pred, err)?;
             }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                self.emit_recover_kind(node, value, marker, handler)?;
+            }
 
             TypedInner::Match(scrutinee, arms) => {
                 self.emit_match(scrutinee, arms)?;
@@ -3753,6 +3756,80 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_recover_kind(
+        &mut self,
+        node: &TypedNode,
+        value: &TypedNode,
+        marker: &ResolvedId,
+        handler: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(value)?;
+        let result_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(result_slot));
+
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit(Opcode::EqTag);
+
+        let err_path = self.fresh_label();
+        let end_label = self.fresh_label();
+        self.emit_jump_if_true(err_path);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit_jump(end_label);
+
+        self.patch_label(err_path);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        let err_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(err_slot));
+
+        let mismatch_label = self.fresh_label();
+        let marker_kind = marker.name.rsplit("::").next().unwrap_or(&marker.name);
+        self.emit_error_kind_test_from_local(err_slot, marker_kind, mismatch_label)?;
+        self.emit_callable_ref(handler)?;
+        self.emit(Opcode::LoadLocal(err_slot));
+        self.emit(Opcode::CallClosure {
+            arity: 1,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+        });
+        self.emit_jump(end_label);
+
+        self.patch_label(mismatch_label);
+        self.emit(Opcode::LoadLocal(result_slot));
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn emit_error_kind_test_from_local(
+        &mut self,
+        slot: u32,
+        expected_kind: &str,
+        fail_label: Label,
+    ) -> Result<(), CodegenError> {
+        self.emit(Opcode::LoadLocal(slot));
+        let kind_id = Self::builtin_id("kind").ok_or_else(|| CodegenError {
+            message: "Unknown builtin: kind".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
+        self.emit(Opcode::CallBuiltin {
+            builtin_id: kind_id,
+            arity: 1,
+            span_start: 0,
+            span_end: 0,
+        });
+        let kind_const = self.add_constant(Constant::Str(expected_kind.to_string()));
+        self.emit(Opcode::LoadConst(kind_const));
+        self.emit(Opcode::EqStr);
+        self.emit_jump_if_false(fail_label);
+        Ok(())
+    }
+
     fn emit_ok_unit_result(&mut self) -> Result<(), CodegenError> {
         let ok_tag = self.add_constant(Constant::Tag(0));
         let unit_idx = self.add_constant(Constant::Unit);
@@ -3908,6 +3985,20 @@ impl Codegen {
                 self.emit(Opcode::EqStr);
                 self.emit_jump_if_false(fail_label);
             }
+            TypedMatchPattern::ErrorKind(kind) => {
+                self.emit_error_kind_test_from_local(slot, kind, fail_label)?;
+            }
+            TypedMatchPattern::Or(items) => {
+                let success_label = self.fresh_label();
+                for item in items {
+                    let next_label = self.fresh_label();
+                    self.emit_match_pattern_test(item, slot, next_label)?;
+                    self.emit_jump(success_label);
+                    self.patch_label(next_label);
+                }
+                self.emit_jump(fail_label);
+                self.patch_label(success_label);
+            }
             TypedMatchPattern::Tuple(items) => {
                 let mut item_slots = Vec::with_capacity(items.len());
                 for (index, item) in items.iter().enumerate() {
@@ -4022,6 +4113,8 @@ impl Codegen {
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::ErrorKind(_)
+            | TypedMatchPattern::Or(_)
             | TypedMatchPattern::ListNil => {}
             TypedMatchPattern::Tuple(items) => {
                 for (index, item) in items.iter().enumerate() {

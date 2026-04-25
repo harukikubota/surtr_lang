@@ -1758,6 +1758,11 @@ impl Checker {
                 Box::new(self.resolve_typed_node(*pred)),
                 Box::new(self.resolve_typed_node(*err)),
             ),
+            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
+                Box::new(self.resolve_typed_node(*value)),
+                marker,
+                Box::new(self.resolve_typed_node(*handler)),
+            ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.resolve_typed_node(*scrutinee)),
                 arms.into_iter()
@@ -1983,6 +1988,13 @@ impl Checker {
             TypedMatchPattern::BoolLit(value) => TypedMatchPattern::BoolLit(value),
             TypedMatchPattern::IntLit(value) => TypedMatchPattern::IntLit(value),
             TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
+            TypedMatchPattern::ErrorKind(value) => TypedMatchPattern::ErrorKind(value),
+            TypedMatchPattern::Or(items) => TypedMatchPattern::Or(
+                items
+                    .into_iter()
+                    .map(|item| self.resolve_typed_match_pattern(item))
+                    .collect(),
+            ),
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()

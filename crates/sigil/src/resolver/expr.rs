@@ -348,11 +348,22 @@ impl Resolver {
                     if name == "ensure" {
                         return self.resolve_ensure(span, args);
                     }
+                    if name == "recover_kind" {
+                        return self.resolve_recover_kind(span, args);
+                    }
                     if name == "and" {
                         return self.resolve_logic_call(span, args, LogicKind::And);
                     }
                     if name == "or" {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
+                    }
+                }
+                if let Ast::Path(_, ref path) = *func {
+                    if path.segments.len() == 2
+                        && path.segments[0] == "Result"
+                        && path.segments[1] == "recover_kind"
+                    {
+                        return self.resolve_recover_kind(span, args);
                     }
                 }
 

@@ -1121,11 +1121,11 @@ impl Parser {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
-            let mut patterns = vec![self.parse_match_pattern()?];
+            let mut patterns = expand_top_level_or_pattern(self.parse_match_pattern()?);
             while matches!(self.peek(), Token::Pipe) {
                 self.advance();
                 self.skip_newlines();
-                patterns.push(self.parse_match_pattern()?);
+                patterns.extend(expand_top_level_or_pattern(self.parse_match_pattern()?));
             }
             let guard = if matches!(self.peek(), Token::When) {
                 self.advance();
@@ -1235,5 +1235,12 @@ impl Parser {
     /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
     pub(super) fn is_true_literal(expr: &Ast) -> bool {
         matches!(expr, Ast::Lit(_, Lit::Bool(true)))
+    }
+}
+
+fn expand_top_level_or_pattern(pattern: AstPattern) -> Vec<AstPattern> {
+    match pattern {
+        AstPattern::Or(_, patterns) => patterns,
+        pattern => vec![pattern],
     }
 }

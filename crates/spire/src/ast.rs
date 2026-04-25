@@ -102,6 +102,8 @@ pub enum AstPattern {
     Call(Span, Symbol, Vec<AstPattern>),
     /// `(head, tail, ...)`
     Tuple(Span, Vec<AstPattern>),
+    /// `left | right` inside a pattern.
+    Or(Span, Vec<AstPattern>),
     /// `inner @ alias` / `inner @ alias: Ty`
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
 }

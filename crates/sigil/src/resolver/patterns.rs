@@ -183,6 +183,12 @@ impl Resolver {
                     .map(|item| self.resolve_pattern_inner(item, seen))
                     .collect::<Result<Vec<_>, _>>()?,
             )),
+            AstPattern::Or(_, items) => Ok(ResolvedPattern::Or(
+                items
+                    .into_iter()
+                    .map(|item| self.resolve_pattern_inner(item, seen))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
             AstPattern::As(span, inner, alias, alias_ty) => {
                 let resolved_inner = self.resolve_pattern_inner(*inner, seen)?;
                 let alias_id = self.define_pattern_binding(alias, span, seen)?;

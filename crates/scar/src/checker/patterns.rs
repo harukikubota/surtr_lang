@@ -8,6 +8,7 @@ impl Checker {
             | ResolvedPattern::Wildcard(_) => true,
             ResolvedPattern::As(inner, _, _) => Self::is_total_bind_pattern(inner),
             ResolvedPattern::Tuple(items) => items.iter().all(Self::is_total_bind_pattern),
+            ResolvedPattern::Or(_) => false,
             ResolvedPattern::ListNil(_)
             | ResolvedPattern::ListCons(_, _)
             | ResolvedPattern::IntLit(_, _)
@@ -106,6 +107,11 @@ impl Checker {
                 }
                 Ok((TypedPattern::Tuple(rhs_ty.clone(), typed_items), rhs_ty))
             }
+            ResolvedPattern::Or(_) => Err(TypeError {
+                message: "Pattern alternatives are only supported in match expressions.".into(),
+                span: span.clone(),
+                hint: None,
+            }),
             ResolvedPattern::ListNil(pspan) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 match rhs_ty {

@@ -105,6 +105,7 @@ pub enum TypedInner {
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Assert(Box<TypedNode>, Box<TypedNode>),
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
+    RecoverKind(Box<TypedNode>, ResolvedId, Box<TypedNode>),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
 
     /// Field access — field name resolved to index by Scar
@@ -243,6 +244,10 @@ pub enum TypedMatchPattern {
     IntLit(SurtrInt),
     /// String literal
     StrLit(String),
+    /// Concrete `deferror` kind pattern for abstract Error values.
+    ErrorKind(String),
+    /// Pattern alternative. Alternatives are tests only and do not bind names.
+    Or(Vec<TypedMatchPattern>),
     Tuple(Vec<TypedMatchPattern>),
     /// Constructor tag + field patterns + payload field offset.
     Constructor {

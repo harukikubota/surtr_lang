@@ -360,6 +360,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::Constructor(span, _, _)
         | AstPattern::Call(span, _, _)
         | AstPattern::Tuple(span, _)
+        | AstPattern::Or(span, _)
         | AstPattern::As(span, _, _, _) => span,
     }
 }
@@ -433,6 +434,13 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
                 .collect(),
         ),
         AstPattern::Tuple(span, items) => AstPattern::Tuple(
+            shift_span(span, delta),
+            items
+                .into_iter()
+                .map(|item| shift_pattern(item, delta))
+                .collect(),
+        ),
+        AstPattern::Or(span, items) => AstPattern::Or(
             shift_span(span, delta),
             items
                 .into_iter()

@@ -118,6 +118,28 @@ defmod Result {
   @@builtin def chain(head: Result<$T>, tail: Result<()>) -> Result<$T>
 
   @@doc """
+  Recover from any error without inspecting the concrete error kind.
+
+  The handler body is evaluated only when `value` is `Err(...)`; `Ok(value)`
+  returns unchanged.
+  """
+  def recover(value: Result<$A>, handler: (-> Result<$A>)) -> Result<$A> {
+    match value {
+      Ok(ok) => Ok(ok),
+      Err(_) => handler(),
+    }
+  }
+
+  @@doc """
+  Recover from one concrete error kind.
+
+  This is a special form: `marker` is treated as a `deferror` kind marker and
+  is not evaluated as an ordinary `Error` value. The handler is evaluated only
+  when `value` is `Err(...)` with the same concrete kind.
+  """
+  @@builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>
+
+  @@doc """
   Apply a function wrapped in `Result` to a value wrapped in `Result`.
   """
   def lift(f: Result<($A -> $B)>, value: Result<$A>) -> Result<$B> {

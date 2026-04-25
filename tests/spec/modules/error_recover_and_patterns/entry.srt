@@ -1,0 +1,30 @@
+def retry(err: Error) -> Result<String> {
+  print("retry:" ++ Error::kind(err))
+  print(Error::format(err))
+  Ok("retry")
+}
+
+def fallback() -> Result<String> {
+  print("fallback")
+  Ok("fallback")
+}
+
+print(Error::kind(Timeout))
+print(Error::message(Timeout))
+print(Error::format(Timeout))
+
+print(inspect(Result::recover(Ok("ok"), &fallback)))
+print(inspect(Result::recover(Err(DnsFailure), &fallback)))
+print(inspect(Result::recover_kind(Ok("ok"), Timeout, &retry)))
+print(inspect(Result::recover_kind(Err(Timeout), Timeout, &retry)))
+print(inspect(Result::recover_kind(Err(DnsFailure), Timeout, &retry)))
+
+match Err(ConnectionReset) {
+  Ok(value) => print(value),
+  Err(Timeout | ConnectionReset @ e: Error) => {
+    print("matched:" ++ Error::kind(e))
+    print(Error::format(e))
+  },
+  Err(DnsFailure) => print("dns"),
+  Err(err) => print("other:" ++ Error::kind(err)),
+}

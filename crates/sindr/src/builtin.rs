@@ -352,6 +352,21 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 0,
         sig_str: "() -> List<String>",
     },
+    BuiltinMeta {
+        name: "kind",
+        arity: 1,
+        sig_str: "(Error) -> String",
+    },
+    BuiltinMeta {
+        name: "message",
+        arity: 1,
+        sig_str: "(Error) -> String",
+    },
+    BuiltinMeta {
+        name: "format",
+        arity: 1,
+        sig_str: "(Error) -> String",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.

@@ -82,6 +82,7 @@ impl Checker {
             "is_match" => "Kernel::is_match",
             "assert" => "Kernel::assert",
             "ensure" => "Kernel::ensure",
+            "recover_kind" => "Result::recover_kind",
             "and" => "Kernel::and",
             "or" => "Kernel::or",
             _ => unreachable!(),
@@ -156,6 +157,15 @@ impl Checker {
                         .as_ref()
                         .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
             }
+            "recover_kind" => {
+                params.len() == 3
+                    && Self::is_result_of_named(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "Error")
+                    && Self::is_unary_func_from_named_to_result(&params[2].ty, "Error", "$A")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
+            }
             "and" | "or" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "Boolean")
@@ -176,6 +186,7 @@ impl Checker {
                 "is_match" => "@@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
                 "assert" => "@@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>",
                 "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>",
+                "recover_kind" => "@@builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>",
                 "and" => "@@builtin def and(left: Boolean, right: Boolean) -> Boolean",
                 "or" => "@@builtin def or(left: Boolean, right: Boolean) -> Boolean",
                 _ => unreachable!(),
@@ -412,6 +423,20 @@ impl Checker {
         )
     }
 
+    pub(super) fn is_unary_func_from_named_to_result(
+        ast_ty: &AstTy,
+        expected_param_name: &str,
+        expected_result_name: &str,
+    ) -> bool {
+        matches!(
+            ast_ty,
+            AstTy::Func(_, params, ret)
+                if params.len() == 1
+                    && matches!(&params[0], AstTy::Named(_, name) if name == expected_param_name)
+                    && Self::is_result_of_named(ret.as_ref(), expected_result_name)
+        )
+    }
+
     pub(super) fn is_special_form_builtin_decl_name(name: &str) -> bool {
         matches!(
             name,
@@ -421,6 +446,7 @@ impl Checker {
                 | "is_match"
                 | "assert"
                 | "ensure"
+                | "recover_kind"
                 | "and"
                 | "or"
                 | "eq"
