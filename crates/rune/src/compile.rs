@@ -98,6 +98,15 @@ fn module_source_collection_error_as_rune_error(
 }
 
 fn source_id_for_span(compile_sources: &xldr::CompileSources, span: &Span) -> SourceId {
+    if let Some(source) = compile_sources
+        .sources
+        .source(compile_sources.user_source_id)
+    {
+        if source.chars().count() >= span.end {
+            return compile_sources.user_source_id;
+        }
+    }
+
     let mut candidates = compile_sources.module_source_ids.clone();
     candidates.push(compile_sources.user_source_id);
     candidates.sort_by_key(|id| id.0);

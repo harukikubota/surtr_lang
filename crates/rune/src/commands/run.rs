@@ -396,6 +396,14 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
 
 fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
     match vm.last_value() {
+        Some(value @ Value::Error(_)) => {
+            xldr::error_display::emit_runtime_value_error_from_vm(
+                vm,
+                value,
+                xldr::ErrorDisplayMode::Full,
+            );
+            true
+        }
         Some(Value::Tagged { tag: 1, fields }) => {
             if let Some(err_value) = fields.first() {
                 xldr::error_display::emit_runtime_value_error_from_vm(

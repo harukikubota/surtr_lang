@@ -13,6 +13,7 @@ mod tests {
     use super::{typecheck, typecheck_with_context, ScarSession, TypecheckContext};
     use crate::typed::TypedNode;
     use crate::typed::{TypedInner, TypedLensSegment};
+    use crate::types::Ty;
     use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
     use spire::ast::Ast;
 
@@ -1558,6 +1559,116 @@ answer = id("oops")"#,
         );
         let err = typecheck(resolved).expect_err("annotation should reject String call");
         assert!(err.message.contains("expected Int, got String"));
+    }
+
+    #[test]
+    fn closure_application_mismatch_reports_callable_type_signature() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"inc = {|n: Int| n + 1}
+answer = inc("oops")"#,
+        );
+        let err = typecheck(resolved).expect_err("closure application should fail");
+        assert!(err.message.contains("expected Int, got String"));
+        let hint = err.hint.as_deref().expect("callable signature hint");
+        assert!(hint.contains("Callable type signature: (Int -> Int)"));
+    }
+
+    #[test]
+    fn capture_application_mismatch_reports_callable_type_signature() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"def add(x: Int, y: Int) -> Int {
+  x + y
+}
+bad = &add("oops")"#,
+        );
+        let err = typecheck(resolved).expect_err("capture application should fail");
+        assert!(err.message.contains("expected Int, got String"));
+        let hint = err.hint.as_deref().expect("callable signature hint");
+        assert!(hint.contains("Callable type signature: (Int, Int -> Int)"));
+    }
+
+    #[test]
+    fn compose_mismatch_reports_left_and_right_callable_types() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"def text(x: Int) -> String {
+  to_string(x)
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+bad = &text >> &inc"#,
+        );
+        let err = typecheck(resolved).expect_err("compose mismatch should fail");
+        assert!(err.message.contains("left output type"));
+        let hint = err.hint.as_deref().expect("compose mismatch hint");
+        assert!(hint.contains("Left output is String; right input is Int"));
+        assert!(hint.contains("LHS: (Int -> String)"));
+        assert!(hint.contains("RHS: (Int -> Int)"));
+    }
+
+    #[test]
+    fn pipe_plain_apply_over_result_suggests_result_map_operator() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"def parse(x: Int) -> Result<Int> {
+  Ok(x)
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+bad = parse(1) |> &inc"#,
+        );
+        let err = typecheck(resolved).expect_err("plain pipe over Result should fail");
+        assert!(err.message.contains("expected Int, got Result<Int>"));
+        let hint = err.hint.as_deref().expect("operator rule hint");
+        assert!(hint.contains("`|>` signature rule"));
+        assert!(hint.contains("Use `|*>` to apply a plain function to the Ok value"));
+    }
+
+    #[test]
+    fn context_bind_rejects_plain_rhs_return() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"def parse(x: Int) -> Result<Int> {
+  Ok(x)
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+bad = parse(1) |>= &inc"#,
+        );
+        let err = typecheck(resolved).expect_err("bind with plain RHS should fail");
+        assert!(err
+            .message
+            .contains("requires the right-hand side to return Result, got Int"));
+        let hint = err.hint.as_deref().expect("operator rule hint");
+        assert!(hint.contains("`|>=` signature rule"));
+        assert!(hint.contains("RHS: (Int -> Int)"));
+        assert!(hint.contains("Use `|*>`"));
+    }
+
+    #[test]
+    fn context_map_keeps_result_for_later_bind() {
+        let typed = typecheck_with_builtin_prelude(
+            r#"def parse(x: Int) -> Result<Int> {
+  Ok(x)
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def stringify(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+ok = parse(1) |*> &inc |>= &stringify"#,
+        );
+        assert_eq!(typed.last().map(|node| &node.ty), Some(&Ty::Unit));
     }
 
     #[test]

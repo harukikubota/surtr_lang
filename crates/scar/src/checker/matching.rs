@@ -557,7 +557,12 @@ impl Checker {
                             self.ty_name(&expected_ty)
                         ),
                         span: extractor_id.span.clone(),
-                        hint: None,
+                        hint: Some(format!(
+                            "Extractor type signature: {}. Match scrutinee type is {}.",
+                            self.callable_signature_for_ty(&extractor_ty)
+                                .unwrap_or_else(|| self.ty_name(&extractor_ty)),
+                            self.ty_name(&expected_ty)
+                        )),
                     });
                 }
                 if items.len() != seq_tys.len() {
@@ -569,7 +574,14 @@ impl Checker {
                             items.len()
                         ),
                         span: extractor_id.span.clone(),
-                        hint: None,
+                        hint: Some(format!(
+                            "Extractor success value(s): {}.",
+                            seq_tys
+                                .iter()
+                                .map(|ty| self.ty_name(ty))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
                     });
                 }
                 let mut typed_items = Vec::with_capacity(items.len());

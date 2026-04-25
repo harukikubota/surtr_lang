@@ -1,2 +1,3 @@
 phase: typecheck
-contains: ensure requires a function value
+contains: ensure requires a closure or capture predicate
+contains: call expressions such as `predicate()` are not accepted here

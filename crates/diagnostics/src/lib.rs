@@ -134,6 +134,14 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
             });
         }
     }
+    if spec.help.is_none() {
+        if let (Some(expected), Some(got)) = extract_expected_got(&spec.message) {
+            spec.help = Some(format!(
+                "This location requires {}, but the expression currently has {}.",
+                expected, got
+            ));
+        }
+    }
 
     spec
 }

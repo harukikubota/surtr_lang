@@ -204,14 +204,16 @@ pub fn runtime_error_text(
     location: Option<sindr::runtime::Location>,
 ) -> String {
     let verbose = runtime_error_verbose_enabled();
-    match (source, location.as_ref()) {
+    let effective_location = location.or_else(|| err.context.call_site.clone());
+    match (source, effective_location.as_ref()) {
         (Some(source), Some(location)) => {
             let file_name = runtime_file_name(location, fallback_file);
             let spec = runtime_error_spec(err, location, verbose);
             diagnostics::render_error(&file_name, source, &spec)
         }
         _ => {
-            let mut rendered = eldr::format_runtime_error_with_location(err, location.as_ref());
+            let mut rendered =
+                eldr::format_runtime_error_with_location(err, effective_location.as_ref());
             if verbose {
                 if let Some(help) = runtime_error_help(err) {
                     if !rendered.ends_with('\n') {

@@ -638,6 +638,74 @@ impl Checker {
         }
     }
 
+    pub(super) fn callable_signature_from_parts(&self, params: &[Ty], ret: &Ty) -> String {
+        let param_str = params
+            .iter()
+            .map(|ty| self.ty_name(ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if param_str.is_empty() {
+            format!("(-> {})", self.ty_name(ret))
+        } else {
+            format!("({} -> {})", param_str, self.ty_name(ret))
+        }
+    }
+
+    pub(super) fn callable_signature_for_ty(&self, ty: &Ty) -> Option<String> {
+        self.function_parts(ty)
+            .map(|(params, ret)| self.callable_signature_from_parts(params, ret))
+    }
+
+    pub(super) fn callable_signature_hint(&self, ty: &Ty) -> Option<String> {
+        self.callable_signature_for_ty(ty)
+            .map(|sig| format!("Callable type signature: {}", sig))
+    }
+
+    pub(super) fn operator_type_display(&self, ty: &Ty) -> String {
+        self.callable_signature_for_ty(ty)
+            .unwrap_or_else(|| self.ty_name(ty))
+    }
+
+    pub(super) fn operator_rule_hint(
+        &self,
+        op_name: &str,
+        rule: &str,
+        lhs_ty: &Ty,
+        rhs_ty: &Ty,
+        extra: Option<String>,
+    ) -> String {
+        let mut hint = format!(
+            "{} signature rule: {}. LHS: {}. RHS: {}. Operators share precedence and resolve left-to-right, so LHS is the type produced so far.",
+            op_name,
+            rule,
+            self.operator_type_display(lhs_ty),
+            self.operator_type_display(rhs_ty)
+        );
+        if let Some(extra) = extra {
+            hint.push(' ');
+            hint.push_str(&extra);
+        }
+        hint
+    }
+
+    pub(super) fn result_map_hint_for_plain_apply(
+        &self,
+        op_name: &str,
+        lhs_ty: &Ty,
+        rhs_in: &Ty,
+    ) -> Option<String> {
+        match self.resolve_ty(lhs_ty) {
+            Ty::Result(ok, _) if self.resolve_ty(ok.as_ref()) == self.resolve_ty(rhs_in) => Some(
+                format!(
+                    "{} sees the evaluated LHS as Result<{}>. Use `|*>` to apply a plain function to the Ok value.",
+                    op_name,
+                    self.ty_name(ok.as_ref())
+                ),
+            ),
+            _ => None,
+        }
+    }
+
     pub(super) fn unary_function_parts(
         &self,
         ty: &Ty,
@@ -655,7 +723,11 @@ impl Checker {
             return Err(TypeError {
                 message: format!("{} expects a unary callable", op_name),
                 span: span.clone(),
-                hint: None,
+                hint: Some(format!(
+                    "{} can compose/apply only one-argument callables. Callable type signature: {}",
+                    op_name,
+                    self.callable_signature_from_parts(params, ret)
+                )),
             });
         }
         Ok((self.resolve_ty(&params[0]), self.resolve_ty(ret)))
@@ -704,11 +776,14 @@ impl Checker {
         func: TypedNode,
         args: Vec<TypedNode>,
     ) -> Result<TypedNode, TypeError> {
-        let (params, ret) = match self.resolve_ty(&func.ty) {
+        let (params, ret, callable_hint) = match self.resolve_ty(&func.ty) {
             Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
-                (params, ret.as_ref().clone())
+                (params, ret.as_ref().clone(), None)
             }
-            Ty::Func(params, ret) => (params, ret.as_ref().clone()),
+            Ty::Func(params, ret) => {
+                let hint = self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()));
+                (params, ret.as_ref().clone(), hint)
+            }
             other => {
                 return Err(TypeError {
                     message: format!("Not a function: {}", self.ty_name(&other)),
@@ -737,7 +812,7 @@ impl Checker {
                         self.ty_name(&arg.ty)
                     ),
                     span: arg.span.clone(),
-                    hint: None,
+                    hint: callable_hint.clone(),
                 });
             }
         }
@@ -1322,6 +1397,7 @@ impl Checker {
         let typed_right = self.check_apply_callable(right, "`|>`")?;
         let (param, ret) = self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
         if !self.types_compatible(&param, &typed_left.ty) {
+            let extra = self.result_map_hint_for_plain_apply("`|>`", &typed_left.ty, &param);
             return Err(TypeError {
                 message: format!(
                     "`|>` type mismatch: expected {}, got {}",
@@ -1329,7 +1405,13 @@ impl Checker {
                     self.ty_name(&typed_left.ty)
                 ),
                 span: typed_left.span.clone(),
-                hint: None,
+                hint: Some(self.operator_rule_hint(
+                    "`|>`",
+                    "LHS: A; RHS: (A -> B); result: B",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    extra,
+                )),
             });
         }
         match typed_right.node {
@@ -1364,7 +1446,13 @@ impl Checker {
                             self.ty_name(&rhs_in)
                         ),
                         span: typed_right.span.clone(),
-                        hint: None,
+                        hint: Some(self.operator_rule_hint(
+                            "`|*>`",
+                            "LHS: Result<A> or List<A>; RHS: (A -> B); result: Result<B> or List<B>",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            None,
+                        )),
                     });
                 }
                 Ok(TypedNode {
@@ -1382,7 +1470,13 @@ impl Checker {
                             self.ty_name(&rhs_in)
                         ),
                         span: typed_right.span.clone(),
-                        hint: None,
+                        hint: Some(self.operator_rule_hint(
+                            "`|*>`",
+                            "LHS: Result<A> or List<A>; RHS: (A -> B); result: Result<B> or List<B>",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            None,
+                        )),
                     });
                 }
                 self.build_list_helper_call("List::map", span, typed_left, typed_right)
@@ -1393,7 +1487,16 @@ impl Checker {
                     self.ty_name(&other)
                 ),
                 span: typed_left.span.clone(),
-                hint: None,
+                hint: Some(self.operator_rule_hint(
+                    "`|*>`",
+                    "LHS: Result<A> or List<A>; RHS: (A -> B); result: Result<B> or List<B>",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    Some(format!(
+                        "The evaluated LHS is {}, so no Result/List container is available yet.",
+                        self.ty_name(&other)
+                    )),
+                )),
             }),
         }
     }
@@ -1417,7 +1520,18 @@ impl Checker {
                     return Err(TypeError {
                         message: "`|>=` requires matching Result context on both sides".into(),
                         span: span.clone(),
-                        hint: None,
+                        hint: Some(self.operator_rule_hint(
+                            "`|>=`",
+                            "LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: Result<B, E> or List<B>",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "LHS Ok type is {}; RHS input is {}; RHS returns Result<{}>. Error types must match. Use `|*>` when the RHS is a plain function and you only want to map over a Result.",
+                                self.ty_name(ok.as_ref()),
+                                self.ty_name(&rhs_in),
+                                self.ty_name(next_ok.as_ref())
+                            )),
+                        )),
                     });
                 }
                 Ok(TypedNode {
@@ -1438,7 +1552,13 @@ impl Checker {
                             self.ty_name(&rhs_in)
                         ),
                         span: typed_right.span.clone(),
-                        hint: None,
+                        hint: Some(self.operator_rule_hint(
+                            "`|>=`",
+                            "LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: Result<B, E> or List<B>",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List.".into()),
+                        )),
                     });
                 }
                 self.build_list_helper_call("List::flat_map", span, typed_left, typed_right)
@@ -1446,7 +1566,47 @@ impl Checker {
             (Ty::Result(_, _), Ty::List(_)) | (Ty::List(_), Ty::Result(_, _)) => Err(TypeError {
                 message: "`|>=` cannot mix Result and List context".into(),
                 span: span.clone(),
-                hint: None,
+                hint: Some(self.operator_rule_hint(
+                    "`|>=`",
+                    "LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: same container family",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    Some("Result and List containers cannot be mixed in one bind operator.".into()),
+                )),
+            }),
+            (Ty::Result(_, _), rhs_plain) => Err(TypeError {
+                message: format!(
+                    "`|>=` requires the right-hand side to return Result, got {}",
+                    self.ty_name(&rhs_plain)
+                ),
+                span: typed_right.span.clone(),
+                hint: Some(self.operator_rule_hint(
+                    "`|>=`",
+                    "LHS: Result<A, E>; RHS: (A -> Result<B, E>); result: Result<B, E>",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    Some(format!(
+                        "RHS returns plain {}. Use `|*>` when the RHS is a plain function and you want to keep the Result context.",
+                        self.ty_name(&rhs_plain)
+                    )),
+                )),
+            }),
+            (Ty::List(_), rhs_plain) => Err(TypeError {
+                message: format!(
+                    "`|>=` requires the right-hand side to return List, got {}",
+                    self.ty_name(&rhs_plain)
+                ),
+                span: typed_right.span.clone(),
+                hint: Some(self.operator_rule_hint(
+                    "`|>=`",
+                    "LHS: List<A>; RHS: (A -> List<B>); result: List<B>",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    Some(format!(
+                        "RHS returns plain {}. Use `|*>` when the RHS is a plain function and you want to keep the List context.",
+                        self.ty_name(&rhs_plain)
+                    )),
+                )),
             }),
             (other, _) => Err(TypeError {
                 message: format!(
@@ -1454,7 +1614,16 @@ impl Checker {
                     self.ty_name(&other)
                 ),
                 span: typed_left.span.clone(),
-                hint: None,
+                hint: Some(self.operator_rule_hint(
+                    "`|>=`",
+                    "LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: Result<B, E> or List<B>",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    Some(format!(
+                        "The evaluated LHS is {}, so no Result/List container is available yet. Use `|*>` after a Result value when the RHS is plain.",
+                        self.ty_name(&other)
+                    )),
+                )),
             }),
         }
     }
@@ -1472,10 +1641,30 @@ impl Checker {
         let (right_in, right_out) =
             self.unary_function_parts(&typed_right.ty, "`>>`", &typed_right.span)?;
         if !self.types_compatible(&left_out, &right_in) {
+            let extra = match self.resolve_ty(&left_out) {
+                Ty::Result(ok, _) if self.resolve_ty(ok.as_ref()) == self.resolve_ty(&right_in) => {
+                    Some(format!(
+                        "`>>` is plain composition, so it passes the whole Result<{}> onward. Use `>*` to compose a plain RHS over the Ok value.",
+                        self.ty_name(ok.as_ref())
+                    ))
+                }
+                _ => None,
+            };
             return Err(TypeError {
                 message: "`>>` requires the left output type to match the right input type".into(),
                 span: span.clone(),
-                hint: None,
+                hint: Some(self.operator_rule_hint(
+                    "`>>`",
+                    "LHS: (A -> B); RHS: (B -> C); result: (A -> C)",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    Some(format!(
+                        "Left output is {}; right input is {}.{}",
+                        self.ty_name(&left_out),
+                        self.ty_name(&right_in),
+                        extra.map(|msg| format!(" {}", msg)).unwrap_or_default()
+                    )),
+                )),
             });
         }
         Ok(TypedNode {
@@ -1510,7 +1699,17 @@ impl Checker {
                             "`>*` requires the left contextual output to match the right input type"
                                 .into(),
                         span: span.clone(),
-                        hint: None,
+                        hint: Some(self.operator_rule_hint(
+                            "`>*`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "Left contextual output is Result<{}>; right input is {}.",
+                                self.ty_name(ok.as_ref()),
+                                self.ty_name(&right_in)
+                            )),
+                        )),
                     });
                 }
                 Ok(TypedNode {
@@ -1536,7 +1735,17 @@ impl Checker {
                             "`>*` requires the left contextual output to match the right input type"
                                 .into(),
                         span: span.clone(),
-                        hint: None,
+                        hint: Some(self.operator_rule_hint(
+                            "`>*`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "Left contextual output is List<{}>; right input is {}.",
+                                self.ty_name(item.as_ref()),
+                                self.ty_name(&right_in)
+                            )),
+                        )),
                     });
                 }
                 Ok(TypedNode {
@@ -1557,7 +1766,16 @@ impl Checker {
             _ => Err(TypeError {
                 message: "`>*` requires Result or List on the left-hand side".into(),
                 span: span.clone(),
-                hint: None,
+                hint: Some(self.operator_rule_hint(
+                    "`>*`",
+                    "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>)",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    Some(format!(
+                        "The left callable returns {}, so no Result/List container is available at this step. Use `>>` for plain composition; use `|*>` when you already have an evaluated Result value and want to map a plain RHS over it.",
+                        self.ty_name(&left_out)
+                    )),
+                )),
             }),
         }
     }
@@ -1582,7 +1800,17 @@ impl Checker {
                     return Err(TypeError {
                         message: "`>=>` requires matching Result context on both sides".into(),
                         span: span.clone(),
-                        hint: None,
+                        hint: Some(self.operator_rule_hint(
+                            "`>=>`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> Result<C, E>) or (B -> List<C>); result: (A -> Result<C, E>) or (A -> List<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "Left output is Result<{}>; right input is {}; error types must match. Use `>*` when the RHS is plain.",
+                                self.ty_name(ok.as_ref()),
+                                self.ty_name(&right_in)
+                            )),
+                        )),
                     });
                 }
                 Ok(TypedNode {
@@ -1607,7 +1835,17 @@ impl Checker {
                         message: "`>=>` requires matching List element types across both sides"
                             .into(),
                         span: span.clone(),
-                        hint: None,
+                        hint: Some(self.operator_rule_hint(
+                            "`>=>`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> Result<C, E>) or (B -> List<C>); result: (A -> Result<C, E>) or (A -> List<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "Left output is List<{}>; right input is {}.",
+                                self.ty_name(item.as_ref()),
+                                self.ty_name(&right_in)
+                            )),
+                        )),
                     });
                 }
                 Ok(TypedNode {
@@ -1628,7 +1866,17 @@ impl Checker {
             _ => Err(TypeError {
                 message: "`>=>` requires matching Result or List context on both sides".into(),
                 span: span.clone(),
-                hint: None,
+                hint: Some(self.operator_rule_hint(
+                    "`>=>`",
+                    "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> Result<C, E>) or (B -> List<C>); result: (A -> Result<C, E>) or (A -> List<C>)",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    Some(format!(
+                        "Left output is {}; right output is {}. Use `>*` when the left side is contextual but the RHS is plain; use `>>` when both sides are plain.",
+                        self.ty_name(&left_out),
+                        self.ty_name(&right_out)
+                    )),
+                )),
             }),
         }
     }
@@ -2557,6 +2805,8 @@ impl Checker {
                 })
             }
             Ty::Func(params, ret) => {
+                let callable_hint =
+                    self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()));
                 if args
                     .iter()
                     .any(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)))
@@ -2576,7 +2826,7 @@ impl Checker {
                             args.len()
                         ),
                         span: span.clone(),
-                        hint: None,
+                        hint: callable_hint.clone(),
                     });
                 }
                 let typed_args: Vec<TypedNode> = args
@@ -2598,7 +2848,7 @@ impl Checker {
                                 self.ty_name(&arg.ty)
                             ),
                             span: arg.span.clone(),
-                            hint: None,
+                            hint: callable_hint.clone(),
                         });
                     }
                 }
@@ -2762,10 +3012,17 @@ impl Checker {
                 return Err(TypeError {
                     message: format!("Not a function: {}", self.ty_name(other)),
                     span: typed_target.span.clone(),
-                    hint: None,
+                    hint: Some(
+                        "Capture (`&`) requires a function name, function value, or closure."
+                            .into(),
+                    ),
                 });
             }
         };
+        let callable_hint = Some(format!(
+            "Callable type signature: {}",
+            self.callable_signature_from_parts(&params, &ret)
+        ));
 
         if args.len() > params.len() {
             return Err(TypeError {
@@ -2775,7 +3032,7 @@ impl Checker {
                     args.len()
                 ),
                 span: span.clone(),
-                hint: None,
+                hint: callable_hint.clone(),
             });
         }
 
@@ -2794,7 +3051,7 @@ impl Checker {
                         self.ty_name(&arg.ty)
                     ),
                     span: arg.span.clone(),
-                    hint: None,
+                    hint: callable_hint.clone(),
                 });
             }
         }
@@ -2887,7 +3144,12 @@ impl Checker {
                             self.ty_name(&rt)
                         ),
                         span: span.clone(),
-                        hint: None,
+                        hint: Some(format!(
+                            "Operator `{:?}` requires compatible operand types. Left operand is {}, right operand is {}.",
+                            op,
+                            self.ty_name(&lt),
+                            self.ty_name(&rt)
+                        )),
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
@@ -3305,6 +3567,13 @@ impl Checker {
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_node(value)?;
+        if matches!(pred, Resolved::App(_, _, _)) {
+            return Err(TypeError {
+                message: "ensure requires a closure or capture predicate".into(),
+                span: self.resolved_span(pred).clone(),
+                hint: Some("Use `&predicate` or `{|value| predicate(value) }`; call expressions such as `predicate()` are not accepted here.".into()),
+            });
+        }
         let typed_pred = self.check_compose_callable(pred, "ensure")?;
         let (pred_in, pred_out) =
             self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;

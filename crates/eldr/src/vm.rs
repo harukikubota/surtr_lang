@@ -2076,6 +2076,12 @@ impl VM {
         let previous = self.frames[frame_idx].call_site;
         self.frames[frame_idx].call_site = call_site;
         let result = f(self);
+        let result = result.map_err(|mut err| {
+            if err.context.call_site.is_none() {
+                err.context.call_site = self.runtime_error_location();
+            }
+            err
+        });
         self.frames[frame_idx].call_site = previous;
         result
     }
