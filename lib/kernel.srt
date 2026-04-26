@@ -204,6 +204,20 @@ xldr(1)> tap(3, {|n| print(to_string(n))})
   }
 
   @@doc """
+  Return `value` unchanged.
+
+  This is the smallest possible identity helper and is mainly useful when a
+  named callable reads better than an inline closure.
+
+## REPL
+xldr(1)> id(42)
+42
+  """
+  def id(value: $A) -> $A {
+    value
+  }
+
+  @@doc """
   Return a callable that ignores its input and always yields `value`.
 
   This is a small pure helper for const-like closure behavior in pipelines and
@@ -217,6 +231,22 @@ xldr(2)> always("ignored")
   """
   def const(value: $A) -> (_ -> $A) {
     {|_| value}
+  }
+
+  @@doc """
+  Return a zero-argument callable that does nothing and yields `()`.
+
+  This is useful when a callback surface needs an explicit no-op function value
+  rather than an omitted branch.
+
+## REPL
+xldr(1)> idle = noop()
+> idle: (-> Unit)
+xldr(2)> idle()
+()
+  """
+  def noop() -> (-> Unit) {
+    {|| ()}
   }
 
   @@doc """

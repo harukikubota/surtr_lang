@@ -254,6 +254,8 @@ fn const_helper_and_hole_return_surface_work() {
         r#"always: (_ -> Int) = const(1)
 print(to_string(always("ignored")))
 
+print(to_string(id("ok")))
+
 def make() -> (_ -> Int) {
   const(2)
 }
@@ -262,8 +264,13 @@ next = make()
 print(to_string(next(False)))
 
 ten = {|_| 10}
-print(to_string(ten([1, 2, 3])))"#,
-        &["1", "2", "10"],
+print(to_string(ten([1, 2, 3])))
+
+idle: (-> Unit) = noop()
+print(inspect(idle()))
+idle2 = noop()
+print(inspect(idle2()))"#,
+        &["1", "ok", "2", "10", "()", "()"],
     );
 }
 
