@@ -42,6 +42,18 @@ def safe_inc(x: Int) -> Result<Int> {
   Ok(x + 1)
 }
 
+def result_pure(x: Int) -> Result<Int> {
+  Ok(x)
+}
+
+def safe_double_under_limit(x: Int) -> Result<Int> {
+  if(x < 5, Ok(x * 2), Err(NoneError))
+}
+
+def safe_step3(x: Int) -> Result<Int> {
+  Ok(x - 3)
+}
+
 def safe_add2(x: Int, y: Int) -> Result<Int> {
   Ok(x + y)
 }
@@ -203,6 +215,100 @@ test("Result") {
       result = then(Err(NoneError), &emit_next)
       assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
       assert_stdout_eq([])
+    }
+  }
+
+  describe("monad laws") {
+    # ghci> let pureR = Right
+    # ghci> let f x = Right (x + 1)
+    # ghci> pureR 2 >>= f
+    # ghci> f 2
+    it("left identity holds") {
+      assert_eq(safe_inc(2), result_pure(2) |>= safe_inc())
+    }
+
+    # ghci> let pureR = Right
+    # ghci> let ok = Right 2
+    # ghci> ok >>= pureR
+    # ghci> ok
+    it("right identity keeps Ok") {
+      value: Result<Int> = Ok(2)
+      assert_eq(value, value |>= result_pure())
+    }
+
+    # ghci> let pureR = Right
+    # ghci> let err = Left "NoneError"
+    # ghci> err >>= pureR
+    # ghci> err
+    it("right identity keeps Err") {
+      value: Result<Int> = Err(NoneError)
+      assert_eq(value, value |>= result_pure())
+    }
+
+    # ghci> let f x = Right (x + 1)
+    # ghci> let g x = if x < 5 then Right (x * 2) else Left "NoneError"
+    # ghci> let ok = Right 2
+    # ghci> ((ok >>= f) >>= g) == (ok >>= (f >=> g))
+    it("associativity holds on success") {
+      value: Result<Int> = Ok(2)
+      composed = &safe_inc >=> &safe_double_under_limit
+      assert_eq((value |>= safe_inc()) |>= safe_double_under_limit(), value |>= composed)
+    }
+
+    # ghci> let f x = Right (x + 1)
+    # ghci> let g x = if x < 5 then Right (x * 2) else Left "NoneError"
+    # ghci> let ok = Right 5
+    # ghci> ((ok >>= f) >>= g) == (ok >>= (f >=> g))
+    it("associativity holds on propagated Err") {
+      value: Result<Int> = Ok(5)
+      composed = &safe_inc >=> &safe_double_under_limit
+      assert_eq((value |>= safe_inc()) |>= safe_double_under_limit(), value |>= composed)
+    }
+
+    # ghci> let pureR = Right
+    # ghci> let f x = Right (x + 1)
+    # ghci> (pureR >=> f) 2
+    # ghci> f 2
+    it("kleisli left identity uses pure") {
+      composed = &result_pure >=> &safe_inc
+      assert_eq(composed(2), safe_inc(2))
+    }
+
+    # ghci> let pureR = Right
+    # ghci> let f x = Right (x + 1)
+    # ghci> (f >=> pureR) 2
+    # ghci> f 2
+    it("kleisli right identity uses pure") {
+      composed = &safe_inc >=> &result_pure
+      assert_eq(composed(2), safe_inc(2))
+    }
+
+    # ghci> let f x = Right (x + 1)
+    # ghci> let g x = if x < 5 then Right (x * 2) else Left "NoneError"
+    # ghci> let h x = Right (x - 3)
+    # ghci> (((f >=> g) >=> h) 2) == ((f >=> (g >=> h)) 2)
+    it("kleisli composition is associative") {
+      left = (&safe_inc >=> &safe_double_under_limit) >=> &safe_step3
+      right = &safe_inc >=> (&safe_double_under_limit >=> &safe_step3)
+      assert_eq(left(2), right(2))
+    }
+
+    # ghci> let f x = Right (x + 1)
+    # ghci> let g x = if x < 5 then Right (x * 2) else Left "NoneError"
+    # ghci> (f >=> g) 2
+    # ghci> f 2 >>= g
+    it("kleisli composition matches staged bind") {
+      composed = &safe_inc >=> &safe_double_under_limit
+      assert_eq(composed(2), safe_inc(2) |>= safe_double_under_limit())
+    }
+
+    # ghci> let pureR = Right
+    # ghci> let ok = Right 2
+    # ghci> fmap (+ 1) ok
+    # ghci> ok >>= (pureR . (+ 1))
+    it("fmap matches bind with pure after mapping") {
+      value: Result<Int> = Ok(2)
+      assert_eq(value |*> inc(), value |>= {|x| result_pure(inc(x))})
     }
   }
 }

@@ -1,0 +1,43 @@
+import Test;
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def double(x: Int) -> Int {
+  x * 2
+}
+
+def show_int(x: Int) -> String {
+  to_string(x)
+}
+
+test("Function") {
+  describe("plain composition laws") {
+    # ghci> let f = (+ 1)
+    # ghci> (f . id) 2
+    # ghci> f 2
+    it("right identity uses id") {
+      composed = &id >> &inc
+      assert_eq(inc(2), composed(2))
+    }
+
+    # ghci> let f = (+ 1)
+    # ghci> (id . f) 2
+    # ghci> f 2
+    it("left identity uses id") {
+      composed = &inc >> &id
+      assert_eq(inc(2), composed(2))
+    }
+
+    # ghci> let f = (+ 1)
+    # ghci> let g = (* 2)
+    # ghci> let h = show
+    # ghci> ((h . g) . f) 2 == (h . (g . f)) 2
+    it("composition is associative") {
+      left = (&inc >> &double) >> &show_int
+      right = &inc >> (&double >> &show_int)
+      assert_eq(left(2), right(2))
+    }
+  }
+}
