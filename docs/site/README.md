@@ -14,6 +14,7 @@ REPL でそのまま試しやすい題材を優先しており、実行例は `s
 - [Lens](./lens.md)
 - [Kernel](./kernel.md)
 - [パターンマッチ](./pattern-matching.md)
+- [エラーハンドリング](./error-handling.md)
 - [Extractor](./extractors.md)
 - [言語機能 (`import`, `include`, `@@autoimport`)](./language-features.md)
 
