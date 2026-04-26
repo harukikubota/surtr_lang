@@ -10,7 +10,12 @@ pub use checker::{
 
 #[cfg(test)]
 mod tests {
-    use super::{typecheck, typecheck_with_context, ScarSession, TypecheckContext};
+    use std::thread;
+
+    use super::{
+        typecheck as scar_typecheck, typecheck_with_context as scar_typecheck_with_context,
+        ScarSession, TypecheckContext,
+    };
     use crate::typed::TypedNode;
     use crate::typed::{TypedInner, TypedLensSegment};
     use crate::types::Ty;
@@ -42,6 +47,35 @@ defmod Generator {}"#;
     const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/option.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
+    const TEST_STACK_SIZE: usize = 32 * 1024 * 1024;
+
+    fn run_with_large_stack<T>(label: &str, f: impl FnOnce() -> T + Send + 'static) -> T
+    where
+        T: Send + 'static,
+    {
+        thread::Builder::new()
+            .name(format!("scar-test-{label}"))
+            .stack_size(TEST_STACK_SIZE)
+            .spawn(f)
+            .unwrap_or_else(|e| panic!("failed to spawn large-stack test thread `{label}`: {e}"))
+            .join()
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    }
+
+    fn typecheck(
+        resolved: Vec<sigil::resolved::Resolved>,
+    ) -> Result<Vec<TypedNode>, crate::error::TypeError> {
+        run_with_large_stack("typecheck", move || scar_typecheck(resolved))
+    }
+
+    fn typecheck_with_context(
+        resolved: Vec<sigil::resolved::Resolved>,
+        context: TypecheckContext,
+    ) -> Result<Vec<TypedNode>, crate::error::TypeError> {
+        run_with_large_stack("typecheck_with_context", move || {
+            scar_typecheck_with_context(resolved, context)
+        })
+    }
 
     fn strip_test_annotations(source: &str) -> String {
         source
@@ -215,12 +249,15 @@ defmod Generator {}"#;
     fn resolve_with_builtin_prelude_result(
         source: &str,
     ) -> Result<Vec<sigil::resolved::Resolved>, sigil::error::ResolveError> {
-        let module_stages = std_module_stages();
-        let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
-            .expect("source should parse");
-        let declaration_index = sigil::precollect_declaration_index(&module_stages)
-            .expect("std modules should precollect");
-        sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
+        let source = source.to_owned();
+        run_with_large_stack("resolve_with_builtin_prelude_result", move || {
+            let module_stages = std_module_stages();
+            let user_ast = spire::parse_with_context(&source, spire::ParserContext::project(0))
+                .expect("source should parse");
+            let declaration_index = sigil::precollect_declaration_index(&module_stages)
+                .expect("std modules should precollect");
+            sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
+        })
     }
 
     fn resolve_with_builtin_prelude_in_script_module(
@@ -233,17 +270,21 @@ defmod Generator {}"#;
         source: &str,
         module_path: &str,
     ) -> Result<Vec<sigil::resolved::Resolved>, sigil::error::ResolveError> {
-        let module_stages = std_module_stages();
-        let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
-            .expect("source should parse");
-        let declaration_index = sigil::precollect_declaration_index(&module_stages)
-            .expect("std modules should precollect");
-        sigil::resolve_staged_program(
-            &module_stages,
-            user_ast,
-            &declaration_index,
-            Some(module_path.to_string()),
-        )
+        let source = source.to_owned();
+        let module_path = module_path.to_owned();
+        run_with_large_stack("resolve_with_builtin_prelude_in_module", move || {
+            let module_stages = std_module_stages();
+            let user_ast = spire::parse_with_context(&source, spire::ParserContext::project(0))
+                .expect("source should parse");
+            let declaration_index = sigil::precollect_declaration_index(&module_stages)
+                .expect("std modules should precollect");
+            sigil::resolve_staged_program(
+                &module_stages,
+                user_ast,
+                &declaration_index,
+                Some(module_path),
+            )
+        })
     }
 
     fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
@@ -278,19 +319,29 @@ defmod Generator {}"#;
     fn typecheck_std_modules_with_overrides(
         overrides: &[(&str, &str)],
     ) -> Result<Vec<TypedNode>, crate::error::TypeError> {
-        let module_stages = std_module_stages_with_overrides(overrides);
-        let declaration_index = sigil::precollect_declaration_index(&module_stages)
-            .expect("std modules should precollect");
-        let resolved =
-            sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
-                .expect("std modules should resolve");
-        typecheck_with_context(
-            resolved,
-            TypecheckContext {
-                runtime_policy: RuntimeSourcePolicy::std_module(),
-                enforce_builtin_type_contracts: true,
-            },
-        )
+        let overrides = overrides
+            .iter()
+            .map(|(name, source)| ((*name).to_owned(), (*source).to_owned()))
+            .collect::<Vec<_>>();
+        run_with_large_stack("typecheck_std_modules_with_overrides", move || {
+            let override_refs = overrides
+                .iter()
+                .map(|(name, source)| (name.as_str(), source.as_str()))
+                .collect::<Vec<_>>();
+            let module_stages = std_module_stages_with_overrides(&override_refs);
+            let declaration_index = sigil::precollect_declaration_index(&module_stages)
+                .expect("std modules should precollect");
+            let resolved =
+                sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+                    .expect("std modules should resolve");
+            scar_typecheck_with_context(
+                resolved,
+                TypecheckContext {
+                    runtime_policy: RuntimeSourcePolicy::std_module(),
+                    enforce_builtin_type_contracts: true,
+                },
+            )
+        })
     }
 
     fn pick_override<'a>(
@@ -2223,51 +2274,54 @@ b = double(1.5)"#,
 
     #[test]
     fn scar_session_preserves_trait_registry_across_chunks() {
-        let module_stages = std_module_stages();
-        let declaration_index = sigil::precollect_declaration_index(&module_stages)
-            .expect("std modules should precollect");
-        let std_resolved =
-            sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
-                .expect("std modules should resolve");
-        let std_resolved_len = std_resolved.len();
+        run_with_large_stack("scar_session_preserves_trait_registry_across_chunks", || {
+            let module_stages = std_module_stages();
+            let declaration_index = sigil::precollect_declaration_index(&module_stages)
+                .expect("std modules should precollect");
+            let std_resolved =
+                sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+                    .expect("std modules should resolve");
+            let std_resolved_len = std_resolved.len();
 
-        let mut session = ScarSession::new();
-        session
-            .typecheck_with_context(
-                std_resolved,
-                TypecheckContext {
-                    runtime_policy: RuntimeSourcePolicy::std_module(),
-                    enforce_builtin_type_contracts: true,
-                },
-            )
-            .expect("std modules should typecheck");
+            let mut session = ScarSession::new();
+            session
+                .typecheck_with_context(
+                    std_resolved,
+                    TypecheckContext {
+                        runtime_policy: RuntimeSourcePolicy::std_module(),
+                        enforce_builtin_type_contracts: true,
+                    },
+                )
+                .expect("std modules should typecheck");
 
-        let user_ast = spire::parse_with_context("value = 1 + 2", spire::ParserContext::project(0))
-            .expect("user chunk should parse");
-        let user_resolved =
-            sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
-                .expect("user chunk should resolve");
-        let user_resolved = user_resolved.into_iter().skip(std_resolved_len).collect();
-        let typed = session
-            .typecheck(user_resolved)
-            .expect("trait registry should survive across chunks");
+            let user_ast =
+                spire::parse_with_context("value = 1 + 2", spire::ParserContext::project(0))
+                    .expect("user chunk should parse");
+            let user_resolved =
+                sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
+                    .expect("user chunk should resolve");
+            let user_resolved = user_resolved.into_iter().skip(std_resolved_len).collect();
+            let typed = session
+                .typecheck(user_resolved)
+                .expect("trait registry should survive across chunks");
 
-        assert!(typed.iter().any(|node| {
-            matches!(
-                &node.node,
-                TypedInner::Bind(_, rhs)
-                    if matches!(
-                        &rhs.node,
-                        TypedInner::TraitCall {
-                            method_name,
-                            dispatch: crate::typed::TraitDispatch::Static(
-                                crate::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
-                            ),
-                            ..
-                        } if method_name == "add"
-                    )
-            )
-        }));
+            assert!(typed.iter().any(|node| {
+                matches!(
+                    &node.node,
+                    TypedInner::Bind(_, rhs)
+                        if matches!(
+                            &rhs.node,
+                            TypedInner::TraitCall {
+                                method_name,
+                                dispatch: crate::typed::TraitDispatch::Static(
+                                    crate::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
+                                ),
+                                ..
+                            } if method_name == "add"
+                        )
+                )
+            }));
+        });
     }
 
     #[test]

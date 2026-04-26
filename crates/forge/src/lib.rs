@@ -10,6 +10,8 @@ pub use codegen::{
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::codegen;
     use crate::bytecode::Constant;
     use crate::opcode::Opcode;
@@ -40,6 +42,20 @@ mod tests {
     const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/option.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
+    const TEST_STACK_SIZE: usize = 32 * 1024 * 1024;
+
+    fn run_with_large_stack<T>(label: &str, f: impl FnOnce() -> T + Send + 'static) -> T
+    where
+        T: Send + 'static,
+    {
+        thread::Builder::new()
+            .name(format!("forge-test-{label}"))
+            .stack_size(TEST_STACK_SIZE)
+            .spawn(f)
+            .unwrap_or_else(|e| panic!("failed to spawn large-stack test thread `{label}`: {e}"))
+            .join()
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    }
 
     fn strip_test_annotations(source: &str) -> String {
         source
@@ -172,8 +188,11 @@ mod tests {
     }
 
     fn codegen_source(source: &str) -> sindr::ir::Bytecode {
-        let typed = typed_with_builtin_prelude(source);
-        codegen(typed).expect("codegen should succeed")
+        let source = source.to_owned();
+        run_with_large_stack("codegen_source", move || {
+            let typed = typed_with_builtin_prelude(&source);
+            codegen(typed).expect("codegen should succeed")
+        })
     }
 
     #[test]

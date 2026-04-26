@@ -1260,7 +1260,23 @@ pub(crate) fn xldr_version() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
+    const TEST_STACK_SIZE: usize = 32 * 1024 * 1024;
+
+    fn run_with_large_stack<T>(label: &str, f: impl FnOnce() -> T + Send + 'static) -> T
+    where
+        T: Send + 'static,
+    {
+        thread::Builder::new()
+            .name(format!("xldr-test-{label}"))
+            .stack_size(TEST_STACK_SIZE)
+            .spawn(f)
+            .unwrap_or_else(|e| panic!("failed to spawn large-stack test thread `{label}`: {e}"))
+            .join()
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    }
 
     fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
         let repl_sources =
@@ -1302,32 +1318,37 @@ mod tests {
     }
 
     fn expect_bootstrap_failure(source: &str, phase: &str, message_fragment: &str) -> LoadError {
-        let mut engine = bootstrap_engine_with_module(source, "Broken");
-        let err = engine
-            .bootstrap_std_modules()
-            .expect_err("bootstrap should fail");
-        match &err {
-            LoadError::BootstrapFailed {
-                phase: actual_phase,
-                file_name,
-                message,
-            } => {
-                assert_eq!(actual_phase, phase);
-                assert!(
-                    file_name == "lib/bad.srt" || file_name == "bootstrap.srt",
-                    "unexpected bootstrap failure file `{}`",
-                    file_name
-                );
-                assert!(
-                    message.contains(message_fragment),
-                    "expected `{}` to contain `{}`",
+        let source = source.to_owned();
+        let phase = phase.to_owned();
+        let message_fragment = message_fragment.to_owned();
+        run_with_large_stack("expect_bootstrap_failure", move || {
+            let mut engine = bootstrap_engine_with_module(&source, "Broken");
+            let err = engine
+                .bootstrap_std_modules()
+                .expect_err("bootstrap should fail");
+            match &err {
+                LoadError::BootstrapFailed {
+                    phase: actual_phase,
+                    file_name,
                     message,
-                    message_fragment
-                );
+                } => {
+                    assert_eq!(actual_phase, &phase);
+                    assert!(
+                        file_name == "lib/bad.srt" || file_name == "bootstrap.srt",
+                        "unexpected bootstrap failure file `{}`",
+                        file_name
+                    );
+                    assert!(
+                        message.contains(&message_fragment),
+                        "expected `{}` to contain `{}`",
+                        message,
+                        message_fragment
+                    );
+                }
+                other => panic!("expected bootstrap failure, got {:?}", other),
             }
-            other => panic!("expected bootstrap failure, got {:?}", other),
-        }
-        err
+            err
+        })
     }
 
     #[test]
@@ -1355,39 +1376,41 @@ mod tests {
 
     #[test]
     fn bootstrap_std_modules_returns_runtime_failure() {
-        let mut engine =
-            bootstrap_engine_with_module("defmod Broken { def nope() -> Int { 1 } }", "Broken");
-        engine.vm = eldr::VM::new_interactive(engine.forge_session.type_registry());
-        engine
-            .vm
-            .push_atomic(sindr::ir::BytecodeChunk {
-                opcodes: vec![sindr::ir::Opcode::Halt],
-                source_map: None,
-                const_base: 0,
-                constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
-                new_locals: 0,
-                type_entries: Vec::new(),
-                error_template_base: 0,
-                error_templates: Vec::new(),
-                functions: Vec::new(),
-                docs: Vec::new(),
-            })
-            .expect("vm bootstrap corruption setup should succeed");
+        run_with_large_stack("bootstrap_std_modules_returns_runtime_failure", || {
+            let mut engine =
+                bootstrap_engine_with_module("defmod Broken { def nope() -> Int { 1 } }", "Broken");
+            engine.vm = eldr::VM::new_interactive(engine.forge_session.type_registry());
+            engine
+                .vm
+                .push_atomic(sindr::ir::BytecodeChunk {
+                    opcodes: vec![sindr::ir::Opcode::Halt],
+                    source_map: None,
+                    const_base: 0,
+                    constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
+                    new_locals: 0,
+                    type_entries: Vec::new(),
+                    error_template_base: 0,
+                    error_templates: Vec::new(),
+                    functions: Vec::new(),
+                    docs: Vec::new(),
+                })
+                .expect("vm bootstrap corruption setup should succeed");
 
-        let err = engine
-            .bootstrap_std_modules()
-            .expect_err("bootstrap should fail at runtime");
-        match err {
-            LoadError::BootstrapFailed {
-                phase,
-                file_name,
-                message,
-            } => {
-                assert_eq!(phase, "runtime");
-                assert_eq!(file_name, "bootstrap.srt");
-                assert!(message.contains("Chunk constant base mismatch"));
+            let err = engine
+                .bootstrap_std_modules()
+                .expect_err("bootstrap should fail at runtime");
+            match err {
+                LoadError::BootstrapFailed {
+                    phase,
+                    file_name,
+                    message,
+                } => {
+                    assert_eq!(phase, "runtime");
+                    assert_eq!(file_name, "bootstrap.srt");
+                    assert!(message.contains("Chunk constant base mismatch"));
+                }
+                other => panic!("expected runtime bootstrap failure, got {:?}", other),
             }
-            other => panic!("expected runtime bootstrap failure, got {:?}", other),
-        }
+        });
     }
 }
