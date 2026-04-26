@@ -1012,18 +1012,22 @@ impl ReplEngine {
                 })
             }
             Err(e) => {
-                let location = self.vm.runtime_error_location();
-                let rendered = error_display::runtime_error_lines(
+                let location = e
+                    .context
+                    .call_site
+                    .clone()
+                    .or_else(|| self.vm.runtime_error_location());
+                let rendered = error_display::runtime_error_lines_with_registry(
                     &e,
-                    self.vm.source(),
-                    self.vm.source_file(),
+                    &self.sources,
+                    self.repl_source_id,
                     location.clone(),
                     self.error_display_mode,
                 );
-                error_display::emit_runtime_error(
+                error_display::emit_runtime_error_with_registry(
                     &e,
-                    self.vm.source(),
-                    self.vm.source_file(),
+                    &self.sources,
+                    self.repl_source_id,
                     location,
                     self.error_display_mode,
                 );

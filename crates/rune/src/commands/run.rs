@@ -174,6 +174,10 @@ fn run_source_file(
         compile_sources
             .sources
             .owned_context(compile_sources.user_source_id),
+        Some((
+            compile_sources.sources.clone(),
+            compile_sources.user_source_id,
+        )),
         vm_dump,
     )
 }
@@ -200,7 +204,7 @@ fn run_eldr_file(
     })?;
 
     let source_context = embedded_source_context_from_bytecode(&bytecode);
-    execute_bytecode(env, bytecode, cli_args, source_context, vm_dump)
+    execute_bytecode(env, bytecode, cli_args, source_context, None, vm_dump)
 }
 
 fn embedded_source_context_from_bytecode(
@@ -232,6 +236,7 @@ fn execute_bytecode(
     bytecode: forge::bytecode::Bytecode,
     cli_args: &[String],
     source_context: Option<(String, String)>,
+    runtime_sources: Option<(diagnostics::SourceRegistry, diagnostics::SourceId)>,
     vm_dump: Option<&VmDumpOptions>,
 ) -> RuneResult<()> {
     let mut vm = match source_context {
@@ -243,13 +248,27 @@ fn execute_bytecode(
         vm.enable_observation(eldr::vm::VmObservationOptions::default());
     }
     if let Err(e) = vm.run() {
-        xldr::error_display::emit_runtime_error(
-            &e,
-            vm.source(),
-            vm.source_file(),
-            vm.runtime_error_location(),
-            xldr::ErrorDisplayMode::Full,
-        );
+        let location = e
+            .context
+            .call_site
+            .clone()
+            .or_else(|| vm.runtime_error_location());
+        match runtime_sources.as_ref() {
+            Some((sources, source_id)) => xldr::error_display::emit_runtime_error_with_registry(
+                &e,
+                sources,
+                *source_id,
+                location.clone(),
+                xldr::ErrorDisplayMode::Full,
+            ),
+            None => xldr::error_display::emit_runtime_error(
+                &e,
+                vm.source(),
+                vm.source_file(),
+                location,
+                xldr::ErrorDisplayMode::Full,
+            ),
+        }
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
         return Err(RuneError::silent(1));
     }

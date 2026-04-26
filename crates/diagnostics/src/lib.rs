@@ -65,6 +65,10 @@ impl SourceRegistry {
         self.get(source_id)
             .map(|entry| (entry.source.clone(), entry.file_name.clone()))
     }
+
+    pub fn entries(&self) -> &[SourceEntry] {
+        &self.entries
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +87,13 @@ pub struct DiagnosticLabel {
     pub span: Span,
     pub message: String,
     pub color: Option<Color>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeDiagnosticContext {
+    pub opcode: Option<String>,
+    pub function: Option<String>,
+    pub details: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,6 +169,49 @@ pub fn runtime_value_error_spec(
             spec.help = Some(help);
         }
     }
+    spec
+}
+
+pub fn runtime_error_spec(
+    source: &str,
+    message: impl Into<String>,
+    span: Span,
+    context: &RuntimeDiagnosticContext,
+    help: Option<String>,
+) -> DiagnosticSpec {
+    let message = message.into();
+    let mut spec = simple_error("RuntimeError", message.clone(), span.clone(), help);
+    if let Some(template) = infer_runtime_error_template(source, &span, &message, context) {
+        if let Some(primary) = template
+            .labels
+            .iter()
+            .find(|label| label.message != "call target" && !label.message.starts_with("opcode:"))
+        {
+            spec.primary_span = primary.span.clone();
+        }
+        spec.labels.extend(template.labels);
+        spec.notes.extend(template.notes);
+        if let Some(help) = template.help {
+            spec.help = Some(match spec.help.take() {
+                Some(existing) => format!("{}\n{}", existing, help),
+                None => help,
+            });
+        }
+    }
+    spec
+}
+
+pub fn runtime_error_spec_by_id(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    message: impl Into<String>,
+    span: Span,
+    context: &RuntimeDiagnosticContext,
+    help: Option<String>,
+) -> DiagnosticSpec {
+    let source = sources.source(source_id).unwrap_or("");
+    let mut spec = runtime_error_spec(source, message, span, context, help);
+    apply_runtime_provenance_by_id(sources, source_id, context, &mut spec);
     spec
 }
 
@@ -619,7 +673,8 @@ fn build_report(
         || has_trait_impl_signature_mismatch_labels(spec)
         || has_total_bind_pattern_labels(spec)
         || has_parse_focus_labels(spec)
-        || has_runtime_safebind_labels(spec);
+        || has_runtime_safebind_labels(spec)
+        || has_runtime_error_focus_labels(spec);
     let primary_source = RenderSourceId::Primary(file_name.to_string());
     let related_source = RenderSourceId::Related(file_name.to_string());
     let mut builder = Report::build(
@@ -705,7 +760,8 @@ fn build_report_with_registry(
         || has_trait_impl_signature_mismatch_labels(spec)
         || has_total_bind_pattern_labels(spec)
         || has_parse_focus_labels(spec)
-        || has_runtime_safebind_labels(spec);
+        || has_runtime_safebind_labels(spec)
+        || has_runtime_error_focus_labels(spec);
     let primary_render_source = RenderSourceId::Primary(primary_file_name.clone());
     let related_render_source = RenderSourceId::Related(primary_file_name.clone());
     let mut builder = Report::build(
@@ -854,6 +910,16 @@ fn has_runtime_safebind_labels(spec: &DiagnosticSpec) -> bool {
     spec.labels
         .iter()
         .any(|label| label.message == "SafeBind partial match")
+}
+
+fn has_runtime_error_focus_labels(spec: &DiagnosticSpec) -> bool {
+    spec.kind == "RuntimeError"
+        && spec.labels.iter().any(|label| {
+            label.message == "call target"
+                || label.message.starts_with("opcode:")
+                || label.message.starts_with("expected rule:")
+                || label.message.starts_with("runtime rule:")
+        })
 }
 
 fn infer_missing_trait_method_labels(source: &str, message: &str) -> Option<Vec<DiagnosticLabel>> {
@@ -2266,6 +2332,341 @@ fn split_runtime_literal_values(message: &str) -> (String, Option<(&str, &str)>)
         return (message.to_string(), None);
     };
     (base.to_string(), Some((lhs, rhs)))
+}
+
+fn infer_runtime_error_template(
+    source: &str,
+    focus: &Span,
+    message: &str,
+    context: &RuntimeDiagnosticContext,
+) -> Option<TemplateSpec> {
+    let lines = line_spans(source);
+    let call_name = call_name_at_span(source, &lines, focus);
+    if let Some(builtin_name) = runtime_builtin_name_from_message(message, call_name.as_deref()) {
+        return infer_builtin_runtime_error_template(source, &lines, focus, message, &builtin_name);
+    }
+
+    infer_vm_runtime_error_template(source, focus, message, context)
+}
+
+fn infer_builtin_runtime_error_template(
+    source: &str,
+    lines: &[(usize, usize)],
+    focus: &Span,
+    message: &str,
+    builtin_name: &str,
+) -> Option<TemplateSpec> {
+    let (call_span, arg_spans) = find_call_site_and_args(source, lines, focus, builtin_name)?;
+    let arg_span = runtime_builtin_argument_span(message, &arg_spans).unwrap_or(call_span.clone());
+    let rule = runtime_builtin_expected_rule(message);
+
+    Some(TemplateSpec {
+        labels: vec![
+            DiagnosticLabel {
+                source_id: None,
+                span: arg_span,
+                message: message.to_string(),
+                color: Some(Color::Red),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: call_span.clone(),
+                message: "call target".into(),
+                color: Some(Color::Yellow),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: call_span,
+                message: format!("expected rule: {}", rule),
+                color: Some(Color::Magenta),
+            },
+        ],
+        notes: Vec::new(),
+        help: None,
+    })
+}
+
+fn infer_vm_runtime_error_template(
+    source: &str,
+    focus: &Span,
+    message: &str,
+    context: &RuntimeDiagnosticContext,
+) -> Option<TemplateSpec> {
+    let line_span =
+        trimmed_line_span_containing(source, focus.start).unwrap_or_else(|| focus.clone());
+    let rule = runtime_vm_rule_from_message(message)?;
+    let mut labels = vec![
+        DiagnosticLabel {
+            source_id: None,
+            span: line_span.clone(),
+            message: message.to_string(),
+            color: Some(Color::Red),
+        },
+        DiagnosticLabel {
+            source_id: None,
+            span: line_span.clone(),
+            message: format!("runtime rule: {}", rule),
+            color: Some(Color::Magenta),
+        },
+    ];
+    if let Some(opcode) = context.opcode.as_deref() {
+        labels.push(DiagnosticLabel {
+            source_id: None,
+            span: line_span,
+            message: format!("opcode: {}", opcode),
+            color: Some(Color::Yellow),
+        });
+    }
+    Some(TemplateSpec {
+        labels,
+        notes: Vec::new(),
+        help: None,
+    })
+}
+
+fn runtime_builtin_name_from_message<'a>(
+    message: &'a str,
+    fallback: Option<&'a str>,
+) -> Option<String> {
+    if let Some((name, _)) = message.split_once(" expects ") {
+        if is_identifier_like(name) {
+            return Some(name.to_string());
+        }
+    }
+    fallback
+        .filter(|name| is_identifier_like(name))
+        .map(|name| name.to_string())
+}
+
+fn runtime_builtin_expected_rule(message: &str) -> String {
+    if let Some((_, expected)) = message.split_once(" expects ") {
+        expected.to_string()
+    } else if let Some((_, tail)) = message.split_once(" out of range for ") {
+        let ty = tail.split(':').next().unwrap_or(tail).trim();
+        format!("value must fit in {}", ty)
+    } else {
+        message.to_string()
+    }
+}
+
+fn runtime_vm_rule_from_message(message: &str) -> Option<String> {
+    if let Some(expected) = message.strip_prefix("JumpIfFalse: expected ") {
+        return Some(format!(
+            "JumpIfFalse requires {}, got a different stack value",
+            expected
+        ));
+    }
+    if let Some(expected) = message.strip_prefix("Expected ") {
+        return Some(format!("opcode expected {}", expected));
+    }
+    if message == "GetField on non-tagged value" {
+        return Some("GetField requires a tagged runtime value".into());
+    }
+    if message == "CallClosure expects a callable value" {
+        return Some("CallClosure requires a callable value on the stack".into());
+    }
+    if message == "Stack underflow" {
+        return Some("opcode attempted to pop more values than were available".into());
+    }
+    if message == "Frame stack underflow" {
+        return Some("call/return machinery expected an active frame".into());
+    }
+    if message.starts_with("Invalid jump target: ") {
+        return Some("jump target must point inside the active bytecode chunk".into());
+    }
+    if message.starts_with("LoadConst index out of bounds: ")
+        || message.starts_with("LoadLocal out of bounds: ")
+        || message.starts_with("StoreLocal out of bounds: ")
+    {
+        return Some("opcode referenced storage outside the current runtime bounds".into());
+    }
+    None
+}
+
+fn runtime_builtin_argument_span(message: &str, arg_spans: &[Span]) -> Option<Span> {
+    if arg_spans.is_empty() {
+        return None;
+    }
+    if message.contains(" as first argument")
+        || message.contains(" as kind")
+        || message.contains(" as pattern")
+        || message.contains(" as idx")
+        || message.contains(" as input")
+        || message.contains(" as text")
+        || message.contains(" as name")
+    {
+        return arg_spans.first().cloned();
+    }
+    if message.contains(" as second argument") || message.contains(" as replacement") {
+        return arg_spans.get(1).cloned();
+    }
+    if let Some(arg_name) = message.split(" as ").nth(1) {
+        let arg_name = arg_name.split(',').next().unwrap_or(arg_name);
+        if arg_name == "detail" {
+            return arg_spans.first().cloned();
+        }
+    }
+    if message.contains(", got (") && arg_spans.len() >= 2 {
+        return Some(Span {
+            start: arg_spans.first()?.start,
+            end: arg_spans.last()?.end,
+        });
+    }
+    arg_spans.first().cloned()
+}
+
+fn find_call_site_and_args(
+    source: &str,
+    lines: &[(usize, usize)],
+    focus: &Span,
+    name: &str,
+) -> Option<(Span, Vec<Span>)> {
+    let line_idx = line_index_for_span(lines, focus.start)?;
+    let (line_start, line_end) = lines[line_idx];
+    let line = slice_chars(source, line_start, line_end);
+    let chars: Vec<char> = line.chars().collect();
+    let needle: Vec<char> = format!("{}(", name).chars().collect();
+    let call_start = find_subslice_outside_literals(&chars, &needle, 0)?;
+    let open = call_start + needle.len() - 1;
+    let close = find_matching_paren(&chars, open)?;
+    let call_span = Span {
+        start: line_start + call_start,
+        end: line_start + close + 1,
+    };
+    let arg_spans = split_call_argument_spans(line_start, &chars, open + 1, close);
+    Some((call_span, arg_spans))
+}
+
+fn split_call_argument_spans(
+    line_start: usize,
+    chars: &[char],
+    start: usize,
+    end: usize,
+) -> Vec<Span> {
+    let mut args = Vec::new();
+    let mut depth_paren = 0usize;
+    let mut depth_bracket = 0usize;
+    let mut arg_start = start;
+    let mut idx = start;
+    while idx < end {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        match chars[idx] {
+            '(' => depth_paren += 1,
+            ')' => depth_paren = depth_paren.saturating_sub(1),
+            '[' => depth_bracket += 1,
+            ']' => depth_bracket = depth_bracket.saturating_sub(1),
+            ',' if depth_paren == 0 && depth_bracket == 0 => {
+                let span = trimmed_span_from_line(line_start, chars, arg_start, idx);
+                if span.start < span.end {
+                    args.push(span);
+                }
+                arg_start = idx + 1;
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+    let span = trimmed_span_from_line(line_start, chars, arg_start, end);
+    if span.start < span.end {
+        args.push(span);
+    }
+    args
+}
+
+fn find_matching_paren(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut idx = open;
+    while idx < chars.len() {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        match chars[idx] {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn is_identifier_like(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn apply_runtime_provenance_by_id(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    context: &RuntimeDiagnosticContext,
+    spec: &mut DiagnosticSpec,
+) {
+    let Some(source) = sources.source(source_id) else {
+        return;
+    };
+    let Some(name) = runtime_builtin_name_from_message(
+        &spec.message,
+        call_name_at_span(source, &line_spans(source), &spec.primary_span).as_deref(),
+    ) else {
+        return;
+    };
+    if let Some((def_source_id, def_span, def_label)) =
+        find_runtime_builtin_definition_label(sources, &name)
+    {
+        spec.labels.push(DiagnosticLabel {
+            source_id: Some(def_source_id),
+            span: def_span,
+            message: def_label,
+            color: Some(Color::Blue),
+        });
+    }
+    if context.function.is_some() {
+        // kept for future expansion; function context is already available in help/details.
+    }
+}
+
+fn find_runtime_builtin_definition_label(
+    sources: &SourceRegistry,
+    builtin_name: &str,
+) -> Option<(SourceId, Span, String)> {
+    let builtin_needle = format!("@@builtin def {}(", builtin_name);
+    let user_needle = format!("def {}(", builtin_name);
+    for entry in &sources.entries {
+        let lines = line_spans(&entry.source);
+        if let Some(sig_line) = find_function_signature_line(&entry.source, &lines, builtin_name) {
+            let text = slice_chars(&entry.source, sig_line.0, sig_line.1);
+            if text.contains(&builtin_needle) || text.trim_start().starts_with(&user_needle) {
+                return Some((
+                    entry.id,
+                    Span {
+                        start: sig_line.0,
+                        end: sig_line.1,
+                    },
+                    source_signature_caption(&entry.source, &lines, sig_line, builtin_name)
+                        .unwrap_or_else(|| text.trim().to_string()),
+                ));
+            }
+        }
+        if let Some(span) = line_head_span_with_brace(&entry.source, &builtin_needle) {
+            return Some((
+                entry.id,
+                span.clone(),
+                slice_chars(&entry.source, span.start, span.end),
+            ));
+        }
+    }
+    None
 }
 
 fn extractor_input_context(
@@ -5075,5 +5476,63 @@ bad = add("oops", 1)"#;
             .labels
             .iter()
             .any(|label| label.message == "input source: String"));
+    }
+
+    #[test]
+    fn runtime_error_spec_splits_builtin_runtime_error() {
+        let spec = runtime_error_spec(
+            r#"len("oops")"#,
+            "len expects List as first argument",
+            Span { start: 0, end: 11 },
+            &RuntimeDiagnosticContext::default(),
+            None,
+        );
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "call target"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "expected rule: List as first argument"));
+    }
+
+    #[test]
+    fn runtime_error_spec_splits_builtin_out_of_range_rule() {
+        let spec = runtime_error_spec(
+            "set_exit_code(999999999999999999999999999999)",
+            "set_exit_code out of range for i32: 999999999999999999999999999999",
+            Span { start: 0, end: 45 },
+            &RuntimeDiagnosticContext::default(),
+            None,
+        );
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "expected rule: value must fit in i32"));
+    }
+
+    #[test]
+    fn runtime_error_spec_splits_vm_runtime_error() {
+        let spec = runtime_error_spec(
+            "bad_jump",
+            "JumpIfFalse: expected Bool",
+            Span { start: 0, end: 8 },
+            &RuntimeDiagnosticContext {
+                opcode: Some("JumpIfFalse".into()),
+                function: Some("fun#1".into()),
+                details: Vec::new(),
+            },
+            None,
+        );
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "opcode: JumpIfFalse"));
+        assert!(spec.labels.iter().any(|label| {
+            label
+                .message
+                .starts_with("runtime rule: JumpIfFalse requires Bool")
+        }));
     }
 }

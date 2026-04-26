@@ -148,27 +148,78 @@ fn runtime_error_help(err: &eldr::RuntimeError) -> Option<String> {
     }
 }
 
-fn runtime_error_spec(
+fn runtime_error_spec_with_source(
     err: &eldr::RuntimeError,
     location: &sindr::runtime::Location,
+    source: &str,
     include_help: bool,
 ) -> DiagnosticSpec {
-    let start = location.span_start as usize;
-    let mut end = location.span_end as usize;
-    if end <= start {
-        end = start.saturating_add(1);
-    }
-
-    diagnostics::simple_error(
-        "RuntimeError",
+    diagnostics::runtime_error_spec(
+        source,
         err.message.clone(),
-        Span { start, end },
+        Span {
+            start: location.span_start as usize,
+            end: location.span_end as usize,
+        },
+        &runtime_diagnostic_context(err),
         if include_help {
             runtime_error_help(err)
         } else {
             None
         },
     )
+}
+
+fn runtime_error_spec_with_registry(
+    err: &eldr::RuntimeError,
+    location: &sindr::runtime::Location,
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    include_help: bool,
+) -> DiagnosticSpec {
+    let (label_source_id, local_span) = runtime_source_context(sources, source_id, location);
+    diagnostics::runtime_error_spec_by_id(
+        sources,
+        label_source_id,
+        err.message.clone(),
+        local_span,
+        &runtime_diagnostic_context(err),
+        if include_help {
+            runtime_error_help(err)
+        } else {
+            None
+        },
+    )
+}
+
+fn runtime_diagnostic_context(err: &eldr::RuntimeError) -> diagnostics::RuntimeDiagnosticContext {
+    diagnostics::RuntimeDiagnosticContext {
+        opcode: err.context.opcode.clone(),
+        function: err.context.function.clone(),
+        details: err.context.details.clone(),
+    }
+}
+
+fn runtime_source_context(
+    sources: &SourceRegistry,
+    fallback_source_id: SourceId,
+    location: &sindr::runtime::Location,
+) -> (SourceId, Span) {
+    let raw_span = Span {
+        start: location.span_start as usize,
+        end: location.span_end as usize,
+    };
+    if let Some((source_id, local_span)) = crate::decode_rebased_module_span(&raw_span) {
+        if sources.get(source_id).is_some() {
+            return (source_id, local_span);
+        }
+    }
+    let by_file = sources
+        .entries()
+        .iter()
+        .find(|entry| entry.file_name == location.file)
+        .map(|entry| entry.id);
+    (by_file.unwrap_or(fallback_source_id), raw_span)
 }
 
 fn runtime_file_name(location: &sindr::runtime::Location, fallback_file: Option<&str>) -> String {
@@ -208,12 +259,44 @@ pub fn runtime_error_text(
     match (source, effective_location.as_ref()) {
         (Some(source), Some(location)) => {
             let file_name = runtime_file_name(location, fallback_file);
-            let spec = runtime_error_spec(err, location, verbose);
+            let spec = runtime_error_spec_with_source(err, location, source, verbose);
             diagnostics::render_error(&file_name, source, &spec)
         }
         _ => {
             let mut rendered =
                 eldr::format_runtime_error_with_location(err, effective_location.as_ref());
+            if verbose {
+                if let Some(help) = runtime_error_help(err) {
+                    if !rendered.ends_with('\n') {
+                        rendered.push('\n');
+                    }
+                    for line in help.lines() {
+                        rendered.push_str("help: ");
+                        rendered.push_str(line);
+                        rendered.push('\n');
+                    }
+                }
+            }
+            rendered
+        }
+    }
+}
+
+pub fn runtime_error_text_with_registry(
+    err: &eldr::RuntimeError,
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    location: Option<sindr::runtime::Location>,
+) -> String {
+    let verbose = runtime_error_verbose_enabled();
+    match location.as_ref() {
+        Some(location) => {
+            let (label_source_id, _) = runtime_source_context(sources, source_id, location);
+            let spec = runtime_error_spec_with_registry(err, location, sources, source_id, verbose);
+            diagnostic_text_by_id(sources, label_source_id, &spec)
+        }
+        None => {
+            let mut rendered = eldr::format_runtime_error(err);
             if verbose {
                 if let Some(help) = runtime_error_help(err) {
                     if !rendered.ends_with('\n') {
@@ -258,6 +341,19 @@ pub fn runtime_error_lines(
     )
 }
 
+pub fn runtime_error_lines_with_registry(
+    err: &eldr::RuntimeError,
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    location: Option<sindr::runtime::Location>,
+    mode: ErrorDisplayMode,
+) -> Vec<String> {
+    lines_for_mode(
+        &runtime_error_text_with_registry(err, sources, source_id, location),
+        mode,
+    )
+}
+
 pub fn emit_runtime_error(
     err: &eldr::RuntimeError,
     source: Option<&str>,
@@ -267,6 +363,19 @@ pub fn emit_runtime_error(
 ) {
     emit_text(
         &runtime_error_text(err, source, fallback_file, location),
+        mode,
+    );
+}
+
+pub fn emit_runtime_error_with_registry(
+    err: &eldr::RuntimeError,
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    location: Option<sindr::runtime::Location>,
+    mode: ErrorDisplayMode,
+) {
+    emit_text(
+        &runtime_error_text_with_registry(err, sources, source_id, location),
         mode,
     );
 }
@@ -426,6 +535,55 @@ mod tests {
     }
 
     #[test]
+    fn runtime_error_text_splits_builtin_runtime_error_into_call_arg_and_rule() {
+        let err = eldr::RuntimeError::new("len expects List as first argument");
+        let text = runtime_error_text(
+            &err,
+            Some(r#"len("oops")"#),
+            Some("main.srt"),
+            Some(Location {
+                file: "main.srt".into(),
+                func: "<runtime>".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 11,
+            }),
+        );
+        assert!(text.contains("call target"));
+        assert!(text.contains("expected rule: List as first argument"));
+        assert!(text.contains("len expects List as first argument"));
+    }
+
+    #[test]
+    fn runtime_error_text_splits_vm_runtime_error_into_rule_and_opcode() {
+        let err = eldr::RuntimeError::new("JumpIfFalse: expected Bool").with_context(
+            RuntimeErrorContext {
+                pc: Some(9),
+                opcode: Some("JumpIfFalse".into()),
+                function: Some("fun#1".into()),
+                call_site: None,
+                details: Vec::new(),
+            },
+        );
+        let text = runtime_error_text(
+            &err,
+            Some("bad_jump"),
+            Some("main.srt"),
+            Some(Location {
+                file: "main.srt".into(),
+                func: "<runtime>".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 8,
+            }),
+        );
+        assert!(text.contains("opcode: JumpIfFalse"));
+        assert!(text.contains("runtime rule: JumpIfFalse requires Bool"));
+    }
+
+    #[test]
     fn runtime_value_error_text_includes_cause_chain_as_help() {
         let vm = VM::new(Bytecode::default()).with_source("main()".into(), "main.srt".into());
         let value = Value::Error(Box::new(RichError {
@@ -515,7 +673,7 @@ mod tests {
             VM::new(Bytecode::default()).with_source(r#"[h, ..t] =? """#.into(), "main.srt".into());
         let value = Value::Error(Box::new(RichError {
             kind: "PatternMismatch".into(),
-            message: "Pattern did not match.\t@@lhs=\"2\"\t@@rhs=\"1\"".into(),
+            message: "Pattern did not match.".into(),
             location: Location {
                 file: "main.srt".into(),
                 func: "<runtime>".into(),
