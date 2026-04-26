@@ -728,11 +728,7 @@ impl Checker {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_signature_ast_ty_in_context(
-                    ret,
-                    context,
-                    tyvars,
-                )?;
+                let ret = self.resolve_signature_ast_ty_in_context(ret, context, tyvars)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             _ => self.resolve_ast_ty_in_context(ast_ty, context),
@@ -1025,12 +1021,8 @@ impl Checker {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_trait_signature_ast_ty_in_context(
-                    ret,
-                    context,
-                    self_ty,
-                    tyvars,
-                )?;
+                let ret =
+                    self.resolve_trait_signature_ast_ty_in_context(ret, context, self_ty, tyvars)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             _ => self.resolve_ast_ty_in_context(ast_ty, context),
@@ -1247,11 +1239,7 @@ impl Checker {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_builtin_ast_ty_in_context(
-                    ret,
-                    context,
-                    tyvars,
-                )?;
+                let ret = self.resolve_builtin_ast_ty_in_context(ret, context, tyvars)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             _ => self.resolve_ast_ty_in_context(ast_ty, context),

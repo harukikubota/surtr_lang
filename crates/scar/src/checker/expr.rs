@@ -619,11 +619,9 @@ impl Checker {
             (_, Ty::BuiltinFunc { name, params, ret }) => {
                 Some(self.call_target_signature_hint(&name, &params, ret.as_ref(), None))
             }
-            (_, Ty::UserFunc { params, ret, .. }) => self.callable_definition_signature_hint(
-                func,
-                &params,
-                ret.as_ref(),
-            ),
+            (_, Ty::UserFunc { params, ret, .. }) => {
+                self.callable_definition_signature_hint(func, &params, ret.as_ref())
+            }
             (_, Ty::Func(params, ret)) => {
                 self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()))
             }
@@ -1595,7 +1593,9 @@ impl Checker {
         let typed_left = self.check_node(left)?;
         let typed_right = self.check_apply_callable(right, "`|>`")?;
         let (param, ret) = self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
-        if !matches!(self.resolve_ty(&param), Ty::Hole) && !self.types_compatible(&param, &typed_left.ty) {
+        if !matches!(self.resolve_ty(&param), Ty::Hole)
+            && !self.types_compatible(&param, &typed_left.ty)
+        {
             return Err(TypeError {
                 message: format!(
                     "`|>` type mismatch: expected {}, got {}",
@@ -3282,8 +3282,7 @@ impl Checker {
             .collect::<Result<Vec<_>, _>>()?;
 
         for (param, arg) in params.iter().zip(&typed_args) {
-            if !matches!(self.resolve_ty(param), Ty::Hole)
-                && !self.types_compatible(param, &arg.ty)
+            if !matches!(self.resolve_ty(param), Ty::Hole) && !self.types_compatible(param, &arg.ty)
             {
                 return Err(TypeError {
                     message: format!(

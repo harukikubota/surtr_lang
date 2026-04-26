@@ -538,8 +538,7 @@ pub fn type_error_spec_by_id(
                     | "trait impl declaration"
             ) {
                 label.source_id = Some(source_id);
-            } else if label.message.starts_with("expected ")
-                || label.message.starts_with("actual ")
+            } else if label.message.starts_with("expected ") || label.message.starts_with("actual ")
             {
                 label.source_id = Some(source_id);
             }
@@ -976,7 +975,10 @@ fn infer_trait_impl_signature_mismatch_labels(
     let (trait_name, method_name) = method_head.split_once("::")?;
     let expected_ty = detail
         .split_once("expected ")
-        .and_then(|(_, rest)| rest.split_once(", got ").map(|(expected, _)| expected.trim()))
+        .and_then(|(_, rest)| {
+            rest.split_once(", got ")
+                .map(|(expected, _)| expected.trim())
+        })
         .filter(|expected| !expected.is_empty())?;
     let got_ty = detail
         .split_once("got ")
@@ -1774,7 +1776,11 @@ fn build_function_value_flow_template_with_signature(
     } else {
         "RHS signature"
     };
-    let opposite_label = if focus_is_lhs { "RHS operand" } else { "LHS operand" };
+    let opposite_label = if focus_is_lhs {
+        "RHS operand"
+    } else {
+        "LHS operand"
+    };
 
     let signature_span = if focus_is_lhs {
         Span {
@@ -5298,10 +5304,9 @@ mod tests {
         let spec = type_error_spec(source, &err);
         let rendered = strip_ansi(&render_error("main.srt", source, &spec));
 
-        assert!(spec
-            .labels
-            .iter()
-            .any(|label| label.message == "LHS signature: __Script::fixture::inc(arg1: Int) -> Int"));
+        assert!(spec.labels.iter().any(
+            |label| label.message == "LHS signature: __Script::fixture::inc(arg1: Int) -> Int"
+        ));
         assert!(spec
             .labels
             .iter()
@@ -5349,7 +5354,10 @@ impl Summable for Int {
             slice_chars(source, expected.span.start, expected.span.end),
             "def add(self: Self, rhs: Self) -> Self"
         );
-        assert_eq!(slice_chars(source, actual.span.start, actual.span.end), "String");
+        assert_eq!(
+            slice_chars(source, actual.span.start, actual.span.end),
+            "String"
+        );
     }
 
     #[test]

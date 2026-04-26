@@ -2376,38 +2376,48 @@ b = double(1.5)"#,
 
     #[test]
     fn scar_session_preserves_trait_registry_across_chunks() {
-        run_with_large_stack("scar_session_preserves_trait_registry_across_chunks", || {
-            let module_stages = std_module_stages();
-            let declaration_index = sigil::precollect_declaration_index(&module_stages)
-                .expect("std modules should precollect");
-            let std_resolved =
-                sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
-                    .expect("std modules should resolve");
-            let std_resolved_len = std_resolved.len();
-
-            let mut session = ScarSession::new();
-            session
-                .typecheck_with_context(
-                    std_resolved,
-                    TypecheckContext {
-                        runtime_policy: RuntimeSourcePolicy::std_module(),
-                        enforce_builtin_type_contracts: true,
-                    },
+        run_with_large_stack(
+            "scar_session_preserves_trait_registry_across_chunks",
+            || {
+                let module_stages = std_module_stages();
+                let declaration_index = sigil::precollect_declaration_index(&module_stages)
+                    .expect("std modules should precollect");
+                let std_resolved = sigil::resolve_staged_program(
+                    &module_stages,
+                    Vec::new(),
+                    &declaration_index,
+                    None,
                 )
-                .expect("std modules should typecheck");
+                .expect("std modules should resolve");
+                let std_resolved_len = std_resolved.len();
 
-            let user_ast =
-                spire::parse_with_context("value = 1 + 2", spire::ParserContext::project(0))
-                    .expect("user chunk should parse");
-            let user_resolved =
-                sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
-                    .expect("user chunk should resolve");
-            let user_resolved = user_resolved.into_iter().skip(std_resolved_len).collect();
-            let typed = session
-                .typecheck(user_resolved)
-                .expect("trait registry should survive across chunks");
+                let mut session = ScarSession::new();
+                session
+                    .typecheck_with_context(
+                        std_resolved,
+                        TypecheckContext {
+                            runtime_policy: RuntimeSourcePolicy::std_module(),
+                            enforce_builtin_type_contracts: true,
+                        },
+                    )
+                    .expect("std modules should typecheck");
 
-            assert!(typed.iter().any(|node| {
+                let user_ast =
+                    spire::parse_with_context("value = 1 + 2", spire::ParserContext::project(0))
+                        .expect("user chunk should parse");
+                let user_resolved = sigil::resolve_staged_program(
+                    &module_stages,
+                    user_ast,
+                    &declaration_index,
+                    None,
+                )
+                .expect("user chunk should resolve");
+                let user_resolved = user_resolved.into_iter().skip(std_resolved_len).collect();
+                let typed = session
+                    .typecheck(user_resolved)
+                    .expect("trait registry should survive across chunks");
+
+                assert!(typed.iter().any(|node| {
                 matches!(
                     &node.node,
                     TypedInner::Bind(_, rhs)
@@ -2423,7 +2433,8 @@ b = double(1.5)"#,
                         )
                 )
             }));
-        });
+            },
+        );
     }
 
     #[test]
