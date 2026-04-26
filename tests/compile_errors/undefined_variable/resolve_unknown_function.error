@@ -1,2 +1,2 @@
 phase: resolve
-contains: Undefined variable: unknown
+contains: Undefined variable or function: unknown

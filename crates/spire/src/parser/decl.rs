@@ -187,9 +187,18 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_impl_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_impl_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    pub(super) fn parse_impl_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        start: Option<usize>,
+    ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Impl)?;
         let (head, trait_args) = self.parse_trait_impl_head()?;
+        let start = start.unwrap_or(sp.start);
         self.skip_newlines();
 
         if matches!(self.peek(), Token::For) {
@@ -206,13 +215,17 @@ impl Parser<'_> {
                 if matches!(self.peek(), Token::Eof) {
                     return Err(ParseError::incomplete("}", self.peek_span()));
                 }
-                if !matches!(self.peek(), Token::Def) {
+                if !matches!(self.peek(), Token::Def | Token::Annotator(_)) {
                     return Err(ParseError::syntax(
                         "trait impl body may only contain `def` declarations",
                         self.peek_span(),
                     ));
                 }
-                let method = self.parse_impl_method(&self_target)?;
+                let method = if matches!(self.peek(), Token::Annotator(_)) {
+                    self.parse_annotated_impl_method(&self_target, true)?
+                } else {
+                    self.parse_impl_method(&self_target)?
+                };
                 self.ensure_stmt_boundary(&method, true)?;
                 methods.push(method);
                 while matches!(self.peek(), Token::Newline) {
@@ -223,13 +236,14 @@ impl Parser<'_> {
             let end = self.expect(&Token::RBrace)?;
             return Ok(Ast::TraitImplDef(
                 Span {
-                    start: sp.start,
+                    start,
                     end: end.end,
                 },
                 head,
                 trait_args,
                 target_ty,
                 methods,
+                attrs,
             ));
         }
 
@@ -248,13 +262,20 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            if !matches!(self.peek(), Token::Def | Token::Defp | Token::Defextractor) {
+            if !matches!(
+                self.peek(),
+                Token::Def | Token::Defp | Token::Defextractor | Token::Annotator(_)
+            ) {
                 return Err(ParseError::syntax(
                     "impl body may only contain `def` / `defp` / `defextractor` declarations",
                     self.peek_span(),
                 ));
             }
-            let method = self.parse_impl_method(&head)?;
+            let method = if matches!(self.peek(), Token::Annotator(_)) {
+                self.parse_annotated_impl_method(&head, false)?
+            } else {
+                self.parse_impl_method(&head)?
+            };
             self.ensure_stmt_boundary(&method, true)?;
             methods.push(method);
             while matches!(self.peek(), Token::Newline) {
@@ -265,17 +286,26 @@ impl Parser<'_> {
         let end = self.expect(&Token::RBrace)?;
         Ok(Ast::ImplDef(
             Span {
-                start: sp.start,
+                start,
                 end: end.end,
             },
             head,
             methods,
+            attrs,
         ))
     }
 
     pub(super) fn parse_impl_method(&mut self, target: &str) -> Result<Ast, ParseError> {
+        self.parse_impl_method_with_attrs(target, DeclAttrs::default())
+    }
+
+    pub(super) fn parse_impl_method_with_attrs(
+        &mut self,
+        target: &str,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
         if matches!(self.peek(), Token::Defextractor) {
-            return self.parse_impl_extractor_method(target);
+            return self.parse_impl_extractor_method_with_attrs(target, attrs);
         }
 
         let sp = self.peek_span();
@@ -401,12 +431,17 @@ impl Parser<'_> {
             Box::new(body),
             DeclAttrs {
                 visibility,
-                ..DeclAttrs::default()
+                doc: attrs.doc,
+                auto_import: attrs.auto_import,
             },
         ))
     }
 
-    pub(super) fn parse_impl_extractor_method(&mut self, target: &str) -> Result<Ast, ParseError> {
+    pub(super) fn parse_impl_extractor_method_with_attrs(
+        &mut self,
+        target: &str,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
         self.impl_target_stack.push(target.to_string());
         let (sp, name, type_params, param, ret_ty) = self.parse_extractor_signature()?;
 
@@ -440,8 +475,79 @@ impl Parser<'_> {
             param,
             ret_ty,
             Box::new(body),
-            DeclAttrs::default(),
+            attrs,
         ))
+    }
+
+    pub(super) fn parse_annotated_impl_method(
+        &mut self,
+        target: &str,
+        trait_impl_only: bool,
+    ) -> Result<Ast, ParseError> {
+        let mut attrs = DeclAttrs::default();
+        let mut saw_annotator = false;
+
+        while let Token::Annotator(name) = self.peek().clone() {
+            let annotator_span = self.peek_span();
+            saw_annotator = true;
+            self.advance();
+            self.skip_newlines();
+            match name.as_str() {
+                "doc" => {
+                    if attrs.doc.is_some() {
+                        return Err(ParseError::syntax(
+                            "@@doc may only appear once before an impl member",
+                            annotator_span,
+                        ));
+                    }
+                    match self.peek().clone() {
+                        Token::DocString(text) => {
+                            self.advance();
+                            attrs.doc = Some(text);
+                        }
+                        Token::Eof => {
+                            return Err(ParseError::incomplete("doc string", self.peek_span()));
+                        }
+                        _ => {
+                            return Err(ParseError::syntax(
+                                "@@doc expects a triple-quoted doc string",
+                                self.peek_span(),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        "Only @@doc is allowed before impl members",
+                        annotator_span,
+                    ));
+                }
+            }
+            self.skip_newlines();
+        }
+
+        if !saw_annotator {
+            return Err(ParseError::syntax(
+                "Expected impl member annotation",
+                self.peek_span(),
+            ));
+        }
+
+        if trait_impl_only {
+            if !matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    "trait impl body may only contain `def` declarations",
+                    self.peek_span(),
+                ));
+            }
+        } else if !matches!(self.peek(), Token::Def | Token::Defp | Token::Defextractor) {
+            return Err(ParseError::syntax(
+                "impl body may only contain `def` / `defp` / `defextractor` declarations",
+                self.peek_span(),
+            ));
+        }
+
+        self.parse_impl_method_with_attrs(target, attrs)
     }
 
     pub(super) fn trait_impl_self_target_name(&self, ty: &AstTy) -> Result<String, ParseError> {
@@ -1266,12 +1372,13 @@ impl Parser<'_> {
                 Token::Def => self.parse_def_with_attrs(attrs, Some(start)),
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deftrait => self.parse_trait_def_with_attrs(attrs, Some(start)),
+                Token::Impl => self.parse_impl_def_with_attrs(attrs, Some(start)),
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
                 Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
-                    "@@doc / @@autoimport must annotate `def`, `defmod`, `deftrait`, `deferror`, `defenum`, `defextractor`, or `@@builtin type/def/defextractor`",
+                    "@@doc / @@autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `deferror`, `defenum`, `defextractor`, or `@@builtin type/def/defextractor`",
                     self.peek_span(),
                 )),
             }

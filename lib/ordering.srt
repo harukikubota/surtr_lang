@@ -15,19 +15,34 @@ defenum Ordering {
 }
 
 impl Show for Ordering {
-  # Standard `Show` impl for `Ordering`.
+  @@doc """
+  Return the standard string rendering for `Ordering`.
+  ## REPL
+  xldr(1)> to_string(Ordering::Less)
+  "Ordering::Less"
+  """
   def to_string(self: Self) -> String {
     inspect(self)
   }
 }
 
 impl Eq for Ordering {
-  # Standard `Eq` impl method for `Ordering`.
+  @@doc """
+  Return `True` when both ordering values are equal.
+  ## REPL
+  xldr(1)> eq(Ordering::Less, Ordering::Less)
+  True
+  """
   def eq(self: Self, rhs: Self) -> Boolean {
     self == rhs
   }
 
-  # Standard `Eq` impl method for `Ordering`.
+  @@doc """
+  Return `True` when the ordering values differ.
+  ## REPL
+  xldr(1)> neq(Ordering::Less, Ordering::Greater)
+  True
+  """
   def neq(self: Self, rhs: Self) -> Boolean {
     self != rhs
   }

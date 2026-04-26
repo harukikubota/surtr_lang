@@ -651,6 +651,14 @@ fn test_undefined_var() {
 }
 
 #[test]
+fn test_undefined_function_call_uses_callable_message() {
+    let err = parse_and_resolve("print(missing_func(1))").expect_err("call to missing function");
+    assert!(err
+        .message
+        .contains("Undefined variable or function: missing_func"));
+}
+
+#[test]
 fn test_if_conversion() {
     let resolved = parse_and_resolve("x = if(True, 1, 2)").unwrap();
     match &resolved[0] {

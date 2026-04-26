@@ -187,6 +187,56 @@ fn format_defenum_signature(name: &str, variants: &[spire::ast::EnumVariant]) ->
     format!("defenum {name} {{ {variants} }}")
 }
 
+fn format_impl_signature(target: &str) -> String {
+    format!("impl {target}")
+}
+
+fn format_impl_method_signature(
+    target: &str,
+    name: &str,
+    type_params: &[spire::ast::TypeParam],
+    params: &[spire::ast::FunParam],
+    ret_ty: &Option<spire::ast::AstTy>,
+) -> String {
+    let signature = format_fun_signature(name, type_params, params, ret_ty);
+    if let Some(rest) = signature.strip_prefix(name) {
+        format!("{target}::{name}{rest}")
+    } else {
+        signature
+    }
+}
+
+fn format_trait_impl_signature(
+    trait_name: &str,
+    trait_args: &[spire::ast::AstTy],
+    target_ty: &spire::ast::AstTy,
+) -> String {
+    if trait_args.is_empty() {
+        format!("impl {trait_name} for {}", format_ast_ty(target_ty))
+    } else {
+        let args = trait_args
+            .iter()
+            .map(format_ast_ty)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("impl {trait_name}<{args}> for {}", format_ast_ty(target_ty))
+    }
+}
+
+fn format_trait_impl_method_signature(
+    trait_name: &str,
+    trait_args: &[spire::ast::AstTy],
+    target_ty: &spire::ast::AstTy,
+    method_name: &str,
+    type_params: &[spire::ast::TypeParam],
+    params: &[spire::ast::FunParam],
+    ret_ty: &Option<spire::ast::AstTy>,
+) -> String {
+    let method_sig = format_fun_signature(method_name, type_params, params, ret_ty);
+    let impl_sig = format_trait_impl_signature(trait_name, trait_args, target_ty);
+    format!("{impl_sig}::{method_sig}")
+}
+
 fn qualified_name(module_path: &str, name: &str) -> String {
     if module_path.is_empty() {
         name.to_string()
@@ -249,6 +299,112 @@ fn collect_doc_entries_for_ast(
                         )),
                         doc: doc.clone(),
                     });
+                }
+            }
+            spire::ast::Ast::ImplDef(_, target, methods, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, target),
+                        kind: DocKind::Type,
+                        module_path: module_path.to_string(),
+                        signature: Some(format_impl_signature(target)),
+                        doc: doc.clone(),
+                    });
+                }
+                for method in methods {
+                    match method {
+                        spire::ast::Ast::Def(
+                            _,
+                            name,
+                            type_params,
+                            params,
+                            ret_ty,
+                            _,
+                            attrs,
+                        ) => {
+                            if let Some(doc) = &attrs.doc {
+                                out.push(DocEntry {
+                                    qualified_name: qualified_name(
+                                        module_path,
+                                        &format!("{target}::{name}"),
+                                    ),
+                                    kind: DocKind::Function,
+                                    module_path: module_path.to_string(),
+                                    signature: Some(format_impl_method_signature(
+                                        target,
+                                        name,
+                                        type_params,
+                                        params,
+                                        ret_ty,
+                                    )),
+                                    doc: doc.clone(),
+                                });
+                            }
+                        }
+                        spire::ast::Ast::ExtractorDef(..) => {}
+                        _ => {}
+                    }
+                }
+            }
+            spire::ast::Ast::TraitImplDef(
+                _,
+                trait_name,
+                trait_args,
+                target_ty,
+                methods,
+                attrs,
+            ) => {
+                if let Some(doc) = &attrs.doc {
+                    let rendered = format_trait_impl_signature(trait_name, trait_args, target_ty);
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, &rendered),
+                        kind: DocKind::Type,
+                        module_path: module_path.to_string(),
+                        signature: Some(rendered),
+                        doc: doc.clone(),
+                    });
+                }
+                for method in methods {
+                    if let spire::ast::Ast::Def(
+                        _,
+                        name,
+                        type_params,
+                        params,
+                        ret_ty,
+                        _,
+                        method_attrs,
+                    ) = method
+                    {
+                        if let Some(doc) = &method_attrs.doc {
+                            let rendered = format_trait_impl_method_signature(
+                                trait_name,
+                                trait_args,
+                                target_ty,
+                                name,
+                                type_params,
+                                params,
+                                ret_ty,
+                            );
+                            out.push(DocEntry {
+                                qualified_name: qualified_name(
+                                    module_path,
+                                    &format!(
+                                        "{}::{}",
+                                        format_trait_impl_signature(
+                                            trait_name,
+                                            trait_args,
+                                            target_ty,
+                                        ),
+                                        name
+                                    ),
+                                ),
+                                kind: DocKind::Function,
+                                module_path: module_path.to_string(),
+                                signature: Some(rendered),
+                                doc: doc.clone(),
+                            });
+                        }
+                    }
                 }
             }
             spire::ast::Ast::BuiltinTypeDecl(_, head, attrs) => {
@@ -458,7 +614,7 @@ pub fn lower_module_source_ast(
             | spire::ast::Ast::RecordDef(_, _, _)
             | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
             | spire::ast::Ast::EnumDef(_, _, _, _, _)
-            | spire::ast::Ast::ImplDef(_, _, _)
+            | spire::ast::Ast::ImplDef(_, _, _, _)
             | spire::ast::Ast::BuiltinDecl(_, _, _, _, _)
             | spire::ast::Ast::BuiltinTypeDecl(_, _, _) => {
                 // Std-module files are allowed to carry top-level declarations
@@ -691,6 +847,120 @@ deferror NoneError { "None Value." }"#,
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref() == Some("import() -> Unit")
                 && entry.doc == "Language-provided import macro function."
+        }));
+    }
+
+    #[test]
+    fn collect_doc_entries_includes_impl_and_trait_docs() {
+        let ast = spire::parse_with_context(
+            r#"@@doc """Trait docs."""
+deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+defstruct User {
+  name: String,
+}
+
+@@doc """User helper docs."""
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}
+
+@@doc """Numeric Int docs."""
+impl Numeric for Int {
+  def add(self: Self, rhs: Self) -> Self {
+    self + rhs
+  }
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("annotated trait and impl docs should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Sample"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::Numeric"
+                && entry.kind == DocKind::Type
+                && entry.doc == "Trait docs."
+        }));
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::User"
+                && entry.kind == DocKind::Type
+                && entry.signature.as_deref() == Some("impl User")
+                && entry.doc == "User helper docs."
+        }));
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::impl Numeric for Int"
+                && entry.kind == DocKind::Type
+                && entry.signature.as_deref() == Some("impl Numeric for Int")
+                && entry.doc == "Numeric Int docs."
+        }));
+    }
+
+    #[test]
+    fn collect_doc_entries_includes_impl_method_docs() {
+        let ast = spire::parse_with_context(
+            r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  @@doc """Construct a new user value."""
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}
+
+@@doc """String conversion for `Int`."""
+impl Show for Int {
+  @@doc """Render `Int` through the standard display surface."""
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("annotated impl method docs should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Sample"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::User::new"
+                && entry.kind == DocKind::Function
+                && entry.signature.as_deref() == Some("User::new(name: String) -> Self")
+                && entry.doc == "Construct a new user value."
+        }));
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::impl Show for Int::to_string"
+                && entry.kind == DocKind::Function
+                && entry
+                    .signature
+                    .as_deref()
+                    == Some("impl Show for Int::to_string(self: Self) -> String")
+                && entry.doc == "Render `Int` through the standard display surface."
         }));
     }
 

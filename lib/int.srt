@@ -484,64 +484,142 @@ defmod Int {
 }
 
 impl Numeric for Int {
+  @@doc """
+  Return the sum of the two integer values.
+  ## REPL
+  xldr(1)> add(1, 2)
+  3
+  """
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
   }
 
+  @@doc """
+  Return the difference of the two integer values.
+  ## REPL
+  xldr(1)> sub(5, 2)
+  3
+  """
   def sub(self: Self, rhs: Self) -> Self {
     self - rhs
   }
 
+  @@doc """
+  Return the product of the two integer values.
+  ## REPL
+  xldr(1)> mul(3, 4)
+  12
+  """
   def mul(self: Self, rhs: Self) -> Self {
     self * rhs
   }
 
+  @@doc """
+  Divide by `rhs`, returning `Err(ZeroDivisionError)` for zero divisors.
+  ## REPL
+  xldr(1)> safe_div(8, 2)
+  Ok(4)
+  """
   def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
     Int::safe_div(self, rhs)
   }
 
+  @@doc """
+  Return the absolute value of the integer.
+  ## REPL
+  xldr(1)> abs(-3)
+  3
+  """
   def abs(self: Self) -> Self {
     Int::abs(self)
   }
 
+  @@doc """
+  Return the smaller of the two integer values.
+  ## REPL
+  xldr(1)> min(1, 2)
+  1
+  """
   def min(self: Self, rhs: Self) -> Self {
     Int::min(self, rhs)
   }
 
+  @@doc """
+  Return the larger of the two integer values.
+  ## REPL
+  xldr(1)> max(1, 2)
+  2
+  """
   def max(self: Self, rhs: Self) -> Self {
     Int::max(self, rhs)
   }
 }
 
 impl Show for Int {
+  @@doc """
+  Return the standard string rendering for `Int`.
+  ## REPL
+  xldr(1)> to_string(42)
+  "42"
+  """
   def to_string(self: Self) -> String {
     inspect(self)
   }
 }
 
 impl From<Int> for Int {
+  @@doc """
+  Return the value unchanged when converting `Int` to `Int`.
+  ## REPL
+  xldr(1)> from(42, Int)
+  42
+  """
   def from(self: Self, to: TypeRef<Int>) -> Int {
     self
   }
 }
 
 impl From<String> for Int {
+  @@doc """
+  Convert `Int` into its standard string representation.
+  ## REPL
+  xldr(1)> from(42, String)
+  "42"
+  """
   def from(self: Self, to: TypeRef<String>) -> String {
     to_string(self)
   }
 }
 
 impl Eq for Int {
+  @@doc """
+  Return `True` when both integer values are equal.
+  ## REPL
+  xldr(1)> eq(2, 2)
+  True
+  """
   def eq(self: Self, rhs: Self) -> Boolean {
     self == rhs
   }
 
+  @@doc """
+  Return `True` when the integer values differ.
+  ## REPL
+  xldr(1)> neq(2, 3)
+  True
+  """
   def neq(self: Self, rhs: Self) -> Boolean {
     self != rhs
   }
 }
 
 impl Compare for Int {
+  @@doc """
+  Return the three-way ordering between the two integer values.
+  ## REPL
+  xldr(1)> compare(1, 2)
+  Ordering::Less
+  """
   def compare(self: Self, rhs: Self) -> Ordering {
     if(
       self < rhs,
@@ -552,6 +630,12 @@ impl Compare for Int {
 }
 
 impl Ord for Int {
+  @@doc """
+  Return `True` when the left integer is strictly less than the right integer.
+  ## REPL
+  xldr(1)> lt(1, 2)
+  True
+  """
   def lt(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
       Ordering::Less => True,
@@ -559,6 +643,12 @@ impl Ord for Int {
     }
   }
 
+  @@doc """
+  Return `True` when the left integer is less than or equal to the right integer.
+  ## REPL
+  xldr(1)> lte(2, 2)
+  True
+  """
   def lte(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
       Ordering::Less | Ordering::Equal => True,
@@ -566,6 +656,12 @@ impl Ord for Int {
     }
   }
 
+  @@doc """
+  Return `True` when the left integer is strictly greater than the right integer.
+  ## REPL
+  xldr(1)> gt(3, 2)
+  True
+  """
   def gt(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
       Ordering::Less | Ordering::Equal => False,
@@ -573,6 +669,12 @@ impl Ord for Int {
     }
   }
 
+  @@doc """
+  Return `True` when the left integer is greater than or equal to the right integer.
+  ## REPL
+  xldr(1)> gte(2, 2)
+  True
+  """
   def gte(self: Self, rhs: Self) -> Boolean {
     match Compare::compare(self, rhs) {
       Ordering::Less => False,

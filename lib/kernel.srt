@@ -293,21 +293,36 @@ xldr(1)> project_args()
 }
 
 impl Show for Unit {
-  # Standard `Show` impl for `Unit`.
+  @@doc """
+  Return the standard string rendering for `Unit`.
+  ## REPL
+  xldr(1)> to_string(())
+  "()"
+  """
   def to_string(self: Self) -> String {
     inspect(self)
   }
 }
 
 impl From<Unit> for Unit {
-  # Standard `From` impl entry for `Unit` conversions.
+  @@doc """
+  Return the value unchanged when converting `Unit` to `Unit`.
+  ## REPL
+  xldr(1)> from((), Unit)
+  ()
+  """
   def from(self: Self, to: TypeRef<Unit>) -> Unit {
     self
   }
 }
 
 impl From<String> for Unit {
-  # Standard `From` impl entry for `Unit` conversions.
+  @@doc """
+  Convert `Unit` into its standard string representation.
+  ## REPL
+  xldr(1)> from((), String)
+  "()"
+  """
   def from(self: Self, to: TypeRef<String>) -> String {
     to_string(self)
   }

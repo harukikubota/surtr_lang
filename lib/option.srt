@@ -16,7 +16,12 @@ defenum Option<$T> {
 }
 
 impl Option {
-  # Return `True` when the option is `Some(...)`.
+  @@doc """
+  Return `True` when the option is `Some(...)`.
+  ## REPL
+  xldr(1)> Option::is_some(Option::Some(1))
+  True
+  """
   def is_some(value: Option<$T>) -> Boolean {
     match value {
       Option::Some(_) => True,
@@ -24,19 +29,34 @@ impl Option {
     }
   }
 
-  # Return `True` when the option is `None`.
+  @@doc """
+  Return `True` when the option is `None`.
+  ## REPL
+  xldr(1)> Option::is_none(Option::None)
+  True
+  """
   def is_none(value: Option<$T>) -> Boolean {
     Boolean::not(Option::is_some(value))
   }
 
-  # Wrap the value in the module constructor.
+  @@doc """
+  Wrap the value in `Option::Some(...)`.
+  ## REPL
+  xldr(1)> Option::wrap(1)
+  Option::Some(1)
+  """
   def wrap(value: $T) -> Option<$T> {
     Option::Some(value)
   }
 }
 
 impl From<Result<$T>> for Option<$T> {
-  # Convert the value into the requested target type.
+  @@doc """
+  Convert `Option<$T>` into `Result<$T>` using `NoneError` for missing values.
+  ## REPL
+  xldr(1)> from(Option::Some(1), Result)
+  Ok(1)
+  """
   def from(self: Self, to: TypeRef<Result<$T>>) -> Result<$T> {
     match self {
       Option::Some(value) => Ok(value),
@@ -46,7 +66,12 @@ impl From<Result<$T>> for Option<$T> {
 }
 
 impl From<Option<$T>> for Result<$T> {
-  # Convert the value into the requested target type.
+  @@doc """
+  Convert `Result<$T>` into `Option<$T>`, dropping the concrete error value.
+  ## REPL
+  xldr(1)> from(Ok(1), Option)
+  Option::Some(1)
+  """
   def from(self: Self, to: TypeRef<Option<$T>>) -> Option<$T> {
     match self {
       Ok(value) => Option::Some(value),

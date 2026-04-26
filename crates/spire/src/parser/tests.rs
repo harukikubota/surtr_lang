@@ -267,11 +267,12 @@ impl User {
 
     let impl_node = ast
         .iter()
-        .find(|node| matches!(node, Ast::ImplDef(_, _, _)))
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
         .expect("expected impl node");
     match impl_node {
-        Ast::ImplDef(_, target, methods) => {
+        Ast::ImplDef(_, target, methods, attrs) => {
             assert_eq!(target, "User");
+            assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 2);
             assert!(matches!(
                 &methods[0],
@@ -335,10 +336,11 @@ fn test_trait_impl_parses_and_keeps_methods() {
     .expect("trait impl should parse");
 
     match ast.as_slice() {
-        [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods)] => {
+        [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
             assert_eq!(trait_name, "Numeric");
             assert!(trait_args.is_empty());
             assert_eq!(target, "Int");
+            assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 2);
             assert!(matches!(
                 &methods[0],
@@ -350,6 +352,115 @@ fn test_trait_impl_parses_and_keeps_methods() {
                 Ast::Def(_, name, _, _, Some(AstTy::Named(_, ret)), _, _)
                     if name == "abs" && ret == "Self"
             ));
+        }
+        _ => panic!("Expected TraitImplDef"),
+    }
+}
+
+#[test]
+fn test_doc_attributes_parse_for_trait_and_impl_decls() {
+    let ast = parse_with_context(
+        r#"@@doc """Trait docs."""
+deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+@@doc """Impl docs."""
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("annotated trait and impl should parse");
+
+    match &ast[0] {
+        Ast::TraitDef(_, name, _, _, attrs) => {
+            assert_eq!(name, "Numeric");
+            assert_eq!(attrs.doc.as_deref(), Some("Trait docs."));
+        }
+        _ => panic!("Expected TraitDef"),
+    }
+
+    match &ast[1] {
+        Ast::ImplDef(_, target, _, attrs) => {
+            assert_eq!(target, "User");
+            assert_eq!(attrs.doc.as_deref(), Some("Impl docs."));
+        }
+        _ => panic!("Expected ImplDef"),
+    }
+}
+
+#[test]
+fn test_doc_attributes_parse_for_impl_methods() {
+    let ast = parse_with_context(
+        r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  @@doc """Construct a user."""
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+
+  @@doc """Normalize the user."""
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("annotated impl methods should parse");
+
+    match &ast[1] {
+        Ast::ImplDef(_, target, methods, _) => {
+            assert_eq!(target, "User");
+            assert_eq!(methods.len(), 2);
+            match &methods[0] {
+                Ast::Def(_, name, _, _, _, _, attrs) => {
+                    assert_eq!(name, "new");
+                    assert_eq!(attrs.doc.as_deref(), Some("Construct a user."));
+                }
+                _ => panic!("Expected impl def"),
+            }
+            match &methods[1] {
+                Ast::Def(_, name, _, _, _, _, attrs) => {
+                    assert_eq!(name, "normalize");
+                    assert_eq!(attrs.doc.as_deref(), Some("Normalize the user."));
+                }
+                _ => panic!("Expected impl def"),
+            }
+        }
+        _ => panic!("Expected ImplDef"),
+    }
+}
+
+#[test]
+fn test_doc_attributes_parse_for_trait_impl_methods() {
+    let ast = parse_with_context(
+        r#"impl Show for Int {
+  @@doc """Format the integer."""
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("annotated trait impl methods should parse");
+
+    match ast.as_slice() {
+        [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), methods, _)] => {
+            assert_eq!(trait_name, "Show");
+            assert_eq!(target, "Int");
+            match &methods[0] {
+                Ast::Def(_, name, _, _, _, _, attrs) => {
+                    assert_eq!(name, "to_string");
+                    assert_eq!(attrs.doc.as_deref(), Some("Format the integer."));
+                }
+                _ => panic!("Expected trait impl def"),
+            }
         }
         _ => panic!("Expected TraitImplDef"),
     }
@@ -414,10 +525,11 @@ fn test_trait_impl_parses_trait_type_args() {
     .expect("generic trait impl should parse");
 
     match ast.as_slice() {
-        [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods)] => {
+        [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
             assert_eq!(trait_name, "From");
             assert!(matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String"));
             assert_eq!(target, "Int");
+            assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 1);
         }
         _ => panic!("Expected TraitImplDef"),
@@ -496,7 +608,7 @@ impl User {
         ParserContext::module(1, None),
     )
     .expect("self rebinding should be parsed");
-    assert!(ast.iter().any(|node| matches!(node, Ast::ImplDef(_, _, _))));
+    assert!(ast.iter().any(|node| matches!(node, Ast::ImplDef(_, _, _, _))));
 }
 
 #[test]

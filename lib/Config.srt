@@ -7,21 +7,38 @@ defstruct Config {
   paths: List<String>,
 }
 
+@@doc """
+Configuration builder helpers for the standard `Config` support type.
+These methods keep project-style examples compact by offering a small fluent
+surface around the raw record fields.
+"""
 impl Config {
-  # Build a config with a default entrypoint and no extra paths.
-  # Construct a new value of the surrounding type.
+  @@doc """
+  Build a config with a default entrypoint and no extra paths.
+  ## REPL
+  xldr(1)> Config::new("App")
+  Config { name: "App", entrypoint: "Main::main", paths: [] }
+  """
   def new(name: String) -> Self {
     Config { name: name, entrypoint: "Main::main", paths: [] }
   }
 
-  # Replace the entrypoint symbol and return the updated config.
-  # Replace the config entrypoint symbol.
+  @@doc """
+  Replace the entrypoint symbol and return the updated config.
+  ## REPL
+  xldr(1)> Config::entry_fun(Config::new("App"), "App::main")
+  Config { name: "App", entrypoint: "App::main", paths: [] }
+  """
   def entry_fun(self: Self, symbol: String) -> Self {
     Config { name: self.name, entrypoint: symbol, paths: self.paths }
   }
 
-  # Append one search path and return the updated config.
-  # Append one search path to the config.
+  @@doc """
+  Append one search path and return the updated config.
+  ## REPL
+  xldr(1)> Config::add_path(Config::new("App"), "./lib")
+  Config { name: "App", entrypoint: "Main::main", paths: ["./lib"] }
+  """
   def add_path(self: Self, path: String) -> Self {
     Config {
       name: self.name,

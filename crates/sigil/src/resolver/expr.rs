@@ -77,6 +77,29 @@ impl Resolver {
         }
     }
 
+    fn map_undefined_callable_error(err: ResolveError, func: &Ast) -> ResolveError {
+        match func {
+            Ast::Var(_, name) if err.message == format!("Undefined variable: {}", name) => {
+                ResolveError {
+                    message: format!("Undefined variable or function: {}", name),
+                    span: err.span,
+                }
+            }
+            Ast::Path(_, path)
+                if err.message == format!("Undefined variable: {}", path.segments.join("::")) =>
+            {
+                ResolveError {
+                    message: format!(
+                        "Undefined variable or function: {}",
+                        path.segments.join("::")
+                    ),
+                    span: err.span,
+                }
+            }
+            _ => err,
+        }
+    }
+
     fn type_witness_from_expr(expr: Ast) -> Result<AstTy, ResolveError> {
         match expr {
             Ast::ConstructorCall(span, name, args) => {
@@ -368,7 +391,9 @@ impl Resolver {
                 }
 
                 if Self::conversion_call_head(&func).is_some() {
-                    let resolved_func = self.resolve_node(*func)?;
+                    let resolved_func = self
+                        .resolve_node(*func.clone())
+                        .map_err(|err| Self::map_undefined_callable_error(err, &func))?;
                     if args.len() != 2 {
                         return Err(ResolveError {
                             message: "from/try_from expects exactly 2 positional arguments".into(),
@@ -400,7 +425,9 @@ impl Resolver {
                     return Ok(Resolved::App(span, Box::new(resolved_func), resolved_args));
                 }
 
-                let resolved_func = self.resolve_node(*func)?;
+                let resolved_func = self
+                    .resolve_node(*func.clone())
+                    .map_err(|err| Self::map_undefined_callable_error(err, &func))?;
                 let resolved_args = args
                     .into_iter()
                     .map(|arg| match arg {
@@ -837,7 +864,7 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods) => {
+            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, _attrs) => {
                 let (trait_uid, qualified_trait_name) =
                     self.resolve_trait_reference(&trait_name, &span)?;
                 let trait_id = ResolvedId {
@@ -1071,7 +1098,7 @@ impl Resolver {
                 message: "include directives must be resolved before name resolution".to_string(),
                 span,
             }),
-            Ast::ImplDef(span, target, _) => Err(ResolveError {
+            Ast::ImplDef(span, target, _, _) => Err(ResolveError {
                 message: format!("impl lowering failed for target `{}`", target),
                 span,
             }),

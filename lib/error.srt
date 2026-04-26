@@ -40,12 +40,24 @@ defmod Error {
 }
 
 impl Show for Error {
+  @@doc """
+  Return the standard string rendering for `Error`.
+  ## REPL
+  xldr(1)> to_string(NoneError)
+  "NoneError"
+  """
   def to_string(self: Self) -> String {
     inspect(self)
   }
 }
 
 impl From<String> for Error {
+  @@doc """
+  Convert `Error` into its standard string representation.
+  ## REPL
+  xldr(1)> from(NoneError, String)
+  "NoneError"
+  """
   def from(self: Self, to: TypeRef<String>) -> String {
     to_string(self)
   }

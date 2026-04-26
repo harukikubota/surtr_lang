@@ -2,28 +2,58 @@ defstruct Project {
   entries: List<Config>,
 }
 
+@@doc """
+Project builder helpers for the standard `Project` support type.
+These methods provide a compact surface for assembling entrypoint-oriented
+examples in docs and REPL sessions.
+"""
 impl Project {
-  # Construct a new value of the surrounding type.
+  @@doc """
+  Construct a project from the provided entry configurations.
+  ## REPL
+  xldr(1)> Project::new([])
+  Project { entries: [] }
+  """
   def new(entries: List<Config>) -> Self {
     Project { entries: entries }
   }
 
-  # Return runtime project arguments.
+  @@doc """
+  Return the runtime project arguments supplied by the host.
+  ## REPL
+  xldr(1)> Project::args()
+  []
+  """
   def args() -> List<String> {
     Kernel::project_args()
   }
 
-  # Construct the empty surrounding value.
+  @@doc """
+  Construct an empty project value.
+  ## REPL
+  xldr(1)> Project::empty()
+  Project { entries: [] }
+  """
   def empty() -> Self {
     Project::new([])
   }
 
-  # Build a project by applying the configuration builder.
+  @@doc """
+  Build a project by applying the configuration builder to an empty project.
+  ## REPL
+  xldr(1)> Project::config({|project| project})
+  Project { entries: [] }
+  """
   def config(builder: (Project -> Project)) -> Self {
     builder(Project::empty())
   }
 
-  # Append one configured entrypoint to the project.
+  @@doc """
+  Append one configured entrypoint to the project.
+  ## REPL
+  xldr(1)> Project::entrypoint(Project::empty(), "App", {|cfg| cfg})
+  Project { entries: [Config { name: "App", entrypoint: "Main::main", paths: [] }] }
+  """
   def entrypoint(project: Self, name: String, builder: (Config -> Config)) -> Self {
     base = Config::new(name)
     configured = builder(base)

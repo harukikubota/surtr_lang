@@ -168,6 +168,20 @@ pub fn resolve_error_spec(source: &str, message: impl Into<String>, span: Span) 
         }
     }
 
+    if let Some(name) = message.strip_prefix("Undefined variable or function: ") {
+        spec.help = Some(format!(
+            "`{}` is not defined in the current scope. Define it before use, or check that the function name is imported correctly.",
+            name
+        ));
+        if let Some(name_span) = identifier_span_at(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                span: name_span,
+                message: format!("unresolved callable `{}`", name),
+                color: Color::Yellow,
+            });
+        }
+    }
+
     spec
 }
 
@@ -2530,5 +2544,23 @@ bad = &add("oops")"#;
             .help
             .as_deref()
             .is_some_and(|help| help.contains("not defined in the current scope")));
+    }
+
+    #[test]
+    fn resolve_error_spec_labels_undefined_callable() {
+        let spec = resolve_error_spec(
+            "unknown(1)",
+            "Undefined variable or function: unknown",
+            Span { start: 0, end: 7 },
+        );
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message.contains("unresolved callable `unknown`")));
+        assert!(spec
+            .help
+            .as_deref()
+            .is_some_and(|help| help.contains("function name is imported correctly")));
     }
 }

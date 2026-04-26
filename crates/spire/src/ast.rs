@@ -344,7 +344,7 @@ pub enum Ast {
     Defmod(Span, Symbol, Vec<Ast>, DeclAttrs),
 
     /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
-    ImplDef(Span, Symbol, Vec<Ast>),
+    ImplDef(Span, Symbol, Vec<Ast>, DeclAttrs),
 
     /// Trait definition: `deftrait Numeric<$T> { def add(self: Self, rhs: Self) -> Self }`
     TraitDef(Span, Symbol, Vec<TypeParam>, Vec<TraitMethodSig>, DeclAttrs),
@@ -352,7 +352,7 @@ pub enum Ast {
     /// Trait impl definition:
     /// `impl Numeric for Int { ... }`
     /// `impl From<String> for Int { ... }`
-    TraitImplDef(Span, Symbol, Vec<AstTy>, AstTy, Vec<Ast>),
+    TraitImplDef(Span, Symbol, Vec<AstTy>, AstTy, Vec<Ast>, DeclAttrs),
 
     /// Import declaration
     Import(Span, AstPath, ImportSpec),

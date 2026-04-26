@@ -53,28 +53,58 @@ defmod Boolean {
 }
 
 impl Show for Boolean {
+  @@doc """
+  Return the standard string rendering for `Boolean`.
+  ## REPL
+  xldr(1)> to_string(True)
+  "True"
+  """
   def to_string(self: Self) -> String {
     inspect(self)
   }
 }
 
 impl From<Boolean> for Boolean {
+  @@doc """
+  Return the value unchanged when converting `Boolean` to `Boolean`.
+  ## REPL
+  xldr(1)> from(True, Boolean)
+  True
+  """
   def from(self: Self, to: TypeRef<Boolean>) -> Boolean {
     self
   }
 }
 
 impl From<String> for Boolean {
+  @@doc """
+  Convert `Boolean` into its standard string representation.
+  ## REPL
+  xldr(1)> from(True, String)
+  "True"
+  """
   def from(self: Self, to: TypeRef<String>) -> String {
     to_string(self)
   }
 }
 
 impl Eq for Boolean {
+  @@doc """
+  Return `True` when both boolean values are equal.
+  ## REPL
+  xldr(1)> eq(True, True)
+  True
+  """
   def eq(self: Self, rhs: Self) -> Boolean {
     self == rhs
   }
 
+  @@doc """
+  Return `True` when the boolean values differ.
+  ## REPL
+  xldr(1)> neq(True, False)
+  True
+  """
   def neq(self: Self, rhs: Self) -> Boolean {
     self != rhs
   }

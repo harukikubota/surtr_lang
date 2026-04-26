@@ -791,13 +791,14 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::ImplDef(span, target, methods) => Ast::ImplDef(
+        Ast::ImplDef(span, target, methods, attrs) => Ast::ImplDef(
             shift_span(span, delta),
             target,
             methods
                 .into_iter()
                 .map(|method| shift_ast_span(method, delta))
                 .collect(),
+            shift_decl_attrs(attrs),
         ),
         Ast::TraitDef(span, name, type_params, methods, attrs) => Ast::TraitDef(
             shift_span(span, delta),
@@ -834,7 +835,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::TraitImplDef(span, trait_name, trait_args, target, methods) => Ast::TraitImplDef(
+        Ast::TraitImplDef(span, trait_name, trait_args, target, methods, attrs) => Ast::TraitImplDef(
             shift_span(span, delta),
             trait_name,
             trait_args
@@ -846,6 +847,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .into_iter()
                 .map(|method| shift_ast_span(method, delta))
                 .collect(),
+            shift_decl_attrs(attrs),
         ),
         Ast::Import(span, path, spec) => {
             Ast::Import(shift_span(span, delta), shift_ast_path(path, delta), spec)
@@ -915,9 +917,9 @@ impl Ast {
             | Ast::BuiltinTypeDecl(s, _, _)
             | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)
-            | Ast::ImplDef(s, _, _)
+            | Ast::ImplDef(s, _, _, _)
             | Ast::TraitDef(s, _, _, _, _)
-            | Ast::TraitImplDef(s, _, _, _, _)
+            | Ast::TraitImplDef(s, _, _, _, _, _)
             | Ast::Import(s, _, _)
             | Ast::Include(s, _)
             | Ast::Closure(s, _, _)

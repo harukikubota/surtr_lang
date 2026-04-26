@@ -489,7 +489,7 @@ pub fn precollect_declaration_index(
             }
 
             for stmt in &module.ast {
-                if let Ast::ImplDef(span, target, methods) = stmt {
+                if let Ast::ImplDef(span, target, methods, _) = stmt {
                     let Some(target_kind) = local_types.get(target) else {
                         return Err(ResolveError {
                             message: format!(
@@ -640,7 +640,8 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitImplDef(span, _trait_name, _trait_args, _target_ty, methods) = stmt
+                if let Ast::TraitImplDef(span, _trait_name, _trait_args, _target_ty, methods, _) =
+                    stmt
                 {
                     for method in methods {
                         let Ast::Def(method_span, method_name, _, _, _, _, _) = method else {
@@ -655,7 +656,7 @@ pub fn precollect_declaration_index(
                             _trait_name,
                             _trait_args,
                             _target_ty,
-                            method_name,
+                            &method_name,
                             method_span.start,
                         );
                         if let Some(prev) = index.get(&internal_name) {
@@ -772,9 +773,9 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Extractor,
                         Visibility::Public,
                     ),
-                    Ast::ImplDef(_, _, _)
+                    Ast::ImplDef(_, _, _, _)
                     | Ast::TraitDef(_, _, _, _, _)
-                    | Ast::TraitImplDef(_, _, _, _, _) => continue,
+                    | Ast::TraitImplDef(_, _, _, _, _, _) => continue,
                     Ast::ResultCtorDecl(span, name, _, _, _) => (
                         span,
                         name.as_str(),
@@ -874,7 +875,7 @@ impl Resolver {
 
         for stmt in stmts {
             match stmt {
-                Ast::ImplDef(span, target, methods) => {
+                Ast::ImplDef(span, target, methods, _attrs) => {
                     let Some(target_kind) = local_types.get(&target) else {
                         return Err(ResolveError {
                             message: format!(
@@ -1356,7 +1357,7 @@ impl Resolver {
                         self.scope.define_with_id(&qualified_ctor, ctor_uid);
                     }
                 }
-                Ast::TraitImplDef(_, _, _, _, _) => {}
+                Ast::TraitImplDef(_, _, _, _, _, _) => {}
                 _ => {}
             }
         }

@@ -539,40 +539,82 @@ defmod String {
 }
 
 impl Show for String {
+  @@doc """
+  Return the string value unchanged.
+  ## REPL
+  xldr(1)> to_string("abc")
+  "abc"
+  """
   def to_string(self: Self) -> String {
     self
   }
 }
 
 impl From<String> for String {
+  @@doc """
+  Return the value unchanged when converting `String` to `String`.
+  ## REPL
+  xldr(1)> from("abc", String)
+  "abc"
+  """
   def from(self: Self, to: TypeRef<String>) -> String {
     self
   }
 }
 
 impl TryFrom<Int> for String {
+  @@doc """
+  Parse the string as an `Int`, returning an error result on invalid input.
+  ## REPL
+  xldr(1)> try_from("42", Int)
+  Ok(42)
+  """
   def try_from(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
     String::try_to_int(self)
   }
 }
 
 impl TryFrom<Boolean> for String {
+  @@doc """
+  Parse the string as a `Boolean`, returning an error result on invalid input.
+  ## REPL
+  xldr(1)> try_from("True", Boolean)
+  Ok(True)
+  """
   def try_from(self: Self, to: TypeRef<Boolean>) -> Result<Boolean, Error> {
     String::try_to_boolean(self)
   }
 }
 
 impl Eq for String {
+  @@doc """
+  Return `True` when both string values are equal.
+  ## REPL
+  xldr(1)> eq("a", "a")
+  True
+  """
   def eq(self: Self, rhs: Self) -> Boolean {
     self == rhs
   }
 
+  @@doc """
+  Return `True` when the string values differ.
+  ## REPL
+  xldr(1)> neq("a", "b")
+  True
+  """
   def neq(self: Self, rhs: Self) -> Boolean {
     self != rhs
   }
 }
 
 impl Concat for String {
+  @@doc """
+  Return the concatenation of the two string values.
+  ## REPL
+  xldr(1)> concat("ab", "cd")
+  "abcd"
+  """
   def concat(self: Self, rhs: Self) -> Self {
     self ++ rhs
   }
