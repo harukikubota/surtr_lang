@@ -41,6 +41,12 @@ pub struct DeclarationEntry {
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ImplTargetResolution {
+    Unique(DeclarationKind),
+    Ambiguous,
+}
+
 pub(super) fn is_module_visible_declaration(kind: &DeclarationKind) -> bool {
     !matches!(kind, DeclarationKind::BuiltinType)
 }
@@ -60,12 +66,8 @@ fn normalize_impl_method_name(target: &str, method_name: &str) -> String {
     format!("{}::{}", target, method_name)
 }
 
-fn impl_method_module_path(module_path: &str, target: &str) -> String {
-    if module_path.is_empty() {
-        target.to_string()
-    } else {
-        format!("{}::{}", module_path, target)
-    }
+fn impl_method_module_path(_module_path: &str, target: &str) -> String {
+    target.to_string()
 }
 
 pub(super) fn trait_method_qualified_name(trait_name: &str, method_name: &str) -> String {
@@ -128,6 +130,58 @@ pub(super) fn trait_impl_method_qualified_name(
         method_name,
         span_start
     )
+}
+
+pub(super) fn collect_stage_impl_target_resolutions(
+    stage: &[StagedModuleAst],
+) -> HashMap<String, ImplTargetResolution> {
+    let mut resolutions = HashMap::new();
+    for module in stage {
+        for stmt in &module.ast {
+            let (name, kind) = match stmt {
+                Ast::StructDef(_, name, _) => (name, DeclarationKind::Struct),
+                Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
+                Ast::RecordDef(_, name, _) => (name, DeclarationKind::Record),
+                Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
+                _ => continue,
+            };
+            match resolutions.get(name) {
+                None => {
+                    resolutions.insert(name.clone(), ImplTargetResolution::Unique(kind));
+                }
+                Some(ImplTargetResolution::Unique(_)) | Some(ImplTargetResolution::Ambiguous) => {
+                    resolutions.insert(name.clone(), ImplTargetResolution::Ambiguous);
+                }
+            }
+        }
+    }
+    resolutions
+}
+
+fn resolve_impl_target_kind(
+    target: &str,
+    span: &Span,
+    targets: &HashMap<String, ImplTargetResolution>,
+) -> Result<DeclarationKind, ResolveError> {
+    match targets.get(target) {
+        Some(ImplTargetResolution::Unique(kind)) => Ok(kind.clone()),
+        Some(ImplTargetResolution::Ambiguous) => Err(ResolveError {
+            message: format!(
+                "impl target `{}` is ambiguous within the current stage",
+                target
+            ),
+            span: span.clone(),
+            related_labels: Vec::new(),
+        }),
+        None => Err(ResolveError {
+            message: format!(
+                "impl target `{}` must be a struct or enum defined in the current stage",
+                target
+            ),
+            span: span.clone(),
+            related_labels: Vec::new(),
+        }),
+    }
 }
 
 fn rewrite_self_type(ty: AstTy, target: &str) -> AstTy {
@@ -469,42 +523,12 @@ pub fn precollect_declaration_index(
     let mut index = DeclarationIndex::new();
     let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
     for (stage_index, stage) in module_stages.iter().enumerate() {
+        let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
-            let mut local_types: HashMap<String, DeclarationKind> = HashMap::new();
-            for stmt in &module.ast {
-                match stmt {
-                    Ast::StructDef(_, name, _) => {
-                        local_types.insert(name.clone(), DeclarationKind::Struct);
-                    }
-                    Ast::EnumDef(_, name, _, _, _) => {
-                        local_types.insert(name.clone(), DeclarationKind::Enum);
-                    }
-                    Ast::RecordDef(_, name, _) => {
-                        local_types.insert(name.clone(), DeclarationKind::Record);
-                    }
-                    Ast::DeferrorDef(_, name, _, _, _) => {
-                        local_types.insert(name.clone(), DeclarationKind::Deferror);
-                    }
-                    _ => {}
-                }
-            }
-
             for stmt in &module.ast {
                 if let Ast::ImplDef(span, target, methods, _) = stmt {
-                    let Some(target_kind) = local_types.get(target) else {
-                        return Err(ResolveError {
-                            message: format!(
-                                "impl target `{}` must be a locally defined struct or enum",
-                                target
-                            ),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    };
-                    if !matches!(
-                        target_kind,
-                        &DeclarationKind::Struct | &DeclarationKind::Enum
-                    ) {
+                    let target_kind = resolve_impl_target_kind(target, span, &stage_impl_targets)?;
+                    if !matches!(target_kind, DeclarationKind::Struct | DeclarationKind::Enum) {
                         return Err(ResolveError {
                             message: format!(
                                 "impl target `{}` must be struct or enum (record is not supported)",
@@ -515,11 +539,7 @@ pub fn precollect_declaration_index(
                         });
                     }
 
-                    let target_fq = if module.module_path.is_empty() {
-                        target.clone()
-                    } else {
-                        format!("{}::{}", module.module_path, target)
-                    };
+                    let target_fq = target.clone();
                     if let Some(first_span) = seen_impl_targets.get(&target_fq) {
                         return Err(ResolveError {
                             message: format!(
@@ -547,7 +567,7 @@ pub fn precollect_declaration_index(
                         let (method_span, method_name, kind, attrs) = match method {
                             Ast::Def(method_span, method_name, _, _, _, _, attrs) => {
                                 let kind = if method_name == "new" {
-                                    if !matches!(target_kind, &DeclarationKind::Struct) {
+                                    if !matches!(target_kind, DeclarationKind::Struct) {
                                         return Err(ResolveError {
                                             message: "`new` is only allowed in impl blocks for struct types"
                                                 .to_string(),
@@ -910,24 +930,35 @@ pub fn precollect_declaration_index(
 
 impl Resolver {
     pub(super) fn lower_impl_defs(&self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
-        let mut local_types: HashMap<String, DeclarationKind> = HashMap::new();
-        for stmt in &stmts {
-            match stmt {
-                Ast::StructDef(_, name, _) => {
-                    local_types.insert(name.clone(), DeclarationKind::Struct);
+        let local_impl_targets = if self.current_stage_impl_targets.is_none() {
+            let mut local_targets = HashMap::new();
+            for stmt in &stmts {
+                let (name, kind) = match stmt {
+                    Ast::StructDef(_, name, _) => (name, DeclarationKind::Struct),
+                    Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
+                    Ast::RecordDef(_, name, _) => (name, DeclarationKind::Record),
+                    Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
+                    _ => continue,
+                };
+                match local_targets.get(name) {
+                    None => {
+                        local_targets.insert(name.clone(), ImplTargetResolution::Unique(kind));
+                    }
+                    Some(ImplTargetResolution::Unique(_))
+                    | Some(ImplTargetResolution::Ambiguous) => {
+                        local_targets.insert(name.clone(), ImplTargetResolution::Ambiguous);
+                    }
                 }
-                Ast::EnumDef(_, name, _, _, _) => {
-                    local_types.insert(name.clone(), DeclarationKind::Enum);
-                }
-                Ast::RecordDef(_, name, _) => {
-                    local_types.insert(name.clone(), DeclarationKind::Record);
-                }
-                Ast::DeferrorDef(_, name, _, _, _) => {
-                    local_types.insert(name.clone(), DeclarationKind::Deferror);
-                }
-                _ => {}
             }
-        }
+            Some(local_targets)
+        } else {
+            None
+        };
+        let impl_targets = self
+            .current_stage_impl_targets
+            .as_ref()
+            .or(local_impl_targets.as_ref())
+            .expect("impl target resolutions must exist");
 
         let mut lowered = Vec::new();
         let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
@@ -935,20 +966,8 @@ impl Resolver {
         for stmt in stmts {
             match stmt {
                 Ast::ImplDef(span, target, methods, _attrs) => {
-                    let Some(target_kind) = local_types.get(&target) else {
-                        return Err(ResolveError {
-                            message: format!(
-                                "impl target `{}` must be a locally defined struct or enum",
-                                target
-                            ),
-                            span,
-                            related_labels: Vec::new(),
-                        });
-                    };
-                    if !matches!(
-                        target_kind,
-                        &DeclarationKind::Struct | &DeclarationKind::Enum
-                    ) {
+                    let target_kind = resolve_impl_target_kind(&target, &span, impl_targets)?;
+                    if !matches!(target_kind, DeclarationKind::Struct | DeclarationKind::Enum) {
                         return Err(ResolveError {
                             message: format!(
                                 "impl target `{}` must be struct or enum (record is not supported)",
@@ -992,7 +1011,7 @@ impl Resolver {
                                 attrs,
                             ) => {
                                 if method_name == "new"
-                                    && !matches!(target_kind, &DeclarationKind::Struct)
+                                    && !matches!(target_kind, DeclarationKind::Struct)
                                 {
                                     return Err(ResolveError {
                                         message:

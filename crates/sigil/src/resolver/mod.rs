@@ -28,8 +28,8 @@ pub use self::declarations::{
 pub use self::session::{SigilCheckpoint, SigilSession};
 
 use self::declarations::{
-    assign_declaration_uids, declaration_uid_kind_map, trait_impl_method_qualified_name,
-    trait_method_qualified_name,
+    assign_declaration_uids, collect_stage_impl_target_resolutions, declaration_uid_kind_map,
+    trait_impl_method_qualified_name, trait_method_qualified_name,
 };
 use self::imports::{build_global_scope, build_module_scope};
 
@@ -72,6 +72,7 @@ pub fn resolve_staged_program(
     next_local_id = next_local_id.max(global_scope.next_id());
 
     for (stage_index, stage) in module_stages.iter().enumerate() {
+        let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
             let mut scope = build_module_scope(
                 &global_scope,
@@ -88,6 +89,7 @@ pub fn resolve_staged_program(
             resolver.current_module_path = Some(module.module_path.clone());
             resolver.declaration_uids = declaration_uids.clone();
             resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
+            resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
             resolver.allow_top_level_shadowing = true;
             resolved.extend(resolver.resolve_program(module.ast.clone())?);
             next_local_id = resolver.scope.next_id();
@@ -143,5 +145,6 @@ struct Resolver {
     declaration_uids: HashMap<String, u32>,
     declaration_uid_kinds: HashMap<u32, DeclarationKind>,
     current_module_path: Option<String>,
+    current_stage_impl_targets: Option<HashMap<String, declarations::ImplTargetResolution>>,
     allow_top_level_shadowing: bool,
 }

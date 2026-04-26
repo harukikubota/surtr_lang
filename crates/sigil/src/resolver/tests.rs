@@ -276,6 +276,108 @@ impl User {
 }
 
 #[test]
+fn test_precollect_allows_impl_target_defined_in_another_file_same_stage() {
+    let module_stages = vec![vec![
+        staged_module(
+            "",
+            parse_module_ast(
+                r#"defstruct User {
+  name: String,
+}"#,
+                "",
+            ),
+        ),
+        staged_module(
+            "",
+            parse_module_ast(
+                r#"impl User {
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+                "",
+            ),
+        ),
+    ]];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    let normalize = index
+        .get("User::normalize")
+        .expect("impl method should be indexed");
+    assert_eq!(normalize.module_path, "User");
+    assert_eq!(normalize.kind, DeclarationKind::ImplMethod);
+}
+
+#[test]
+fn test_resolve_allows_impl_target_defined_in_another_file_same_stage() {
+    let module_stages = vec![vec![
+        staged_module(
+            "",
+            parse_module_ast(
+                r#"defstruct User {
+  name: String,
+}"#,
+                "",
+            ),
+        ),
+        staged_module(
+            "",
+            parse_module_ast(
+                r#"impl User {
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+                "",
+            ),
+        ),
+    ]];
+
+    let resolved = resolve_user_with_modules("value = 0", &module_stages)
+        .expect("split impl in same stage should resolve");
+    assert!(resolved
+        .iter()
+        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "User::normalize")));
+}
+
+#[test]
+fn test_impl_owner_uses_target_name_not_declaring_module_path() {
+    let module_stages = vec![vec![staged_module(
+        "Types",
+        parse_module_ast(
+            r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+            "Types",
+        ),
+    )]];
+
+    let declaration_index =
+        precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    assert!(declaration_index.contains_key("User::new"));
+    assert!(declaration_index.contains_key("User::normalize"));
+    assert!(!declaration_index.contains_key("Types::User::normalize"));
+
+    let resolved = resolve_user_with_modules(
+        r#"user = User("alice")
+normalized = User::normalize(user)"#,
+        &module_stages,
+    )
+    .expect("qualified impl calls should resolve through type owner");
+    assert!(resolved
+        .iter()
+        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "User::normalize")));
+}
+
+#[test]
 fn test_precollect_trait_methods_as_trait_namespace_members() {
     let module_stages = vec![vec![staged_module(
         "Numeric",

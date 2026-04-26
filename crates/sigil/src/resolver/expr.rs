@@ -104,7 +104,12 @@ impl Resolver {
             {
                 ResolveError {
                     message: Self::undefined_callable_arity_message(func, arity).unwrap_or_else(
-                        || format!("Undefined variable or function: {}", path.segments.join("::")),
+                        || {
+                            format!(
+                                "Undefined variable or function: {}",
+                                path.segments.join("::")
+                            )
+                        },
                     ),
                     span: err.span,
                     related_labels: Vec::new(),
@@ -168,6 +173,7 @@ impl Resolver {
                 (1, DeclarationKind::ResultCtor),
             ]),
             current_module_path: None,
+            current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
         }
     }
@@ -182,6 +188,7 @@ impl Resolver {
                 (1, DeclarationKind::ResultCtor),
             ]),
             current_module_path: None,
+            current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
         }
     }
@@ -205,6 +212,7 @@ impl Resolver {
         child.declaration_uids = self.declaration_uids.clone();
         child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         child.current_module_path = self.current_module_path.clone();
+        child.current_stage_impl_targets = self.current_stage_impl_targets.clone();
         child.allow_top_level_shadowing = self.allow_top_level_shadowing;
         let out = f(&mut child)?;
         self.scope.advance_next_id_to(child.scope.next_id());
@@ -411,9 +419,9 @@ impl Resolver {
                 }
 
                 if Self::conversion_call_head(&func).is_some() {
-                    let resolved_func = self
-                        .resolve_node(*func.clone())
-                        .map_err(|err| Self::map_undefined_callable_error(err, &func, args.len()))?;
+                    let resolved_func = self.resolve_node(*func.clone()).map_err(|err| {
+                        Self::map_undefined_callable_error(err, &func, args.len())
+                    })?;
                     if args.len() != 2 {
                         return Err(ResolveError {
                             message: "from/try_from expects exactly 2 positional arguments".into(),
