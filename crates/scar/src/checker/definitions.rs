@@ -1374,6 +1374,8 @@ impl Checker {
         if let Some(ty) = self.env.lookup_var(id.unique_id).cloned() {
             match &ty {
                 Ty::BuiltinFunc { params, ret, .. } => {
+                    let callable_hint =
+                        Some(self.call_target_signature_hint_for_id(id, params, ret.as_ref()));
                     if args.len() != params.len() {
                         return Err(TypeError {
                             message: format!(
@@ -1382,7 +1384,7 @@ impl Checker {
                                 args.len()
                             ),
                             span: span.clone(),
-                            hint: None,
+                            hint: callable_hint.clone(),
                         });
                     }
 
@@ -1418,7 +1420,7 @@ impl Checker {
                                     self.ty_name(&typed_val.ty)
                                 ),
                                 span: typed_val.span.clone(),
-                                hint: None,
+                                hint: callable_hint.clone(),
                             });
                         }
                         typed_args.push(typed_val);
@@ -1438,8 +1440,14 @@ impl Checker {
                     });
                 }
                 Ty::UserFunc { params, ret, .. } => {
-                    let typed_args =
-                        self.typecheck_user_function_args(span, id.unique_id, params, args, None)?;
+                    let callable_hint = self.call_target_signature_hint_for_id(id, params, ret);
+                    let typed_args = self.typecheck_user_function_args(
+                        span,
+                        id.unique_id,
+                        params,
+                        args,
+                        Some(callable_hint.as_str()),
+                    )?;
                     return Ok(TypedNode {
                         ty: ret.as_ref().clone(),
                         span: span.clone(),
@@ -1454,6 +1462,8 @@ impl Checker {
                     });
                 }
                 Ty::Func(params, ret) => {
+                    let callable_hint =
+                        self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()));
                     if args
                         .iter()
                         .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -1472,7 +1482,7 @@ impl Checker {
                                 args.len()
                             ),
                             span: span.clone(),
-                            hint: None,
+                            hint: callable_hint.clone(),
                         });
                     }
 
@@ -1502,7 +1512,7 @@ impl Checker {
                                     self.ty_name(&typed.ty)
                                 ),
                                 span: typed.span.clone(),
-                                hint: None,
+                                hint: callable_hint.clone(),
                             });
                         }
                         typed_args.push(typed);

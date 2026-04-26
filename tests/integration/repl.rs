@@ -850,6 +850,34 @@ fn repl_numeric_trait_errors_list_available_implementations() {
         "expected trait implementation list in stderr, got:\n{}",
         stderr
     );
+    assert!(
+        stderr.contains("Help: Call target signature: Numeric::add("),
+        "expected trait call signature help in stderr, got:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn repl_call_errors_show_target_signature() {
+    let output = run_repl_session("print()\nprint(1)\nNumeric::add(2, \"a\")\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("Help: Call target signature: Kernel::print(arg1: String) -> Unit"),
+        "expected builtin call signature help in stderr, got:\n{}",
+        stderr
+    );
+    assert!(
+        stderr.contains("Help: Call target signature: Numeric::add("),
+        "expected Numeric call signature help in stderr, got:\n{}",
+        stderr
+    );
 }
 
 #[test]

@@ -661,6 +661,68 @@ impl Checker {
             .map(|sig| format!("Callable type signature: {}", sig))
     }
 
+    pub(super) fn call_target_signature_hint(
+        &self,
+        display_name: &str,
+        params: &[Ty],
+        ret: &Ty,
+        first_param_name: Option<&str>,
+    ) -> String {
+        let param_list = params
+            .iter()
+            .enumerate()
+            .map(|(idx, ty)| {
+                let name = match (idx, first_param_name) {
+                    (0, Some(name)) => name.to_string(),
+                    _ => format!("arg{}", idx + 1),
+                };
+                format!("{}: {}", name, self.ty_name(ty))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Call target signature: {}({}) -> {}",
+            display_name,
+            param_list,
+            self.ty_name(ret)
+        )
+    }
+
+    pub(super) fn callable_target_display_name(&self, id: &ResolvedId) -> String {
+        if let Some(qualified_name) = id.qualified_name.as_deref() {
+            return callable_definition_display_name(qualified_name, &id.name);
+        }
+        if sindr::builtin::builtin_meta_by_name(&id.name).is_some() {
+            return format!("Kernel::{}", id.name);
+        }
+        id.name.clone()
+    }
+
+    pub(super) fn call_target_signature_hint_for_id(
+        &self,
+        id: &ResolvedId,
+        params: &[Ty],
+        ret: &Ty,
+    ) -> String {
+        let display_name = self.callable_target_display_name(id);
+        self.call_target_signature_hint(&display_name, params, ret, None)
+    }
+
+    pub(super) fn trait_method_signature_hint(
+        &self,
+        trait_display_name: &str,
+        method_name: &str,
+        params: &[Ty],
+        ret: &Ty,
+    ) -> String {
+        self.call_target_signature_hint(
+            &format!("{}::{}", trait_display_name, method_name),
+            params,
+            ret,
+            Some("self"),
+        )
+    }
+
     pub(super) fn callable_definition_signature_hint(
         &self,
         func: &TypedNode,
@@ -1114,6 +1176,14 @@ impl Checker {
 
         let trait_display_name = self.trait_display_name(trait_name);
         let trait_impl_summary = self.trait_implementation_summary(trait_name);
+        let trait_signature_hint = |checker: &Self| {
+            let params = param_tys
+                .iter()
+                .map(|ty| checker.resolve_ty(ty))
+                .collect::<Vec<_>>();
+            let ret = checker.resolve_ty(&ret_ty);
+            checker.trait_method_signature_hint(&trait_display_name, method_name, &params, &ret)
+        };
 
         if args.len() != param_tys.len() {
             return Err(TypeError {
@@ -1125,7 +1195,7 @@ impl Checker {
                     args.len()
                 ),
                 span: span.clone(),
-                hint: None,
+                hint: Some(trait_signature_hint(self)),
             });
         }
 
@@ -1155,7 +1225,7 @@ impl Checker {
                                 left_ty, right_ty, trait_impl_summary
                             ),
                             span: arg.span.clone(),
-                            hint: None,
+                            hint: Some(trait_signature_hint(self)),
                         });
                     }
                     if self.trait_matches_short_name(trait_name, "Concat") {
@@ -1165,7 +1235,7 @@ impl Checker {
                                 left_ty, right_ty, trait_impl_summary
                             ),
                             span: arg.span.clone(),
-                            hint: None,
+                            hint: Some(trait_signature_hint(self)),
                         });
                     }
                 }
@@ -1184,7 +1254,7 @@ impl Checker {
                             trait_impl_summary
                         ),
                         span: arg.span.clone(),
-                        hint: None,
+                        hint: Some(trait_signature_hint(self)),
                     });
                 }
                 return Err(TypeError {
@@ -1197,7 +1267,7 @@ impl Checker {
                         trait_impl_summary
                     ),
                     span: arg.span.clone(),
-                    hint: None,
+                    hint: Some(trait_signature_hint(self)),
                 });
             }
         }
@@ -1248,7 +1318,7 @@ impl Checker {
                     trait_call_summary
                 ),
                 span: receiver_span,
-                hint: None,
+                hint: Some(trait_signature_hint(self)),
             })?;
 
         Ok(TypedNode {
@@ -2146,7 +2216,7 @@ impl Checker {
                         args.len()
                     ),
                     span: span.clone(),
-                    hint: None,
+                    hint: callable_hint.map(str::to_string),
                 });
             }
 
@@ -2205,7 +2275,7 @@ impl Checker {
                     args.len()
                 ),
                 span: span.clone(),
-                hint: None,
+                hint: callable_hint.map(str::to_string),
             });
         }
 
@@ -2716,6 +2786,11 @@ impl Checker {
 
         match &func_ty {
             Ty::BuiltinFunc { name, params, ret } => {
+                let callable_hint = if let TypedInner::Var(id) = &typed_func.node {
+                    Some(self.call_target_signature_hint_for_id(id, params, ret.as_ref()))
+                } else {
+                    Some(self.call_target_signature_hint(name, params, ret.as_ref(), None))
+                };
                 if args
                     .iter()
                     .any(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)))
@@ -2736,7 +2811,7 @@ impl Checker {
                             args.len()
                         ),
                         span: span.clone(),
-                        hint: None,
+                        hint: callable_hint.clone(),
                     });
                 }
                 let typed_args: Vec<TypedNode> = args
@@ -2758,7 +2833,7 @@ impl Checker {
                                 self.ty_name(&arg.ty)
                             ),
                             span: arg.span.clone(),
-                            hint: None,
+                            hint: callable_hint.clone(),
                         });
                     }
                 }

@@ -1,3 +1,3 @@
 phase: typecheck
 contains: Argument type mismatch: expected Int, got String
-contains: expected Int, got String
+contains: Callable definition signature: __Script::type_call_arg_mismatch::add_one(x: Int) -> Int

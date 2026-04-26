@@ -1606,6 +1606,28 @@ answer = inc("oops")"#,
     }
 
     #[test]
+    fn builtin_function_arity_reports_call_target_signature() {
+        let resolved = resolve_with_builtin_prelude("value = print()");
+        let err = typecheck(resolved).expect_err("builtin arity mismatch should fail");
+        let hint = err.hint.as_deref().expect("builtin signature hint");
+        assert_eq!(
+            hint,
+            "Call target signature: Kernel::print(arg1: String) -> Unit"
+        );
+    }
+
+    #[test]
+    fn builtin_function_mismatch_reports_call_target_signature() {
+        let resolved = resolve_with_builtin_prelude("value = print(1)");
+        let err = typecheck(resolved).expect_err("builtin type mismatch should fail");
+        let hint = err.hint.as_deref().expect("builtin signature hint");
+        assert_eq!(
+            hint,
+            "Call target signature: Kernel::print(arg1: String) -> Unit"
+        );
+    }
+
+    #[test]
     fn capture_application_mismatch_reports_callable_type_signature() {
         let resolved = resolve_with_builtin_prelude_in_script_module(
             r#"def add(x: Int, y: Int) -> Int {
@@ -2220,6 +2242,11 @@ b = double(1.5)"#,
         assert!(err
             .message
             .contains("Numeric is implemented for: Float, Int"));
+        assert!(
+            err.hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("Call target signature: Numeric::add"))
+        );
     }
 
     #[test]
@@ -2232,6 +2259,11 @@ b = double(1.5)"#,
         assert!(err
             .message
             .contains("Numeric is implemented for: Float, Int"));
+        assert!(
+            err.hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("Call target signature: Numeric::add"))
+        );
     }
 
     #[test]
