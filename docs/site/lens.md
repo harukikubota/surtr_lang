@@ -113,7 +113,21 @@ defstruct User {
   profile: Profile,
 }
 
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+impl User {
+  def new(profile: Profile) -> Self {
+    User { profile: profile }
+  }
+}
+
 profile_name = Lens::compose(User.profile, Profile.name)
+# or
+profile_name = User.profile.name
 ```
 
 ## 制約
