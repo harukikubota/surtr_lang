@@ -89,6 +89,10 @@ print(match user {
   User(name, age) => name ++ ":" ++ to_string(age),
   _ => "fallback",
 })
+
+User(name, age) =? user
+print(name)
+# => "alice"
 ```
 
 押さえる点は次のとおりです。
