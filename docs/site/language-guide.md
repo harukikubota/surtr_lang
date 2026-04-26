@@ -215,6 +215,50 @@ deftrait Decode<$To> {
 このときも `TypeRef<$To>` は ordinary value にはならず、
 trait method parameter の中だけで target type witness として使われます。
 
+### 5.4 関数コールと関数値
+
+Surtr では、次の見た目がそれぞれ別物です。
+
+- call 式: `add(1, 2)`
+- capture: `&add`, `&User::get_name`, `&add(10)`
+- closure: `{|x| x + 1}`
+- backtick FuncLiteral: ``1 `add` 2``
+
+まず普通の call はその場で実行されます。
+
+```surtr
+def add(x: Int, y: Int) -> Int { x + y }
+
+sum = add(1, 2)
+```
+
+一方で、関数演算子の compose 系が欲しいのは「実行結果」ではなく「あとで呼ぶ値」です。  
+そのため、関数値が欲しいときは capture か closure を使います。
+
+```surtr
+inc = &add(1)
+show_name = &User::get_name
+render = {|name| "[" ++ name ++ "]"}
+pipeline = &String::trim >> render
+```
+
+裸の関数参照は値になりません。
+
+```surtr
+pipeline = trim >> render   # 不可
+pipeline = &trim >> render  # 可
+```
+
+backtick FuncLiteral は中置 call の sugar です。
+
+```surtr
+10 `+` 5
+7 `eq` 7
+```
+
+これは関数値ではないので、`f = `eq`` のような束縛はできません。  
+関数コール・capture・closure・FuncLiteral の違いをまとまって見たいときは `./callables.md` を参照してください。
+
 ## 6. 条件分岐とパターンマッチ
 
 Surtr では `if` と `match` が重要です。
@@ -492,6 +536,7 @@ capture や closure も使えます。
 ```surtr
 print(to_string(4 |> &add(1)))
 print(to_string(4 |> {|x| x + 1}))
+print(" alice " |> String::trim() |> String::surround("[", "]"))
 ```
 
 関数値を変数に束縛して渡すこともできます。
@@ -581,6 +626,7 @@ Surtr では、compose の左右は関数値です。capture、closure、また�
 parser = &parse
 validator = &validate
 parser >=> validator
+normalizer = &String::trim >> {|text| "[" ++ text ++ "]"}
 ```
 
 次のような call 式は compose できません。
@@ -620,6 +666,7 @@ def eq(left: Int, right: Int) -> Boolean {
 
 print(to_string(10 `+` 5))
 print(to_string(7 `eq` 7))
+print("a" `concat` "b")
 ```
 
 この構文は「関数値を作る」ものではなく、その場で 2 引数 call として解釈されます。

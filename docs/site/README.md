@@ -16,6 +16,7 @@ REPL でそのまま試しやすい題材を優先しており、実行例は `s
 - [Kernel](./kernel.md)
 - [Regex](./regex.md)
 - [パターンマッチ](./pattern-matching.md)
+- [関数コールと関数値](./callables.md)
 - [関数演算子](./function-operators.md)
 - [エラーハンドリング](./error-handling.md)
 - [Extractor](./extractors.md)

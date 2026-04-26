@@ -87,6 +87,7 @@ xldr(2)>
 ## 関連ページ
 
 - `Result` や `match` は `./pattern-matching.md`
+- 関数コール / capture / closure / FuncLiteral は `./callables.md`
 - 型注釈は `./type-annotations.md`
 - trait 経由の変換は `./trait-impls.md`
 - import / include は `./language-features.md`
