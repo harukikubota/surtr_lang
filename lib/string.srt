@@ -73,7 +73,7 @@ Groups string-oriented helpers.
 This module is loaded with the standard library and documented from source so
 the module docs and the actual surface stay in one place.
 """
-defmod String {
+impl String {
   defp _from_chars_go(chars: List<String>, acc: String) -> String {
     match chars {
       [] => acc,

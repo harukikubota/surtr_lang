@@ -10,7 +10,7 @@ contract.
 Boolean module.
 Groups boolean-specific helpers and connective-style combinators.
 """
-defmod Boolean {
+impl Boolean {
   @@doc """
   Return the logical negation of `value`.
   ## REPL

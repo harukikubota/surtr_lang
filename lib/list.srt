@@ -23,7 +23,7 @@ Groups helpers for transforming list values in source code.
 Empty lists usually need a type annotation such as `List<Int>`, and `[]` is the
 canonical Nil value.
 """
-defmod List {
+impl List {
   @@doc """
   Prepend one element onto the front of a list.
   `cons` is the canonical value-level constructor for list growth.

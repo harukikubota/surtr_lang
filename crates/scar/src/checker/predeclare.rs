@@ -370,6 +370,22 @@ impl Checker {
         }
     }
 
+    pub(super) fn split_impl_method_id(id: &ResolvedId) -> Option<(String, String)> {
+        if let Some(split) = Self::split_impl_method_name(&id.name) {
+            return Some(split);
+        }
+
+        let qualified = id.qualified_name.as_deref()?;
+        let mut parts = qualified.rsplitn(3, "::");
+        let method = parts.next()?;
+        let target = parts.next()?;
+        if target.is_empty() || method.is_empty() {
+            None
+        } else {
+            Some((target.to_string(), method.to_string()))
+        }
+    }
+
     pub(super) fn current_impl_self_ty(&self) -> Option<Ty> {
         let symbol = self.current_function_symbol.as_deref()?;
         let mut parts = symbol.split("::").collect::<Vec<_>>();
@@ -489,7 +505,7 @@ impl Checker {
                     struct_decl_spans.insert(id.name.clone(), id.span.clone());
                 }
                 Resolved::Def(_, id, _, _, _, _, _) => {
-                    if let Some((target, method)) = Self::split_impl_method_name(&id.name) {
+                    if let Some((target, method)) = Self::split_impl_method_id(id) {
                         if method == "new" {
                             structs_with_new.insert(target);
                         }
@@ -1386,8 +1402,11 @@ impl Checker {
                         },
                     );
                     self.user_func_params.insert(id.unique_id, param_names);
-                    if Self::split_impl_method_name(&id.name).is_some() {
-                        self.impl_method_uids.insert(id.name.clone(), id.unique_id);
+                    if let Some(qualified_name) = id.qualified_name.as_ref() {
+                        if Self::split_impl_method_name(qualified_name).is_some() {
+                            self.impl_method_uids
+                                .insert(qualified_name.clone(), id.unique_id);
+                        }
                     }
                     fun_idx += 1;
                 }
@@ -1520,11 +1539,11 @@ impl Checker {
                 );
                 self.user_func_params
                     .insert(method.function_id.unique_id, param_names);
-                if Self::split_impl_method_name(&method.function_id.name).is_some() {
-                    self.impl_method_uids.insert(
-                        method.function_id.name.clone(),
-                        method.function_id.unique_id,
-                    );
+                if let Some(qualified_name) = method.function_id.qualified_name.as_ref() {
+                    if Self::split_impl_method_name(qualified_name).is_some() {
+                        self.impl_method_uids
+                            .insert(qualified_name.clone(), method.function_id.unique_id);
+                    }
                 }
                 fun_idx += 1;
             }

@@ -459,6 +459,26 @@ pub fn builtin_type_meta_by_name(name: &str) -> Option<&'static BuiltinTypeMeta>
     BUILTIN_TYPE_METAS.iter().find(|meta| meta.name == name)
 }
 
+pub fn builtin_type_supports_inherent_impl(name: &str) -> bool {
+    matches!(
+        name,
+        "Int"
+            | "Float"
+            | "String"
+            | "Boolean"
+            | "Unit"
+            | "Error"
+            | "Regex"
+            | "RegexCaptures"
+            | "RegexMatch"
+            | "List"
+            | "HashMap"
+            | "Generator"
+            | "Result"
+            | "Lens"
+    )
+}
+
 pub fn builtin_uid(builtin_id: u16) -> u32 {
     BUILTIN_UID_BASE + u32::from(builtin_id)
 }

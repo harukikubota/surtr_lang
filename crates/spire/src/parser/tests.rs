@@ -290,6 +290,38 @@ impl User {
 }
 
 #[test]
+fn test_impl_parses_and_keeps_builtin_methods() {
+    let ast = parse_with_context(
+        r#"@@builtin type Int
+
+impl Int {
+  @@doc """Builtin int helper."""
+  @@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("builtin impl method should parse");
+
+    let impl_node = ast
+        .iter()
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .expect("expected impl node");
+    match impl_node {
+        Ast::ImplDef(_, target, methods, _) => {
+            assert_eq!(target, "Int");
+            assert!(matches!(
+                methods.as_slice(),
+                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Generic(_, ret, _)), attrs)]
+                    if name == "safe_mod"
+                    && ret == "Result"
+                    && attrs.doc.as_deref() == Some("Builtin int helper.")
+            ));
+        }
+        _ => panic!("Expected ImplDef"),
+    }
+}
+
+#[test]
 fn test_trait_def_parses_method_signatures() {
     let ast = parse_with_context(
         r#"deftrait Numeric {

@@ -12,7 +12,7 @@ Provides immutable map helpers backed by runtime builtins.
 Keys are always `String`.
 Visible ordering is deterministic and sorted by key.
 """
-defmod HashMap {
+impl HashMap {
   defp _map_values_go(
     source: HashMap<$A>,
     remaining_keys: List<String>,

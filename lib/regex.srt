@@ -29,7 +29,7 @@ Regex module.
 Provides Rust-regex-backed helpers for pattern compilation, matching, capture
 access, replacement, and text splitting.
 """
-defmod Regex {
+impl Regex {
   @@doc """
   Compile a pattern string into a `Regex` value.
   Invalid syntax returns `Err(RegexCompileError(...))`.
@@ -128,7 +128,7 @@ defmod Regex {
 Capture-access module.
 Extracts per-group values from `RegexCaptures`.
 """
-defmod RegexCaptures {
+impl RegexCaptures {
   @@doc """
   Return the whole matched text (`group 0`).
   ## REPL
@@ -176,7 +176,7 @@ defmod RegexCaptures {
 Match-span module.
 Accessors for `RegexMatch`.
 """
-defmod RegexMatch {
+impl RegexMatch {
   @@doc """
   Return matched text.
   ## REPL

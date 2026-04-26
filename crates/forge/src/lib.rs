@@ -99,6 +99,16 @@ mod tests {
                         auto_import: attrs.auto_import,
                     });
                 }
+                Ast::ImplDef(span, target, methods, attrs) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
+                    lowered.push(sigil::StagedModuleAst {
+                        module_path: target,
+                        ast: module_ast,
+                        module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
+                    });
+                }
                 Ast::Import(_, _, _) => {}
                 Ast::ResultCtorDecl(_, _, _, _, _) => shared_result_ctor_contracts.push(stmt),
                 other => shared_global_defs.push(other),

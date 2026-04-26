@@ -61,6 +61,16 @@ pub struct LoweredModuleAst {
     pub auto_import: bool,
 }
 
+pub(crate) fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
+    matches!(
+        lowered
+            .ast
+            .iter()
+            .find(|stmt| !matches!(stmt, spire::ast::Ast::Import(_, _, _))),
+        Some(spire::ast::Ast::ImplDef(_, _, _, _))
+    )
+}
+
 fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
     match ty {
         spire::ast::AstTy::Named(_, name) => name.clone(),
@@ -302,9 +312,14 @@ fn collect_doc_entries_for_ast(
                 }
             }
             spire::ast::Ast::ImplDef(_, target, methods, attrs) => {
+                let impl_doc_name = if module_path == target {
+                    target.clone()
+                } else {
+                    qualified_name(module_path, target)
+                };
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, target),
+                        qualified_name: impl_doc_name,
                         kind: DocKind::Type,
                         module_path: module_path.to_string(),
                         signature: Some(format_impl_signature(target)),
@@ -315,17 +330,40 @@ fn collect_doc_entries_for_ast(
                     match method {
                         spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
+                                let qualified_method_name = if module_path == target {
+                                    format!("{target}::{name}")
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
                                 out.push(DocEntry {
-                                    qualified_name: qualified_name(
-                                        module_path,
-                                        &format!("{target}::{name}"),
-                                    ),
+                                    qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
                                     module_path: module_path.to_string(),
                                     signature: Some(format_impl_method_signature(
                                         target,
                                         name,
                                         type_params,
+                                        params,
+                                        ret_ty,
+                                    )),
+                                    doc: doc.clone(),
+                                });
+                            }
+                        }
+                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
+                            if let Some(doc) = &attrs.doc {
+                                let qualified_method_name = if module_path == target {
+                                    format!("{target}::{name}")
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                                out.push(DocEntry {
+                                    qualified_name: qualified_method_name,
+                                    kind: DocKind::Function,
+                                    module_path: module_path.to_string(),
+                                    signature: Some(format_fun_signature(
+                                        name,
+                                        &[],
                                         params,
                                         ret_ty,
                                     )),
@@ -584,6 +622,24 @@ pub fn lower_module_source_ast(
                     auto_import: attrs.auto_import,
                 });
             }
+            spire::ast::Ast::ImplDef(span, target, methods, attrs) => {
+                let declared_span = span.clone();
+                let module_path = target.clone();
+                let mut module_ast = shared_imports.clone();
+                module_ast.push(spire::ast::Ast::ImplDef(
+                    span,
+                    target,
+                    methods,
+                    attrs.clone(),
+                ));
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    ast: module_ast,
+                    declared_span: Some(declared_span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                });
+            }
             spire::ast::Ast::Import(_, _, _) => {}
             // `Ok` / `Err` are the one top-level std declaration we want to
             // associate with the `Result` module proper. They are surface
@@ -597,7 +653,6 @@ pub fn lower_module_source_ast(
             | spire::ast::Ast::RecordDef(_, _, _)
             | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
             | spire::ast::Ast::EnumDef(_, _, _, _, _)
-            | spire::ast::Ast::ImplDef(_, _, _, _)
             | spire::ast::Ast::BuiltinDecl(_, _, _, _, _)
             | spire::ast::Ast::BuiltinTypeDecl(_, _, _) => {
                 // Std-module files are allowed to carry top-level declarations
@@ -703,11 +758,11 @@ defmod B {
     }
 
     #[test]
-    fn lower_module_source_merges_shared_defs_into_single_defmod() {
+    fn lower_module_source_merges_result_ctors_into_single_impl_owner() {
         let ast = spire::parse_with_context(
             r#"@@builtin type Ok($T) -> Result<$T>
 
-defmod Result {
+impl Result {
   def dummy() { () }
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
@@ -721,17 +776,18 @@ defmod Result {
             |stmt| matches!(stmt, spire::ast::Ast::ResultCtorDecl(_, name, _, _, _) if name == "Ok")
         ));
         assert!(lowered[0].ast.iter().any(
-            |stmt| matches!(stmt, spire::ast::Ast::Def(_, name, _, _, _, _, _) if name == "dummy")
+            |stmt| matches!(stmt, spire::ast::Ast::ImplDef(_, target, methods, _) if target == "Result"
+                && methods.iter().any(|method| matches!(method, spire::ast::Ast::Def(_, name, _, _, _, _, _) if name == "dummy")))
         ));
     }
 
     #[test]
-    fn lower_module_source_keeps_builtin_decls_global_even_with_single_defmod() {
+    fn lower_module_source_keeps_builtin_decls_global_even_with_single_impl_owner() {
         let ast = spire::parse_with_context(
             r#"@@builtin type Int
 @@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 
-defmod Int {
+impl Int {
   def dummy() { () }
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
@@ -880,7 +936,7 @@ impl Numeric for Int {
                 && entry.doc == "Trait docs."
         }));
         assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::User"
+            entry.qualified_name == "User"
                 && entry.kind == DocKind::Type
                 && entry.signature.as_deref() == Some("impl User")
                 && entry.doc == "User helper docs."
@@ -931,7 +987,7 @@ impl Show for Int {
 
         let docs = collect_doc_entries(&stages, &[], None);
         assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::User::new"
+            entry.qualified_name == "User::new"
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref() == Some("User::new(name: String) -> Self")
                 && entry.doc == "Construct a new user value."

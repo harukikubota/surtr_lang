@@ -42,7 +42,7 @@ mod tests {
     const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
     const GENERATOR_MODULE_SOURCE: &str = r#"@@builtin type Generator<$State, $Item>
 
-defmod Generator {}"#;
+impl Generator {}"#;
     const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
     const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/option.srt");
@@ -119,6 +119,16 @@ defmod Generator {}"#;
                         auto_import: attrs.auto_import,
                     });
                 }
+                Ast::ImplDef(span, target, methods, attrs) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
+                    lowered.push(sigil::StagedModuleAst {
+                        module_path: target,
+                        ast: module_ast,
+                        module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
+                    });
+                }
                 Ast::Import(_, _, _) => {}
                 Ast::ResultCtorDecl(_, _, _, _, _) => shared_result_ctor_contracts.push(stmt),
                 other => shared_global_defs.push(other),
@@ -188,6 +198,16 @@ defmod Generator {}"#;
                     module_ast.extend(body);
                     lowered.push(sigil::StagedModuleAst {
                         module_path,
+                        ast: module_ast,
+                        module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
+                    });
+                }
+                Ast::ImplDef(span, target, methods, attrs) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
+                    lowered.push(sigil::StagedModuleAst {
+                        module_path: target,
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
@@ -1659,7 +1679,7 @@ guard = assert(False, make_error(True))"#,
             "Boolean",
             r#"@@builtin type Boolean
 
-defmod Boolean {
+impl Boolean {
   def not(value: Boolean) -> Boolean {
     if(value, False, True)
   }
@@ -1795,9 +1815,7 @@ bad = &add("oops")"#,
             .hint
             .as_deref()
             .expect("callable definition signature hint");
-        assert!(hint.contains(
-            "Callable definition signature: __Script::fixture::add(x: Int, y: Int) -> Int"
-        ));
+        assert!(hint.contains("Callable definition signature: add(x: Int, y: Int) -> Int"));
     }
 
     #[test]
@@ -1815,9 +1833,7 @@ result = add_one("oops")"#,
             .hint
             .as_deref()
             .expect("callable definition signature hint");
-        assert!(hint.contains(
-            "Callable definition signature: __Script::type_call_arg_mismatch::add_one(x: Int) -> Int"
-        ));
+        assert!(hint.contains("Callable definition signature: add_one(x: Int) -> Int"));
         assert!(!hint.contains("__Script::Users::haruca"));
         assert!(hint.contains("Callable definition span: 0.."));
     }
@@ -2559,7 +2575,7 @@ b = double(1.5)"#,
             "String",
             r#"@@builtin type String
 
-defmod String {}
+impl String {}
 
 impl Show for String {
   def to_string(self: Self) -> String {

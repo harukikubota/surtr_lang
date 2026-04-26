@@ -4349,6 +4349,6 @@ fn trim_script_qualified_display_name(qualified_name: &str) -> String {
     {
         format!("{}::{}", parent, name)
     } else {
-        format!("__Script::{}::{}", parent, name)
+        name.to_string()
     }
 }

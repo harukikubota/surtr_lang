@@ -49,7 +49,7 @@ language keeps `Result` distinct from the future general `Enum` surface.
 but they are available without an explicit `import Result`.
 """
 @@autoimport
-defmod Result {
+impl Result {
   defp _all_go(values: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
     match values {
       [] => Ok(List::reverse(acc_rev)),

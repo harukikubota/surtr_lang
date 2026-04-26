@@ -326,6 +326,7 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_ident()?;
+        let type_params = self.parse_decl_type_params()?;
         let mut params = Vec::new();
 
         if matches!(self.peek(), Token::Unit) {
@@ -397,6 +398,7 @@ impl Parser<'_> {
         } else {
             None
         };
+        self.reject_where_clause()?;
 
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -425,7 +427,7 @@ impl Parser<'_> {
                 end: end.end,
             },
             name,
-            Vec::new(),
+            type_params,
             params,
             ret_ty,
             Box::new(body),
@@ -486,13 +488,33 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let mut attrs = DeclAttrs::default();
         let mut saw_annotator = false;
+        let mut saw_builtin = false;
+        let mut start_span: Option<Span> = None;
 
         while let Token::Annotator(name) = self.peek().clone() {
             let annotator_span = self.peek_span();
             saw_annotator = true;
+            if start_span.is_none() {
+                start_span = Some(annotator_span.clone());
+            }
             self.advance();
             self.skip_newlines();
             match name.as_str() {
+                "builtin" => {
+                    if trait_impl_only {
+                        return Err(ParseError::syntax(
+                            "@@builtin is not allowed before trait impl members",
+                            annotator_span,
+                        ));
+                    }
+                    if saw_builtin {
+                        return Err(ParseError::syntax(
+                            "@@builtin may only appear once before an impl member",
+                            annotator_span,
+                        ));
+                    }
+                    saw_builtin = true;
+                }
                 "doc" => {
                     if attrs.doc.is_some() {
                         return Err(ParseError::syntax(
@@ -545,6 +567,24 @@ impl Parser<'_> {
                 "impl body may only contain `def` / `defp` / `defextractor` declarations",
                 self.peek_span(),
             ));
+        }
+
+        if saw_builtin {
+            let start = start_span
+                .map(|span| span.start)
+                .unwrap_or_else(|| self.peek_span().start);
+            return match self.peek() {
+                Token::Def => self.parse_builtin_decl(start, attrs),
+                Token::Defextractor => self.parse_builtin_extractor_decl(start, attrs),
+                Token::Defp => Err(ParseError::syntax(
+                    "@@builtin is not allowed before `defp` impl members",
+                    self.peek_span(),
+                )),
+                _ => Err(ParseError::syntax(
+                    "impl body may only contain `@@builtin def` / `@@builtin defextractor` declarations",
+                    self.peek_span(),
+                )),
+            };
         }
 
         self.parse_impl_method_with_attrs(target, attrs)

@@ -1198,7 +1198,7 @@ pub(crate) fn parse_module_stages_from_sources(
     _compile_unit_kind: CompileUnitKind,
 ) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
     let mut staged_module_asts = Vec::with_capacity(module_stages.len());
-    let mut seen_module_paths: HashMap<String, String> = HashMap::new();
+    let mut seen_module_paths: HashMap<String, (String, bool)> = HashMap::new();
 
     for stage in module_stages {
         let mut stage_ast = Vec::new();
@@ -1220,24 +1220,32 @@ pub(crate) fn parse_module_stages_from_sources(
 
             for lowered in crate::lower_module_source_ast(parsed, None) {
                 if !lowered.module_path.is_empty() {
+                    let is_impl_owner = crate::lowered_module_is_impl_owner(&lowered);
                     let second_file_name = sources
                         .file_name(module.source_id)
                         .unwrap_or("<unknown>")
                         .to_string();
-                    if let Some(first_file_name) = seen_module_paths.get(&lowered.module_path) {
-                        return Err(ModuleStageParseError {
-                            source_id: module.source_id,
-                            kind: ModuleStageParseErrorKind::DuplicateModulePath {
-                                module_path: lowered.module_path.clone(),
-                                first_file_name: first_file_name.clone(),
-                                second_file_name,
-                                span: lowered
-                                    .declared_span
-                                    .unwrap_or(spire::ast::Span { start: 0, end: 0 }),
-                            },
-                        });
+                    if let Some((first_file_name, first_is_impl_owner)) =
+                        seen_module_paths.get(&lowered.module_path)
+                    {
+                        if !(*first_is_impl_owner || is_impl_owner) {
+                            return Err(ModuleStageParseError {
+                                source_id: module.source_id,
+                                kind: ModuleStageParseErrorKind::DuplicateModulePath {
+                                    module_path: lowered.module_path.clone(),
+                                    first_file_name: first_file_name.clone(),
+                                    second_file_name,
+                                    span: lowered
+                                        .declared_span
+                                        .unwrap_or(spire::ast::Span { start: 0, end: 0 }),
+                                },
+                            });
+                        }
                     }
-                    seen_module_paths.insert(lowered.module_path.clone(), second_file_name);
+                    seen_module_paths.insert(
+                        lowered.module_path.clone(),
+                        (second_file_name, is_impl_owner),
+                    );
                 }
 
                 stage_ast.push(sigil::StagedModuleAst {

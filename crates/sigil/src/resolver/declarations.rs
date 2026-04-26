@@ -1,7 +1,7 @@
 use super::scope_init::initialize_scope;
 use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
-use sindr::builtin::builtin_type_meta_by_name;
+use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
@@ -68,6 +68,18 @@ fn normalize_impl_method_name(target: &str, method_name: &str) -> String {
 
 fn impl_method_module_path(_module_path: &str, target: &str) -> String {
     target.to_string()
+}
+
+fn lower_impl_member_name(
+    current_module_path: Option<&str>,
+    target: &str,
+    method_name: &str,
+) -> String {
+    if current_module_path == Some(target) {
+        method_name.to_string()
+    } else {
+        normalize_impl_method_name(target, method_name)
+    }
 }
 
 pub(super) fn trait_method_qualified_name(trait_name: &str, method_name: &str) -> String {
@@ -173,14 +185,20 @@ fn resolve_impl_target_kind(
             span: span.clone(),
             related_labels: Vec::new(),
         }),
-        None => Err(ResolveError {
-            message: format!(
-                "impl target `{}` must be a struct or enum defined in the current stage",
-                target
-            ),
-            span: span.clone(),
-            related_labels: Vec::new(),
-        }),
+        None => {
+            if builtin_type_supports_inherent_impl(target) {
+                Ok(DeclarationKind::BuiltinType)
+            } else {
+                Err(ResolveError {
+                    message: format!(
+                        "impl target `{}` must be a standard type owner or a struct/enum defined in the current stage",
+                        target
+                    ),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                })
+            }
+        }
     }
 }
 
@@ -528,10 +546,15 @@ pub fn precollect_declaration_index(
             for stmt in &module.ast {
                 if let Ast::ImplDef(span, target, methods, _) = stmt {
                     let target_kind = resolve_impl_target_kind(target, span, &stage_impl_targets)?;
-                    if !matches!(target_kind, DeclarationKind::Struct | DeclarationKind::Enum) {
+                    if !matches!(
+                        target_kind,
+                        DeclarationKind::Struct
+                            | DeclarationKind::Enum
+                            | DeclarationKind::BuiltinType
+                    ) {
                         return Err(ResolveError {
                             message: format!(
-                                "impl target `{}` must be struct or enum (record is not supported)",
+                                "impl target `{}` must be a standard type, struct, or enum (record is not supported)",
                                 target
                             ),
                             span: span.clone(),
@@ -581,13 +604,19 @@ pub fn precollect_declaration_index(
                                 };
                                 (method_span, method_name, kind, attrs)
                             }
+                            Ast::BuiltinDecl(method_span, method_name, _, _, attrs) => {
+                                (method_span, method_name, DeclarationKind::Def, attrs)
+                            }
                             Ast::ExtractorDef(method_span, method_name, _, _, _, _, attrs) => {
+                                (method_span, method_name, DeclarationKind::Extractor, attrs)
+                            }
+                            Ast::BuiltinExtractorDecl(method_span, method_name, _, _, attrs) => {
                                 (method_span, method_name, DeclarationKind::Extractor, attrs)
                             }
                             _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "impl body may only contain `def` / `defextractor` declarations"
+                                        "impl body may only contain `def` / `defextractor` / `@@builtin def` / `@@builtin defextractor` declarations"
                                             .to_string(),
                                     span: span.clone(),
                                 related_labels: Vec::new(),
@@ -967,10 +996,15 @@ impl Resolver {
             match stmt {
                 Ast::ImplDef(span, target, methods, _attrs) => {
                     let target_kind = resolve_impl_target_kind(&target, &span, impl_targets)?;
-                    if !matches!(target_kind, DeclarationKind::Struct | DeclarationKind::Enum) {
+                    if !matches!(
+                        target_kind,
+                        DeclarationKind::Struct
+                            | DeclarationKind::Enum
+                            | DeclarationKind::BuiltinType
+                    ) {
                         return Err(ResolveError {
                             message: format!(
-                                "impl target `{}` must be struct or enum (record is not supported)",
+                                "impl target `{}` must be a standard type, struct, or enum (record is not supported)",
                                 target
                             ),
                             span,
@@ -999,6 +1033,7 @@ impl Resolver {
                         seen_impl_targets.insert(target.clone(), span.clone());
                     }
 
+                    let lowered_module_path = self.current_module_path.as_deref();
                     for method in methods {
                         match method {
                             Ast::Def(
@@ -1022,8 +1057,11 @@ impl Resolver {
                                     });
                                 }
 
-                                let lowered_name =
-                                    normalize_impl_method_name(&target, &method_name);
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
                                 let lowered_params = params
                                     .into_iter()
                                     .map(|param| FunParam {
@@ -1055,8 +1093,11 @@ impl Resolver {
                                 body,
                                 attrs,
                             ) => {
-                                let lowered_name =
-                                    normalize_impl_method_name(&target, &method_name);
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
                                 let lowered_param = ExtractorParam {
                                     name: param.name,
                                     ty: param.ty.map(|ty| rewrite_self_type(ty, &target)),
@@ -1075,10 +1116,62 @@ impl Resolver {
                                     attrs,
                                 ));
                             }
+                            Ast::BuiltinDecl(method_span, method_name, params, ret_ty, attrs) => {
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
+                                let lowered_params = params
+                                    .into_iter()
+                                    .map(|param| FunParam {
+                                        name: param.name,
+                                        ty: rewrite_self_type(param.ty, &target),
+                                        span: param.span,
+                                    })
+                                    .collect::<Vec<_>>();
+                                let lowered_ret_ty =
+                                    ret_ty.map(|ty| rewrite_self_type(ty, &target));
+
+                                lowered.push(Ast::BuiltinDecl(
+                                    method_span,
+                                    lowered_name,
+                                    lowered_params,
+                                    lowered_ret_ty,
+                                    attrs,
+                                ));
+                            }
+                            Ast::BuiltinExtractorDecl(
+                                method_span,
+                                method_name,
+                                param,
+                                ret_ty,
+                                attrs,
+                            ) => {
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
+                                let lowered_param = ExtractorParam {
+                                    name: param.name,
+                                    ty: param.ty.map(|ty| rewrite_self_type(ty, &target)),
+                                    span: param.span,
+                                };
+                                let lowered_ret_ty = rewrite_self_type(ret_ty, &target);
+
+                                lowered.push(Ast::BuiltinExtractorDecl(
+                                    method_span,
+                                    lowered_name,
+                                    lowered_param,
+                                    lowered_ret_ty,
+                                    attrs,
+                                ));
+                            }
                             _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "impl body may only contain `def` / `defextractor` declarations"
+                                        "impl body may only contain `def` / `defextractor` / `@@builtin def` / `@@builtin defextractor` declarations"
                                             .to_string(),
                                     span: span.clone(),
                                 related_labels: Vec::new(),

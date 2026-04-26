@@ -81,7 +81,7 @@ Record path surface:
 Use `docs/site/lens.md` for the longer walkthrough.
 """
 @@autoimport
-defmod Lens {
+impl Lens {
   @@doc """
   View the focus at `lens` from `source`.
   The declared contract is `Result`-shaped; the compiler refines this in

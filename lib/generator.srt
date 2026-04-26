@@ -25,7 +25,7 @@ Generator module.
 Provides finite sequence construction helpers and cursor-aware consumption
 operations.
 """
-defmod Generator {
+impl Generator {
   @@doc """
   Internal runtime bridge: construct an opaque `Generator` from `(idx, items)`.
   ## REPL

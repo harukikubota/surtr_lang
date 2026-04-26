@@ -14,7 +14,7 @@ refined.
 This module stays intentionally small and focuses on arithmetic helpers that
 are independent of rounding-policy decisions.
 """
-defmod Float {
+impl Float {
   @@doc """
   Return the absolute value of `value`.
   ## REPL

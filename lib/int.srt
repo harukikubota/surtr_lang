@@ -61,7 +61,7 @@ Groups integer-specific helpers and arithmetic predicates.
 The type declaration lives at the top level of this file, while the module body
 is reserved for integer-owned helpers.
 """
-defmod Int {
+impl Int {
   @@doc """
   Divide two values and return `Err(ZeroDivisionError)` instead of trapping.
   The success case keeps the same value type as the inputs.

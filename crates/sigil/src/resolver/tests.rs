@@ -341,6 +341,28 @@ fn test_resolve_allows_impl_target_defined_in_another_file_same_stage() {
 }
 
 #[test]
+fn test_precollect_allows_impl_for_builtin_type_owner() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"impl Int {
+  def abs_alias(value: Int) -> Int {
+    value
+  }
+}"#,
+            "",
+        ),
+    )]];
+
+    let index = precollect_declaration_index(&module_stages).expect("builtin impl should succeed");
+    let method = index
+        .get("Int::abs_alias")
+        .expect("builtin impl method should be indexed");
+    assert_eq!(method.module_path, "Int");
+    assert_eq!(method.kind, DeclarationKind::ImplMethod);
+}
+
+#[test]
 fn test_impl_owner_uses_target_name_not_declaring_module_path() {
     let module_stages = vec![vec![staged_module(
         "Types",
@@ -465,7 +487,7 @@ impl Pair {
         precollect_declaration_index(&module_stages).expect_err("record impl should be rejected");
     assert!(err
         .message
-        .contains("impl target `Pair` must be struct or enum"));
+        .contains("impl target `Pair` must be a standard type, struct, or enum"));
 }
 
 #[test]

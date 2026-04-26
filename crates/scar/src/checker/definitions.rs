@@ -628,13 +628,12 @@ impl Checker {
             }
         }
 
-        let impl_target =
-            Self::split_impl_method_name(&id.name).and_then(|(impl_target, _method)| {
-                self.env
-                    .lookup_type_def(&impl_target)
-                    .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
-                    .then_some(impl_target)
-            });
+        let impl_target = Self::split_impl_method_id(id).and_then(|(impl_target, _method)| {
+            self.env
+                .lookup_type_def(&impl_target)
+                .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
+                .then_some(impl_target)
+        });
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
             expected_ret.clone(),
