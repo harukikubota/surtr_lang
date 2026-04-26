@@ -568,10 +568,10 @@ fn infer_operator_mismatch_template(
     let (line_start, line_end) = lines[line_idx];
     let line = slice_chars(source, line_start, line_end);
     let chars: Vec<char> = line.chars().collect();
-    let op_span = find_backtick_operator_span(line_start, &chars)
-        .or_else(|| find_operator_symbol_span(line_start, &chars, op_name))?;
-    let lhs_start = line
-        .find('=')
+    let focus_col = focus.start.saturating_sub(line_start);
+    let op_span = find_backtick_operator_span(line_start, &chars, focus_col)
+        .or_else(|| find_operator_symbol_span(line_start, &chars, op_name, focus_col))?;
+    let lhs_start = find_assignment_eq_before(&chars, op_span.start - line_start)
         .map(|idx| idx + 1)
         .unwrap_or(0)
         .min(op_span.start - line_start);
@@ -620,9 +620,13 @@ fn infer_flow_operator_template(
     let (line_start, line_end) = lines[line_idx];
     let line = slice_chars(source, line_start, line_end);
     let chars: Vec<char> = line.chars().collect();
-    let op_start = line.find(op)?;
+    let op_pattern: Vec<char> = op.chars().collect();
+    let op_start = find_subslice_outside_literals(&chars, &op_pattern, 0)?;
     let op_end = op_start + op.chars().count();
-    let lhs_start = line.find('=').map(|idx| idx + 1).unwrap_or(0).min(op_start);
+    let lhs_start = find_assignment_eq_before(&chars, op_start)
+        .map(|idx| idx + 1)
+        .unwrap_or(0)
+        .min(op_start);
     let (lhs_start, lhs_end) = trim_char_span(&chars, lhs_start, op_start);
     let (rhs_start, rhs_end) = trim_char_span(&chars, op_end, chars.len());
     let detail = hint.and_then(parse_operator_hint);
@@ -682,7 +686,8 @@ fn infer_ensure_predicate_template(
     let (line_start, line_end) = lines[line_idx];
     let line = slice_chars(source, line_start, line_end);
     let chars: Vec<char> = line.chars().collect();
-    let call_start = line.find("ensure(")?;
+    let call_start =
+        find_subslice_outside_literals(&chars, &['e', 'n', 's', 'u', 'r', 'e', '('], 0)?;
     let arg_spans = collect_call_argument_spans(&chars, call_start + "ensure(".len())?;
     let predicate_span = arg_spans.get(1)?;
 
@@ -1070,7 +1075,7 @@ fn infer_if_branch_mismatch_template(
     let (line_start, line_end) = lines[line_idx];
     let line = slice_chars(source, line_start, line_end);
     let chars: Vec<char> = line.chars().collect();
-    let if_start = line.find("if(")?;
+    let if_start = find_subslice_outside_literals(&chars, &['i', 'f', '('], 0)?;
     let mut paren_depth = 1usize;
     let mut first_comma = None;
     let mut second_comma = None;
@@ -1078,6 +1083,10 @@ fn infer_if_branch_mismatch_template(
     let mut idx = if_start + 3;
 
     while idx < chars.len() {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(&chars, idx);
+            continue;
+        }
         match chars[idx] {
             '(' => paren_depth += 1,
             ')' => {
@@ -1443,6 +1452,10 @@ fn find_enclosing_match_block(chars: &[char], focus_pos: usize) -> Option<(usize
         let mut bracket_depth = 0usize;
         let mut brace_open = None;
         while j < chars.len() {
+            if is_quote_char(chars[j]) {
+                j = skip_quoted_literal(chars, j);
+                continue;
+            }
             match chars[j] {
                 '(' => paren_depth += 1,
                 ')' => paren_depth = paren_depth.saturating_sub(1),
@@ -1461,6 +1474,10 @@ fn find_enclosing_match_block(chars: &[char], focus_pos: usize) -> Option<(usize
         let mut depth = 1usize;
         let mut k = open + 1;
         while k < chars.len() {
+            if is_quote_char(chars[k]) {
+                k = skip_quoted_literal(chars, k);
+                continue;
+            }
             match chars[k] {
                 '{' => depth += 1,
                 '}' => {
@@ -1492,6 +1509,10 @@ fn collect_match_arm_body_spans(
     let mut bracket_depth = 0usize;
 
     while i + 1 < block_end {
+        if is_quote_char(chars[i]) {
+            i = skip_quoted_literal(chars, i);
+            continue;
+        }
         match chars[i] {
             '{' => brace_depth += 1,
             '}' => brace_depth = brace_depth.saturating_sub(1),
@@ -1510,6 +1531,10 @@ fn collect_match_arm_body_spans(
                 let mut p_depth = 0usize;
                 let mut br_depth = 0usize;
                 while j < block_end {
+                    if is_quote_char(chars[j]) {
+                        j = skip_quoted_literal(chars, j);
+                        continue;
+                    }
                     match chars[j] {
                         '{' => b_depth += 1,
                         '}' => {
@@ -1567,6 +1592,28 @@ fn trim_char_span(chars: &[char], start: usize, end: usize) -> (usize, usize) {
     (s, e)
 }
 
+fn find_assignment_eq_before(chars: &[char], limit: usize) -> Option<usize> {
+    let limit = limit.min(chars.len());
+    let mut idx = 0usize;
+    while idx < limit {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        if chars[idx] == '=' {
+            let prev = idx.checked_sub(1).and_then(|i| chars.get(i)).copied();
+            let next = chars.get(idx + 1).copied();
+            let looks_like_operator = matches!(prev, Some('<' | '>' | '!' | '=' | '|' | '-'))
+                || matches!(next, Some('=' | '>'));
+            if !looks_like_operator {
+                return Some(idx);
+            }
+        }
+        idx += 1;
+    }
+    None
+}
+
 fn line_span_containing(source: &str, pos: usize) -> Option<(usize, usize)> {
     let lines = line_spans(source);
     let idx = line_index_for_span(&lines, pos)?;
@@ -1592,13 +1639,16 @@ fn find_annotated_assignment_line(
             break;
         }
         let chars: Vec<char> = line.chars().collect();
-        let Some(colon) = chars.iter().position(|ch| *ch == ':') else {
+        let Some(colon) = find_char_outside_literals(&chars, ':', 0) else {
             continue;
         };
-        let Some(eq) = chars.iter().position(|ch| *ch == '=') else {
+        let Some(eq) = find_assignment_eq_before(&chars, chars.len()) else {
             continue;
         };
-        if colon >= eq || line.trim_start().starts_with("def ") || line.contains("=>") {
+        if colon >= eq
+            || line.trim_start().starts_with("def ")
+            || find_subslice_outside_literals(&chars, &['=', '>'], 0).is_some()
+        {
             continue;
         }
         let (lhs_start, lhs_end) = trim_char_span(&chars, 0, eq + 1);
@@ -1709,20 +1759,55 @@ fn is_ident_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
-fn find_backtick_operator_span(line_start: usize, chars: &[char]) -> Option<Span> {
-    let first = chars.iter().position(|ch| *ch == '`')?;
-    let second = chars
-        .iter()
-        .enumerate()
-        .skip(first + 1)
-        .find_map(|(idx, ch)| (*ch == '`').then_some(idx))?;
+fn find_backtick_operator_span(
+    line_start: usize,
+    chars: &[char],
+    focus_col: usize,
+) -> Option<Span> {
+    let mut best = None;
+    let mut idx = 0usize;
+    while idx < chars.len() {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        if chars[idx] != '`' {
+            idx += 1;
+            continue;
+        }
+        let first = idx;
+        idx += 1;
+        while idx < chars.len() {
+            if is_quote_char(chars[idx]) {
+                idx = skip_quoted_literal(chars, idx);
+                continue;
+            }
+            if chars[idx] == '`' {
+                let end = idx + 1;
+                if first <= focus_col {
+                    best = Some((first, end));
+                } else if best.is_none() {
+                    best = Some((first, end));
+                }
+                idx = end;
+                break;
+            }
+            idx += 1;
+        }
+    }
+    let (first, end) = best?;
     Some(Span {
         start: line_start + first,
-        end: line_start + second + 1,
+        end: line_start + end,
     })
 }
 
-fn find_operator_symbol_span(line_start: usize, chars: &[char], op_name: &str) -> Option<Span> {
+fn find_operator_symbol_span(
+    line_start: usize,
+    chars: &[char],
+    op_name: &str,
+    focus_col: usize,
+) -> Option<Span> {
     let op = match op_name {
         "Add" => "+",
         "Sub" => "-",
@@ -1737,11 +1822,23 @@ fn find_operator_symbol_span(line_start: usize, chars: &[char], op_name: &str) -
         "Gte" => ">=",
         _ => return None,
     };
-    let line: String = chars.iter().collect();
-    let start = line.find(op)?;
+    let pattern: Vec<char> = op.chars().collect();
+    let mut best = None;
+    let mut search_from = 0usize;
+    while let Some(start) = find_subslice_outside_literals(chars, &pattern, search_from) {
+        let end = start + pattern.len();
+        if start <= focus_col {
+            best = Some(start);
+        } else if best.is_none() {
+            best = Some(start);
+            break;
+        }
+        search_from = end.max(search_from + 1);
+    }
+    let start = best?;
     Some(Span {
         start: line_start + start,
-        end: line_start + start + op.chars().count(),
+        end: line_start + start + pattern.len(),
     })
 }
 
@@ -1754,6 +1851,10 @@ fn collect_call_argument_spans(chars: &[char], args_start: usize) -> Option<Vec<
     let mut idx = args_start;
 
     while idx < chars.len() {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
         match chars[idx] {
             '(' => paren_depth += 1,
             ')' => {
@@ -1786,15 +1887,71 @@ fn collect_call_argument_spans(chars: &[char], args_start: usize) -> Option<Vec<
 }
 
 fn extract_match_pattern_span(chars: &[char]) -> Option<(usize, usize)> {
-    let arrow = chars
-        .windows(2)
-        .position(|pair| matches!(pair, ['=', '>']))?;
+    let arrow = find_subslice_outside_literals(chars, &['=', '>'], 0)?;
     trim_after_line_indent(chars, 0, arrow)
 }
 
 fn trim_after_line_indent(chars: &[char], start: usize, end: usize) -> Option<(usize, usize)> {
     let span = trim_char_span(chars, start, end);
     (span.0 < span.1).then_some(span)
+}
+
+fn is_quote_char(ch: char) -> bool {
+    matches!(ch, '"' | '\'')
+}
+
+fn skip_quoted_literal(chars: &[char], start: usize) -> usize {
+    let Some(&quote) = chars.get(start) else {
+        return start;
+    };
+    let mut idx = start + 1;
+    let mut escaped = false;
+    while idx < chars.len() {
+        let ch = chars[idx];
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == quote {
+            return idx + 1;
+        }
+        idx += 1;
+    }
+    chars.len()
+}
+
+fn find_char_outside_literals(chars: &[char], target: char, start: usize) -> Option<usize> {
+    let mut idx = start.min(chars.len());
+    while idx < chars.len() {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        if chars[idx] == target {
+            return Some(idx);
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn find_subslice_outside_literals(chars: &[char], needle: &[char], start: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(start.min(chars.len()));
+    }
+
+    let mut idx = start.min(chars.len());
+    while idx + needle.len() <= chars.len() {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        if chars[idx..idx + needle.len()] == *needle {
+            return Some(idx);
+        }
+        idx += 1;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1996,6 +2153,38 @@ mod tests {
     }
 
     #[test]
+    fn type_error_spec_picks_symbol_operator_outside_literals() {
+        let source = r#""+" + "value""#;
+        let rhs_start = source.rfind("\"value\"").expect("rhs literal");
+        let err = TypeError {
+            message: "Cannot apply Add to String and String".into(),
+            span: Span {
+                start: rhs_start,
+                end: source.chars().count(),
+            },
+            hint: Some(
+                "Operator `Add` requires compatible operand types. Left operand is String, right operand is String."
+                    .into(),
+            ),
+        };
+
+        let spec = type_error_spec(source, &err);
+        let op = spec
+            .labels
+            .iter()
+            .find(|label| label.message == "operator `Add`")
+            .expect("operator label");
+        let lhs = spec
+            .labels
+            .iter()
+            .find(|label| label.message == "left operand: String")
+            .expect("lhs label");
+
+        assert_eq!(slice_chars(source, op.span.start, op.span.end), "+");
+        assert_eq!(slice_chars(source, lhs.span.start, lhs.span.end), r#""+""#);
+    }
+
+    #[test]
     fn type_error_spec_labels_flow_operator_parts() {
         let source = "bad = parse(1) |> &inc";
         let err = TypeError {
@@ -2116,6 +2305,44 @@ mod tests {
     }
 
     #[test]
+    fn type_error_spec_labels_repl_flow_operator_lhs_before_pipe_bind() {
+        let source = r#"re"^a$" |>= Regex::is_match("a")"#;
+        let rhs_start = source.find("Regex::is_match").expect("rhs call");
+        let err = TypeError {
+            message: "`|>=` requires the right-hand side to return Result, got Boolean".into(),
+            span: Span {
+                start: rhs_start,
+                end: source.chars().count(),
+            },
+            hint: Some(
+                "`|>=` signature rule: LHS: Result<A, E>; RHS: (A -> Result<B, E>); result: Result<B, E>. LHS: Result<Regex>. RHS: (Regex -> Boolean). Operators share precedence and resolve left-to-right, so LHS is the type produced so far."
+                    .into(),
+            ),
+        };
+
+        let spec = type_error_spec(source, &err);
+        let lhs = spec
+            .labels
+            .iter()
+            .find(|label| strip_ansi(&label.message).contains("LHS actual: Result<Regex>"))
+            .expect("lhs label");
+        let rhs = spec
+            .labels
+            .iter()
+            .find(|label| strip_ansi(&label.message).contains("RHS actual: (Regex -> Boolean)"))
+            .expect("rhs label");
+
+        assert_eq!(
+            slice_chars(source, lhs.span.start, lhs.span.end),
+            r#"re"^a$""#
+        );
+        assert_eq!(
+            slice_chars(source, rhs.span.start, rhs.span.end),
+            r#"Regex::is_match("a")"#
+        );
+    }
+
+    #[test]
     fn type_error_spec_labels_ensure_predicate_call() {
         let source = "guard = ensure(4, is_even(), NoneError)";
         let err = TypeError {
@@ -2136,6 +2363,55 @@ mod tests {
             .help
             .as_deref()
             .is_some_and(|help| help.contains("Use `&predicate`")));
+    }
+
+    #[test]
+    fn type_error_spec_labels_ensure_predicate_call_with_string_comma() {
+        let source = r#"guard = ensure(4, invalid("a,b"), NoneError)"#;
+        let err = TypeError {
+            message: "ensure requires a closure or capture predicate".into(),
+            span: Span { start: 18, end: 32 },
+            hint: None,
+        };
+
+        let spec = type_error_spec(source, &err);
+        let predicate = spec
+            .labels
+            .iter()
+            .find(|label| {
+                label
+                    .message
+                    .contains("predicate must be a closure or capture")
+            })
+            .expect("predicate label");
+
+        assert_eq!(
+            slice_chars(source, predicate.span.start, predicate.span.end),
+            r#"invalid("a,b")"#
+        );
+    }
+
+    #[test]
+    fn collect_match_arm_body_spans_ignores_literals() {
+        let source = r#"match value { Left("=>") => "a,b", Right(x) => x }"#;
+        let chars: Vec<char> = source.chars().collect();
+        let (_, open_brace, close_brace) =
+            find_enclosing_match_block(&chars, source.find("Right").expect("focus"))
+                .expect("match block");
+        let spans = collect_match_arm_body_spans(&chars, open_brace + 1, close_brace);
+
+        assert_eq!(spans.len(), 2);
+        assert_eq!(slice_chars(source, spans[0].0, spans[0].1), r#""a,b""#);
+        assert_eq!(slice_chars(source, spans[1].0, spans[1].1), "x");
+    }
+
+    #[test]
+    fn extract_match_pattern_span_ignores_literal_arrow() {
+        let source = r#"Capture("=>") => value"#;
+        let chars: Vec<char> = source.chars().collect();
+        let span = extract_match_pattern_span(&chars).expect("pattern span");
+
+        assert_eq!(slice_chars(source, span.0, span.1), r#"Capture("=>")"#);
     }
 
     #[test]
