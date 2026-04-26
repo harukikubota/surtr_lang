@@ -78,21 +78,33 @@ cargo clean
 
 ## Docs
 
-- Canonical specs in `doc/`
+- Public user docs in `docs/site/`
+  - [Docs index](./docs/site/README.md)
+  - [Standard modules](./docs/site/standard-modules.md)
+  - [Definitions and usage](./docs/site/definitions-and-usage.md)
+  - [Type annotations](./docs/site/type-annotations.md)
+  - [Trait impls](./docs/site/trait-impls.md)
+  - [Lens](./docs/site/lens.md)
+  - [Kernel](./docs/site/kernel.md)
+  - [Pattern matching](./docs/site/pattern-matching.md)
+  - [Extractors](./docs/site/extractors.md)
+  - [Language features](./docs/site/language-features.md)
+- Developer docs in `docs/dev/`
+  - [Docs index](./docs/dev/README.md)
+  - [VM spec entry](./docs/dev/EldrVM_spec.md)
+  - [REPL spec entry](./docs/dev/Xldr_spec.md)
+  - [Observability spec entry](./docs/dev/Rune_observability.md)
+  - [Test policy entry](./docs/dev/テスト方針.md)
+- Canonical specs and internal design notes in `doc/`
   - [Requirements (V9, Japanese)](./doc/要件定義v9.md)
-  - [VM spec](./doc/EldrVM_spec.md)
-  - [REPL spec](./doc/Xldr_spec.md)
-  - [Test policy](./doc/テスト方針.md)
   - [Open issues](./doc/open-issues.md)
   - [Float memo](./doc/float.md)
-- Public guides in `docs/site/`
-  - [Docs index](./docs/site/README.md)
-  - [Language guide](./docs/site/language-guide.md)
-  - [Language reference](./docs/site/language-reference.md)
-  - [Compiler design guide](./docs/site/compiler-design.md)
-  - [Crate reference](./docs/site/crate-reference.md)
+- Internal docs index
+  - [Internal docs guide](./docs/internal/README.md)
 - Standard-library docs live in `lib/*.srt` via `@@doc`
 - Implementation contracts live in Rust doc comments under `crates/**`
+- Install guide
+  - [INSTALL.md](./INSTALL.md)
 - Working ledger: [AGENTS.md](./AGENTS.md)
 
 ## Status
