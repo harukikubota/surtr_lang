@@ -16,7 +16,7 @@ Surtr の標準モジュールは language surface の一部です。
 - trait modules
   - `Numeric`, `Show`, `Eq`, `Compare`, `Ord`, `Concat`, `From`, `TryFrom`
 - type modules
-  - `Int`, `String`, `Boolean`, `Error`, `List`, `Result`, `Lens`, `Float`
+  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Result`, `Lens`, `Float`
 
 ## どこを見るか
 
@@ -24,6 +24,7 @@ Surtr の標準モジュールは language surface の一部です。
 - 数値演算の契約: `../../lib/trait/numeric.srt`
 - 変換: `../../lib/trait/from.srt`, `../../lib/trait/try_from.srt`
 - 型ごとの helper: `../../lib/int.srt`, `../../lib/string.srt`, `../../lib/list.srt` など
+- 正規表現: `../../lib/regex.srt`
 - Lens path: `../../lib/lens.srt`
 
 ## auto import されるもの
@@ -44,6 +45,7 @@ xldr(2)>
 ## 次に読むページ
 
 - `Kernel` を先に触りたいなら `./kernel.md`
+- `Regex` を触りたいなら `./regex.md`
 - trait 系を見たいなら `./trait-impls.md`
 - path 操作を見たいなら `./lens.md`
 
