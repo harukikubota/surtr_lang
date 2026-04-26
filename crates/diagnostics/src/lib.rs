@@ -72,6 +72,7 @@ pub struct DiagnosticSpec {
     pub message: String,
     pub primary_span: Span,
     pub labels: Vec<DiagnosticLabel>,
+    pub notes: Vec<String>,
     pub help: Option<String>,
 }
 
@@ -114,6 +115,7 @@ pub fn simple_error(
         message: message.into(),
         primary_span: span,
         labels: Vec::new(),
+        notes: Vec::new(),
         help,
     }
 }
@@ -193,11 +195,13 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
         error.hint.clone(),
     );
 
-    let replace_help = is_flow_operator_message(&error.message);
+    let replace_help =
+        is_flow_operator_message(&error.message) || parse_binary_operator_error(&error.message).is_some();
     if let Some(template) =
         infer_type_error_template(source, &error.span, &error.message, error.hint.as_deref())
     {
         spec.labels.extend(template.labels);
+        spec.notes.extend(template.notes);
         if let Some(help) = template.help {
             spec.help = Some(if replace_help {
                 help
@@ -306,7 +310,9 @@ fn build_report(
     let lines = line_spans(source);
     let primary_line = line_index_for_span(&lines, primary.start);
     let suppress_primary_label = spec.kind == "TypeError"
-        && (is_flow_operator_message(&spec.message) || has_annotation_assignment_labels(spec));
+        && (is_flow_operator_message(&spec.message)
+            || parse_binary_operator_error(&spec.message).is_some()
+            || has_annotation_assignment_labels(spec));
     let primary_source = RenderSourceId::Primary(file_name.to_string());
     let related_source = RenderSourceId::Related(file_name.to_string());
     let mut builder = Report::build(
@@ -339,11 +345,12 @@ fn build_report(
         );
     }
 
+    for note in &spec.notes {
+        builder = builder.with_note(note.clone());
+    }
+
     if let Some(h) = &spec.help {
         builder = builder.with_help(h.clone());
-    }
-    if spec.kind == "TypeError" && is_flow_operator_message(&spec.message) {
-        builder = builder.with_note(format!("Reason: {}", spec.message));
     }
 
     builder.finish()
@@ -438,6 +445,9 @@ fn write_fallback_diagnostic(
             label.message, label.span.start, label.span.end
         )?;
     }
+    for note in &spec.notes {
+        writeln!(writer, "= note: {}", note)?;
+    }
     if let Some(help) = &spec.help {
         for line in help.lines() {
             writeln!(writer, "= help: {}", line)?;
@@ -469,6 +479,10 @@ pub fn serializable_diagnostic_by_id(
     let source = sources.source(source_id).unwrap_or("");
     let (line, column) = line_column_for_offset(source, spec.primary_span.start);
     let (expected, got) = extract_expected_got(&spec.message);
+    let hint = spec
+        .help
+        .clone()
+        .or_else(|| serializable_callable_hint_from_labels(spec));
     SerializableDiagnostic {
         kind: spec.kind.clone(),
         phase,
@@ -478,14 +492,48 @@ pub fn serializable_diagnostic_by_id(
         message: spec.message.clone(),
         expected,
         got,
-        hint: spec.help.clone(),
+        hint,
     }
 }
 
 #[derive(Debug, Clone)]
 struct TemplateSpec {
     labels: Vec<DiagnosticLabel>,
+    notes: Vec<String>,
     help: Option<String>,
+}
+
+struct FlowOperatorView<'a> {
+    lhs_actual: &'a str,
+    rhs_actual: &'a str,
+    op_rule: String,
+    step: String,
+    rule_detail: Option<String>,
+    reason: String,
+    help: String,
+}
+
+struct BinaryOperatorView<'a> {
+    lhs_actual: &'a str,
+    rhs_actual: &'a str,
+    op_rule: String,
+    step: String,
+    reason: String,
+    help: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BinaryOperatorFailureKind {
+    IncompatibleTypes,
+    MissingImplementation,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedBinaryOperatorError {
+    op_name_hint: Option<&'static str>,
+    left_ty: Option<String>,
+    right_ty: Option<String>,
+    failure_kind: BinaryOperatorFailureKind,
 }
 
 fn infer_type_error_template(
@@ -507,6 +555,9 @@ fn infer_type_error_template(
         return Some(spec);
     }
     if let Some(spec) = infer_flow_operator_template(source, &lines, focus, message, hint) {
+        return Some(spec);
+    }
+    if let Some(spec) = infer_plain_rhs_required_flow_template(source, &lines, message) {
         return Some(spec);
     }
     if let Some(spec) = infer_ensure_predicate_template(source, &lines, focus, message) {
@@ -544,7 +595,11 @@ fn infer_type_error_template(
             color: Color::Yellow,
         });
 
-        return Some(TemplateSpec { labels, help: None });
+        return Some(TemplateSpec {
+            labels,
+            notes: Vec::new(),
+            help: None,
+        });
     }
 
     if let Some(call_name) = call_name_at_span(source, &lines, focus) {
@@ -561,6 +616,7 @@ fn infer_type_error_template(
                     message: sig_text,
                     color: Color::Blue,
                 }],
+                notes: Vec::new(),
                 help: None,
             });
         }
@@ -569,42 +625,334 @@ fn infer_type_error_template(
     None
 }
 
+fn serializable_callable_hint_from_labels(spec: &DiagnosticSpec) -> Option<String> {
+    if spec.kind != "TypeError" || !spec.message.starts_with("Argument type mismatch: expected ") {
+        return None;
+    }
+
+    let signature = spec.labels.first()?.message.trim();
+    if signature.is_empty()
+        || signature.starts_with("LHS ")
+        || signature.starts_with("RHS ")
+        || signature.starts_with("OP:")
+        || signature.starts_with("operator ")
+        || signature.starts_with("left operand:")
+        || signature.starts_with("right operand:")
+    {
+        return None;
+    }
+
+    Some(format!("Callable definition signature: {}", signature))
+}
+
 fn infer_operator_mismatch_template(
     source: &str,
     lines: &[(usize, usize)],
     focus: &Span,
     message: &str,
 ) -> Option<TemplateSpec> {
-    let tail = message.strip_prefix("Cannot apply ")?;
-    let (op_name, types) = tail.split_once(" to ")?;
-    let (left_ty, right_ty) = types.split_once(" and ")?;
+    let parsed = parse_binary_operator_error(message)?;
     let line_idx = line_index_for_span(lines, focus.start)?;
     let (line_start, line_end) = lines[line_idx];
     let line = slice_chars(source, line_start, line_end);
     let chars: Vec<char> = line.chars().collect();
     let focus_col = focus.start.saturating_sub(line_start);
-    let op_span = find_backtick_operator_span(line_start, &chars, focus_col)
-        .or_else(|| find_operator_symbol_span(line_start, &chars, op_name, focus_col))?;
-    let lhs_start = find_assignment_eq_before(&chars, op_span.start - line_start)
-        .map(|idx| idx + 1)
-        .unwrap_or(0)
-        .min(op_span.start - line_start);
-    let (left_start, left_end) = trim_char_span(&chars, lhs_start, op_span.start - line_start);
-    let (right_start, right_end) = trim_char_span(&chars, op_span.end - line_start, chars.len());
+    let op_span = match parsed.op_name_hint {
+        Some(op_name) => find_backtick_operator_span(line_start, &chars, focus_col)
+            .or_else(|| find_operator_symbol_span(line_start, &chars, op_name, focus_col))?,
+        None => find_any_binary_operator_span(line_start, &chars, focus_col)?,
+    };
+    let op_symbol = slice_chars(source, op_span.start, op_span.end);
+    let op_display = binary_operator_display_symbol(&op_symbol);
+    let op_name = parsed
+        .op_name_hint
+        .or_else(|| binary_op_name_from_symbol(&op_display))
+        .unwrap_or("Eq");
+    let ((left_start, left_end), (right_start, right_end)) =
+        find_binary_operand_spans(&chars, op_span.start - line_start, op_span.end - line_start)?;
+    let left_ty = parsed.left_ty.as_deref().unwrap_or("unknown");
+    let right_ty = parsed.right_ty.as_deref().unwrap_or(left_ty);
+    let view = build_binary_operator_view(
+        op_name,
+        &op_display,
+        left_ty,
+        right_ty,
+        parsed.failure_kind,
+    );
+    Some(build_binary_operator_template(
+        line_start,
+        left_start,
+        left_end,
+        op_span,
+        right_start,
+        right_end,
+        &view,
+    ))
+}
 
-    Some(TemplateSpec {
+fn parse_binary_operator_error(message: &str) -> Option<ParsedBinaryOperatorError> {
+    if let Some(tail) = message.strip_prefix("Cannot apply ") {
+        let (op_name, types) = tail.split_once(" to ")?;
+        let (left_ty, right_ty) = types.split_once(" and ")?;
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: Some(binary_canonical_op_name(op_name)?),
+            left_ty: Some(left_ty.to_string()),
+            right_ty: Some(right_ty.to_string()),
+            failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
+        });
+    }
+    if let Some(tail) = message.strip_prefix("Cannot compare ") {
+        let tail = tail.split_once(". ").map(|(head, _)| head).unwrap_or(tail);
+        let (left_ty, right_ty) = tail.split_once(" and ")?;
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: None,
+            left_ty: Some(left_ty.to_string()),
+            right_ty: Some(right_ty.to_string()),
+            failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
+        });
+    }
+    if let Some(tail) = message.strip_prefix("++ requires (String, String), got (") {
+        let tail = tail
+            .split_once(". ")
+            .map(|(head, _)| head)
+            .unwrap_or(tail)
+            .strip_suffix(')')?;
+        let (left_ty, right_ty) = tail.split_once(", ")?;
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: Some("Concat"),
+            left_ty: Some(left_ty.to_string()),
+            right_ty: Some(right_ty.to_string()),
+            failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
+        });
+    }
+    if let Some(op_name) = message
+        .strip_prefix("Operator ")
+        .and_then(|tail| tail.strip_suffix(" requires both operands to implement Numeric"))
+    {
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: Some(binary_canonical_op_name(op_name)?),
+            left_ty: None,
+            right_ty: None,
+            failure_kind: BinaryOperatorFailureKind::MissingImplementation,
+        });
+    }
+    if let Some(ty) = message.strip_prefix("== / != not supported for ") {
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: None,
+            left_ty: Some(ty.to_string()),
+            right_ty: Some(ty.to_string()),
+            failure_kind: BinaryOperatorFailureKind::MissingImplementation,
+        });
+    }
+    if let Some(tail) = message.strip_prefix("++ requires values implementing Concat, got (") {
+        let tail = tail.strip_suffix(')')?;
+        let (left_ty, right_ty) = tail.split_once(", ")?;
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: Some("Concat"),
+            left_ty: Some(left_ty.to_string()),
+            right_ty: Some(right_ty.to_string()),
+            failure_kind: BinaryOperatorFailureKind::MissingImplementation,
+        });
+    }
+    None
+}
+
+fn build_binary_operator_view<'a>(
+    op_name: &str,
+    op_symbol: &str,
+    left_ty: &'a str,
+    right_ty: &'a str,
+    failure_kind: BinaryOperatorFailureKind,
+) -> BinaryOperatorView<'a> {
+    let (lhs_bad, rhs_bad) =
+        binary_operator_mismatch_sides(op_name, left_ty, right_ty, failure_kind);
+    let lhs_display = flow_type_display(left_ty, lhs_bad);
+    let rhs_display = flow_type_display(right_ty, rhs_bad);
+    let result_ty = if matches!(op_name, "Add" | "Sub" | "Mul") {
+        "A"
+    } else {
+        "Boolean"
+    };
+    match op_name {
+        "Add" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "A + A -> A (where A: Numeric)".into(),
+            step: format!("{lhs_display} + {rhs_display} -> <type error>"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Use the same Numeric type on both sides, for example `Int + Int` or `Float + Float`.".into(),
+        },
+        "Sub" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "A - A -> A (where A: Numeric)".into(),
+            step: format!("{lhs_display} - {rhs_display} -> <type error>"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Use the same Numeric type on both sides, for example `Int - Int` or `Float - Float`.".into(),
+        },
+        "Mul" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "A * A -> A (where A: Numeric)".into(),
+            step: format!("{lhs_display} * {rhs_display} -> <type error>"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Use the same Numeric type on both sides, for example `Int * Int` or `Float * Float`.".into(),
+        },
+        "Eq" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "A == A -> Boolean".into(),
+            step: format!("{lhs_display} == {rhs_display} -> Boolean"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Compare two values of the same type, or convert one side before comparing.".into(),
+        },
+        "Neq" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "A != A -> Boolean".into(),
+            step: format!("{lhs_display} != {rhs_display} -> Boolean"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Compare two values of the same type, or convert one side before comparing.".into(),
+        },
+        "Lt" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "A < A -> Boolean (where A: Ord)".into(),
+            step: format!("{lhs_display} < {rhs_display} -> Boolean"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Use the same ordered type on both sides, or convert one side before comparing.".into(),
+        },
+        "Lte" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "A <= A -> Boolean (where A: Ord)".into(),
+            step: format!("{lhs_display} <= {rhs_display} -> Boolean"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Use the same ordered type on both sides, or convert one side before comparing.".into(),
+        },
+        "Gt" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "A > A -> Boolean (where A: Ord)".into(),
+            step: format!("{lhs_display} > {rhs_display} -> Boolean"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Use the same ordered type on both sides, or convert one side before comparing.".into(),
+        },
+        "Gte" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "A >= A -> Boolean (where A: Ord)".into(),
+            step: format!("{lhs_display} >= {rhs_display} -> Boolean"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Use the same ordered type on both sides, or convert one side before comparing.".into(),
+        },
+        "Concat" => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: "String ++ String -> String".into(),
+            step: format!("{lhs_display} ++ {rhs_display} -> String"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Convert both sides to String, or use an operator/helper that matches the current types.".into(),
+        },
+        other => BinaryOperatorView {
+            lhs_actual: left_ty,
+            rhs_actual: right_ty,
+            op_rule: format!("{other} requires compatible operands"),
+            step: format!("{lhs_display} {op_symbol} {rhs_display} -> {result_ty}"),
+            reason: binary_operator_reason(
+                op_name,
+                op_symbol,
+                &lhs_display,
+                &rhs_display,
+                failure_kind,
+            ),
+            help: "Use operand types that match the operator's contract.".into(),
+        },
+    }
+}
+
+fn build_binary_operator_template(
+    line_start: usize,
+    left_start: usize,
+    left_end: usize,
+    op_span: Span,
+    right_start: usize,
+    right_end: usize,
+    view: &BinaryOperatorView<'_>,
+) -> TemplateSpec {
+    TemplateSpec {
         labels: vec![
             DiagnosticLabel {
                 span: Span {
                     start: line_start + left_start,
                     end: line_start + left_end,
                 },
-                message: format!("left operand: {}", left_ty),
+                message: flow_operator_caption("LHS actual", view.lhs_actual),
                 color: Color::Blue,
             },
             DiagnosticLabel {
                 span: op_span,
-                message: format!("operator `{}`", op_name),
+                message: flow_operator_caption("OP rule", &view.op_rule),
                 color: Color::Magenta,
             },
             DiagnosticLabel {
@@ -612,12 +960,13 @@ fn infer_operator_mismatch_template(
                     start: line_start + right_start,
                     end: line_start + right_end,
                 },
-                message: format!("right operand: {}", right_ty),
+                message: flow_operator_caption("RHS actual", view.rhs_actual),
                 color: Color::Yellow,
             },
         ],
-        help: None,
-    })
+        notes: vec![format!("Step: {}", view.step), view.reason.clone()],
+        help: Some(view.help.clone()),
+    }
 }
 
 fn infer_flow_operator_template(
@@ -630,12 +979,19 @@ fn infer_flow_operator_template(
     let op = ["|>=", "|*>", "|>", ">>", ">*", ">=>"]
         .into_iter()
         .find(|op| message.contains(&format!("`{}`", op)))?;
-    let line_idx = line_index_for_span(lines, focus.start)?;
-    let (line_start, line_end) = lines[line_idx];
-    let line = slice_chars(source, line_start, line_end);
-    let chars: Vec<char> = line.chars().collect();
     let op_pattern: Vec<char> = op.chars().collect();
-    let op_start = find_subslice_outside_literals(&chars, &op_pattern, 0)?;
+    let focus_line_idx = line_index_for_span(lines, focus.start);
+    let mut line_indices = focus_line_idx
+        .into_iter()
+        .chain((0..lines.len()).filter(move |idx| Some(*idx) != focus_line_idx));
+    let (line_start, chars, op_start) = line_indices
+        .find_map(|line_idx| {
+            let (line_start, line_end) = lines[line_idx];
+            let line = slice_chars(source, line_start, line_end);
+            let chars: Vec<char> = line.chars().collect();
+            let op_start = find_subslice_outside_literals(&chars, &op_pattern, 0)?;
+            Some((line_start, chars, op_start))
+        })?;
     let op_end = op_start + op.chars().count();
     let lhs_start = find_assignment_eq_before(&chars, op_start)
         .map(|idx| idx + 1)
@@ -652,39 +1008,33 @@ fn infer_flow_operator_template(
         .as_ref()
         .map(|detail| detail.rhs.as_str())
         .unwrap_or("unknown");
-    let (lhs_expected, rhs_expected) = flow_operator_display_expectations(op, message);
     let (lhs_bad, rhs_bad) = flow_operator_mismatch_sides(op, message);
-    let lowered_rule = lowered_flow_operator_rule(op, lhs_actual, rhs_actual, lhs_bad, rhs_bad);
+    let view = FlowOperatorView {
+        lhs_actual,
+        rhs_actual,
+        op_rule: flow_operator_rule_display(op, lhs_actual, rhs_actual),
+        step: lowered_flow_operator_rule(op, lhs_actual, rhs_actual, lhs_bad, rhs_bad),
+        rule_detail: flow_operator_rule_detail(op, &flow_operator_rule_display(op, lhs_actual, rhs_actual)),
+        reason: flow_operator_reason(op, message, lhs_actual, rhs_actual),
+        help: flow_operator_help(
+            op,
+            message,
+            lhs_actual,
+            rhs_actual,
+            detail.as_ref().and_then(|detail| detail.extra.as_deref()),
+        ),
+    };
 
-    Some(TemplateSpec {
-        labels: vec![
-            DiagnosticLabel {
-                span: Span {
-                    start: line_start + lhs_start,
-                    end: line_start + lhs_end,
-                },
-                message: flow_operand_label("LHS", lhs_actual, &lhs_expected, lhs_bad, message),
-                color: Color::Blue,
-            },
-            DiagnosticLabel {
-                span: Span {
-                    start: line_start + op_start,
-                    end: line_start + op_end,
-                },
-                message: format!("OP: {}", lowered_rule),
-                color: Color::Yellow,
-            },
-            DiagnosticLabel {
-                span: Span {
-                    start: line_start + rhs_start,
-                    end: line_start + rhs_end,
-                },
-                message: flow_operand_label("RHS", rhs_actual, &rhs_expected, rhs_bad, message),
-                color: Color::Magenta,
-            },
-        ],
-        help: Some(flow_operator_help(op).into()),
-    })
+    Some(build_flow_operator_template(
+        line_start,
+        lhs_start,
+        lhs_end,
+        op_start,
+        op_end,
+        rhs_start,
+        rhs_end,
+        &view,
+    ))
 }
 
 fn infer_ensure_predicate_template(
@@ -714,8 +1064,308 @@ fn infer_ensure_predicate_template(
             message: "predicate must be a closure or capture, not a call result".into(),
             color: Color::Yellow,
         }],
+        notes: Vec::new(),
         help: None,
     })
+}
+
+fn infer_plain_rhs_required_flow_template(
+    source: &str,
+    lines: &[(usize, usize)],
+    message: &str,
+) -> Option<TemplateSpec> {
+    let op = if message.starts_with("`|*>` expects a plain function on the right-hand side") {
+        "|*>"
+    } else if message.starts_with("`>*` expects a plain function on the right-hand side") {
+        ">*"
+    } else {
+        return None;
+    };
+    let (line_start, chars, op_start, line_idx) =
+        lines.iter().enumerate().find_map(|(line_idx, (line_start, line_end))| {
+            let line = slice_chars(source, *line_start, *line_end);
+            let chars: Vec<char> = line.chars().collect();
+            let op_start = find_subslice_outside_literals(&chars, &op.chars().collect::<Vec<_>>(), 0)?;
+            Some((*line_start, chars, op_start, line_idx))
+        })?;
+    let op_end = op_start + op.chars().count();
+    let lhs_start = find_assignment_eq_before(&chars, op_start)
+        .map(|idx| idx + 1)
+        .unwrap_or(0)
+        .min(op_start);
+    let (lhs_start, lhs_end) = trim_char_span(&chars, lhs_start, op_start);
+    let (rhs_start, rhs_end) = trim_char_span(&chars, op_end, chars.len());
+    let lhs_expr = slice_chars(&chars.iter().collect::<String>(), lhs_start, lhs_end);
+    let rhs_expr = slice_chars(&chars.iter().collect::<String>(), rhs_start, rhs_end);
+    let lhs_actual = infer_simple_binding_type(source, lines, line_idx, &lhs_expr)
+        .unwrap_or_else(|| "unknown".into());
+    let rhs_actual = infer_simple_callable_type(source, lines, &rhs_expr)
+        .unwrap_or_else(|| "unknown".into());
+    let op_rule = flow_operator_rule_display(op, &lhs_actual, &rhs_actual);
+    let view = FlowOperatorView {
+        lhs_actual: &lhs_actual,
+        rhs_actual: &rhs_actual,
+        rule_detail: flow_operator_rule_detail(op, &op_rule),
+        op_rule,
+        step: lowered_flow_operator_rule(op, &lhs_actual, &rhs_actual, false, true),
+        reason: flow_operator_reason(op, message, &lhs_actual, &rhs_actual),
+        help: flow_operator_help(op, message, &lhs_actual, &rhs_actual, None),
+    };
+
+    Some(build_flow_operator_template(
+        line_start,
+        lhs_start,
+        lhs_end,
+        op_start,
+        op_end,
+        rhs_start,
+        rhs_end,
+        &view,
+    ))
+}
+
+fn build_flow_operator_template(
+    line_start: usize,
+    lhs_start: usize,
+    lhs_end: usize,
+    op_start: usize,
+    op_end: usize,
+    rhs_start: usize,
+    rhs_end: usize,
+    view: &FlowOperatorView<'_>,
+) -> TemplateSpec {
+    let labels = vec![
+        DiagnosticLabel {
+            span: Span {
+                start: line_start + lhs_start,
+                end: line_start + lhs_end,
+            },
+            message: flow_operator_caption("LHS actual", view.lhs_actual),
+            color: Color::Blue,
+        },
+        DiagnosticLabel {
+            span: Span {
+                start: line_start + op_start,
+                end: line_start + op_end,
+            },
+            message: flow_operator_caption("OP rule", &view.op_rule),
+            color: Color::Yellow,
+        },
+        DiagnosticLabel {
+            span: Span {
+                start: line_start + rhs_start,
+                end: line_start + rhs_end,
+            },
+            message: flow_operator_caption("RHS actual", view.rhs_actual),
+            color: Color::Magenta,
+        },
+    ];
+    let mut notes = vec![format!("Step: {}", view.step)];
+    if let Some(rule_detail) = &view.rule_detail {
+        notes.push(rule_detail.clone());
+    }
+    notes.push(view.reason.clone());
+
+    TemplateSpec {
+        labels,
+        notes,
+        help: Some(view.help.clone()),
+    }
+}
+
+fn flow_operator_caption(prefix: &str, value: &str) -> String {
+    const FLOW_PREFIX_WIDTH: usize = 10;
+    format!("{prefix:>width$}: {value}", width = FLOW_PREFIX_WIDTH)
+}
+
+fn binary_operator_mismatch_sides(
+    op_name: &str,
+    left_ty: &str,
+    right_ty: &str,
+    failure_kind: BinaryOperatorFailureKind,
+) -> (bool, bool) {
+    if failure_kind == BinaryOperatorFailureKind::MissingImplementation {
+        return (left_ty != "unknown", right_ty != "unknown");
+    }
+    match op_name {
+        "Add" => {
+            let lhs_impl = is_numeric_type(left_ty);
+            let rhs_impl = is_numeric_type(right_ty);
+            let rhs_differs = left_ty != right_ty;
+            (!lhs_impl, !rhs_impl || rhs_differs)
+        }
+        "Sub" | "Mul" => {
+            let lhs_impl = is_numeric_type(left_ty);
+            let rhs_impl = is_numeric_type(right_ty);
+            let rhs_differs = left_ty != right_ty;
+            (!lhs_impl, !rhs_impl || rhs_differs)
+        }
+        "Eq" | "Neq" | "Lt" | "Lte" | "Gt" | "Gte" => (false, left_ty != right_ty),
+        "Concat" => {
+            let lhs_impl = left_ty == "String";
+            let rhs_impl = right_ty == "String";
+            let rhs_differs = left_ty != right_ty;
+            (!lhs_impl, !rhs_impl || rhs_differs)
+        }
+        _ => (false, left_ty != right_ty),
+    }
+}
+
+fn is_numeric_type(ty: &str) -> bool {
+    matches!(ty.trim(), "Int" | "Float")
+}
+
+fn binary_canonical_op_name(op_name: &str) -> Option<&'static str> {
+    match op_name {
+        "Add" => Some("Add"),
+        "Sub" => Some("Sub"),
+        "Mul" => Some("Mul"),
+        "Eq" => Some("Eq"),
+        "Neq" => Some("Neq"),
+        "Lt" => Some("Lt"),
+        "Lte" => Some("Lte"),
+        "Gt" => Some("Gt"),
+        "Gte" => Some("Gte"),
+        "Concat" => Some("Concat"),
+        _ => None,
+    }
+}
+
+fn binary_op_name_from_symbol(symbol: &str) -> Option<&'static str> {
+    match symbol {
+        "+" => Some("Add"),
+        "-" => Some("Sub"),
+        "*" => Some("Mul"),
+        "==" => Some("Eq"),
+        "!=" => Some("Neq"),
+        "<" => Some("Lt"),
+        "<=" => Some("Lte"),
+        ">" => Some("Gt"),
+        ">=" => Some("Gte"),
+        "++" => Some("Concat"),
+        _ => None,
+    }
+}
+
+fn binary_operator_display_symbol(symbol: &str) -> String {
+    symbol
+        .strip_prefix('`')
+        .and_then(|s| s.strip_suffix('`'))
+        .unwrap_or(symbol)
+        .to_string()
+}
+
+fn binary_operator_reason(
+    op_name: &str,
+    op_symbol: &str,
+    lhs_display: &str,
+    rhs_display: &str,
+    failure_kind: BinaryOperatorFailureKind,
+) -> String {
+    match failure_kind {
+        BinaryOperatorFailureKind::IncompatibleTypes => match op_name {
+            "Add" | "Sub" | "Mul" => {
+                if lhs_display == rhs_display {
+                    format!(
+                        "Reason: `{}` requires a Numeric type, but both sides are {}.",
+                        op_symbol, lhs_display
+                    )
+                } else {
+                    format!(
+                        "Reason: `{}` requires the same Numeric type on both sides, but got {} and {}.",
+                        op_symbol, lhs_display, rhs_display
+                    )
+                }
+            }
+            "Eq" | "Neq" => format!(
+                "Reason: `{}` compares two values of the same type, but got {} and {}.",
+                op_symbol, lhs_display, rhs_display
+            ),
+            "Lt" | "Lte" | "Gt" | "Gte" => format!(
+                "Reason: `{}` compares two ordered values of the same type, but got {} and {}.",
+                op_symbol, lhs_display, rhs_display
+            ),
+            "Concat" => format!(
+                "Reason: `++` is string concatenation, but got {} and {}.",
+                lhs_display, rhs_display
+            ),
+            _ => format!(
+                "Reason: operator `{}` cannot combine {} and {}.",
+                op_symbol, lhs_display, rhs_display
+            ),
+        },
+        BinaryOperatorFailureKind::MissingImplementation => match op_name {
+            "Add" | "Sub" | "Mul" => format!(
+                "Reason: {} does not implement Numeric, so `{}` is not available.",
+                lhs_display, op_symbol
+            ),
+            "Eq" | "Neq" => format!(
+                "Reason: {} does not implement Eq, so `{}` is not available.",
+                lhs_display, op_symbol
+            ),
+            "Lt" | "Lte" | "Gt" | "Gte" => format!(
+                "Reason: {} does not implement Ord, so `{}` is not available.",
+                lhs_display, op_symbol
+            ),
+            "Concat" => format!(
+                "Reason: {} does not implement Concat, so `++` is not available.",
+                lhs_display
+            ),
+            _ => format!(
+                "Reason: {} does not implement the trait required by `{}`.",
+                lhs_display, op_symbol
+            ),
+        },
+    }
+}
+
+fn infer_simple_binding_type(
+    source: &str,
+    lines: &[(usize, usize)],
+    current_line_idx: usize,
+    expr: &str,
+) -> Option<String> {
+    let ident = expr.trim();
+    if ident.is_empty() || !ident.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return None;
+    }
+    for idx in (0..current_line_idx).rev() {
+        let (line_start, line_end) = lines[idx];
+        let line = slice_chars(source, line_start, line_end);
+        let trimmed = line.trim();
+        let prefix = format!("{}:", ident);
+        if !trimmed.starts_with(&prefix) {
+            continue;
+        }
+        let rest = trimmed[prefix.len()..].trim_start();
+        let ty = rest.split('=').next()?.trim();
+        if !ty.is_empty() {
+            return Some(ty.to_string());
+        }
+    }
+    None
+}
+
+fn infer_simple_callable_type(source: &str, lines: &[(usize, usize)], expr: &str) -> Option<String> {
+    let trimmed = expr.trim();
+    let name = trimmed.strip_suffix("()")?.trim();
+    if name.is_empty() || !name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return None;
+    }
+    for (line_start, line_end) in lines {
+        let line = slice_chars(source, *line_start, *line_end);
+        let trimmed = line.trim();
+        let prefix = format!("def {}(", name);
+        if !trimmed.starts_with(&prefix) {
+            continue;
+        }
+        let rest = &trimmed[prefix.len()..];
+        let (params, ret) = rest.split_once(") -> ")?;
+        let param_ty = params.split(':').nth(1)?.trim().trim_end_matches(',');
+        let ret_ty = ret.split_whitespace().next()?.trim_end_matches('{').trim();
+        return Some(format!("({} -> {})", param_ty, ret_ty));
+    }
+    None
 }
 
 fn infer_extractor_template(
@@ -742,6 +1392,7 @@ fn infer_extractor_template(
             message: "extractor pattern checked against the match scrutinee".into(),
             color: Color::Yellow,
         }],
+        notes: Vec::new(),
         help: None,
     })
 }
@@ -783,7 +1434,11 @@ fn infer_argument_mismatch_template(
     if labels.is_empty() {
         return None;
     }
-    Some(TemplateSpec { labels, help: None })
+    Some(TemplateSpec {
+        labels,
+        notes: Vec::new(),
+        help: None,
+    })
 }
 
 fn infer_annotation_assignment_template(
@@ -815,6 +1470,7 @@ fn infer_annotation_assignment_template(
                 color: Color::Yellow,
             },
         ],
+        notes: Vec::new(),
         help: None,
     })
 }
@@ -823,6 +1479,7 @@ fn infer_annotation_assignment_template(
 struct OperatorHintParts {
     lhs: String,
     rhs: String,
+    extra: Option<String>,
 }
 
 fn is_flow_operator_message(message: &str) -> bool {
@@ -844,73 +1501,93 @@ fn has_annotation_assignment_labels(spec: &DiagnosticSpec) -> bool {
 }
 
 fn parse_operator_hint(hint: &str) -> Option<OperatorHintParts> {
-    let (_, rest) = hint.split_once(". LHS: ")?;
+    let (_rule, rest) = hint.split_once(". LHS: ")?;
     let (lhs, rest) = rest.split_once(". RHS: ")?;
-    let rhs = rest
-        .split_once(". Operators share precedence")
-        .map(|(rhs, _)| rhs)
-        .unwrap_or(rest.trim_end_matches('.'));
+    let precedence = ". Operators share precedence and resolve left-to-right, so LHS is the type produced so far.";
+    let (rhs, extra) = if let Some((rhs, rest)) = rest.split_once(precedence) {
+        let extra = rest.trim();
+        (
+            rhs,
+            if extra.is_empty() {
+                None
+            } else {
+                Some(extra.to_string())
+            },
+        )
+    } else {
+        (rest.trim_end_matches('.'), None)
+    };
     Some(OperatorHintParts {
         lhs: lhs.trim().to_string(),
         rhs: rhs.trim().to_string(),
+        extra,
     })
 }
 
-fn flow_operator_expected_parts(op: &str) -> (&'static str, &'static str) {
-    match op {
-        "|>" => ("Evaluated", "Callable"),
-        "|*>" => ("Container<A>", "(A -> B)"),
-        "|>=" => ("Container<A>", "(A -> Container<B>)"),
-        ">>" => ("(A -> B)", "(B -> C)"),
-        ">*" => ("(A -> Container<B>)", "(B -> C)"),
-        ">=>" => ("(A -> Container<B>)", "(B -> Container<C>)"),
-        _ => ("LHS", "RHS"),
-    }
-}
-
-fn flow_operator_display_expectations(op: &str, message: &str) -> (String, String) {
-    let (lhs_default, rhs_default) = flow_operator_expected_parts(op);
-    let (Some(expected), Some(_got)) = extract_expected_got(message) else {
-        return (lhs_default.into(), rhs_default.into());
-    };
-
-    match op {
-        "|>" => (expected, rhs_default.into()),
-        "|*>" | "|>=" => (lhs_default.into(), format!("input {}", expected)),
-        _ => (lhs_default.into(), rhs_default.into()),
-    }
-}
-
-fn flow_operand_label(
-    side: &str,
-    actual: &str,
-    expected: &str,
-    is_mismatch: bool,
-    message: &str,
-) -> String {
-    if !is_mismatch {
-        return format!("{} actual: {} (expected {})", side, actual, expected);
-    }
-
-    let prefix = if message.contains("requires Result or List")
-        || message.contains("requires matching Result or List")
-    {
-        "Container required"
-    } else if message.contains("requires Result")
-        || message.contains("requires matching Result")
-        || message.contains("return Result")
-    {
-        "Result required"
+fn flow_family_from_type(ty: &str) -> Option<&'static str> {
+    let trimmed = ty.trim();
+    if trimmed.starts_with("Result<") {
+        Some("Result")
+    } else if trimmed.starts_with("List<") {
+        Some("List")
     } else {
-        "TypeMismatch"
-    };
-    format!(
-        "{}: {} actual: {} (expected {})",
-        prefix,
-        side,
-        actual.fg(Color::Red),
-        expected.fg(Color::Red)
-    )
+        None
+    }
+}
+
+fn flow_family_from_callable_output(ty: &str) -> Option<&'static str> {
+    let (_input, output) = unary_function_parts_display(ty)?;
+    flow_family_from_type(&output)
+}
+
+fn flow_operator_rule_display(op: &str, lhs_actual: &str, rhs_actual: &str) -> String {
+    match op {
+        "|>" => "A |> (A -> B) -> B".into(),
+        ">>" => "(A -> B) >> (B -> C) -> (A -> C)".into(),
+        "|*>" => match flow_family_from_type(lhs_actual) {
+            Some("Result") => "Result<A> |*> (A -> B) -> Result<B>".into(),
+            Some("List") => "List<A> |*> (A -> B) -> List<B>".into(),
+            _ => "Result/List map".into(),
+        },
+        "|>=" => match flow_family_from_type(lhs_actual).or_else(|| flow_family_from_callable_output(rhs_actual)) {
+            Some("Result") => "Result<A> |>= (A -> Result<B>) -> Result<B>".into(),
+            Some("List") => "List<A> |>= (A -> List<B>) -> List<B>".into(),
+            _ => "Result/List bind".into(),
+        },
+        ">*" => match flow_family_from_callable_output(lhs_actual) {
+            Some("Result") => "(A -> Result<B>) >* (B -> C) -> (A -> Result<C>)".into(),
+            Some("List") => "(A -> List<B>) >* (B -> C) -> (A -> List<C>)".into(),
+            _ => "Result/List lifted compose".into(),
+        },
+        ">=>" => match flow_family_from_callable_output(lhs_actual).or_else(|| flow_family_from_callable_output(rhs_actual)) {
+            Some("Result") => "(A -> Result<B>) >=> (B -> Result<C>) -> (A -> Result<C>)".into(),
+            Some("List") => "(A -> List<B>) >=> (B -> List<C>) -> (A -> List<C>)".into(),
+            _ => "Result/List Kleisli compose".into(),
+        },
+        _ => format!("{} rule", op),
+    }
+}
+
+fn flow_operator_rule_detail(op: &str, summary: &str) -> Option<String> {
+    match (op, summary) {
+        ("|*>", "Result/List map") => Some(
+            "Rule: Result<A> |*> (A -> B) -> Result<B>\n      List<A>   |*> (A -> B) -> List<B>"
+                .into(),
+        ),
+        ("|>=", "Result/List bind") => Some(
+            "Rule: Result<A> |>= (A -> Result<B>) -> Result<B>\n      List<A>   |>= (A -> List<B>)   -> List<B>"
+                .into(),
+        ),
+        (">*", "Result/List lifted compose") => Some(
+            "Rule: (A -> Result<B>) >* (B -> C) -> (A -> Result<C>)\n      (A -> List<B>)   >* (B -> C) -> (A -> List<C>)"
+                .into(),
+        ),
+        (">=>", "Result/List Kleisli compose") => Some(
+            "Rule: (A -> Result<B>) >=> (B -> Result<C>) -> (A -> Result<C>)\n      (A -> List<B>)   >=> (B -> List<C>)   -> (A -> List<C>)"
+                .into(),
+        ),
+        _ => None,
+    }
 }
 
 fn lowered_flow_operator_rule(
@@ -1036,15 +1713,149 @@ fn flow_operator_mismatch_sides(op: &str, message: &str) -> (bool, bool) {
     (false, false)
 }
 
-fn flow_operator_help(op: &str) -> &'static str {
+fn flow_operator_reason(op: &str, message: &str, lhs_actual: &str, rhs_actual: &str) -> String {
     match op {
-        "|>" => "`|>` passes the whole left-hand value into the callable. The RHS must accept the LHS type.",
-        "|*>" => "`|*>` maps a plain function over Result/List. The right side must return a plain value.",
-        "|>=" => "`|>=` binds a Result/List value. The right side must return the same container family.",
-        ">>" => "`>>` composes plain functions. Use `>*` or `>=>` when the left function returns Result/List.",
-        ">*" => "`>*` composes a contextual function with a plain function. The left side must return Result/List.",
-        ">=>" => "`>=>` composes contextual functions. Both sides must return the same container family.",
-        _ => "Check the function operator rule against the LHS and RHS types.",
+        "|>" => {
+            if let (Some(expected), Some(got)) = extract_expected_got(message) {
+                format!("Reason: RHS expects {}, but LHS is {}.", expected, got)
+            } else {
+                format!("Reason: {}", message)
+            }
+        }
+        "|*>" => {
+            if let Some(got) = message.strip_prefix("`|*>` requires Result or List on the left, got ") {
+                format!("Reason: LHS is {}, but `|*>` maps over Result<A> or List<A>.", got)
+            } else if let Some((_prefix, got)) =
+                message.split_once("expects a plain function on the right-hand side; use `|>=` for contextual output")
+            {
+                let _ = got;
+                if let Some((_input, output)) = unary_function_parts_display(rhs_actual) {
+                    format!("Reason: RHS returns {}, but `|*>` maps with a plain function.", output)
+                } else {
+                    format!("Reason: {}", message)
+                }
+            } else if let (Some(expected), Some(got)) = extract_expected_got(message) {
+                format!("Reason: LHS contains {}, but RHS expects {}.", expected, got)
+            } else {
+                format!("Reason: {}", message)
+            }
+        }
+        "|>=" => {
+            if let Some(got) = message.strip_prefix("`|>=` requires Result or List on the left, got ") {
+                format!("Reason: LHS is {}, but `|>=` requires Result<A> or List<A>.", got)
+            } else if let Some(got) =
+                message.strip_prefix("`|>=` requires the right-hand side to return Result, got ")
+            {
+                format!("Reason: RHS returns {}, but `|>=` requires Result<B>.", got)
+            } else if let Some(got) =
+                message.strip_prefix("`|>=` requires the right-hand side to return List, got ")
+            {
+                format!("Reason: RHS returns {}, but `|>=` requires List<B>.", got)
+            } else if message.contains("cannot mix Result and List context") {
+                let lhs_family = flow_family_from_type(lhs_actual).unwrap_or("Result/List");
+                let rhs_family = flow_family_from_callable_output(rhs_actual).unwrap_or("Result/List");
+                format!("Reason: LHS is {}, but RHS returns {}.", lhs_family, rhs_family)
+            } else if let (Some(expected), Some(got)) = extract_expected_got(message) {
+                format!("Reason: LHS contains {}, but RHS expects {}.", expected, got)
+            } else {
+                format!("Reason: {}", message)
+            }
+        }
+        ">>" => {
+            if message.contains("left output type to match the right input type") {
+                let lhs_out = unary_function_parts_display(lhs_actual)
+                    .map(|(_, out)| out)
+                    .unwrap_or_else(|| "unknown".into());
+                let rhs_in = unary_function_parts_display(rhs_actual)
+                    .map(|(input, _)| input)
+                    .unwrap_or_else(|| "unknown".into());
+                format!("Reason: left output is {}, but right input is {}.", lhs_out, rhs_in)
+            } else {
+                format!("Reason: {}", message)
+            }
+        }
+        ">*" => {
+            if message.contains("requires Result or List on the left-hand side") {
+                let lhs_out = unary_function_parts_display(lhs_actual)
+                    .map(|(_, out)| out)
+                    .unwrap_or_else(|| lhs_actual.to_string());
+                format!(
+                    "Reason: LHS returns {}, but `>*` expects Result<B> or List<B>.",
+                    lhs_out
+                )
+            } else if message.contains("left contextual output to match the right input type") {
+                let lhs_out = unary_function_parts_display(lhs_actual)
+                    .map(|(_, out)| out)
+                    .unwrap_or_else(|| "unknown".into());
+                let rhs_in = unary_function_parts_display(rhs_actual)
+                    .map(|(input, _)| input)
+                    .unwrap_or_else(|| "unknown".into());
+                format!("Reason: left contextual output is {}, but right input is {}.", lhs_out, rhs_in)
+            } else {
+                format!("Reason: {}", message)
+            }
+        }
+        ">=>" => format!("Reason: {}", message),
+        _ => format!("Reason: {}", message),
+    }
+}
+
+fn flow_operator_help(
+    op: &str,
+    message: &str,
+    lhs_actual: &str,
+    _rhs_actual: &str,
+    extra: Option<&str>,
+) -> String {
+    match op {
+        "|>" if flow_family_from_type(lhs_actual) == Some("Result") => {
+            "Use `|*>` to map over the Ok value, or `|>=` if the RHS returns Result.".into()
+        }
+        "|>" if flow_family_from_type(lhs_actual) == Some("List") => {
+            "Use `|*>` to map over each List element, or use a function that accepts the whole List.".into()
+        }
+        "|>" => {
+            if let Some(expected) = extract_expected_got(message).0 {
+                format!("Change the LHS to {}, or use a function that accepts {}.", expected, lhs_actual)
+            } else {
+                "Change the LHS value, or use a function that accepts the current LHS type.".into()
+            }
+        }
+        "|*>" if message.contains("requires Result or List on the left") => {
+            "Use `|>` for a plain value, or make the LHS Result/List.".into()
+        }
+        "|*>" if message.contains("plain function on the right-hand side") => {
+            "Use `|>=` to bind a function that already returns Result/List.".into()
+        }
+        "|*>" => "Keep the RHS plain, or switch to `|>=` if it already returns Result/List.".into(),
+        "|>=" if message.contains("requires Result or List on the left") => {
+            "Use `|>` for a plain value, or make the LHS Result/List.".into()
+        }
+        "|>=" if message.contains("right-hand side to return Result") => {
+            "Use `|*>` to map over the Result value, or change the RHS to return Result.".into()
+        }
+        "|>=" if message.contains("right-hand side to return List") => {
+            "Use `|*>` to map over the List value, or change the RHS to return List.".into()
+        }
+        "|>=" if message.contains("cannot mix Result and List context") => {
+            "Keep the same container family across bind.".into()
+        }
+        "|>=" => "Make the RHS input and container family match the LHS.".into(),
+        ">>" => {
+            let lhs_out = unary_function_parts_display(lhs_actual)
+                .map(|(_, out)| out)
+                .unwrap_or_else(|| "the left output".into());
+            format!(
+                "Change the RHS to accept {}, or insert a conversion function.",
+                lhs_out
+            )
+        }
+        ">*" if message.contains("requires Result or List on the left-hand side") => {
+            extra.unwrap_or("Use `>>` for plain composition, or make the left function return Result/List.").into()
+        }
+        ">*" => "Keep the left side contextual and make the RHS accept its success value.".into(),
+        ">=>" => extra.unwrap_or("Keep the same container family across both functions.").into(),
+        _ => extra.unwrap_or("Check the operator rule against the LHS and RHS types.").into(),
     }
 }
 
@@ -1142,6 +1953,7 @@ fn infer_if_branch_mismatch_template(
                 color: Color::Yellow,
             },
         ],
+        notes: Vec::new(),
         help: Some(
             "if/3 requires both branches to return the same type. Use if_then/2 when only side effects are needed."
                 .into(),
@@ -1211,6 +2023,7 @@ fn infer_match_arm_mismatch_template(
 
     Some(TemplateSpec {
         labels,
+        notes: Vec::new(),
         help: Some("All match arms must return the same type.".into()),
     })
 }
@@ -1828,6 +2641,7 @@ fn find_operator_symbol_span(
         "Mul" => "*",
         "Div" => "/",
         "Mod" => "%",
+        "Concat" => "++",
         "Eq" => "==",
         "Neq" => "!=",
         "Lt" => "<",
@@ -1854,6 +2668,15 @@ fn find_operator_symbol_span(
         start: line_start + start,
         end: line_start + start + pattern.len(),
     })
+}
+
+fn find_any_binary_operator_span(line_start: usize, chars: &[char], focus_col: usize) -> Option<Span> {
+    for op_name in ["Concat", "Eq", "Neq", "Lte", "Gte", "Lt", "Gt", "Add", "Sub", "Mul"] {
+        if let Some(span) = find_operator_symbol_span(line_start, chars, op_name, focus_col) {
+            return Some(span);
+        }
+    }
+    None
 }
 
 fn collect_call_argument_spans(chars: &[char], args_start: usize) -> Option<Vec<(usize, usize)>> {
@@ -1898,6 +2721,126 @@ fn collect_call_argument_spans(chars: &[char], args_start: usize) -> Option<Vec<
     }
 
     None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NestingDepth {
+    paren: usize,
+    bracket: usize,
+    brace: usize,
+}
+
+fn find_binary_operand_spans(
+    chars: &[char],
+    op_start: usize,
+    op_end: usize,
+) -> Option<((usize, usize), (usize, usize))> {
+    let target = nesting_depth_before(chars, op_start);
+    let mut current = NestingDepth {
+        paren: 0,
+        bracket: 0,
+        brace: 0,
+    };
+    let mut left_boundary = 0usize;
+    let mut idx = 0usize;
+
+    while idx < op_start.min(chars.len()) {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        match chars[idx] {
+            '(' => {
+                current.paren += 1;
+                if current == target {
+                    left_boundary = idx + 1;
+                }
+            }
+            '[' => {
+                current.bracket += 1;
+                if current == target {
+                    left_boundary = idx + 1;
+                }
+            }
+            '{' => {
+                current.brace += 1;
+                if current == target {
+                    left_boundary = idx + 1;
+                }
+            }
+            ')' => current.paren = current.paren.saturating_sub(1),
+            ']' => current.bracket = current.bracket.saturating_sub(1),
+            '}' => current.brace = current.brace.saturating_sub(1),
+            '=' | ',' | ';' if current == target => {
+                left_boundary = idx + 1;
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+
+    let left = trim_char_span(chars, left_boundary.min(op_start), op_start);
+    if left.0 >= left.1 {
+        return None;
+    }
+
+    let mut right_boundary = chars.len();
+    current = nesting_depth_before(chars, op_end);
+    idx = op_end.min(chars.len());
+
+    while idx < chars.len() {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        match chars[idx] {
+            '(' => current.paren += 1,
+            '[' => current.bracket += 1,
+            '{' => current.brace += 1,
+            ')' | ']' | '}' | ',' | ';' if current == target => {
+                right_boundary = idx;
+                break;
+            }
+            ')' => current.paren = current.paren.saturating_sub(1),
+            ']' => current.bracket = current.bracket.saturating_sub(1),
+            '}' => current.brace = current.brace.saturating_sub(1),
+            _ => {}
+        }
+        idx += 1;
+    }
+
+    let right = trim_char_span(chars, op_end, right_boundary);
+    if right.0 >= right.1 {
+        return None;
+    }
+
+    Some((left, right))
+}
+
+fn nesting_depth_before(chars: &[char], limit: usize) -> NestingDepth {
+    let mut depth = NestingDepth {
+        paren: 0,
+        bracket: 0,
+        brace: 0,
+    };
+    let mut idx = 0usize;
+    while idx < limit.min(chars.len()) {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        match chars[idx] {
+            '(' => depth.paren += 1,
+            ')' => depth.paren = depth.paren.saturating_sub(1),
+            '[' => depth.bracket += 1,
+            ']' => depth.bracket = depth.bracket.saturating_sub(1),
+            '{' => depth.brace += 1,
+            '}' => depth.brace = depth.brace.saturating_sub(1),
+            _ => {}
+        }
+        idx += 1;
+    }
+    depth
 }
 
 fn extract_match_pattern_span(chars: &[char]) -> Option<(usize, usize)> {
@@ -2013,6 +2956,7 @@ mod tests {
                 message: "binding value".into(),
                 color: Color::Blue,
             }],
+            notes: Vec::new(),
             help: Some("The type annotation requires Int".into()),
         };
 
@@ -2147,23 +3091,31 @@ mod tests {
         };
 
         let spec = type_error_spec(source, &err);
+        let notes_text = spec
+            .notes
+            .iter()
+            .map(|note| strip_ansi(note))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         assert!(spec
             .labels
             .iter()
-            .any(|label| label.message == "left operand: Int"));
+            .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
         assert!(spec
             .labels
             .iter()
-            .any(|label| label.message == "operator `Add`"));
+            .any(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A (where A: Numeric)"));
         assert!(spec
             .labels
             .iter()
-            .any(|label| label.message == "right operand: String"));
+            .any(|label| strip_ansi(&label.message) == "RHS actual: String"));
+        assert!(notes_text.contains("Step: Int + String -> <type error>"));
+        assert!(notes_text.contains("Reason: `+` requires the same Numeric type on both sides, but got Int and String."));
         assert!(spec
             .help
             .as_deref()
-            .is_some_and(|help| help.contains("Operator `Add` requires")));
+            .is_some_and(|help| help.contains("same Numeric type")));
     }
 
     #[test]
@@ -2186,16 +3138,156 @@ mod tests {
         let op = spec
             .labels
             .iter()
-            .find(|label| label.message == "operator `Add`")
+            .find(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A (where A: Numeric)")
             .expect("operator label");
         let lhs = spec
             .labels
             .iter()
-            .find(|label| label.message == "left operand: String")
+            .find(|label| strip_ansi(&label.message) == "LHS actual: String")
             .expect("lhs label");
 
         assert_eq!(slice_chars(source, op.span.start, op.span.end), "+");
         assert_eq!(slice_chars(source, lhs.span.start, lhs.span.end), r#""+""#);
+    }
+
+    #[test]
+    fn type_error_spec_formats_eq_operator_with_three_captions() {
+        let source = "print(to_string(1 == True))";
+        let err = TypeError {
+            message: "Cannot compare Int and Boolean".into(),
+            span: Span { start: 16, end: 25 },
+            hint: None,
+        };
+
+        let spec = type_error_spec(source, &err);
+        let notes_text = spec
+            .notes
+            .iter()
+            .map(|note| strip_ansi(note))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| strip_ansi(&label.message) == "   OP rule: A == A -> Boolean"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| strip_ansi(&label.message) == "RHS actual: Boolean"));
+        assert!(notes_text.contains("Step: Int == Boolean -> Boolean"));
+        assert!(notes_text.contains("Reason: `==` compares two values of the same type, but got Int and Boolean."));
+    }
+
+    #[test]
+    fn type_error_spec_distinguishes_neq_operator_from_source() {
+        let source = "print(to_string(1 != True))";
+        let err = TypeError {
+            message: "Cannot compare Int and Boolean".into(),
+            span: Span { start: 16, end: 25 },
+            hint: None,
+        };
+
+        let spec = type_error_spec(source, &err);
+        let notes_text = spec
+            .notes
+            .iter()
+            .map(|note| strip_ansi(note))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| strip_ansi(&label.message) == "   OP rule: A != A -> Boolean"));
+        assert!(notes_text.contains("Step: Int != Boolean -> Boolean"));
+        assert!(notes_text.contains("Reason: `!=` compares two values of the same type, but got Int and Boolean."));
+    }
+
+    #[test]
+    fn type_error_spec_distinguishes_lt_operator_from_source() {
+        let source = "print(to_string(1 < True))";
+        let err = TypeError {
+            message: "Cannot compare Int and Boolean".into(),
+            span: Span { start: 16, end: 24 },
+            hint: None,
+        };
+
+        let spec = type_error_spec(source, &err);
+        let notes_text = spec
+            .notes
+            .iter()
+            .map(|note| strip_ansi(note))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| strip_ansi(&label.message) == "   OP rule: A < A -> Boolean (where A: Ord)"));
+        assert!(notes_text.contains("Step: Int < Boolean -> Boolean"));
+        assert!(notes_text.contains("Reason: `<` compares two ordered values of the same type, but got Int and Boolean."));
+    }
+
+    #[test]
+    fn type_error_spec_formats_concat_operator_with_three_captions() {
+        let source = "print(1 ++ \"x\")";
+        let err = TypeError {
+            message: "++ requires (String, String), got (Int, String)".into(),
+            span: Span { start: 6, end: 14 },
+            hint: None,
+        };
+
+        let spec = type_error_spec(source, &err);
+        let notes_text = spec
+            .notes
+            .iter()
+            .map(|note| strip_ansi(note))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| strip_ansi(&label.message) == "   OP rule: String ++ String -> String"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| strip_ansi(&label.message) == "RHS actual: String"));
+        assert!(notes_text.contains("Step: Int ++ String -> String"));
+        assert!(notes_text.contains("Reason: `++` is string concatenation, but got Int and String."));
+    }
+
+    #[test]
+    fn type_error_spec_colors_generic_binary_operator_note_only() {
+        let source = "bad = 1 `*` \"oops\"";
+        let err = TypeError {
+            message: "Cannot apply Mul to Int and String".into(),
+            span: Span { start: 6, end: 18 },
+            hint: None,
+        };
+
+        let spec = type_error_spec(source, &err);
+        let labels_text = spec
+            .labels
+            .iter()
+            .map(|label| strip_ansi(&label.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let notes_text = spec.notes.join("\n");
+
+        assert!(labels_text.contains("LHS actual: Int"));
+        assert!(labels_text.contains("RHS actual: String"));
+        assert!(!labels_text.contains("\u{1b}[31m"));
+        assert!(notes_text.contains(&"String".fg(Color::Red).to_string()));
     }
 
     #[test]
@@ -2217,14 +3309,22 @@ mod tests {
             .map(|label| strip_ansi(&label.message))
             .collect::<Vec<_>>()
             .join("\n");
+        let notes_text = spec
+            .notes
+            .iter()
+            .map(|note| strip_ansi(note))
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        assert!(label_text.contains("TypeMismatch: LHS actual: Result<Int> (expected Int)"));
-        assert!(label_text.contains("OP: Result<Int> |> (Int -> Int) -> Int"));
-        assert!(label_text.contains("RHS actual: (Int -> Int) (expected Callable)"));
+        assert!(label_text.contains("LHS actual: Result<Int>"));
+        assert!(label_text.contains("OP rule: A |> (A -> B) -> B"));
+        assert!(label_text.contains("RHS actual: (Int -> Int)"));
+        assert!(notes_text.contains("Step: Result<Int> |> (Int -> Int) -> Int"));
+        assert!(notes_text.contains("Reason: RHS expects Int, but LHS is Result<Int>."));
         assert!(spec
             .help
             .as_deref()
-            .is_some_and(|help| help.contains("The RHS must accept the LHS type")));
+            .is_some_and(|help| help.contains("Use `|*>`")));
     }
 
     #[test]
@@ -2304,16 +3404,13 @@ mod tests {
         let rendered = render_error("main.srt", source, &spec);
         let rendered_plain = strip_ansi(&rendered);
 
-        assert!(rendered_plain.contains("Container required: LHS actual: Int"));
-        assert!(rendered_plain.contains("OP: Int |>= (Int -> Result<Int>) -> Result<Int>"));
-        assert!(
-            rendered_plain.contains("Reason: `|>=` requires Result or List on the left, got Int")
-        );
+        assert!(rendered_plain.contains("LHS actual: Int"));
+        assert!(rendered_plain.contains("OP rule: Result<A> |>= (A -> Result<B>) -> Result<B>"));
+        assert!(rendered_plain.contains("Step: Int |>= (Int -> Result<Int>) -> Result<Int>"));
+        assert!(rendered_plain.contains("Reason: LHS is Int, but `|>=` requires Result<A> or List<A>."));
         assert_eq!(
             spec.help.as_deref(),
-            Some(
-                "`|>=` binds a Result/List value. The right side must return the same container family."
-            )
+            Some("Use `|>` for a plain value, or make the LHS Result/List.")
         );
         assert!(!spec.help.as_deref().unwrap_or("").contains("Int"));
     }
@@ -2462,6 +3559,36 @@ bad = &add("oops")"#;
             1
         );
         assert!(rendered.contains("__Script::fixture::add(x: Int, y: Int) -> Int"));
+    }
+
+    #[test]
+    fn serializable_report_preserves_callable_definition_signature_hint() {
+        let mut sources = SourceRegistry::new();
+        let source = r#"def add(x: Int, y: Int) -> Int {
+  x + y
+}
+bad = add("oops", 1)"#;
+        let source_id = sources.register("main.srt", source);
+        let err = TypeError {
+            message: "Argument type mismatch: expected Int, got String".into(),
+            span: Span { start: 52, end: 58 },
+            hint: Some(
+                "Callable definition signature: __Script::fixture::add(x: Int, y: Int) -> Int\nCallable definition span: 0..32"
+                    .into(),
+            ),
+        };
+
+        let spec = type_error_spec(source, &err);
+        let report = serializable_report_by_id(&sources, source_id, "typecheck", &spec);
+        let hint = report.errors[0]
+            .hint
+            .as_deref()
+            .expect("serialized callable signature hint");
+
+        assert_eq!(
+            hint,
+            "Callable definition signature: __Script::fixture::add(x: Int, y: Int) -> Int"
+        );
     }
 
     #[test]
