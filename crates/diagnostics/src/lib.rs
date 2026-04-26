@@ -355,6 +355,21 @@ pub fn resolve_error_spec(source: &str, message: impl Into<String>, span: Span) 
         }
     }
 
+    if let Some(name_arity) = message.strip_prefix("Undefined function ") {
+        spec.help = Some(format!(
+            "No callable named `{}` is available in this call position. Check the argument count, or capture/pass a function value explicitly.",
+            name_arity
+        ));
+        if let Some(name_span) = identifier_span_at(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: name_span,
+                message: format!("unresolved call target `{}`", name_arity),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
     if let Some(name) = message.strip_prefix("Unknown module import: ") {
         spec.help = Some(format!(
             "`{}` is not a known module or trait import target in this compilation context. Check the name, or ensure the defining file is loaded before this import.",
@@ -450,7 +465,7 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
     if let Some(labels) = infer_trait_impl_signature_mismatch_labels(source, &error.message) {
         if let Some(primary) = labels
             .iter()
-            .find(|label| label.message == "implementation function")
+            .find(|label| label.message.starts_with("actual "))
         {
             spec.primary_span = primary.span.clone();
         }
@@ -520,10 +535,12 @@ pub fn type_error_spec_by_id(
                 "impl target"
                     | "missing required method"
                     | "trait declaration"
-                    | "trait function"
                     | "trait impl declaration"
-                    | "implementation function"
             ) {
+                label.source_id = Some(source_id);
+            } else if label.message.starts_with("expected ")
+                || label.message.starts_with("actual ")
+            {
                 label.source_id = Some(source_id);
             }
         }
@@ -869,7 +886,7 @@ fn has_trait_impl_signature_mismatch_labels(spec: &DiagnosticSpec) -> bool {
         && spec
             .labels
             .iter()
-            .any(|label| label.message == "trait function")
+            .any(|label| label.message.starts_with("expected "))
         && spec
             .labels
             .iter()
@@ -877,7 +894,7 @@ fn has_trait_impl_signature_mismatch_labels(spec: &DiagnosticSpec) -> bool {
         && spec
             .labels
             .iter()
-            .any(|label| label.message == "implementation function")
+            .any(|label| label.message.starts_with("actual "))
 }
 
 fn has_parse_focus_labels(spec: &DiagnosticSpec) -> bool {
@@ -957,10 +974,21 @@ fn infer_trait_impl_signature_mismatch_labels(
     let rest = message.strip_prefix(prefix)?;
     let (method_head, detail) = rest.split_once(" has incompatible ")?;
     let (trait_name, method_name) = method_head.split_once("::")?;
+    let expected_ty = detail
+        .split_once("expected ")
+        .and_then(|(_, rest)| rest.split_once(", got ").map(|(expected, _)| expected.trim()))
+        .filter(|expected| !expected.is_empty())?;
     let got_ty = detail
         .split_once("got ")
         .map(|(_, got)| got.trim())
         .filter(|got| !got.is_empty())?;
+    let mismatch_kind = if detail.starts_with("parameter type") {
+        "parameter"
+    } else if detail.starts_with("return type") {
+        "return"
+    } else {
+        "signature"
+    };
 
     let trait_decl_span = line_head_span_with_brace(source, &format!("deftrait {}", trait_name))?;
     let trait_fn_span = line_head_span_from(
@@ -986,7 +1014,7 @@ fn infer_trait_impl_signature_mismatch_labels(
         DiagnosticLabel {
             source_id: None,
             span: trait_fn_span,
-            message: "trait function".to_string(),
+            message: format!("expected {} type: {}", mismatch_kind, expected_ty),
             color: None,
         },
         DiagnosticLabel {
@@ -998,7 +1026,7 @@ fn infer_trait_impl_signature_mismatch_labels(
         DiagnosticLabel {
             source_id: None,
             span: impl_fn_error_span,
-            message: "implementation function".to_string(),
+            message: format!("actual {} type: {}", mismatch_kind, got_ty),
             color: Some(Color::Red),
         },
     ])
@@ -1655,6 +1683,159 @@ fn build_binary_operator_template(
     }
 }
 
+fn build_function_value_flow_template(
+    line_start: usize,
+    lhs_start: usize,
+    lhs_end: usize,
+    op_start: usize,
+    op_end: usize,
+    rhs_start: usize,
+    rhs_end: usize,
+    op: &str,
+    lhs_expr: &str,
+    rhs_expr: &str,
+    message: &str,
+) -> TemplateSpec {
+    let rule = match op {
+        ">>" => "(A -> B) >> (B -> C) -> (A -> C)",
+        ">*" => "(A -> B) >* (B -> C) -> (A -> C)",
+        ">=>" => "compose one-argument Result/List-returning functions",
+        _ => "compose function values",
+    };
+
+    TemplateSpec {
+        labels: vec![
+            DiagnosticLabel {
+                source_id: None,
+                span: Span {
+                    start: line_start + lhs_start,
+                    end: line_start + lhs_end,
+                },
+                message: format!("LHS operand: {}", lhs_expr.trim()),
+                color: Some(Color::Blue),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: Span {
+                    start: line_start + op_start,
+                    end: line_start + op_end,
+                },
+                message: format!("OP rule: {}", rule),
+                color: Some(Color::Magenta),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: Span {
+                    start: line_start + rhs_start,
+                    end: line_start + rhs_end,
+                },
+                message: format!("RHS operand: {}", rhs_expr.trim()),
+                color: Some(Color::Yellow),
+            },
+        ],
+        notes: vec![
+            format!(
+                "These operands are parsed as expressions before `{}` checks whether they are function values.",
+                op
+            ),
+            message.to_string(),
+        ],
+        help: Some(format!(
+            "`{}` works on one-argument function values. Use `&name`, a closure, or a function-valued variable. If a call returns the function you want to compose, parenthesize the call like `(make_fn(...)) {} (other_fn(...))`.",
+            op, op
+        )),
+    }
+}
+
+fn build_function_value_flow_template_with_signature(
+    line_start: usize,
+    lhs_start: usize,
+    lhs_end: usize,
+    op_start: usize,
+    op_end: usize,
+    rhs_start: usize,
+    rhs_end: usize,
+    op: &str,
+    focus_is_lhs: bool,
+    failing_signature: &str,
+    opposite_expr: &str,
+    message: &str,
+    result_note: Option<&str>,
+) -> TemplateSpec {
+    let rule = match op {
+        ">>" => "(A -> B) >> (B -> C) -> (A -> C)",
+        ">*" => "(A -> Result<B> / List<B>) >* (B -> C) -> contextual function",
+        ">=>" => "(A -> Result<B> / List<B>) >=> (B -> Result<C> / List<C>) -> contextual function",
+        _ => "compose function values",
+    };
+
+    let signature_label = if focus_is_lhs {
+        "LHS signature"
+    } else {
+        "RHS signature"
+    };
+    let opposite_label = if focus_is_lhs { "RHS operand" } else { "LHS operand" };
+
+    let signature_span = if focus_is_lhs {
+        Span {
+            start: line_start + lhs_start,
+            end: line_start + lhs_end,
+        }
+    } else {
+        Span {
+            start: line_start + rhs_start,
+            end: line_start + rhs_end,
+        }
+    };
+    let opposite_span = if focus_is_lhs {
+        Span {
+            start: line_start + rhs_start,
+            end: line_start + rhs_end,
+        }
+    } else {
+        Span {
+            start: line_start + lhs_start,
+            end: line_start + lhs_end,
+        }
+    };
+
+    let mut notes = vec![message.to_string()];
+    if let Some(note) = result_note {
+        notes.insert(0, note.to_string());
+    }
+
+    TemplateSpec {
+        labels: vec![
+            DiagnosticLabel {
+                source_id: None,
+                span: signature_span,
+                message: format!("{}: {}", signature_label, failing_signature),
+                color: Some(Color::Blue),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: Span {
+                    start: line_start + op_start,
+                    end: line_start + op_end,
+                },
+                message: format!("OP rule: {}", rule),
+                color: Some(Color::Magenta),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: opposite_span,
+                message: format!("{}: {}", opposite_label, opposite_expr.trim()),
+                color: Some(Color::Yellow),
+            },
+        ],
+        notes,
+        help: Some(format!(
+            "`{}` works on one-argument function values. A call operand is typechecked first; only a resulting function value can participate in composition.",
+            op
+        )),
+    }
+}
+
 fn infer_flow_operator_template(
     source: &str,
     lines: &[(usize, usize)],
@@ -1685,6 +1866,41 @@ fn infer_flow_operator_template(
     let (lhs_start, lhs_end) = trim_char_span(&chars, lhs_start, op_start);
     let (rhs_start, rhs_end) = trim_char_span(&chars, op_end, chars.len());
     let detail = hint.and_then(parse_operator_hint);
+    if detail.is_none() && message.contains("requires a function value") {
+        let line = chars.iter().collect::<String>();
+        let lhs_expr = slice_chars(&line, lhs_start, lhs_end);
+        let rhs_expr = slice_chars(&line, rhs_start, rhs_end);
+        let op_abs_start = line_start + op_start;
+        let focus_is_lhs = focus.start < op_abs_start;
+        if let Some(signature) = hint
+            .and_then(call_target_signature_from_hint)
+            .or_else(|| hint.and_then(callable_definition_signature_from_hint))
+            .or_else(|| hint.and_then(callable_type_signature_from_hint))
+        {
+            let result_note = hint
+                .and_then(non_signature_hint_note)
+                .filter(|note| !note.is_empty());
+            return Some(build_function_value_flow_template_with_signature(
+                line_start,
+                lhs_start,
+                lhs_end,
+                op_start,
+                op_end,
+                rhs_start,
+                rhs_end,
+                op,
+                focus_is_lhs,
+                signature,
+                if focus_is_lhs { &rhs_expr } else { &lhs_expr },
+                message,
+                result_note,
+            ));
+        }
+        return Some(build_function_value_flow_template(
+            line_start, lhs_start, lhs_end, op_start, op_end, rhs_start, rhs_end, op, &lhs_expr,
+            &rhs_expr, message,
+        ));
+    }
     let lhs_actual = detail
         .as_ref()
         .map(|detail| detail.lhs.as_str())
@@ -3491,6 +3707,25 @@ fn callable_definition_signature_from_hint(hint: &str) -> Option<&str> {
         .map(|sig| sig.lines().next().unwrap_or(sig))
 }
 
+fn call_target_signature_from_hint(hint: &str) -> Option<&str> {
+    hint.strip_prefix("Call target signature: ")
+        .map(|sig| sig.lines().next().unwrap_or(sig))
+}
+
+fn callable_type_signature_from_hint(hint: &str) -> Option<&str> {
+    hint.strip_prefix("Callable type signature: ")
+        .map(|sig| sig.lines().next().unwrap_or(sig))
+}
+
+fn non_signature_hint_note(hint: &str) -> Option<&str> {
+    hint.lines().find(|line| {
+        !line.starts_with("Call target signature: ")
+            && !line.starts_with("Callable definition signature: ")
+            && !line.starts_with("Callable definition span: ")
+            && !line.starts_with("Callable type signature: ")
+    })
+}
+
 fn callable_definition_span_from_hint(hint: &str) -> Option<Span> {
     let line = hint
         .lines()
@@ -5049,6 +5284,75 @@ mod tests {
     }
 
     #[test]
+    fn type_error_spec_labels_compose_call_operands_without_unknown_types() {
+        let source = "bad = inc(1) >> inc(1)";
+        let err = TypeError {
+            message: "`>>` requires a function value".into(),
+            span: Span { start: 6, end: 12 },
+            hint: Some(
+                "Call target signature: __Script::fixture::inc(arg1: Int) -> Int\n`>>` evaluates this call before composition; the result type Int is not a function value."
+                    .into(),
+            ),
+        };
+
+        let spec = type_error_spec(source, &err);
+        let rendered = strip_ansi(&render_error("main.srt", source, &spec));
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "LHS signature: __Script::fixture::inc(arg1: Int) -> Int"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "RHS operand: inc(1)"));
+        assert!(!rendered.contains("unknown"));
+        assert!(rendered.contains("result type Int is not a function value"));
+    }
+
+    #[test]
+    fn type_error_spec_labels_trait_impl_signature_mismatch_show_expected_and_actual_types() {
+        let source = r#"deftrait Summable {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+impl Summable for Int {
+  def add(self: Self, rhs: String) -> Self {
+    self
+  }
+}"#;
+        let string_start = source.find("String").expect("impl type");
+        let err = TypeError {
+            message:
+                "Trait impl method Summable::add has incompatible parameter type: expected Int, got String"
+                    .into(),
+            span: Span {
+                start: string_start,
+                end: string_start + "String".len(),
+            },
+            hint: None,
+        };
+
+        let spec = type_error_spec(source, &err);
+        let expected = spec
+            .labels
+            .iter()
+            .find(|label| label.message == "expected parameter type: Int")
+            .expect("expected label");
+        let actual = spec
+            .labels
+            .iter()
+            .find(|label| label.message == "actual parameter type: String")
+            .expect("actual label");
+
+        assert_eq!(
+            slice_chars(source, expected.span.start, expected.span.end),
+            "def add(self: Self, rhs: Self) -> Self"
+        );
+        assert_eq!(slice_chars(source, actual.span.start, actual.span.end), "String");
+    }
+
+    #[test]
     fn collect_match_arm_body_spans_ignores_literals() {
         let source = r#"match value { Left("=>") => "a,b", Right(x) => x }"#;
         let chars: Vec<char> = source.chars().collect();
@@ -5372,18 +5676,18 @@ bad = add("oops", 1)"#;
     fn resolve_error_spec_labels_undefined_callable() {
         let spec = resolve_error_spec(
             "unknown(1)",
-            "Undefined variable or function: unknown",
+            "Undefined function unknown/1",
             Span { start: 0, end: 7 },
         );
 
         assert!(spec
             .labels
             .iter()
-            .any(|label| label.message.contains("unresolved callable `unknown`")));
+            .any(|label| label.message.contains("unresolved call target `unknown/1`")));
         assert!(spec
             .help
             .as_deref()
-            .is_some_and(|help| help.contains("function name is imported correctly")));
+            .is_some_and(|help| help.contains("Check the argument count")));
     }
 
     #[test]

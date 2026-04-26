@@ -509,12 +509,12 @@ impl Checker {
                 self.check_function_value_operand(node, op_name)
             }
             _ => Err(TypeError {
-                message: format!(
-                    "{} requires a function value",
-                    op_name
-                ),
+                message: format!("{} requires a function value", op_name),
                 span: self.resolved_span(node).clone(),
-                hint: Some("Use `&f`, a closure, a function-typed variable, a grouped function-valued expression, or another compose expression.".into()),
+                hint: Some(format!(
+                    "{} composes one-argument function values. This operand is being parsed as a call/result expression first. Use `&f`, a closure, a function-typed variable, or another compose expression. If you meant to compose a function returned by a call, parenthesize the call like `(make_fn(...)) {} (other_fn(...))`.",
+                    op_name, op_name
+                )),
             }),
         }
     }
@@ -524,21 +524,7 @@ impl Checker {
         node: &Resolved,
         op_name: &str,
     ) -> Result<TypedNode, TypeError> {
-        match node {
-            Resolved::Capture(_, _, _)
-            | Resolved::Closure(_, _, _, _)
-            | Resolved::Compose(_, _, _)
-            | Resolved::LiftedCompose(_, _, _)
-            | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
-            Resolved::Var(_, _) | Resolved::Grouped(_, _) => {
-                self.check_function_value_operand(node, op_name)
-            }
-            _ => Err(TypeError {
-                message: format!("{} requires a function value", op_name),
-                span: self.resolved_span(node).clone(),
-                hint: Some("Use `&f`, a closure, a function-typed variable, or a parenthesized expression that evaluates to a function value.".into()),
-            }),
-        }
+        self.check_function_value_operand(node, op_name)
     }
 
     pub(super) fn check_apply_callable(
@@ -568,15 +554,114 @@ impl Checker {
         node: &Resolved,
         op_name: &str,
     ) -> Result<TypedNode, TypeError> {
-        let typed = self.check_node(node)?;
+        let typed = match self.check_node(node) {
+            Ok(typed) => typed,
+            Err(err) => return Err(self.remap_compose_operand_error(node, op_name, err)),
+        };
         if matches!(self.resolve_ty(&typed.ty), Ty::Func(_, _)) {
             Ok(typed)
         } else {
+            let span = typed.span.clone();
+            let hint = self.compose_function_value_hint(&typed, op_name);
             Err(TypeError {
                 message: format!("{} requires a function value", op_name),
-                span: typed.span,
-                hint: Some("Bare function names are not function values; use `&name`, a closure, a function-typed variable, or `(call_returning_function(...))`.".into()),
+                span,
+                hint: Some(hint),
             })
+        }
+    }
+
+    fn remap_compose_operand_error(
+        &self,
+        node: &Resolved,
+        op_name: &str,
+        err: TypeError,
+    ) -> TypeError {
+        let Resolved::App(_, func, args) = node else {
+            return err;
+        };
+
+        let Some(name) = self.compose_operand_callee_name(func) else {
+            return err;
+        };
+        let arity = args.len();
+        let is_arity_error = err.message.contains("expects")
+            && err.message.contains("argument(s)")
+            && err.message.contains(", got ");
+        if !is_arity_error {
+            return err;
+        }
+
+        TypeError {
+            message: format!("Undefined function {}/{}", name, arity),
+            span: self.resolved_span(func).clone(),
+            hint: Some(format!(
+                "{} composes one-argument function values. `{}` is being called with arity {}, but no callable with that arity is available here.",
+                op_name, name, arity
+            )),
+        }
+    }
+
+    fn compose_operand_callee_name(&self, node: &Resolved) -> Option<String> {
+        match node {
+            Resolved::Var(_, id) => Some(id.name.clone()),
+            Resolved::Grouped(_, inner) => self.compose_operand_callee_name(inner),
+            _ => None,
+        }
+    }
+
+    fn compose_call_signature_hint(&self, func: &TypedNode) -> Option<String> {
+        match (&func.node, self.resolve_ty(&func.ty)) {
+            (TypedInner::Var(id), Ty::BuiltinFunc { params, ret, .. })
+            | (TypedInner::Var(id), Ty::UserFunc { params, ret, .. }) => {
+                Some(self.call_target_signature_hint_for_id(id, &params, ret.as_ref()))
+            }
+            (_, Ty::BuiltinFunc { name, params, ret }) => {
+                Some(self.call_target_signature_hint(&name, &params, ret.as_ref(), None))
+            }
+            (_, Ty::UserFunc { params, ret, .. }) => self.callable_definition_signature_hint(
+                func,
+                &params,
+                ret.as_ref(),
+            ),
+            (_, Ty::Func(params, ret)) => {
+                self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn compose_function_value_hint(&self, typed: &TypedNode, op_name: &str) -> String {
+        if let TypedInner::App(func, _) = &typed.node {
+            let signature = self
+                .compose_call_signature_hint(func)
+                .unwrap_or_else(|| "Call target signature: <unknown>".into());
+            format!(
+                "{}\n`{}` evaluates this call before composition; the result type {} is not a function value.",
+                signature,
+                op_name,
+                self.ty_name(&typed.ty)
+            )
+        } else {
+            format!(
+                "{} works on one-argument function values. Bare function names are not function values; use `&name`, a closure, a function-typed variable, or a call that returns a function value.",
+                op_name
+            )
+        }
+    }
+
+    fn tuple_index_hint(tuple_len: usize) -> String {
+        if tuple_len == 0 {
+            "This tuple has 0 elements, so no tuple selectors are available.".into()
+        } else {
+            let selectors = (0..tuple_len)
+                .map(|idx| format!("._{}", idx))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "This tuple has {} element(s); valid selectors are {}.",
+                tuple_len, selectors
+            )
         }
     }
 
@@ -3840,7 +3925,7 @@ impl Checker {
                         self.ty_name(source_ty)
                     ),
                     span: span.clone(),
-                    hint: None,
+                    hint: Some(Self::tuple_index_hint(items.len())),
                 })?;
                 Ok((
                     TypedLensSegment::Tuple {
@@ -4040,7 +4125,7 @@ impl Checker {
                     .join(", ")
             ),
             span: span.clone(),
-            hint: None,
+            hint: Some(Self::tuple_index_hint(tuple_items.len())),
         })?;
 
         if !self.types_compatible(&focus_ty, &expected_focus) {

@@ -1,2 +1,2 @@
 phase: resolve
-contains: Undefined variable or function: missing_func
+contains: Undefined function missing_func/1

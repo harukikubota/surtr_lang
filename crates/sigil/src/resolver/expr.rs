@@ -77,11 +77,24 @@ impl Resolver {
         }
     }
 
-    fn map_undefined_callable_error(err: ResolveError, func: &Ast) -> ResolveError {
+    fn undefined_callable_arity_message(func: &Ast, arity: usize) -> Option<String> {
+        match func {
+            Ast::Var(_, name) => Some(format!("Undefined function {}/{}", name, arity)),
+            Ast::Path(_, path) => Some(format!(
+                "Undefined function {}/{}",
+                path.segments.join("::"),
+                arity
+            )),
+            _ => None,
+        }
+    }
+
+    fn map_undefined_callable_error(err: ResolveError, func: &Ast, arity: usize) -> ResolveError {
         match func {
             Ast::Var(_, name) if err.message == format!("Undefined variable: {}", name) => {
                 ResolveError {
-                    message: format!("Undefined variable or function: {}", name),
+                    message: Self::undefined_callable_arity_message(func, arity)
+                        .unwrap_or_else(|| format!("Undefined variable or function: {}", name)),
                     span: err.span,
                     related_labels: Vec::new(),
                 }
@@ -90,9 +103,8 @@ impl Resolver {
                 if err.message == format!("Undefined variable: {}", path.segments.join("::")) =>
             {
                 ResolveError {
-                    message: format!(
-                        "Undefined variable or function: {}",
-                        path.segments.join("::")
+                    message: Self::undefined_callable_arity_message(func, arity).unwrap_or_else(
+                        || format!("Undefined variable or function: {}", path.segments.join("::")),
                     ),
                     span: err.span,
                     related_labels: Vec::new(),
@@ -401,7 +413,7 @@ impl Resolver {
                 if Self::conversion_call_head(&func).is_some() {
                     let resolved_func = self
                         .resolve_node(*func.clone())
-                        .map_err(|err| Self::map_undefined_callable_error(err, &func))?;
+                        .map_err(|err| Self::map_undefined_callable_error(err, &func, args.len()))?;
                     if args.len() != 2 {
                         return Err(ResolveError {
                             message: "from/try_from expects exactly 2 positional arguments".into(),
@@ -437,7 +449,7 @@ impl Resolver {
 
                 let resolved_func = self
                     .resolve_node(*func.clone())
-                    .map_err(|err| Self::map_undefined_callable_error(err, &func))?;
+                    .map_err(|err| Self::map_undefined_callable_error(err, &func, args.len()))?;
                 let resolved_args = args
                     .into_iter()
                     .map(|arg| match arg {

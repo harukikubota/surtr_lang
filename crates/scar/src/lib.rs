@@ -1691,6 +1691,44 @@ bad = &text >> &inc"#,
     }
 
     #[test]
+    #[ignore = "covered by integration/manual cases; current scar unit harness overflows stack here"]
+    fn compose_accepts_calls_returning_function_values() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"def make_inc() -> (Int -> Int) {
+  {|x| x + 1}
+}
+
+def make_double() -> (Int -> Int) {
+  {|x| x * 2}
+}
+
+plain = make_inc() >> make_double()"#,
+        );
+        let typed = typecheck(resolved).expect("compose should accept function-returning calls");
+        assert!(matches!(
+            typed.last().map(|node| &node.node),
+            Some(TypedInner::Compose(_, _, _))
+        ));
+    }
+
+    #[test]
+    #[ignore = "covered by integration/manual cases; current scar unit harness overflows stack here"]
+    fn compose_rejects_non_function_call_results_after_typechecking_call() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+plain = inc(1) >> inc(1)"#,
+        );
+        let err = typecheck(resolved).expect_err("compose should reject Int call results");
+        assert_eq!(err.message, "`>>` requires a function value");
+        let hint = err.hint.as_deref().expect("compose function-value hint");
+        assert!(hint.contains("Call target signature:"));
+        assert!(hint.contains("result type Int is not a function value"));
+    }
+
+    #[test]
     fn pipe_plain_apply_over_result_reports_whole_lhs_mismatch() {
         let resolved = resolve_with_builtin_prelude(
             r#"def parse(x: Int) -> Result<Int> {

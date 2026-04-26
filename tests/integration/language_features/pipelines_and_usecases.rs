@@ -344,7 +344,7 @@ def render(x: Int) -> Result<String> {
 }
 
 pipeline = parse() >=> render()"#,
-        "requires a function value",
+        "Undefined function parse/0",
     );
 
     assert_compile_error(
@@ -357,7 +357,7 @@ def render(x: Int) -> String {
 }
 
 pipeline = parse() >* render()"#,
-        "requires a function value",
+        "Undefined function parse/0",
     );
 
     assert_compile_error(
@@ -366,7 +366,23 @@ pipeline = parse() >* render()"#,
 }
 
 plain = inc() >> inc()"#,
-        "requires a function value",
+        "Undefined function inc/0",
+    );
+}
+
+fn compose_accepts_closure_returning_calls_without_parentheses() {
+    assert_output(
+        r#"def make_inc() -> (Int -> Int) {
+  {|x| x + 1}
+}
+
+def make_double() -> (Int -> Int) {
+  {|x| x * 2}
+}
+
+plain = make_inc() >> make_double()
+print(to_string(plain(3)))"#,
+        &["8"],
     );
 }
 
@@ -688,6 +704,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
         (
             "compose_rejects_call_expressions",
             compose_rejects_call_expressions as fn(),
+        ),
+        (
+            "compose_accepts_closure_returning_calls_without_parentheses",
+            compose_accepts_closure_returning_calls_without_parentheses as fn(),
         ),
         (
             "flow_operators_reject_context_mismatch_and_monadic_map_rhs",
