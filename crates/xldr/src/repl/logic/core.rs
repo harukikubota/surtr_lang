@@ -609,7 +609,7 @@ impl ReplEngine {
 
     pub(crate) fn prompt(&self) -> String {
         if self.pending.is_empty() {
-            format!("surtr({})> ", self.next_line)
+            format!("xldr({})> ", self.next_line)
         } else {
             format!("...({})> ", self.next_line)
         }
