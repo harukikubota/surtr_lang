@@ -22,6 +22,7 @@ impl Resolver {
                     start: prev_span.start,
                     end: span.end,
                 },
+                related_labels: Vec::new(),
             });
         }
         seen.insert(name.clone(), span.clone());
@@ -60,6 +61,7 @@ impl Resolver {
                 let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
                     span: span.clone(),
+                    related_labels: Vec::new(),
                 })?;
                 Ok(ResolvedPattern::Constructor(
                     ResolvedId {
@@ -82,6 +84,7 @@ impl Resolver {
                         format!("Undefined MatchBlock head: {}", head_name)
                     },
                     span: span.clone(),
+                    related_labels: Vec::new(),
                 })?;
                 let head_kind = self
                     .declaration_uid_kinds
@@ -99,6 +102,7 @@ impl Resolver {
                     .ok_or_else(|| ResolveError {
                         message: format!("Unknown MatchBlock head: {}", head_name),
                         span: span.clone(),
+                        related_labels: Vec::new(),
                     })?;
                 let resolved_id = ResolvedId {
                     name: head_name.clone(),
@@ -119,6 +123,7 @@ impl Resolver {
                                     head_name, head_name
                                 ),
                                 span,
+                            related_labels: Vec::new(),
                             });
                         }
                         Ok(ResolvedPattern::Extractor(resolved_id, resolved_inners))
@@ -136,6 +141,7 @@ impl Resolver {
                                     head_name, head_name
                                 ),
                                 span,
+                            related_labels: Vec::new(),
                             });
                         };
                         if !matches!(extractor_kind, DeclarationKind::Extractor) {
@@ -145,6 +151,7 @@ impl Resolver {
                                     head_name, head_name
                                 ),
                                 span,
+                            related_labels: Vec::new(),
                             });
                         }
                         Ok(ResolvedPattern::Extractor(
@@ -166,6 +173,7 @@ impl Resolver {
                                 head_name
                             ),
                             span,
+                            related_labels: Vec::new(),
                         })
                     }
                     other => Err(ResolveError {
@@ -174,6 +182,7 @@ impl Resolver {
                             head_name, other
                         ),
                         span,
+                        related_labels: Vec::new(),
                     }),
                 }
             }

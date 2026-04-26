@@ -313,15 +313,7 @@ fn collect_doc_entries_for_ast(
                 }
                 for method in methods {
                     match method {
-                        spire::ast::Ast::Def(
-                            _,
-                            name,
-                            type_params,
-                            params,
-                            ret_ty,
-                            _,
-                            attrs,
-                        ) => {
+                        spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
                                 out.push(DocEntry {
                                     qualified_name: qualified_name(
@@ -346,14 +338,7 @@ fn collect_doc_entries_for_ast(
                     }
                 }
             }
-            spire::ast::Ast::TraitImplDef(
-                _,
-                trait_name,
-                trait_args,
-                target_ty,
-                methods,
-                attrs,
-            ) => {
+            spire::ast::Ast::TraitImplDef(_, trait_name, trait_args, target_ty, methods, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     let rendered = format_trait_impl_signature(trait_name, trait_args, target_ty);
                     out.push(DocEntry {
@@ -391,9 +376,7 @@ fn collect_doc_entries_for_ast(
                                     &format!(
                                         "{}::{}",
                                         format_trait_impl_signature(
-                                            trait_name,
-                                            trait_args,
-                                            target_ty,
+                                            trait_name, trait_args, target_ty,
                                         ),
                                         name
                                     ),
@@ -956,9 +939,7 @@ impl Show for Int {
         assert!(docs.iter().any(|entry| {
             entry.qualified_name == "Sample::impl Show for Int::to_string"
                 && entry.kind == DocKind::Function
-                && entry
-                    .signature
-                    .as_deref()
+                && entry.signature.as_deref()
                     == Some("impl Show for Int::to_string(self: Self) -> String")
                 && entry.doc == "Render `Int` through the standard display surface."
         }));

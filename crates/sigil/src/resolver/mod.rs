@@ -6,7 +6,7 @@ use spire::ast::{
     RecordLitArg, Span, Visibility,
 };
 
-use crate::error::ResolveError;
+use crate::error::{ResolveError, ResolveErrorLabel};
 use crate::resolved::*;
 use crate::scope::Scope;
 

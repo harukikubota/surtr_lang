@@ -337,25 +337,15 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
                     vm.emit_stderr_line(line);
                 }
             } else if let (Some(source), Some(file)) = (vm.source(), vm.source_file()) {
-                use ariadne::{Color, Label, Report, ReportKind, Source};
-
-                let start = rich.location.span_start as usize;
-                let end = rich.location.span_end as usize;
-                if let Err(err) = Report::build(ReportKind::Error, (file, start..end))
-                    .with_message(rich.kind.clone())
-                    .with_label(
-                        Label::new((file, start..end))
-                            .with_message(rich.message.clone())
-                            .with_color(Color::Red),
-                    )
-                    .finish()
-                    .eprint((file, Source::from(source)))
-                {
-                    return Err(RuntimeError::new(format!(
-                        "Failed to render rich error report: {}",
-                        err
-                    )));
-                }
+                let spec = diagnostics::runtime_value_error_spec(
+                    source,
+                    rich.kind.clone(),
+                    rich.message.clone(),
+                    rich.location.span_start as usize,
+                    rich.location.span_end as usize,
+                    rich_error_cause_help(rich),
+                );
+                eprint!("{}", diagnostics::render_error(file, source, &spec));
                 for line in rich.to_eprint_lines().into_iter().skip(1) {
                     eprintln!("{}", line);
                 }
@@ -371,6 +361,20 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
         }
     }
     Ok(Value::Unit)
+}
+
+fn rich_error_cause_help(rich: &RichError) -> Option<String> {
+    let mut lines = Vec::new();
+    let mut next = rich.cause.as_deref();
+    while let Some(cause) = next {
+        lines.push(format!("Caused by: {}: {}", cause.kind, cause.message));
+        next = cause.cause.as_deref();
+    }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
 }
 
 fn builtin_set_exit_code(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

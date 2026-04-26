@@ -159,6 +159,84 @@ fn diagnostic_location_for_span(
     (source_id_for_span(compile_sources, span), span.clone())
 }
 
+fn impl_header_span(source: &str, span: &Span) -> Span {
+    let chars = source.chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return span.clone();
+    }
+    let anchor = span.start.min(chars.len().saturating_sub(1));
+    let line_start = chars[..anchor]
+        .iter()
+        .rposition(|ch| *ch == '\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let line_end = chars[anchor..]
+        .iter()
+        .position(|ch| *ch == '\n')
+        .map(|idx| anchor + idx)
+        .unwrap_or(chars.len());
+    let mut header_start = line_start;
+    while header_start < line_end && chars[header_start].is_whitespace() {
+        header_start += 1;
+    }
+    let mut header_end = (line_start..line_end)
+        .find(|idx| chars[*idx] == '{')
+        .unwrap_or(line_end);
+    while header_end > header_start && chars[header_end - 1].is_whitespace() {
+        header_end -= 1;
+    }
+    if header_start < header_end {
+        Span {
+            start: header_start,
+            end: header_end,
+        }
+    } else {
+        span.clone()
+    }
+}
+
+fn resolve_spec_for_error(
+    compile_sources: &xldr::CompileSources,
+    error: &sigil::error::ResolveError,
+) -> (SourceId, diagnostics::DiagnosticSpec) {
+    let (source_id, span) = diagnostic_location_for_span(compile_sources, &error.span);
+    let source = compile_sources.sources.source(source_id).unwrap_or("");
+    let primary_span = if error.message.starts_with("Multiple impl blocks for `")
+        || error
+            .message
+            .starts_with("Multiple trait impl blocks for `")
+    {
+        impl_header_span(source, &span)
+    } else {
+        span
+    };
+    let mut spec = diagnostics::resolve_error_spec(source, &error.message, primary_span.clone());
+    for related in &error.related_labels {
+        let (label_source_id, label_span) =
+            diagnostic_location_for_span(compile_sources, &related.span);
+        let label_source = compile_sources
+            .sources
+            .source(label_source_id)
+            .unwrap_or("");
+        let label_span = if error.message.starts_with("Multiple impl blocks for `")
+            || error
+                .message
+                .starts_with("Multiple trait impl blocks for `")
+        {
+            impl_header_span(label_source, &label_span)
+        } else {
+            label_span
+        };
+        spec.labels.push(diagnostics::DiagnosticLabel {
+            source_id: Some(label_source_id),
+            span: label_span,
+            message: related.message.clone(),
+            color: Some(diagnostics::Color::Red),
+        });
+    }
+    (source_id, spec)
+}
+
 pub(crate) fn collect_default_script_compile_sources(
     env: ExecutionEnv,
     file_path: &str,
@@ -422,18 +500,8 @@ pub(crate) fn compile_source(
     );
 
     let declaration_index = sigil::precollect_declaration_index(&module_stages).map_err(|e| {
-        let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-        RuneError::diagnostic(
-            1,
-            sources,
-            source_id,
-            "resolve",
-            diagnostics::resolve_error_spec(
-                sources.source(source_id).unwrap_or(""),
-                &e.message,
-                span,
-            ),
-        )
+        let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
+        RuneError::diagnostic(1, sources, source_id, "resolve", spec)
     })?;
 
     let resolved = sigil::resolve_staged_program(
@@ -443,18 +511,8 @@ pub(crate) fn compile_source(
         Some(compile_sources.user_module_path.clone()),
     )
     .map_err(|e| {
-        let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-        RuneError::diagnostic(
-            1,
-            sources,
-            source_id,
-            "resolve",
-            diagnostics::resolve_error_spec(
-                sources.source(source_id).unwrap_or(""),
-                &e.message,
-                span,
-            ),
-        )
+        let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
+        RuneError::diagnostic(1, sources, source_id, "resolve", spec)
     })?;
 
     let typed = scar::typecheck_with_context(

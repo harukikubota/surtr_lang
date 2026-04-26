@@ -466,7 +466,7 @@ pub fn precollect_declaration_index(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<DeclarationIndex, ResolveError> {
     let mut index = DeclarationIndex::new();
-    let mut seen_impl_targets = HashSet::new();
+    let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
     for (stage_index, stage) in module_stages.iter().enumerate() {
         for module in stage {
             let mut local_types: HashMap<String, DeclarationKind> = HashMap::new();
@@ -497,6 +497,7 @@ pub fn precollect_declaration_index(
                                 target
                             ),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     };
                     if !matches!(
@@ -509,6 +510,7 @@ pub fn precollect_declaration_index(
                                 target
                             ),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
 
@@ -517,14 +519,26 @@ pub fn precollect_declaration_index(
                     } else {
                         format!("{}::{}", module.module_path, target)
                     };
-                    if !seen_impl_targets.insert(target_fq.clone()) {
+                    if let Some(first_span) = seen_impl_targets.get(&target_fq) {
                         return Err(ResolveError {
                             message: format!(
                                 "Multiple impl blocks for `{}` are not allowed",
                                 target_fq
                             ),
                             span: span.clone(),
+                            related_labels: vec![
+                                ResolveErrorLabel {
+                                    span: first_span.clone(),
+                                    message: "first definition".to_string(),
+                                },
+                                ResolveErrorLabel {
+                                    span: span.clone(),
+                                    message: "conflicting definition".to_string(),
+                                },
+                            ],
                         });
+                    } else {
+                        seen_impl_targets.insert(target_fq.clone(), span.clone());
                     }
 
                     let method_module_path = impl_method_module_path(&module.module_path, target);
@@ -537,6 +551,7 @@ pub fn precollect_declaration_index(
                                             message: "`new` is only allowed in impl blocks for struct types"
                                                 .to_string(),
                                             span: method_span.clone(),
+                                        related_labels: Vec::new(),
                                         });
                                     }
                                     DeclarationKind::ImplCtorNew
@@ -545,18 +560,16 @@ pub fn precollect_declaration_index(
                                 };
                                 (method_span, method_name, kind, attrs)
                             }
-                            Ast::ExtractorDef(method_span, method_name, _, _, _, _, attrs) => (
-                                method_span,
-                                method_name,
-                                DeclarationKind::Extractor,
-                                attrs,
-                            ),
+                            Ast::ExtractorDef(method_span, method_name, _, _, _, _, attrs) => {
+                                (method_span, method_name, DeclarationKind::Extractor, attrs)
+                            }
                             _ => {
                                 return Err(ResolveError {
                                     message:
                                         "impl body may only contain `def` / `defextractor` declarations"
                                             .to_string(),
                                     span: span.clone(),
+                                related_labels: Vec::new(),
                                 });
                             }
                         };
@@ -569,6 +582,7 @@ pub fn precollect_declaration_index(
                                     fq_name, prev.stage_index, prev.module_path
                                 ),
                                 span: method_span.clone(),
+                            related_labels: Vec::new(),
                             });
                         }
 
@@ -601,6 +615,7 @@ pub fn precollect_declaration_index(
                                 fq_name, prev.stage_index, prev.module_path
                             ),
                             span: span.clone(),
+                        related_labels: Vec::new(),
                         });
                     }
                     index.insert(
@@ -632,6 +647,7 @@ pub fn precollect_declaration_index(
                                     method_fq_name, prev.stage_index, prev.module_path
                                 ),
                                 span: method.span.clone(),
+                            related_labels: Vec::new(),
                             });
                         }
                         index.insert(
@@ -659,6 +675,7 @@ pub fn precollect_declaration_index(
                                 message: "trait impl body may only contain `def` declarations"
                                     .to_string(),
                                 span: span.clone(),
+                                related_labels: Vec::new(),
                             });
                         };
                         let internal_name = trait_impl_method_qualified_name(
@@ -676,6 +693,7 @@ pub fn precollect_declaration_index(
                                     internal_name, prev.stage_index, prev.module_path
                                 ),
                                 span: method_span.clone(),
+                            related_labels: Vec::new(),
                             });
                         }
                         index.insert(
@@ -711,6 +729,7 @@ pub fn precollect_declaration_index(
                                 fq_name, prev.stage_index, prev.module_path
                             ),
                             span: span.clone(),
+                        related_labels: Vec::new(),
                         });
                     }
                     index.insert(
@@ -740,6 +759,7 @@ pub fn precollect_declaration_index(
                                     variant_fq_name, prev.stage_index, prev.module_path
                                 ),
                                 span: variant.span.clone(),
+                            related_labels: Vec::new(),
                             });
                         }
                         index.insert(
@@ -837,6 +857,7 @@ pub fn precollect_declaration_index(
                             fq_name, prev.stage_index, prev.module_path
                         ),
                         span: span.clone(),
+                    related_labels: Vec::new(),
                     });
                 }
 
@@ -881,7 +902,7 @@ impl Resolver {
         }
 
         let mut lowered = Vec::new();
-        let mut seen_impl_targets = HashSet::new();
+        let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
 
         for stmt in stmts {
             match stmt {
@@ -893,6 +914,7 @@ impl Resolver {
                                 target
                             ),
                             span,
+                            related_labels: Vec::new(),
                         });
                     };
                     if !matches!(
@@ -905,16 +927,29 @@ impl Resolver {
                                 target
                             ),
                             span,
+                            related_labels: Vec::new(),
                         });
                     }
-                    if !seen_impl_targets.insert(target.clone()) {
+                    if let Some(first_span) = seen_impl_targets.get(&target) {
                         return Err(ResolveError {
                             message: format!(
                                 "Multiple impl blocks for `{}` are not allowed",
                                 target
                             ),
-                            span,
+                            span: span.clone(),
+                            related_labels: vec![
+                                ResolveErrorLabel {
+                                    span: first_span.clone(),
+                                    message: "first definition".to_string(),
+                                },
+                                ResolveErrorLabel {
+                                    span: span.clone(),
+                                    message: "conflicting definition".to_string(),
+                                },
+                            ],
                         });
+                    } else {
+                        seen_impl_targets.insert(target.clone(), span.clone());
                     }
 
                     for method in methods {
@@ -936,6 +971,7 @@ impl Resolver {
                                             "`new` is only allowed in impl blocks for struct types"
                                                 .to_string(),
                                         span: method_span,
+                                        related_labels: Vec::new(),
                                     });
                                 }
 
@@ -998,6 +1034,7 @@ impl Resolver {
                                         "impl body may only contain `def` / `defextractor` declarations"
                                             .to_string(),
                                     span: span.clone(),
+                                related_labels: Vec::new(),
                                 });
                             }
                         }
@@ -1034,12 +1071,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let qualified_name = self.qualify_current_declaration_name(name);
@@ -1066,12 +1105,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let qualified_name = self.qualify_current_declaration_name(name);
@@ -1097,12 +1138,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let qualified_trait = self.qualify_current_declaration_name(name);
@@ -1136,6 +1179,7 @@ impl Resolver {
                                     method_alias
                                 ),
                                 span: method.span.clone(),
+                                related_labels: Vec::new(),
                             });
                         }
                         if !self.allow_top_level_shadowing
@@ -1147,6 +1191,7 @@ impl Resolver {
                                     method_alias
                                 ),
                                 span: method.span.clone(),
+                                related_labels: Vec::new(),
                             });
                         }
                         let method_uid = self
@@ -1176,6 +1221,7 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: stmt.span().clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     // Builtins are keyed by fixed IDs from builtin metadata.
@@ -1196,6 +1242,7 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: stmt.span().clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let uid = self
@@ -1215,12 +1262,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let uid = self
@@ -1240,12 +1289,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", head.name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(&head.name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", head.name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let uid = self.scope.reserve_id();
@@ -1263,12 +1314,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let qualified_name = self.qualify_current_declaration_name(name);
@@ -1299,12 +1352,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let qualified_enum = self.qualify_current_declaration_name(name);
@@ -1334,6 +1389,7 @@ impl Resolver {
                                     qualified_ctor
                                 ),
                                 span: variant.span.clone(),
+                                related_labels: Vec::new(),
                             });
                         }
                         if !self.allow_top_level_shadowing
@@ -1345,6 +1401,7 @@ impl Resolver {
                                     qualified_ctor
                                 ),
                                 span: variant.span.clone(),
+                                related_labels: Vec::new(),
                             });
                         }
                         let ctor_uid = self

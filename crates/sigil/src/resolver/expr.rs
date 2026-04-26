@@ -83,6 +83,7 @@ impl Resolver {
                 ResolveError {
                     message: format!("Undefined variable or function: {}", name),
                     span: err.span,
+                    related_labels: Vec::new(),
                 }
             }
             Ast::Path(_, path)
@@ -94,6 +95,7 @@ impl Resolver {
                         path.segments.join("::")
                     ),
                     span: err.span,
+                    related_labels: Vec::new(),
                 }
             }
             _ => err,
@@ -114,6 +116,7 @@ impl Resolver {
                             message: "type witness arguments do not accept named type parameters"
                                 .into(),
                             span: expr.span().clone(),
+                            related_labels: Vec::new(),
                         }),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -128,6 +131,7 @@ impl Resolver {
                 message: "conversion target must be a bare type name such as String or Result<Int>"
                     .into(),
                 span: other.span().clone(),
+                related_labels: Vec::new(),
             }),
         }
     }
@@ -272,6 +276,7 @@ impl Resolver {
                     .ok_or_else(|| ResolveError {
                         message: format!("Undefined variable: {}", name),
                         span: span.clone(),
+                        related_labels: Vec::new(),
                     })?;
                 let qualified_name = (uid != TUPLE_TYPE_ROOT_UID)
                     .then(|| self.declaration_fq_name_for_uid(uid))
@@ -287,6 +292,7 @@ impl Resolver {
                             name
                         ),
                         span,
+                    related_labels: Vec::new(),
                     });
                 }
                 Ok(Resolved::Var(
@@ -314,6 +320,7 @@ impl Resolver {
                     .ok_or_else(|| ResolveError {
                         message: format!("Undefined variable: {}", name),
                         span: span.clone(),
+                        related_labels: Vec::new(),
                     })?;
                 let qualified_name = if uid == TUPLE_TYPE_ROOT_UID {
                     None
@@ -334,6 +341,7 @@ impl Resolver {
                             name
                         ),
                         span,
+                    related_labels: Vec::new(),
                     });
                 }
                 Ok(Resolved::Var(
@@ -398,6 +406,7 @@ impl Resolver {
                         return Err(ResolveError {
                             message: "from/try_from expects exactly 2 positional arguments".into(),
                             span,
+                            related_labels: Vec::new(),
                         });
                     }
                     let mut resolved_args = Vec::with_capacity(2);
@@ -418,6 +427,7 @@ impl Resolver {
                                 return Err(ResolveError {
                                     message: "from/try_from does not accept named arguments".into(),
                                     span: expr.span().clone(),
+                                    related_labels: Vec::new(),
                                 });
                             }
                         }
@@ -918,6 +928,7 @@ impl Resolver {
                             message: "trait impl body may only contain `def` declarations"
                                 .to_string(),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     };
 
@@ -994,6 +1005,7 @@ impl Resolver {
                     return Err(ResolveError {
                         message: format!("Unknown builtin declaration: {}", name),
                         span,
+                        related_labels: Vec::new(),
                     });
                 }
 
@@ -1089,18 +1101,22 @@ impl Resolver {
             Ast::Defmod(span, name, _, _) => Err(ResolveError {
                 message: format!("Module resolution is not implemented yet: {}", name),
                 span,
+                related_labels: Vec::new(),
             }),
             Ast::Import(span, _, _) => Err(ResolveError {
                 message: "Import resolution is not implemented yet".to_string(),
                 span,
+                related_labels: Vec::new(),
             }),
             Ast::Include(span, _) => Err(ResolveError {
                 message: "include directives must be resolved before name resolution".to_string(),
                 span,
+                related_labels: Vec::new(),
             }),
             Ast::ImplDef(span, target, _, _) => Err(ResolveError {
                 message: format!("impl lowering failed for target `{}`", target),
                 span,
+                related_labels: Vec::new(),
             }),
 
             Ast::Closure(span, params, body) => {
@@ -1154,6 +1170,7 @@ impl Resolver {
                 let uid = self.scope.lookup(&type_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined type: {}", type_name),
                     span: span.clone(),
+                    related_labels: Vec::new(),
                 })?;
                 let rid = ResolvedId {
                     name: type_name,
@@ -1185,6 +1202,7 @@ impl Resolver {
                     .ok_or_else(|| ResolveError {
                         message: format!("Undefined type: {}", normalized_name),
                         span: span.clone(),
+                        related_labels: Vec::new(),
                     })?;
                 let rid = ResolvedId {
                     name: normalized_name,
@@ -1320,6 +1338,7 @@ impl Resolver {
         let trait_uid = self.scope.lookup(trait_name).ok_or_else(|| ResolveError {
             message: format!("Undefined trait: {}", trait_name),
             span: span.clone(),
+            related_labels: Vec::new(),
         })?;
         match self.declaration_uid_kinds.get(&trait_uid) {
             Some(DeclarationKind::Trait) => {}
@@ -1327,6 +1346,7 @@ impl Resolver {
                 return Err(ResolveError {
                     message: format!("{} is not a trait", trait_name),
                     span: span.clone(),
+                    related_labels: Vec::new(),
                 });
             }
         }
@@ -1377,7 +1397,7 @@ impl Resolver {
     }
 
     fn validate_trait_impl_pairs(&self, resolved: &[Resolved]) -> Result<(), ResolveError> {
-        let mut seen_pairs = HashSet::new();
+        let mut seen_pairs: HashMap<String, Span> = HashMap::new();
         for node in resolved {
             let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _) = node else {
                 continue;
@@ -1387,14 +1407,26 @@ impl Resolver {
                 trait_args,
             );
             let pair_key = format!("{} for {}", trait_name, Self::ast_ty_symbol_key(target_ty));
-            if !seen_pairs.insert(pair_key.clone()) {
+            if let Some(first_span) = seen_pairs.get(&pair_key) {
                 return Err(ResolveError {
                     message: format!(
                         "Multiple trait impl blocks for `{}` are not allowed",
                         pair_key
                     ),
                     span: span.clone(),
+                    related_labels: vec![
+                        ResolveErrorLabel {
+                            span: first_span.clone(),
+                            message: "first definition".to_string(),
+                        },
+                        ResolveErrorLabel {
+                            span: span.clone(),
+                            message: "conflicting definition".to_string(),
+                        },
+                    ],
                 });
+            } else {
+                seen_pairs.insert(pair_key.clone(), span.clone());
             }
         }
         Ok(())

@@ -31,6 +31,7 @@ impl Resolver {
                     args.len()
                 ),
                 span,
+                related_labels: Vec::new(),
             });
         }
 
@@ -45,6 +46,7 @@ impl Resolver {
                             callee_name, name
                         ),
                         span,
+                        related_labels: Vec::new(),
                     });
                 }
             }
@@ -76,6 +78,7 @@ impl Resolver {
             return Err(ResolveError {
                 message: format!("assert expects 2 arguments, got {}", args.len()),
                 span,
+                related_labels: Vec::new(),
             });
         }
 
@@ -87,6 +90,7 @@ impl Resolver {
                     return Err(ResolveError {
                         message: format!("assert does not accept named argument '{}'", name),
                         span,
+                        related_labels: Vec::new(),
                     });
                 }
             }
@@ -107,6 +111,7 @@ impl Resolver {
             return Err(ResolveError {
                 message: format!("ensure expects 3 arguments, got {}", args.len()),
                 span,
+                related_labels: Vec::new(),
             });
         }
 
@@ -118,6 +123,7 @@ impl Resolver {
                     return Err(ResolveError {
                         message: format!("ensure does not accept named argument '{}'", name),
                         span,
+                        related_labels: Vec::new(),
                     });
                 }
             }
@@ -162,12 +168,14 @@ impl Resolver {
                 return Err(ResolveError {
                     message: format!("{} marker must be a deferror name", form_name),
                     span: other.span().clone(),
+                    related_labels: Vec::new(),
                 });
             }
         };
         let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
             message: format!("Undefined error marker: {}", name),
             span: span.clone(),
+            related_labels: Vec::new(),
         })?;
         Ok(ResolvedId {
             name,
@@ -261,6 +269,7 @@ impl Resolver {
             return Err(ResolveError {
                 message: "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.".into(),
                 span: ast_pattern_span(&pattern).clone(),
+            related_labels: Vec::new(),
             });
         }
 
@@ -305,6 +314,7 @@ impl Resolver {
                     Err(ResolveError {
                         message: "Qualified patterns support constructor forms only".into(),
                         span,
+                    related_labels: Vec::new(),
                     })
                 }
             }
@@ -318,6 +328,7 @@ impl Resolver {
                         callee_name
                     ),
                     span,
+                related_labels: Vec::new(),
                 }),
             },
             Ast::ListNil(span) => Ok(AstPattern::ListNil(span)),
@@ -338,6 +349,7 @@ impl Resolver {
                     return Err(ResolveError {
                         message: "1-tuple patterns are not supported".into(),
                         span,
+                    related_labels: Vec::new(),
                     });
                 }
                 let pats = items
@@ -360,6 +372,7 @@ impl Resolver {
                                     callee_name, name
                                 ),
                                 span,
+                            related_labels: Vec::new(),
                             });
                         }
                     }
@@ -381,6 +394,7 @@ impl Resolver {
                                 callee_name
                             ),
                             span: other.span().clone(),
+                        related_labels: Vec::new(),
                         });
                     }
                 };
@@ -397,6 +411,7 @@ impl Resolver {
                                     callee_name, name
                                 ),
                                 span,
+                            related_labels: Vec::new(),
                             });
                         }
                     }
@@ -414,6 +429,7 @@ impl Resolver {
                     callee_name
                 ),
                 span: other.span().clone(),
+            related_labels: Vec::new(),
             }),
         }
     }
@@ -463,6 +479,7 @@ fn collect_positional_args(
                 args.len()
             ),
             span,
+            related_labels: Vec::new(),
         });
     }
 
@@ -474,6 +491,7 @@ fn collect_positional_args(
                 return Err(ResolveError {
                     message: format!("{} does not accept named argument '{}'", callee_name, name),
                     span,
+                    related_labels: Vec::new(),
                 });
             }
         }

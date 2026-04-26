@@ -314,17 +314,16 @@ pub fn emit_invalid_result_missing_payload(
     );
 }
 
-fn error_spec_from_value_error(value: &sindr::runtime::RichError) -> DiagnosticSpec {
-    let start = value.location.span_start as usize;
-    let mut end = value.location.span_end as usize;
-    if end <= start {
-        end = start.saturating_add(1);
-    }
-
-    diagnostics::simple_error(
+fn error_spec_from_value_error_with_source(
+    value: &sindr::runtime::RichError,
+    source: &str,
+) -> DiagnosticSpec {
+    diagnostics::runtime_value_error_spec(
+        source,
         value.kind.clone(),
         value.message.clone(),
-        Span { start, end },
+        value.location.span_start as usize,
+        value.location.span_end as usize,
         runtime_value_cause_help(value),
     )
 }
@@ -333,7 +332,7 @@ pub fn runtime_value_error_text_from_vm(vm: &eldr::VM, value: &Value) -> String 
     match value {
         Value::Error(rich) => {
             if let (Some(source), Some(file_name)) = (vm.source(), vm.source_file()) {
-                let spec = error_spec_from_value_error(rich);
+                let spec = error_spec_from_value_error_with_source(rich, source);
                 diagnostic_text(file_name, source, &spec)
             } else {
                 format!("Error: {}: {}", rich.kind, rich.message)
@@ -351,7 +350,8 @@ pub fn runtime_value_error_text_with_registry(
 ) -> String {
     match value {
         Value::Error(rich) => {
-            let spec = error_spec_from_value_error(rich);
+            let source = sources.source(source_id).unwrap_or("");
+            let spec = error_spec_from_value_error_with_source(rich, source);
             diagnostic_text_by_id(sources, source_id, &spec)
         }
         other => format!("Error: {}", inspect_value(vm, other)),
@@ -457,6 +457,80 @@ mod tests {
         let text = runtime_value_error_text_from_vm(&vm, &value);
         assert!(text.contains("Higher: higher"));
         assert!(text.contains("Caused by: Lower: lower"));
+    }
+
+    #[test]
+    fn runtime_value_error_text_adds_list_pattern_rule_for_fixed_safebind() {
+        let vm =
+            VM::new(Bytecode::default()).with_source("[h] =? [1, 2]".into(), "main.srt".into());
+        let value = Value::Error(Box::new(RichError {
+            kind: "IndexOutOfBounds".into(),
+            message: "LHS.len(1) < RHS.len(2)".into(),
+            location: Location {
+                file: "main.srt".into(),
+                func: "<runtime>".into(),
+                line: 1,
+                column: 8,
+                span_start: 7,
+                span_end: 12,
+            },
+            cause: None,
+        }));
+
+        let text = runtime_value_error_text_from_vm(&vm, &value);
+        assert!(
+            text.contains("fixed-length list pattern requires List.len to match the pattern arity")
+        );
+        assert!(text.contains("SafeBind partial match"));
+        assert!(text.contains("input source: List"));
+    }
+
+    #[test]
+    fn runtime_value_error_text_adds_list_pattern_rule_for_head_tail_safebind() {
+        let vm =
+            VM::new(Bytecode::default()).with_source("[h, ..t] =? []".into(), "main.srt".into());
+        let value = Value::Error(Box::new(RichError {
+            kind: "EmptyList".into(),
+            message: "Empty List.".into(),
+            location: Location {
+                file: "main.srt".into(),
+                func: "<runtime>".into(),
+                line: 1,
+                column: 13,
+                span_start: 12,
+                span_end: 14,
+            },
+            cause: None,
+        }));
+
+        let text = runtime_value_error_text_from_vm(&vm, &value);
+        assert!(text.contains("head-tail list pattern requires a non-empty List"));
+        assert!(text.contains("SafeBind partial match"));
+        assert!(text.contains("input source: List"));
+    }
+
+    #[test]
+    fn runtime_value_error_text_adds_string_pattern_rule_for_head_tail_safebind() {
+        let vm =
+            VM::new(Bytecode::default()).with_source(r#"[h, ..t] =? """#.into(), "main.srt".into());
+        let value = Value::Error(Box::new(RichError {
+            kind: "PatternMismatch".into(),
+            message: "Pattern did not match.\t@@lhs=\"2\"\t@@rhs=\"1\"".into(),
+            location: Location {
+                file: "main.srt".into(),
+                func: "<runtime>".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+        }));
+
+        let text = runtime_value_error_text_from_vm(&vm, &value);
+        assert!(text.contains("head-tail list pattern requires a non-empty String"));
+        assert!(text.contains("SafeBind partial match"));
+        assert!(text.contains("input source: String"));
     }
 
     #[test]

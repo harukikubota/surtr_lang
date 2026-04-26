@@ -38,6 +38,7 @@ impl SigilSession {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                 }

@@ -2395,7 +2395,7 @@ impl Codegen {
             self.emit_jump(success_label);
 
             self.patch_label(pattern_fail);
-            self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+            self.emit_safebind_pattern_failure(pat, payload_slot, rhs.span.clone())?;
 
             self.patch_label(success_label);
             let unit_idx = self.add_constant(Constant::Unit);
@@ -2475,7 +2475,7 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_safebind_pattern_failure(pat, rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(pat, payload_slot, rhs.span.clone())?;
 
         self.patch_label(success_label);
         if matches!(pat, TypedPattern::Wildcard(_)) {
@@ -2543,7 +2543,7 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_safebind_pattern_failure(pat, rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(pat, list_slot, rhs.span.clone())?;
 
         self.patch_label(success_label);
         let unit_idx = self.add_constant(Constant::Unit);
@@ -2558,10 +2558,13 @@ impl Codegen {
     fn emit_safebind_pattern_failure(
         &mut self,
         pat: &TypedPattern,
+        value_slot: u32,
         span: Span,
     ) -> Result<(), CodegenError> {
         match pat {
-            TypedPattern::As(_, inner, _) => self.emit_safebind_pattern_failure(inner, span),
+            TypedPattern::As(_, inner, _) => {
+                self.emit_safebind_pattern_failure(inner, value_slot, span)
+            }
             TypedPattern::ListNil(_) | TypedPattern::ListCons(_, _, _) => {
                 self.emit_empty_list_failure(span)
             }
@@ -2574,8 +2577,49 @@ impl Codegen {
             {
                 self.emit_empty_list_failure(span)
             }
+            TypedPattern::IntLit(_, _)
+            | TypedPattern::StrLit(_, _)
+            | TypedPattern::BoolLit(_, _) => {
+                self.emit_literal_pattern_mismatch_failure(pat, value_slot, span)
+            }
             _ => self.emit_pattern_mismatch_failure(span),
         }
+    }
+
+    fn emit_literal_pattern_mismatch_failure(
+        &mut self,
+        pat: &TypedPattern,
+        value_slot: u32,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let Some(lhs_value) = literal_pattern_display(pat) else {
+            return self.emit_pattern_mismatch_failure(span);
+        };
+
+        let prefix_idx = self.add_constant(Constant::Str("Pattern did not match.\t@@lhs=".into()));
+        self.emit(Opcode::LoadConst(prefix_idx));
+        let lhs_idx = self.add_constant(Constant::Str(lhs_value));
+        self.emit(Opcode::LoadConst(lhs_idx));
+        self.emit(Opcode::ConcatStr);
+
+        let rhs_prefix_idx = self.add_constant(Constant::Str("\t@@rhs=".into()));
+        self.emit(Opcode::LoadConst(rhs_prefix_idx));
+        self.emit(Opcode::ConcatStr);
+
+        self.emit(Opcode::LoadLocal(value_slot));
+        let inspect_id = Self::builtin_id("inspect").ok_or_else(|| CodegenError {
+            message: "Unknown builtin: inspect".into(),
+            span: span.clone(),
+        })?;
+        self.emit(Opcode::CallBuiltin {
+            builtin_id: inspect_id,
+            arity: 1,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+        });
+        self.emit(Opcode::ConcatStr);
+
+        self.emit_pattern_failure_from_message_stack("PatternMismatch", span)
     }
 
     fn emit_list_len_mismatch_failure_concrete(
@@ -2806,13 +2850,18 @@ impl Codegen {
             }
         }
 
-        self.emit(Opcode::Pop);
-        let kind_idx = self.add_constant(Constant::Str(kind.into()));
-        let message_idx = self.add_constant(Constant::Str("Pattern did not match.".into()));
-        self.emit(Opcode::MakeErrorLiteral {
-            kind_const_idx: kind_idx,
-            message_const_idx: message_idx,
+        let template_id = self.state.error_templates.len() as u32;
+        self.state.error_templates.push(ErrTemplate {
+            id: template_id,
+            kind: kind.into(),
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+            line: 0,
+            column: 0,
+            format: String::new(),
+            num_params: 1,
         });
+        self.emit(Opcode::MakeError { template_id });
     }
 
     fn collect_exact_list_pattern_items(pat: &TypedPattern) -> Option<Vec<&TypedPattern>> {
@@ -4324,4 +4373,34 @@ impl Codegen {
         }
         Ok((opcodes, self.state))
     }
+}
+
+fn literal_pattern_display(pat: &TypedPattern) -> Option<String> {
+    match pat {
+        TypedPattern::As(_, inner, _) => literal_pattern_display(inner),
+        TypedPattern::IntLit(_, value) => Some(value.to_string()),
+        TypedPattern::StrLit(_, value) => Some(quote_surtr_string_literal(value)),
+        TypedPattern::BoolLit(_, value) => Some(if *value {
+            "True".to_string()
+        } else {
+            "False".to_string()
+        }),
+        _ => None,
+    }
+}
+
+fn quote_surtr_string_literal(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 2);
+    out.push('"');
+    for ch in input.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }

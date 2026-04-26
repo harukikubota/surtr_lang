@@ -1,4 +1,5 @@
-use ariadne::{Color, Fmt, Label, Report, ReportKind};
+pub use ariadne::Color;
+use ariadne::{Fmt, Label, Report, ReportKind};
 use scar::error::TypeError;
 use serde::{Deserialize, Serialize};
 use spire::ast::Span;
@@ -78,9 +79,10 @@ pub struct DiagnosticSpec {
 
 #[derive(Debug, Clone)]
 pub struct DiagnosticLabel {
+    pub source_id: Option<SourceId>,
     pub span: Span,
     pub message: String,
-    pub color: Color,
+    pub color: Option<Color>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,9 +122,121 @@ pub fn simple_error(
     }
 }
 
+pub fn runtime_value_error_spec(
+    source: &str,
+    kind: impl Into<String>,
+    message: impl Into<String>,
+    span_start: usize,
+    span_end: usize,
+    help: Option<String>,
+) -> DiagnosticSpec {
+    let mut span = Span {
+        start: span_start,
+        end: span_end,
+    };
+    if span.end <= span.start {
+        span.end = span.start.saturating_add(1);
+    }
+
+    let kind = kind.into();
+    let raw_message = message.into();
+    let (message, literal_values) = split_runtime_literal_values(&raw_message);
+    let mut spec = simple_error(kind.clone(), message.clone(), span.clone(), help);
+    if let Some(template) =
+        infer_runtime_value_error_template(source, &span, &kind, &raw_message, literal_values)
+    {
+        if let Some(primary) = template
+            .labels
+            .iter()
+            .find(|label| label.message != "SafeBind partial match")
+        {
+            spec.primary_span = primary.span.clone();
+        }
+        spec.labels.extend(template.labels);
+        spec.notes.extend(template.notes);
+        if let Some(help) = template.help {
+            spec.help = Some(help);
+        }
+    }
+    spec
+}
+
 pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) -> DiagnosticSpec {
     let message = message.into();
     let mut spec = simple_error("ParseError", message.clone(), span.clone(), None);
+
+    if message == "This top-level declaration is not allowed in the current source policy" {
+        spec.help = Some(
+            "Move this declaration into a module compile unit, or replace it with an expression that is allowed in this source kind."
+                .into(),
+        );
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: "forbidden top-level declaration".into(),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
+    if message == "Top-level expressions are not allowed in module compile units" {
+        spec.help = Some(
+            "Wrap this code in a `def`, `defmod`, or another declaration that is valid at module top level."
+                .into(),
+        );
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: "top-level expression is not allowed here".into(),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
+    if message == "Top-level expressions are not allowed in this source context" {
+        spec.help = Some(
+            "This source kind only accepts declarations at the top level. Move the expression into a function or another executable context."
+                .into(),
+        );
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: "top-level expression is not allowed here".into(),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
+    if message.starts_with("return-position `impl Trait` is not supported") {
+        spec.help =
+            Some("Name the return type parameter explicitly in the function signature.".into());
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: "return-position `impl Trait` is not supported".into(),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
+    if message == "`where` clauses are staged and not implemented yet" {
+        spec.help = Some(
+            "Rewrite the constraint as explicit type parameters or defer this API shape until `where` clauses are available."
+                .into(),
+        );
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: "`where` clauses are not available yet".into(),
+                color: Some(Color::Red),
+            });
+        }
+    }
 
     if message.starts_with("Unexpected token:") {
         spec.help = Some(
@@ -141,9 +255,10 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
             };
             if !line.trim().is_empty() {
                 spec.labels.push(DiagnosticLabel {
+                    source_id: None,
                     span,
                     message: token_hint.into(),
-                    color: Color::Yellow,
+                    color: Some(Color::Red),
                 });
             }
         }
@@ -163,9 +278,10 @@ pub fn resolve_error_spec(source: &str, message: impl Into<String>, span: Span) 
         ));
         if let Some(name_span) = identifier_span_at(source, span.start) {
             spec.labels.push(DiagnosticLabel {
+                source_id: None,
                 span: name_span,
                 message: format!("unresolved name `{}`", name),
-                color: Color::Yellow,
+                color: Some(Color::Red),
             });
         }
     }
@@ -177,9 +293,91 @@ pub fn resolve_error_spec(source: &str, message: impl Into<String>, span: Span) 
         ));
         if let Some(name_span) = identifier_span_at(source, span.start) {
             spec.labels.push(DiagnosticLabel {
+                source_id: None,
                 span: name_span,
                 message: format!("unresolved callable `{}`", name),
-                color: Color::Yellow,
+                color: Some(Color::Red),
+            });
+        }
+    }
+
+    if let Some(name) = message.strip_prefix("Unknown module import: ") {
+        spec.help = Some(format!(
+            "`{}` is not a known module or trait import target in this compilation context. Check the name, or ensure the defining file is loaded before this import.",
+            name
+        ));
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: format!("unknown import target `{}`", name),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
+    if let Some(name) = message.strip_prefix("Unknown import member: ") {
+        spec.help = Some(format!(
+            "`{}` is not exported by the imported module or trait. Check the member name and the import list.",
+            name
+        ));
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: format!("unknown import member `{}`", name),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
+    if let Some(name) = message.strip_prefix("Duplicate import: ") {
+        spec.help = Some(format!(
+            "`{}` is imported more than once in the same scope. Keep one import form and remove the duplicate.",
+            name
+        ));
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: "duplicate import".into(),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
+    if let Some(target) =
+        extract_backticked_target(&message, "Import target `", "` is not importable")
+    {
+        spec.help = Some(format!(
+            "`{}` exists, but it cannot be imported directly in this position. Import its module/trait surface instead, or refer to the type by name where that is supported.",
+            target
+        ));
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: format!("import target `{}` is not importable", target),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
+    if let Some(target) = extract_backticked_target(
+        &message,
+        "Import target `",
+        "` is not available in the current stage",
+    ) {
+        spec.help = Some(format!(
+            "`{}` is declared later than this import can see. Move the import after the definition stage, or restructure the source so the target is available earlier.",
+            target
+        ));
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: format!("import target `{}` is not available yet", target),
+                color: Some(Color::Red),
             });
         }
     }
@@ -195,8 +393,27 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
         error.hint.clone(),
     );
 
-    let replace_help =
-        is_flow_operator_message(&error.message) || parse_binary_operator_error(&error.message).is_some();
+    if let Some(labels) = infer_trait_impl_signature_mismatch_labels(source, &error.message) {
+        if let Some(primary) = labels
+            .iter()
+            .find(|label| label.message == "implementation function")
+        {
+            spec.primary_span = primary.span.clone();
+        }
+        spec.labels.extend(labels);
+        spec.help = None;
+        return spec;
+    }
+
+    if let Some(labels) = infer_missing_trait_method_labels(source, &error.message) {
+        if let Some(first) = labels.first() {
+            spec.primary_span = first.span.clone();
+        }
+        spec.labels.extend(labels);
+    }
+
+    let replace_help = is_flow_operator_message(&error.message)
+        || parse_binary_operator_error(&error.message).is_some();
     if let Some(template) =
         infer_type_error_template(source, &error.span, &error.message, error.hint.as_deref())
     {
@@ -212,6 +429,9 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
                 }
             });
         }
+    }
+    if error.message == "Only total MatchBlock patterns can be used with `=`" {
+        spec.help = None;
     }
     if spec.help.is_none() {
         if let (Some(expected), Some(got)) = extract_expected_got(&spec.message) {
@@ -237,7 +457,77 @@ pub fn type_error_spec_by_id(
     source_id: SourceId,
     error: &TypeError,
 ) -> DiagnosticSpec {
-    type_error_spec(sources.source(source_id).unwrap_or(""), error)
+    let mut spec = type_error_spec(sources.source(source_id).unwrap_or(""), error);
+    apply_extractor_context_by_id(sources, source_id, error, &mut spec);
+    if has_missing_trait_method_labels(&spec) || has_trait_impl_signature_mismatch_labels(&spec) {
+        for label in &mut spec.labels {
+            if matches!(
+                label.message.as_str(),
+                "impl target"
+                    | "missing required method"
+                    | "trait declaration"
+                    | "trait function"
+                    | "trait impl declaration"
+                    | "implementation function"
+            ) {
+                label.source_id = Some(source_id);
+            }
+        }
+    }
+    spec
+}
+
+fn apply_extractor_context_by_id(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    error: &TypeError,
+    spec: &mut DiagnosticSpec,
+) {
+    if !error.message.starts_with("Extractor ") {
+        return;
+    }
+    spec.labels.retain(|label| {
+        !matches!(
+            label.message.as_str(),
+            "extractor pattern checked against the match scrutinee"
+                | "extractor pattern checked against the SafeBind RHS"
+        )
+    });
+    let Some(source) = sources.source(source_id) else {
+        return;
+    };
+    let lines = line_spans(source);
+    let Some(error_line_idx) = line_index_for_span(&lines, error.span.start) else {
+        return;
+    };
+
+    if let Some((context_span, context_ty)) =
+        extractor_input_context(source, &lines, error_line_idx, &error.message)
+    {
+        spec.labels.push(DiagnosticLabel {
+            source_id: Some(source_id),
+            span: context_span,
+            message: format!("input source: {}", context_ty),
+            color: Some(Color::Yellow),
+        });
+    }
+
+    if let Some(pattern_span) = extractor_error_locus_span(source, &lines, error_line_idx) {
+        spec.primary_span = pattern_span;
+    }
+
+    if let Some((extractor_name, _rule_text)) = extractor_name_and_rule(&error.message) {
+        if let Some((def_source_id, def_span, def_label)) =
+            find_extractor_definition_label(sources, &extractor_name)
+        {
+            spec.labels.push(DiagnosticLabel {
+                source_id: Some(def_source_id),
+                span: def_span,
+                message: format!("Extractor definition: {}", def_label),
+                color: Some(Color::Blue),
+            });
+        }
+    }
 }
 
 pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
@@ -281,8 +571,13 @@ pub fn render_error(file_name: &str, source: &str, spec: &DiagnosticSpec) -> Str
 }
 
 pub fn report_error_by_id(sources: &SourceRegistry, source_id: SourceId, spec: DiagnosticSpec) {
-    if let Some(entry) = sources.get(source_id) {
-        report_error(&entry.file_name, &entry.source, spec);
+    if let Some((report, cache)) = build_report_with_registry(sources, source_id, &spec) {
+        if let Err(err) = report.eprint(ariadne::sources(cache)) {
+            if let Some(entry) = sources.get(source_id) {
+                let mut stderr = io::stderr().lock();
+                let _ = write_fallback_diagnostic(&mut stderr, &entry.file_name, &spec, &err);
+            }
+        }
     } else {
         report_error("<unknown>", "", spec);
     }
@@ -293,8 +588,14 @@ pub fn render_error_by_id(
     source_id: SourceId,
     spec: &DiagnosticSpec,
 ) -> String {
-    if let Some(entry) = sources.get(source_id) {
-        render_error(&entry.file_name, &entry.source, spec)
+    if let Some((report, cache)) = build_report_with_registry(sources, source_id, spec) {
+        let mut buf = Vec::new();
+        if let Err(err) = report.write(ariadne::sources(cache), &mut buf) {
+            if let Some(entry) = sources.get(source_id) {
+                let _ = write_fallback_diagnostic(&mut buf, &entry.file_name, spec, &err);
+            }
+        }
+        String::from_utf8_lossy(&buf).into_owned()
     } else {
         render_error("<unknown>", "", spec)
     }
@@ -312,7 +613,13 @@ fn build_report(
     let suppress_primary_label = spec.kind == "TypeError"
         && (is_flow_operator_message(&spec.message)
             || parse_binary_operator_error(&spec.message).is_some()
-            || has_annotation_assignment_labels(spec));
+            || has_annotation_assignment_labels(spec))
+        || has_duplicate_definition_labels(spec)
+        || has_missing_trait_method_labels(spec)
+        || has_trait_impl_signature_mismatch_labels(spec)
+        || has_total_bind_pattern_labels(spec)
+        || has_parse_focus_labels(spec)
+        || has_runtime_safebind_labels(spec);
     let primary_source = RenderSourceId::Primary(file_name.to_string());
     let related_source = RenderSourceId::Related(file_name.to_string());
     let mut builder = Report::build(
@@ -338,11 +645,12 @@ fn build_report(
             } else {
                 primary_source.clone()
             };
-        builder = builder.with_label(
-            Label::new((label_source, range))
+        builder = builder.with_label(match label.color {
+            Some(color) => Label::new((label_source, range))
                 .with_message(label.message.clone())
-                .with_color(label.color),
-        );
+                .with_color(color),
+            None => Label::new((label_source, range)).with_message(label.message.clone()),
+        });
     }
 
     for note in &spec.notes {
@@ -360,16 +668,109 @@ fn build_report(
 enum RenderSourceId {
     Primary(String),
     Related(String),
+    Auxiliary(SourceId, usize, String),
 }
 
 impl fmt::Display for RenderSourceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RenderSourceId::Primary(file_name) | RenderSourceId::Related(file_name) => {
-                f.write_str(file_name)
-            }
+            RenderSourceId::Primary(file_name)
+            | RenderSourceId::Related(file_name)
+            | RenderSourceId::Auxiliary(_, _, file_name) => f.write_str(file_name),
         }
     }
+}
+
+fn build_report_with_registry(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    spec: &DiagnosticSpec,
+) -> Option<(
+    Report<'static, (RenderSourceId, std::ops::Range<usize>)>,
+    Vec<(RenderSourceId, String)>,
+)> {
+    let primary_entry = sources.get(source_id)?;
+    let primary_source = primary_entry.source.as_str();
+    let primary_file_name = primary_entry.file_name.clone();
+    let primary = normalized_char_span(primary_source, &spec.primary_span);
+    let primary_range = char_span_to_byte_range(primary_source, &primary);
+    let lines = line_spans(primary_source);
+    let primary_line = line_index_for_span(&lines, primary.start);
+    let suppress_primary_label = spec.kind == "TypeError"
+        && (is_flow_operator_message(&spec.message)
+            || parse_binary_operator_error(&spec.message).is_some()
+            || has_annotation_assignment_labels(spec))
+        || has_duplicate_definition_labels(spec)
+        || has_missing_trait_method_labels(spec)
+        || has_trait_impl_signature_mismatch_labels(spec)
+        || has_total_bind_pattern_labels(spec)
+        || has_parse_focus_labels(spec)
+        || has_runtime_safebind_labels(spec);
+    let primary_render_source = RenderSourceId::Primary(primary_file_name.clone());
+    let related_render_source = RenderSourceId::Related(primary_file_name.clone());
+    let mut builder = Report::build(
+        ReportKind::Error,
+        (primary_render_source.clone(), primary_range.clone()),
+    )
+    .with_message(format!("{}: {}", spec.kind, spec.message));
+
+    if !suppress_primary_label {
+        builder = builder.with_label(
+            Label::new((primary_render_source.clone(), primary_range))
+                .with_message(spec.message.clone())
+                .with_color(Color::Red),
+        );
+    }
+
+    let mut cache = vec![
+        (primary_render_source.clone(), primary_source.to_string()),
+        (related_render_source.clone(), primary_source.to_string()),
+    ];
+
+    for (label_index, label) in spec.labels.iter().enumerate() {
+        let label_source_id = label.source_id.unwrap_or(source_id);
+        let Some(label_entry) = sources.get(label_source_id) else {
+            continue;
+        };
+        let label_span = normalized_char_span(&label_entry.source, &label.span);
+        let label_range = char_span_to_byte_range(&label_entry.source, &label_span);
+        let label_render_source = if label.source_id.is_none() && label_source_id == source_id {
+            if should_render_related_label_with_own_source(spec, primary_line, &lines, &label_span)
+            {
+                related_render_source.clone()
+            } else {
+                primary_render_source.clone()
+            }
+        } else {
+            let render_id = RenderSourceId::Auxiliary(
+                label_source_id,
+                label_index,
+                label_entry.file_name.clone(),
+            );
+            if !cache.iter().any(|(id, _)| id == &render_id) {
+                cache.push((render_id.clone(), label_entry.source.clone()));
+            }
+            render_id
+        };
+        builder = builder.with_label(match label.color {
+            Some(color) => Label::new((label_render_source, label_range))
+                .with_message(label.message.clone())
+                .with_color(color),
+            None => {
+                Label::new((label_render_source, label_range)).with_message(label.message.clone())
+            }
+        });
+    }
+
+    for note in &spec.notes {
+        builder = builder.with_note(note.clone());
+    }
+
+    if let Some(h) = &spec.help {
+        builder = builder.with_help(h.clone());
+    }
+
+    Some((builder.finish(), cache))
 }
 
 fn should_render_related_label_with_own_source(
@@ -383,6 +784,217 @@ fn should_render_related_label_with_own_source(
             .message
             .starts_with("Argument type mismatch: expected ")
         && line_index_for_span(lines, span.start) != primary_line
+}
+
+fn has_duplicate_definition_labels(spec: &DiagnosticSpec) -> bool {
+    spec.labels
+        .iter()
+        .any(|label| label.message == "first definition")
+        && spec
+            .labels
+            .iter()
+            .any(|label| label.message == "conflicting definition")
+}
+
+fn has_missing_trait_method_labels(spec: &DiagnosticSpec) -> bool {
+    spec.labels
+        .iter()
+        .any(|label| label.message == "impl target")
+        && spec
+            .labels
+            .iter()
+            .any(|label| label.message == "missing required method")
+}
+
+fn has_trait_impl_signature_mismatch_labels(spec: &DiagnosticSpec) -> bool {
+    spec.labels
+        .iter()
+        .any(|label| label.message == "trait declaration")
+        && spec
+            .labels
+            .iter()
+            .any(|label| label.message == "trait function")
+        && spec
+            .labels
+            .iter()
+            .any(|label| label.message == "trait impl declaration")
+        && spec
+            .labels
+            .iter()
+            .any(|label| label.message == "implementation function")
+}
+
+fn has_parse_focus_labels(spec: &DiagnosticSpec) -> bool {
+    spec.kind == "ParseError"
+        && spec.labels.iter().any(|label| {
+            matches!(
+                label.message.as_str(),
+                "forbidden top-level declaration"
+                    | "top-level expression is not allowed here"
+                    | "return-position `impl Trait` is not supported"
+                    | "`where` clauses are not available yet"
+            )
+        })
+}
+
+fn has_total_bind_pattern_labels(spec: &DiagnosticSpec) -> bool {
+    spec.kind == "TypeError"
+        && spec
+            .labels
+            .iter()
+            .any(|label| label.message == "LHS pattern: partial MatchBlock pattern")
+        && spec.labels.iter().any(|label| {
+            label
+                .message
+                .contains("Use `=?` for partial destructuring and extractor-driven matches.")
+        })
+}
+
+fn has_runtime_safebind_labels(spec: &DiagnosticSpec) -> bool {
+    spec.labels
+        .iter()
+        .any(|label| label.message == "SafeBind partial match")
+}
+
+fn infer_missing_trait_method_labels(source: &str, message: &str) -> Option<Vec<DiagnosticLabel>> {
+    let prefix = "Trait impl ";
+    let suffix = " is missing method `";
+    let rest = message.strip_prefix(prefix)?;
+    let (impl_head, method_part) = rest.split_once(suffix)?;
+    let method_name = method_part.strip_suffix('`')?;
+    let trait_name = impl_head.split_once(" for ")?.0;
+    let impl_pattern = format!("impl {} for ", trait_name);
+    let method_pattern = format!("def {}(", method_name);
+    let impl_span = line_head_span_with_brace(source, &impl_pattern)?;
+    let method_span = line_head_span_with_brace(source, &method_pattern)?;
+    Some(vec![
+        DiagnosticLabel {
+            source_id: None,
+            span: impl_span,
+            message: "impl target".to_string(),
+            color: None,
+        },
+        DiagnosticLabel {
+            source_id: None,
+            span: method_span,
+            message: "missing required method".to_string(),
+            color: Some(Color::Red),
+        },
+    ])
+}
+
+fn infer_trait_impl_signature_mismatch_labels(
+    source: &str,
+    message: &str,
+) -> Option<Vec<DiagnosticLabel>> {
+    let prefix = "Trait impl method ";
+    let rest = message.strip_prefix(prefix)?;
+    let (method_head, detail) = rest.split_once(" has incompatible ")?;
+    let (trait_name, method_name) = method_head.split_once("::")?;
+    let got_ty = detail
+        .split_once("got ")
+        .map(|(_, got)| got.trim())
+        .filter(|got| !got.is_empty())?;
+
+    let trait_decl_span = line_head_span_with_brace(source, &format!("deftrait {}", trait_name))?;
+    let trait_fn_span = line_head_span_from(
+        source,
+        &format!("def {}(", method_name),
+        trait_decl_span.start,
+    )?;
+    let impl_decl_span = line_head_span_with_brace(source, &format!("impl {} for ", trait_name))?;
+    let impl_fn_line_span = line_head_span_from(
+        source,
+        &format!("def {}(", method_name),
+        impl_decl_span.start,
+    )?;
+    let impl_fn_error_span = type_token_span_in_line(source, &impl_fn_line_span, got_ty)?;
+
+    Some(vec![
+        DiagnosticLabel {
+            source_id: None,
+            span: trait_decl_span,
+            message: "trait declaration".to_string(),
+            color: None,
+        },
+        DiagnosticLabel {
+            source_id: None,
+            span: trait_fn_span,
+            message: "trait function".to_string(),
+            color: None,
+        },
+        DiagnosticLabel {
+            source_id: None,
+            span: impl_decl_span,
+            message: "trait impl declaration".to_string(),
+            color: None,
+        },
+        DiagnosticLabel {
+            source_id: None,
+            span: impl_fn_error_span,
+            message: "implementation function".to_string(),
+            color: Some(Color::Red),
+        },
+    ])
+}
+
+fn line_head_span_with_brace(source: &str, needle: &str) -> Option<Span> {
+    let byte_start = source.find(needle)?;
+    let line_byte_start = source[..byte_start]
+        .rfind('\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let line_byte_end = source[byte_start..]
+        .find('\n')
+        .map(|idx| byte_start + idx)
+        .unwrap_or(source.len());
+    let line = &source[line_byte_start..line_byte_end];
+    let head_byte_start = line
+        .char_indices()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(idx, _)| idx)
+        .unwrap_or(0);
+    let brace_byte_idx = line.find('{').unwrap_or(line.len());
+    let trim_end = line[..brace_byte_idx]
+        .trim_end_matches(char::is_whitespace)
+        .len();
+    let start = source[..line_byte_start + head_byte_start].chars().count();
+    let end = source[..line_byte_start + trim_end].chars().count();
+    Some(Span { start, end })
+}
+
+fn line_head_span_from(source: &str, needle: &str, start_char_offset: usize) -> Option<Span> {
+    let start_byte_offset = char_offset_to_byte_offset(source, start_char_offset);
+    let relative_byte_start = source[start_byte_offset..].find(needle)?;
+    let byte_start = start_byte_offset + relative_byte_start;
+    let line_byte_start = source[..byte_start]
+        .rfind('\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let line_byte_end = source[byte_start..]
+        .find('\n')
+        .map(|idx| byte_start + idx)
+        .unwrap_or(source.len());
+    let line = &source[line_byte_start..line_byte_end];
+    let head_byte_start = line
+        .char_indices()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(idx, _)| idx)
+        .unwrap_or(0);
+    let trim_end = line.trim_end_matches(char::is_whitespace).len();
+    let start = source[..line_byte_start + head_byte_start].chars().count();
+    let end = source[..line_byte_start + trim_end].chars().count();
+    Some(Span { start, end })
+}
+
+fn type_token_span_in_line(source: &str, line_span: &Span, ty_name: &str) -> Option<Span> {
+    let line_start = char_offset_to_byte_offset(source, line_span.start);
+    let line_end = char_offset_to_byte_offset(source, line_span.end);
+    let line = &source[line_start..line_end];
+    let byte_idx = line.rfind(ty_name)?;
+    let start = source[..line_start + byte_idx].chars().count();
+    let end = start + ty_name.chars().count();
+    Some(Span { start, end })
 }
 
 fn normalized_char_span(source: &str, span: &Span) -> Span {
@@ -566,6 +1178,9 @@ fn infer_type_error_template(
     if let Some(spec) = infer_extractor_template(source, &lines, focus, message) {
         return Some(spec);
     }
+    if let Some(spec) = infer_total_bind_pattern_template(source, &lines, focus, message, hint) {
+        return Some(spec);
+    }
     if let Some(spec) = infer_argument_mismatch_template(source, &lines, focus, message, hint) {
         return Some(spec);
     }
@@ -578,21 +1193,23 @@ fn infer_type_error_template(
             .trim()
             .to_string();
         let mut labels = vec![DiagnosticLabel {
+            source_id: None,
             span: Span {
                 start: decl_line.0,
                 end: decl_line.1,
             },
             message: decl_text,
-            color: Color::Blue,
+            color: Some(Color::Blue),
         }];
 
         labels.push(DiagnosticLabel {
+            source_id: None,
             span: Span {
                 start: close_line.0,
                 end: close_line.1,
             },
             message: "function body ends here".into(),
-            color: Color::Yellow,
+            color: Some(Color::Yellow),
         });
 
         return Some(TemplateSpec {
@@ -609,12 +1226,13 @@ fn infer_type_error_template(
                 .to_string();
             return Some(TemplateSpec {
                 labels: vec![DiagnosticLabel {
+                    source_id: None,
                     span: Span {
                         start: sig_line.0,
                         end: sig_line.1,
                     },
                     message: sig_text,
-                    color: Color::Blue,
+                    color: Some(Color::Blue),
                 }],
                 notes: Vec::new(),
                 help: None,
@@ -626,7 +1244,11 @@ fn infer_type_error_template(
 }
 
 fn serializable_callable_hint_from_labels(spec: &DiagnosticSpec) -> Option<String> {
-    if spec.kind != "TypeError" || !spec.message.starts_with("Argument type mismatch: expected ") {
+    if spec.kind != "TypeError"
+        || !spec
+            .message
+            .starts_with("Argument type mismatch: expected ")
+    {
         return None;
     }
 
@@ -672,13 +1294,8 @@ fn infer_operator_mismatch_template(
         find_binary_operand_spans(&chars, op_span.start - line_start, op_span.end - line_start)?;
     let left_ty = parsed.left_ty.as_deref().unwrap_or("unknown");
     let right_ty = parsed.right_ty.as_deref().unwrap_or(left_ty);
-    let view = build_binary_operator_view(
-        op_name,
-        &op_display,
-        left_ty,
-        right_ty,
-        parsed.failure_kind,
-    );
+    let view =
+        build_binary_operator_view(op_name, &op_display, left_ty, right_ty, parsed.failure_kind);
     Some(build_binary_operator_template(
         line_start,
         left_start,
@@ -943,25 +1560,28 @@ fn build_binary_operator_template(
     TemplateSpec {
         labels: vec![
             DiagnosticLabel {
+                source_id: None,
                 span: Span {
                     start: line_start + left_start,
                     end: line_start + left_end,
                 },
                 message: flow_operator_caption("LHS actual", view.lhs_actual),
-                color: Color::Blue,
+                color: Some(Color::Blue),
             },
             DiagnosticLabel {
+                source_id: None,
                 span: op_span,
                 message: flow_operator_caption("OP rule", &view.op_rule),
-                color: Color::Magenta,
+                color: Some(Color::Magenta),
             },
             DiagnosticLabel {
+                source_id: None,
                 span: Span {
                     start: line_start + right_start,
                     end: line_start + right_end,
                 },
                 message: flow_operator_caption("RHS actual", view.rhs_actual),
-                color: Color::Yellow,
+                color: Some(Color::Yellow),
             },
         ],
         notes: vec![format!("Step: {}", view.step), view.reason.clone()],
@@ -984,14 +1604,13 @@ fn infer_flow_operator_template(
     let mut line_indices = focus_line_idx
         .into_iter()
         .chain((0..lines.len()).filter(move |idx| Some(*idx) != focus_line_idx));
-    let (line_start, chars, op_start) = line_indices
-        .find_map(|line_idx| {
-            let (line_start, line_end) = lines[line_idx];
-            let line = slice_chars(source, line_start, line_end);
-            let chars: Vec<char> = line.chars().collect();
-            let op_start = find_subslice_outside_literals(&chars, &op_pattern, 0)?;
-            Some((line_start, chars, op_start))
-        })?;
+    let (line_start, chars, op_start) = line_indices.find_map(|line_idx| {
+        let (line_start, line_end) = lines[line_idx];
+        let line = slice_chars(source, line_start, line_end);
+        let chars: Vec<char> = line.chars().collect();
+        let op_start = find_subslice_outside_literals(&chars, &op_pattern, 0)?;
+        Some((line_start, chars, op_start))
+    })?;
     let op_end = op_start + op.chars().count();
     let lhs_start = find_assignment_eq_before(&chars, op_start)
         .map(|idx| idx + 1)
@@ -1014,7 +1633,10 @@ fn infer_flow_operator_template(
         rhs_actual,
         op_rule: flow_operator_rule_display(op, lhs_actual, rhs_actual),
         step: lowered_flow_operator_rule(op, lhs_actual, rhs_actual, lhs_bad, rhs_bad),
-        rule_detail: flow_operator_rule_detail(op, &flow_operator_rule_display(op, lhs_actual, rhs_actual)),
+        rule_detail: flow_operator_rule_detail(
+            op,
+            &flow_operator_rule_display(op, lhs_actual, rhs_actual),
+        ),
         reason: flow_operator_reason(op, message, lhs_actual, rhs_actual),
         help: flow_operator_help(
             op,
@@ -1026,14 +1648,7 @@ fn infer_flow_operator_template(
     };
 
     Some(build_flow_operator_template(
-        line_start,
-        lhs_start,
-        lhs_end,
-        op_start,
-        op_end,
-        rhs_start,
-        rhs_end,
-        &view,
+        line_start, lhs_start, lhs_end, op_start, op_end, rhs_start, rhs_end, &view,
     ))
 }
 
@@ -1057,12 +1672,13 @@ fn infer_ensure_predicate_template(
 
     Some(TemplateSpec {
         labels: vec![DiagnosticLabel {
+            source_id: None,
             span: Span {
                 start: line_start + predicate_span.0,
                 end: line_start + predicate_span.1,
             },
             message: "predicate must be a closure or capture, not a call result".into(),
-            color: Color::Yellow,
+            color: Some(Color::Yellow),
         }],
         notes: Vec::new(),
         help: None,
@@ -1082,12 +1698,16 @@ fn infer_plain_rhs_required_flow_template(
         return None;
     };
     let (line_start, chars, op_start, line_idx) =
-        lines.iter().enumerate().find_map(|(line_idx, (line_start, line_end))| {
-            let line = slice_chars(source, *line_start, *line_end);
-            let chars: Vec<char> = line.chars().collect();
-            let op_start = find_subslice_outside_literals(&chars, &op.chars().collect::<Vec<_>>(), 0)?;
-            Some((*line_start, chars, op_start, line_idx))
-        })?;
+        lines
+            .iter()
+            .enumerate()
+            .find_map(|(line_idx, (line_start, line_end))| {
+                let line = slice_chars(source, *line_start, *line_end);
+                let chars: Vec<char> = line.chars().collect();
+                let op_start =
+                    find_subslice_outside_literals(&chars, &op.chars().collect::<Vec<_>>(), 0)?;
+                Some((*line_start, chars, op_start, line_idx))
+            })?;
     let op_end = op_start + op.chars().count();
     let lhs_start = find_assignment_eq_before(&chars, op_start)
         .map(|idx| idx + 1)
@@ -1099,8 +1719,8 @@ fn infer_plain_rhs_required_flow_template(
     let rhs_expr = slice_chars(&chars.iter().collect::<String>(), rhs_start, rhs_end);
     let lhs_actual = infer_simple_binding_type(source, lines, line_idx, &lhs_expr)
         .unwrap_or_else(|| "unknown".into());
-    let rhs_actual = infer_simple_callable_type(source, lines, &rhs_expr)
-        .unwrap_or_else(|| "unknown".into());
+    let rhs_actual =
+        infer_simple_callable_type(source, lines, &rhs_expr).unwrap_or_else(|| "unknown".into());
     let op_rule = flow_operator_rule_display(op, &lhs_actual, &rhs_actual);
     let view = FlowOperatorView {
         lhs_actual: &lhs_actual,
@@ -1113,14 +1733,7 @@ fn infer_plain_rhs_required_flow_template(
     };
 
     Some(build_flow_operator_template(
-        line_start,
-        lhs_start,
-        lhs_end,
-        op_start,
-        op_end,
-        rhs_start,
-        rhs_end,
-        &view,
+        line_start, lhs_start, lhs_end, op_start, op_end, rhs_start, rhs_end, &view,
     ))
 }
 
@@ -1136,28 +1749,31 @@ fn build_flow_operator_template(
 ) -> TemplateSpec {
     let labels = vec![
         DiagnosticLabel {
+            source_id: None,
             span: Span {
                 start: line_start + lhs_start,
                 end: line_start + lhs_end,
             },
             message: flow_operator_caption("LHS actual", view.lhs_actual),
-            color: Color::Blue,
+            color: Some(Color::Blue),
         },
         DiagnosticLabel {
+            source_id: None,
             span: Span {
                 start: line_start + op_start,
                 end: line_start + op_end,
             },
             message: flow_operator_caption("OP rule", &view.op_rule),
-            color: Color::Yellow,
+            color: Some(Color::Yellow),
         },
         DiagnosticLabel {
+            source_id: None,
             span: Span {
                 start: line_start + rhs_start,
                 end: line_start + rhs_end,
             },
             message: flow_operator_caption("RHS actual", view.rhs_actual),
-            color: Color::Magenta,
+            color: Some(Color::Magenta),
         },
     ];
     let mut notes = vec![format!("Step: {}", view.step)];
@@ -1326,7 +1942,11 @@ fn infer_simple_binding_type(
     expr: &str,
 ) -> Option<String> {
     let ident = expr.trim();
-    if ident.is_empty() || !ident.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+    if ident.is_empty()
+        || !ident
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
         return None;
     }
     for idx in (0..current_line_idx).rev() {
@@ -1346,10 +1966,18 @@ fn infer_simple_binding_type(
     None
 }
 
-fn infer_simple_callable_type(source: &str, lines: &[(usize, usize)], expr: &str) -> Option<String> {
+fn infer_simple_callable_type(
+    source: &str,
+    lines: &[(usize, usize)],
+    expr: &str,
+) -> Option<String> {
     let trimmed = expr.trim();
     let name = trimmed.strip_suffix("()")?.trim();
-    if name.is_empty() || !name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
         return None;
     }
     for (line_start, line_end) in lines {
@@ -1381,20 +2009,353 @@ fn infer_extractor_template(
     let (line_start, line_end) = lines[line_idx];
     let line = slice_chars(source, line_start, line_end);
     let chars: Vec<char> = line.chars().collect();
-    let pattern_span = extract_match_pattern_span(&chars)?;
+    let (pattern_span, caption) = if let Some(pattern_span) = extract_match_pattern_span(&chars) {
+        (
+            pattern_span,
+            "extractor pattern checked against the match scrutinee",
+        )
+    } else if let Some(pattern_span) = extract_safebind_pattern_span(&chars) {
+        (
+            pattern_span,
+            "extractor pattern checked against the SafeBind RHS",
+        )
+    } else {
+        return None;
+    };
 
     Some(TemplateSpec {
         labels: vec![DiagnosticLabel {
+            source_id: None,
             span: Span {
                 start: line_start + pattern_span.0,
                 end: line_start + pattern_span.1,
             },
-            message: "extractor pattern checked against the match scrutinee".into(),
-            color: Color::Yellow,
+            message: caption.into(),
+            color: Some(Color::Yellow),
         }],
         notes: Vec::new(),
         help: None,
     })
+}
+
+fn infer_total_bind_pattern_template(
+    source: &str,
+    lines: &[(usize, usize)],
+    focus: &Span,
+    message: &str,
+    hint: Option<&str>,
+) -> Option<TemplateSpec> {
+    if message != "Only total MatchBlock patterns can be used with `=`" {
+        return None;
+    }
+    let line_idx = line_index_for_span(lines, focus.start)?;
+    let (line_start, line_end) = lines[line_idx];
+    let line = slice_chars(source, line_start, line_end);
+    let chars: Vec<char> = line.chars().collect();
+    let eq_col = find_assignment_eq_before(&chars, chars.len())?;
+    let lhs = trim_char_span(&chars, 0, eq_col);
+    let rhs = trim_char_span(&chars, eq_col + 1, chars.len());
+    let op_span = Span {
+        start: line_start + eq_col,
+        end: line_start + eq_col + 1,
+    };
+
+    Some(TemplateSpec {
+        labels: vec![
+            DiagnosticLabel {
+                source_id: None,
+                span: Span {
+                    start: line_start + lhs.0,
+                    end: line_start + lhs.1,
+                },
+                message: "LHS pattern: partial MatchBlock pattern".into(),
+                color: Some(Color::Red),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: op_span,
+                message: hint
+                    .unwrap_or("Use `=?` for partial destructuring and extractor-driven matches.")
+                    .to_string(),
+                color: Some(Color::Yellow),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: Span {
+                    start: line_start + rhs.0,
+                    end: line_start + rhs.1,
+                },
+                message: "RHS value".into(),
+                color: None,
+            },
+        ],
+        notes: Vec::new(),
+        help: None,
+    })
+}
+
+fn infer_runtime_value_error_template(
+    source: &str,
+    focus: &Span,
+    kind: &str,
+    message: &str,
+    literal_values: Option<(&str, &str)>,
+) -> Option<TemplateSpec> {
+    if !matches!(kind, "PatternMismatch" | "EmptyList" | "IndexOutOfBounds") {
+        return None;
+    }
+
+    let lines = line_spans(source);
+    let focus_line = line_index_for_span(&lines, focus.start)?;
+    let (assignment_line_idx, bind_col) = find_safebind_assignment(&lines, focus_line, source)?;
+    let (line_start, line_end) = lines[assignment_line_idx];
+    let line = slice_chars(source, line_start, line_end);
+    let chars: Vec<char> = line.chars().collect();
+    let lhs = trim_char_span(&chars, 0, bind_col);
+    let lhs_span = Span {
+        start: line_start + lhs.0,
+        end: line_start + lhs.1,
+    };
+    let op_span = Span {
+        start: line_start + bind_col,
+        end: line_start + bind_col + 2,
+    };
+    let rhs_span = safebind_terminal_rhs_span(source, &lines, (assignment_line_idx, bind_col))?;
+    let lhs_text = slice_chars(source, lhs_span.start, lhs_span.end);
+    let rhs_text = slice_chars(source, rhs_span.start, rhs_span.end);
+    let input_source = classify_runtime_input_source(rhs_text.trim());
+
+    if let Some((lhs_value, rhs_value)) = literal_values {
+        return Some(TemplateSpec {
+            labels: vec![
+                DiagnosticLabel {
+                    source_id: None,
+                    span: lhs_span,
+                    message: format!("LHS value: {}", lhs_value),
+                    color: Some(Color::Red),
+                },
+                DiagnosticLabel {
+                    source_id: None,
+                    span: op_span,
+                    message: "SafeBind partial match".into(),
+                    color: Some(Color::Yellow),
+                },
+                DiagnosticLabel {
+                    source_id: None,
+                    span: rhs_span,
+                    message: format!("RHS value: {}", rhs_value),
+                    color: None,
+                },
+            ],
+            notes: Vec::new(),
+            help: None,
+        });
+    }
+
+    let lhs_message =
+        describe_runtime_pattern_failure(lhs_text.trim(), input_source, kind, message);
+
+    Some(TemplateSpec {
+        labels: vec![
+            DiagnosticLabel {
+                source_id: None,
+                span: lhs_span,
+                message: lhs_message,
+                color: Some(Color::Red),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: op_span,
+                message: "SafeBind partial match".into(),
+                color: Some(Color::Yellow),
+            },
+            DiagnosticLabel {
+                source_id: None,
+                span: rhs_span,
+                message: format!("input source: {}", input_source),
+                color: None,
+            },
+        ],
+        notes: Vec::new(),
+        help: None,
+    })
+}
+
+fn classify_runtime_input_source(text: &str) -> &'static str {
+    if is_string_literal(text) {
+        "String"
+    } else if text.starts_with('[') && text.ends_with(']') {
+        "List"
+    } else if matches!(text, "True" | "False") {
+        "Boolean"
+    } else if is_int_literal(text) {
+        "Int"
+    } else if text.starts_with('(') && text.ends_with(')') {
+        "Tuple"
+    } else {
+        "value"
+    }
+}
+
+fn describe_runtime_pattern_failure(
+    pattern: &str,
+    input_source: &str,
+    kind: &str,
+    _message: &str,
+) -> String {
+    if pattern.starts_with('[') && pattern.ends_with(']') {
+        if pattern == "[]" {
+            return format!("empty list pattern requires {}.len == 0", input_source);
+        }
+        if pattern.contains("..") {
+            return format!(
+                "head-tail list pattern requires a non-empty {}",
+                input_source
+            );
+        }
+        if kind == "PatternMismatch" {
+            return "fixed-length list pattern item did not match the input source".into();
+        }
+        return format!(
+            "fixed-length list pattern requires {}.len to match the pattern arity",
+            input_source
+        );
+    }
+
+    if is_literal_pattern(pattern) {
+        return "literal pattern did not match the input source".into();
+    }
+
+    if pattern.starts_with('(') && pattern.ends_with(')') {
+        return "tuple pattern did not match the input source".into();
+    }
+
+    if is_constructor_like_pattern(pattern) {
+        return "constructor pattern did not match the input source".into();
+    }
+
+    "pattern did not match the input source".into()
+}
+
+fn is_literal_pattern(pattern: &str) -> bool {
+    is_string_literal(pattern) || matches!(pattern, "True" | "False") || is_int_literal(pattern)
+}
+
+fn is_string_literal(text: &str) -> bool {
+    (text.starts_with('"') && text.ends_with('"'))
+        || (text.starts_with('\'') && text.ends_with('\''))
+}
+
+fn is_int_literal(text: &str) -> bool {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn is_constructor_like_pattern(pattern: &str) -> bool {
+    let Some(head) = pattern.chars().next() else {
+        return false;
+    };
+    head.is_ascii_uppercase()
+}
+
+fn split_runtime_literal_values(message: &str) -> (String, Option<(&str, &str)>) {
+    let Some((base, rest)) = message.split_once("\t@@lhs=") else {
+        return (message.to_string(), None);
+    };
+    let Some((lhs, rhs)) = rest.split_once("\t@@rhs=") else {
+        return (message.to_string(), None);
+    };
+    (base.to_string(), Some((lhs, rhs)))
+}
+
+fn extractor_input_context(
+    source: &str,
+    lines: &[(usize, usize)],
+    error_line_idx: usize,
+    message: &str,
+) -> Option<(Span, String)> {
+    let chars: Vec<char> = source.chars().collect();
+    let focus_pos = lines
+        .get(error_line_idx)
+        .map(|(start, _)| *start)
+        .unwrap_or(0);
+    let observed_ty = extractor_observed_type_from_message(message)?;
+
+    if let Some((match_start, open_brace, _)) = find_enclosing_match_block(&chars, focus_pos) {
+        let scrutinee_span = match_scrutinee_span(&chars, match_start, open_brace)?;
+        return Some((scrutinee_span, observed_ty));
+    }
+
+    let assignment = find_safebind_assignment(lines, error_line_idx, source)?;
+    let rhs_span = safebind_terminal_rhs_span(source, lines, assignment)?;
+    Some((rhs_span, observed_ty))
+}
+
+fn extractor_error_locus_span(
+    source: &str,
+    lines: &[(usize, usize)],
+    error_line_idx: usize,
+) -> Option<Span> {
+    let (line_start, line_end) = *lines.get(error_line_idx)?;
+    let line = slice_chars(source, line_start, line_end);
+    let chars: Vec<char> = line.chars().collect();
+    if let Some(pattern_span) = extract_match_pattern_span(&chars) {
+        return Some(Span {
+            start: line_start + pattern_span.0,
+            end: line_start + pattern_span.1,
+        });
+    }
+    let pattern_span = extract_safebind_pattern_span(&chars)?;
+    Some(Span {
+        start: line_start + pattern_span.0,
+        end: line_start + pattern_span.1,
+    })
+}
+
+fn extractor_name_and_rule(message: &str) -> Option<(String, String)> {
+    let tail = message.strip_prefix("Extractor ")?;
+    let (name, _) = tail.split_once(" expects ")?;
+    let rule = if name == "uncons" {
+        "uncons(head, tail) only matches List<$A> or String".to_string()
+    } else {
+        format!(
+            "{}(...) only matches values accepted by its extractor input contract",
+            name
+        )
+    };
+    Some((name.to_string(), rule))
+}
+
+fn find_extractor_definition_label(
+    sources: &SourceRegistry,
+    extractor_name: &str,
+) -> Option<(SourceId, Span, String)> {
+    let builtin_needle = format!("@@builtin defextractor {}(", extractor_name);
+    let user_needle = format!("defextractor {}(", extractor_name);
+
+    for entry in &sources.entries {
+        if let Some(span) = line_head_span_with_brace(&entry.source, &builtin_needle) {
+            return Some((
+                entry.id,
+                span.clone(),
+                slice_chars(&entry.source, span.start, span.end),
+            ));
+        }
+        if let Some(span) = line_head_span_with_brace(&entry.source, &user_needle) {
+            return Some((
+                entry.id,
+                span.clone(),
+                slice_chars(&entry.source, span.start, span.end),
+            ));
+        }
+    }
+
+    None
+}
+
+fn extractor_observed_type_from_message(message: &str) -> Option<String> {
+    let (_, got) = message.split_once(", got ")?;
+    Some(got.trim().to_string())
 }
 
 fn infer_argument_mismatch_template(
@@ -1413,20 +2374,22 @@ fn infer_argument_mismatch_template(
             .map(|(start, end)| Span { start, end })
             .unwrap_or(sig_span);
         labels.push(DiagnosticLabel {
+            source_id: None,
             span: label_span,
             message: sig_text.to_string(),
-            color: Color::Blue,
+            color: Some(Color::Blue),
         });
     } else if let Some(call_name) = call_name_at_span(source, lines, focus) {
         if let Some(sig_line) = find_function_signature_line(source, lines, &call_name) {
             if let Some(sig_text) = source_signature_caption(source, lines, sig_line, &call_name) {
                 labels.push(DiagnosticLabel {
+                    source_id: None,
                     span: Span {
                         start: sig_line.0,
                         end: sig_line.1,
                     },
                     message: sig_text,
-                    color: Color::Blue,
+                    color: Some(Color::Blue),
                 });
             }
         }
@@ -1460,14 +2423,16 @@ fn infer_annotation_assignment_template(
     Some(TemplateSpec {
         labels: vec![
             DiagnosticLabel {
+                source_id: None,
                 span: assignment.lhs_span,
                 message: format!("LHS annotation: {}", expected),
-                color: Color::Blue,
+                color: Some(Color::Blue),
             },
             DiagnosticLabel {
+                source_id: None,
                 span: rhs_span,
                 message: format!("RHS expression: {}", got),
-                color: Color::Yellow,
+                color: Some(Color::Yellow),
             },
         ],
         notes: Vec::new(),
@@ -1549,7 +2514,9 @@ fn flow_operator_rule_display(op: &str, lhs_actual: &str, rhs_actual: &str) -> S
             Some("List") => "List<A> |*> (A -> B) -> List<B>".into(),
             _ => "Result/List map".into(),
         },
-        "|>=" => match flow_family_from_type(lhs_actual).or_else(|| flow_family_from_callable_output(rhs_actual)) {
+        "|>=" => match flow_family_from_type(lhs_actual)
+            .or_else(|| flow_family_from_callable_output(rhs_actual))
+        {
             Some("Result") => "Result<A> |>= (A -> Result<B>) -> Result<B>".into(),
             Some("List") => "List<A> |>= (A -> List<B>) -> List<B>".into(),
             _ => "Result/List bind".into(),
@@ -1559,7 +2526,9 @@ fn flow_operator_rule_display(op: &str, lhs_actual: &str, rhs_actual: &str) -> S
             Some("List") => "(A -> List<B>) >* (B -> C) -> (A -> List<C>)".into(),
             _ => "Result/List lifted compose".into(),
         },
-        ">=>" => match flow_family_from_callable_output(lhs_actual).or_else(|| flow_family_from_callable_output(rhs_actual)) {
+        ">=>" => match flow_family_from_callable_output(lhs_actual)
+            .or_else(|| flow_family_from_callable_output(rhs_actual))
+        {
             Some("Result") => "(A -> Result<B>) >=> (B -> Result<C>) -> (A -> Result<C>)".into(),
             Some("List") => "(A -> List<B>) >=> (B -> List<C>) -> (A -> List<C>)".into(),
             _ => "Result/List Kleisli compose".into(),
@@ -1723,26 +2692,42 @@ fn flow_operator_reason(op: &str, message: &str, lhs_actual: &str, rhs_actual: &
             }
         }
         "|*>" => {
-            if let Some(got) = message.strip_prefix("`|*>` requires Result or List on the left, got ") {
-                format!("Reason: LHS is {}, but `|*>` maps over Result<A> or List<A>.", got)
-            } else if let Some((_prefix, got)) =
-                message.split_once("expects a plain function on the right-hand side; use `|>=` for contextual output")
+            if let Some(got) =
+                message.strip_prefix("`|*>` requires Result or List on the left, got ")
             {
+                format!(
+                    "Reason: LHS is {}, but `|*>` maps over Result<A> or List<A>.",
+                    got
+                )
+            } else if let Some((_prefix, got)) = message.split_once(
+                "expects a plain function on the right-hand side; use `|>=` for contextual output",
+            ) {
                 let _ = got;
                 if let Some((_input, output)) = unary_function_parts_display(rhs_actual) {
-                    format!("Reason: RHS returns {}, but `|*>` maps with a plain function.", output)
+                    format!(
+                        "Reason: RHS returns {}, but `|*>` maps with a plain function.",
+                        output
+                    )
                 } else {
                     format!("Reason: {}", message)
                 }
             } else if let (Some(expected), Some(got)) = extract_expected_got(message) {
-                format!("Reason: LHS contains {}, but RHS expects {}.", expected, got)
+                format!(
+                    "Reason: LHS contains {}, but RHS expects {}.",
+                    expected, got
+                )
             } else {
                 format!("Reason: {}", message)
             }
         }
         "|>=" => {
-            if let Some(got) = message.strip_prefix("`|>=` requires Result or List on the left, got ") {
-                format!("Reason: LHS is {}, but `|>=` requires Result<A> or List<A>.", got)
+            if let Some(got) =
+                message.strip_prefix("`|>=` requires Result or List on the left, got ")
+            {
+                format!(
+                    "Reason: LHS is {}, but `|>=` requires Result<A> or List<A>.",
+                    got
+                )
             } else if let Some(got) =
                 message.strip_prefix("`|>=` requires the right-hand side to return Result, got ")
             {
@@ -1753,10 +2738,17 @@ fn flow_operator_reason(op: &str, message: &str, lhs_actual: &str, rhs_actual: &
                 format!("Reason: RHS returns {}, but `|>=` requires List<B>.", got)
             } else if message.contains("cannot mix Result and List context") {
                 let lhs_family = flow_family_from_type(lhs_actual).unwrap_or("Result/List");
-                let rhs_family = flow_family_from_callable_output(rhs_actual).unwrap_or("Result/List");
-                format!("Reason: LHS is {}, but RHS returns {}.", lhs_family, rhs_family)
+                let rhs_family =
+                    flow_family_from_callable_output(rhs_actual).unwrap_or("Result/List");
+                format!(
+                    "Reason: LHS is {}, but RHS returns {}.",
+                    lhs_family, rhs_family
+                )
             } else if let (Some(expected), Some(got)) = extract_expected_got(message) {
-                format!("Reason: LHS contains {}, but RHS expects {}.", expected, got)
+                format!(
+                    "Reason: LHS contains {}, but RHS expects {}.",
+                    expected, got
+                )
             } else {
                 format!("Reason: {}", message)
             }
@@ -1769,7 +2761,10 @@ fn flow_operator_reason(op: &str, message: &str, lhs_actual: &str, rhs_actual: &
                 let rhs_in = unary_function_parts_display(rhs_actual)
                     .map(|(input, _)| input)
                     .unwrap_or_else(|| "unknown".into());
-                format!("Reason: left output is {}, but right input is {}.", lhs_out, rhs_in)
+                format!(
+                    "Reason: left output is {}, but right input is {}.",
+                    lhs_out, rhs_in
+                )
             } else {
                 format!("Reason: {}", message)
             }
@@ -1790,7 +2785,10 @@ fn flow_operator_reason(op: &str, message: &str, lhs_actual: &str, rhs_actual: &
                 let rhs_in = unary_function_parts_display(rhs_actual)
                     .map(|(input, _)| input)
                     .unwrap_or_else(|| "unknown".into());
-                format!("Reason: left contextual output is {}, but right input is {}.", lhs_out, rhs_in)
+                format!(
+                    "Reason: left contextual output is {}, but right input is {}.",
+                    lhs_out, rhs_in
+                )
             } else {
                 format!("Reason: {}", message)
             }
@@ -1943,14 +2941,16 @@ fn infer_if_branch_mismatch_template(
     Some(TemplateSpec {
         labels: vec![
             DiagnosticLabel {
+                source_id: None,
                 span: then_span,
                 message: format!("then branch: {}", then_ty),
-                color: Color::Blue,
+                color: Some(Color::Blue),
             },
             DiagnosticLabel {
+                source_id: None,
                 span: else_span,
                 message: format!("else branch: {}", else_ty),
-                color: Color::Yellow,
+                color: Some(Color::Yellow),
             },
         ],
         notes: Vec::new(),
@@ -1990,12 +2990,13 @@ fn infer_match_arm_mismatch_template(
 
     let mut labels = Vec::new();
     labels.push(DiagnosticLabel {
+        source_id: None,
         span: Span {
             start: match_start,
             end: (match_start + 5).min(chars.len()),
         },
         message: format!("match expression expects {}", expected_ty),
-        color: Color::Magenta,
+        color: Some(Color::Magenta),
     });
 
     for (idx, (start, end)) in arm_spans.iter().enumerate() {
@@ -2012,12 +3013,13 @@ fn infer_match_arm_mismatch_template(
             expected_ty
         );
         labels.push(DiagnosticLabel {
+            source_id: None,
             span: Span {
                 start: *start,
                 end: *end,
             },
             message,
-            color,
+            color: Some(color),
         });
     }
 
@@ -2324,6 +3326,15 @@ fn find_enclosing_match_block(chars: &[char], focus_pos: usize) -> Option<(usize
     None
 }
 
+fn match_scrutinee_span(chars: &[char], match_start: usize, open_brace: usize) -> Option<Span> {
+    let start = match_start + "match".chars().count();
+    let (scrutinee_start, scrutinee_end) = trim_char_span(chars, start, open_brace);
+    (scrutinee_start < scrutinee_end).then_some(Span {
+        start: scrutinee_start,
+        end: scrutinee_end,
+    })
+}
+
 fn collect_match_arm_body_spans(
     chars: &[char],
     block_start: usize,
@@ -2447,6 +3458,10 @@ fn line_span_containing(source: &str, pos: usize) -> Option<(usize, usize)> {
     Some(lines[idx])
 }
 
+fn trimmed_line_span_containing(source: &str, pos: usize) -> Option<Span> {
+    trimmed_line_span(source, line_span_containing(source, pos)?)
+}
+
 #[derive(Debug, Clone)]
 struct AnnotatedAssignment {
     line_idx: usize,
@@ -2494,6 +3509,22 @@ fn find_annotated_assignment_line(
     None
 }
 
+fn find_safebind_assignment(
+    lines: &[(usize, usize)],
+    focus_line: usize,
+    source: &str,
+) -> Option<(usize, usize)> {
+    for idx in (0..=focus_line).rev() {
+        let (line_start, line_end) = lines[idx];
+        let line = slice_chars(source, line_start, line_end);
+        let chars: Vec<char> = line.chars().collect();
+        if let Some(bind) = find_subslice_outside_literals(&chars, &['=', '?'], 0) {
+            return Some((idx, bind));
+        }
+    }
+    None
+}
+
 fn assignment_rhs_span(
     source: &str,
     lines: &[(usize, usize)],
@@ -2523,6 +3554,43 @@ fn assignment_rhs_span(
         last = Some(span);
     }
     last
+}
+
+fn safebind_terminal_rhs_span(
+    source: &str,
+    lines: &[(usize, usize)],
+    assignment: (usize, usize),
+) -> Option<Span> {
+    let (assignment_line_idx, bind_col) = assignment;
+    let mut last_non_empty = None;
+    for idx in assignment_line_idx + 1..lines.len() {
+        let text = slice_chars(source, lines[idx].0, lines[idx].1);
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            break;
+        }
+        if !starts_with_flow_operator(trimmed) {
+            break;
+        }
+        last_non_empty = Some(idx);
+    }
+
+    if let Some(last_line_idx) = last_non_empty {
+        return trimmed_rhs_focus_line_span(source, lines[last_line_idx]);
+    }
+
+    let (line_start, line_end) = lines[assignment_line_idx];
+    let line = slice_chars(source, line_start, line_end);
+    let chars: Vec<char> = line.chars().collect();
+    let rhs = trimmed_span_from_line(line_start, &chars, bind_col + 2, chars.len());
+    if rhs.start >= rhs.end {
+        return None;
+    }
+    if let Some(op_rhs) = terminal_operator_rhs_span(line_start, &chars, bind_col + 2, chars.len())
+    {
+        return Some(op_rhs);
+    }
+    Some(rhs)
 }
 
 fn trimmed_rhs_focus_line_span(source: &str, line: (usize, usize)) -> Option<Span> {
@@ -2555,6 +3623,53 @@ fn trimmed_rhs_focus_line_span(source: &str, line: (usize, usize)) -> Option<Spa
     })
 }
 
+fn terminal_operator_rhs_span(
+    line_start: usize,
+    chars: &[char],
+    start: usize,
+    end: usize,
+) -> Option<Span> {
+    let mut idx = start.min(chars.len());
+    let limit = end.min(chars.len());
+    let mut last_rhs = None;
+    while idx < limit {
+        if is_quote_char(chars[idx]) {
+            idx = skip_quoted_literal(chars, idx);
+            continue;
+        }
+        if let Some(op_len) = flow_operator_length_at(chars, idx) {
+            let rhs_start = idx + op_len;
+            let rhs = trim_char_span(chars, rhs_start, limit);
+            if rhs.0 < rhs.1 {
+                last_rhs = Some(Span {
+                    start: line_start + rhs.0,
+                    end: line_start + rhs.1,
+                });
+            }
+            idx += op_len;
+            continue;
+        }
+        idx += 1;
+    }
+    last_rhs
+}
+
+fn starts_with_flow_operator(trimmed: &str) -> bool {
+    ["|>=", "|*>", "|>", ">>", ">*", ">=>"]
+        .iter()
+        .any(|op| trimmed.starts_with(op))
+}
+
+fn flow_operator_length_at(chars: &[char], idx: usize) -> Option<usize> {
+    for op in ["|>=", "|*>", "|>", ">>", ">*", ">=>"] {
+        let op_chars = op.chars().collect::<Vec<_>>();
+        if idx + op_chars.len() <= chars.len() && chars[idx..idx + op_chars.len()] == op_chars[..] {
+            return Some(op_chars.len());
+        }
+    }
+    None
+}
+
 fn trimmed_line_span(source: &str, line: (usize, usize)) -> Option<Span> {
     let text = slice_chars(source, line.0, line.1);
     let chars: Vec<char> = text.chars().collect();
@@ -2580,6 +3695,11 @@ fn identifier_span_at(source: &str, pos: usize) -> Option<Span> {
     } else {
         None
     }
+}
+
+fn extract_backticked_target<'a>(message: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    let tail = message.strip_prefix(prefix)?;
+    tail.strip_suffix(suffix)
 }
 
 fn is_ident_char(ch: char) -> bool {
@@ -2670,8 +3790,14 @@ fn find_operator_symbol_span(
     })
 }
 
-fn find_any_binary_operator_span(line_start: usize, chars: &[char], focus_col: usize) -> Option<Span> {
-    for op_name in ["Concat", "Eq", "Neq", "Lte", "Gte", "Lt", "Gt", "Add", "Sub", "Mul"] {
+fn find_any_binary_operator_span(
+    line_start: usize,
+    chars: &[char],
+    focus_col: usize,
+) -> Option<Span> {
+    for op_name in [
+        "Concat", "Eq", "Neq", "Lte", "Gte", "Lt", "Gt", "Add", "Sub", "Mul",
+    ] {
         if let Some(span) = find_operator_symbol_span(line_start, chars, op_name, focus_col) {
             return Some(span);
         }
@@ -2848,6 +3974,11 @@ fn extract_match_pattern_span(chars: &[char]) -> Option<(usize, usize)> {
     trim_after_line_indent(chars, 0, arrow)
 }
 
+fn extract_safebind_pattern_span(chars: &[char]) -> Option<(usize, usize)> {
+    let bind = find_subslice_outside_literals(chars, &['=', '?'], 0)?;
+    trim_after_line_indent(chars, 0, bind)
+}
+
 fn trim_after_line_indent(chars: &[char], start: usize, end: usize) -> Option<(usize, usize)> {
     let span = trim_char_span(chars, start, end);
     (span.0 < span.1).then_some(span)
@@ -2952,9 +4083,10 @@ mod tests {
             message: "expected Int, got String".into(),
             primary_span: Span { start: 13, end: 23 },
             labels: vec![DiagnosticLabel {
+                source_id: None,
                 span: Span { start: 13, end: 23 },
                 message: "binding value".into(),
-                color: Color::Blue,
+                color: Some(Color::Blue),
             }],
             notes: Vec::new(),
             help: Some("The type annotation requires Int".into()),
@@ -3102,16 +4234,20 @@ mod tests {
             .labels
             .iter()
             .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
-        assert!(spec
-            .labels
-            .iter()
-            .any(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A (where A: Numeric)"));
+        assert!(
+            spec.labels
+                .iter()
+                .any(|label| strip_ansi(&label.message)
+                    == "   OP rule: A + A -> A (where A: Numeric)")
+        );
         assert!(spec
             .labels
             .iter()
             .any(|label| strip_ansi(&label.message) == "RHS actual: String"));
         assert!(notes_text.contains("Step: Int + String -> <type error>"));
-        assert!(notes_text.contains("Reason: `+` requires the same Numeric type on both sides, but got Int and String."));
+        assert!(notes_text.contains(
+            "Reason: `+` requires the same Numeric type on both sides, but got Int and String."
+        ));
         assert!(spec
             .help
             .as_deref()
@@ -3180,7 +4316,9 @@ mod tests {
             .iter()
             .any(|label| strip_ansi(&label.message) == "RHS actual: Boolean"));
         assert!(notes_text.contains("Step: Int == Boolean -> Boolean"));
-        assert!(notes_text.contains("Reason: `==` compares two values of the same type, but got Int and Boolean."));
+        assert!(notes_text.contains(
+            "Reason: `==` compares two values of the same type, but got Int and Boolean."
+        ));
     }
 
     #[test]
@@ -3205,7 +4343,9 @@ mod tests {
             .iter()
             .any(|label| strip_ansi(&label.message) == "   OP rule: A != A -> Boolean"));
         assert!(notes_text.contains("Step: Int != Boolean -> Boolean"));
-        assert!(notes_text.contains("Reason: `!=` compares two values of the same type, but got Int and Boolean."));
+        assert!(notes_text.contains(
+            "Reason: `!=` compares two values of the same type, but got Int and Boolean."
+        ));
     }
 
     #[test]
@@ -3225,12 +4365,13 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(spec
-            .labels
-            .iter()
-            .any(|label| strip_ansi(&label.message) == "   OP rule: A < A -> Boolean (where A: Ord)"));
+        assert!(spec.labels.iter().any(
+            |label| strip_ansi(&label.message) == "   OP rule: A < A -> Boolean (where A: Ord)"
+        ));
         assert!(notes_text.contains("Step: Int < Boolean -> Boolean"));
-        assert!(notes_text.contains("Reason: `<` compares two ordered values of the same type, but got Int and Boolean."));
+        assert!(notes_text.contains(
+            "Reason: `<` compares two ordered values of the same type, but got Int and Boolean."
+        ));
     }
 
     #[test]
@@ -3263,7 +4404,9 @@ mod tests {
             .iter()
             .any(|label| strip_ansi(&label.message) == "RHS actual: String"));
         assert!(notes_text.contains("Step: Int ++ String -> String"));
-        assert!(notes_text.contains("Reason: `++` is string concatenation, but got Int and String."));
+        assert!(
+            notes_text.contains("Reason: `++` is string concatenation, but got Int and String.")
+        );
     }
 
     #[test]
@@ -3407,7 +4550,9 @@ mod tests {
         assert!(rendered_plain.contains("LHS actual: Int"));
         assert!(rendered_plain.contains("OP rule: Result<A> |>= (A -> Result<B>) -> Result<B>"));
         assert!(rendered_plain.contains("Step: Int |>= (Int -> Result<Int>) -> Result<Int>"));
-        assert!(rendered_plain.contains("Reason: LHS is Int, but `|>=` requires Result<A> or List<A>."));
+        assert!(
+            rendered_plain.contains("Reason: LHS is Int, but `|>=` requires Result<A> or List<A>.")
+        );
         assert_eq!(
             spec.help.as_deref(),
             Some("Use `|>` for a plain value, or make the LHS Result/List.")
@@ -3656,6 +4801,155 @@ bad = add("oops", 1)"#;
     }
 
     #[test]
+    fn type_error_spec_labels_extractor_pattern_for_safebind_rhs() {
+        let source = "uncons(head, tail) =? True";
+        let err = TypeError {
+            message: "Extractor uncons expects List<...> or String, got Boolean".into(),
+            span: Span { start: 0, end: 6 },
+            hint: None,
+        };
+
+        let spec = type_error_spec(source, &err);
+
+        assert!(spec.labels.iter().any(|label| {
+            label.message == "extractor pattern checked against the SafeBind RHS"
+                && slice_chars(source, label.span.start, label.span.end) == "uncons(head, tail)"
+        }));
+    }
+
+    #[test]
+    fn type_error_spec_splits_total_bind_pattern_error_into_lhs_op_rhs() {
+        let source = "[h, ..t] = [1]";
+        let err = TypeError {
+            message: "Only total MatchBlock patterns can be used with `=`".into(),
+            span: Span {
+                start: 0,
+                end: source.chars().count(),
+            },
+            hint: Some("Use `=?` for partial destructuring and extractor-driven matches.".into()),
+        };
+
+        let spec = type_error_spec(source, &err);
+
+        assert!(spec.labels.iter().any(|label| {
+            label.message == "LHS pattern: partial MatchBlock pattern"
+                && label.color == Some(Color::Red)
+                && slice_chars(source, label.span.start, label.span.end) == "[h, ..t]"
+        }));
+        assert!(spec.labels.iter().any(|label| {
+            label.message == "Use `=?` for partial destructuring and extractor-driven matches."
+                && label.color == Some(Color::Yellow)
+                && slice_chars(source, label.span.start, label.span.end) == "="
+        }));
+        assert!(spec.labels.iter().any(|label| {
+            label.message == "RHS value"
+                && label.color.is_none()
+                && slice_chars(source, label.span.start, label.span.end) == "[1]"
+        }));
+        assert!(spec.help.is_none());
+    }
+
+    #[test]
+    fn type_error_spec_by_id_adds_extractor_context_blocks() {
+        let mut sources = SourceRegistry::new();
+        let main_source = "print(match True {\n  uncons(head, tail) => head,\n  _ => 0,\n})";
+        let main_id = sources.register("main.srt", main_source);
+        let kernel_id = sources.register(
+            "lib/kernel.srt",
+            "@@builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>",
+        );
+        let err = TypeError {
+            message: "Extractor uncons expects List<...> or String, got Boolean".into(),
+            span: Span { start: 22, end: 28 },
+            hint: None,
+        };
+
+        let spec = type_error_spec_by_id(&sources, main_id, &err);
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.source_id == Some(main_id)
+                && label.message == "input source: Boolean"));
+        assert!(spec.labels.iter().any(|label| {
+            label.source_id == Some(kernel_id)
+                && label
+                    .message
+                    .contains("Extractor definition: @@builtin defextractor uncons(term)")
+        }));
+    }
+
+    #[test]
+    fn safebind_terminal_rhs_span_picks_last_pipeline_rhs() {
+        let source = "uncons(head, tail) =? seed\n  |> step1()\n  |> finalize()";
+        let lines = line_spans(source);
+        let assignment = find_safebind_assignment(&lines, 0, source).expect("safebind assignment");
+        let span =
+            safebind_terminal_rhs_span(source, &lines, assignment).expect("terminal rhs span");
+
+        assert_eq!(slice_chars(source, span.start, span.end), "finalize()");
+    }
+
+    #[test]
+    fn parse_error_spec_labels_source_policy_violation() {
+        let source = "defstruct User {\n  name: String,\n}";
+        let spec = parse_error_spec(
+            source,
+            "This top-level declaration is not allowed in the current source policy",
+            Span { start: 0, end: 17 },
+        );
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "forbidden top-level declaration"));
+        assert_eq!(
+            spec.help.as_deref(),
+            Some(
+                "Move this declaration into a module compile unit, or replace it with an expression that is allowed in this source kind."
+            )
+        );
+    }
+
+    #[test]
+    fn parse_error_spec_labels_return_position_impl_trait() {
+        let source = "def echo(x: impl Numeric) -> impl Numeric { x }";
+        let spec = parse_error_spec(
+            source,
+            "return-position `impl Trait` is not supported; name the type parameter explicitly",
+            Span { start: 29, end: 41 },
+        );
+
+        assert!(spec.labels.iter().any(|label| {
+            label.message == "return-position `impl Trait` is not supported"
+                && label.color == Some(Color::Red)
+        }));
+        assert_eq!(
+            spec.help.as_deref(),
+            Some("Name the return type parameter explicitly in the function signature.")
+        );
+    }
+
+    #[test]
+    fn parse_error_spec_labels_where_clause_staging() {
+        let source = "def double<$N>(x: $N) -> $N where $N: Numeric { x + x }";
+        let spec = parse_error_spec(
+            source,
+            "`where` clauses are staged and not implemented yet",
+            Span { start: 29, end: 46 },
+        );
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "`where` clauses are not available yet"));
+        assert!(spec
+            .help
+            .as_deref()
+            .is_some_and(|help| help.contains("explicit type parameters")));
+    }
+
+    #[test]
     fn resolve_error_spec_labels_undefined_name() {
         let spec = resolve_error_spec(
             "unknown(1)",
@@ -3689,5 +4983,97 @@ bad = add("oops", 1)"#;
             .help
             .as_deref()
             .is_some_and(|help| help.contains("function name is imported correctly")));
+    }
+
+    #[test]
+    fn resolve_error_spec_labels_unknown_module_import() {
+        let spec = resolve_error_spec(
+            "import Missing",
+            "Unknown module import: Missing",
+            Span { start: 0, end: 14 },
+        );
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "unknown import target `Missing`"));
+        assert!(spec
+            .help
+            .as_deref()
+            .is_some_and(|help| help.contains("loaded before this import")));
+    }
+
+    #[test]
+    fn resolve_error_spec_labels_non_importable_target() {
+        let spec = resolve_error_spec(
+            "import User",
+            "Import target `User` is not importable",
+            Span { start: 0, end: 11 },
+        );
+
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "import target `User` is not importable"));
+        assert!(spec
+            .help
+            .as_deref()
+            .is_some_and(|help| help.contains("cannot be imported directly")));
+    }
+
+    #[test]
+    fn runtime_value_error_spec_splits_literal_safebind_pattern() {
+        let source = r#""2" =? "1""#;
+        let spec = runtime_value_error_spec(
+            source,
+            "PatternMismatch",
+            "Pattern did not match.\t@@lhs=\"2\"\t@@rhs=\"1\"",
+            0,
+            1,
+            None,
+        );
+
+        assert_eq!(
+            slice_chars(source, spec.primary_span.start, spec.primary_span.end),
+            r#""2""#
+        );
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "LHS value: \"2\""));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "SafeBind partial match"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "RHS value: \"1\""));
+        assert_eq!(spec.message, "Pattern did not match.");
+    }
+
+    #[test]
+    fn runtime_value_error_spec_splits_head_tail_string_safebind_pattern() {
+        let source = r#"[h, ..t] =? """#;
+        let spec = runtime_value_error_spec(
+            source,
+            "PatternMismatch",
+            "Pattern did not match.",
+            0,
+            1,
+            None,
+        );
+
+        assert!(spec.labels.iter().any(|label| {
+            label.message == "head-tail list pattern requires a non-empty String"
+        }));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "SafeBind partial match"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "input source: String"));
     }
 }

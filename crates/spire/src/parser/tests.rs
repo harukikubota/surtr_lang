@@ -608,7 +608,9 @@ impl User {
         ParserContext::module(1, None),
     )
     .expect("self rebinding should be parsed");
-    assert!(ast.iter().any(|node| matches!(node, Ast::ImplDef(_, _, _, _))));
+    assert!(ast
+        .iter()
+        .any(|node| matches!(node, Ast::ImplDef(_, _, _, _))));
 }
 
 #[test]

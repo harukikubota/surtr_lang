@@ -835,20 +835,22 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::TraitImplDef(span, trait_name, trait_args, target, methods, attrs) => Ast::TraitImplDef(
-            shift_span(span, delta),
-            trait_name,
-            trait_args
-                .into_iter()
-                .map(|arg| shift_ast_ty(arg, delta))
-                .collect(),
-            shift_ast_ty(target, delta),
-            methods
-                .into_iter()
-                .map(|method| shift_ast_span(method, delta))
-                .collect(),
-            shift_decl_attrs(attrs),
-        ),
+        Ast::TraitImplDef(span, trait_name, trait_args, target, methods, attrs) => {
+            Ast::TraitImplDef(
+                shift_span(span, delta),
+                trait_name,
+                trait_args
+                    .into_iter()
+                    .map(|arg| shift_ast_ty(arg, delta))
+                    .collect(),
+                shift_ast_ty(target, delta),
+                methods
+                    .into_iter()
+                    .map(|method| shift_ast_span(method, delta))
+                    .collect(),
+                shift_decl_attrs(attrs),
+            )
+        }
         Ast::Import(span, path, spec) => {
             Ast::Import(shift_span(span, delta), shift_ast_path(path, delta), spec)
         }

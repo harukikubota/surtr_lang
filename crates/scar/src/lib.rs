@@ -2242,11 +2242,10 @@ b = double(1.5)"#,
         assert!(err
             .message
             .contains("Numeric is implemented for: Float, Int"));
-        assert!(
-            err.hint
-                .as_deref()
-                .is_some_and(|hint| hint.contains("Call target signature: Numeric::add"))
-        );
+        assert!(err
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("Call target signature: Numeric::add")));
     }
 
     #[test]
@@ -2259,11 +2258,10 @@ b = double(1.5)"#,
         assert!(err
             .message
             .contains("Numeric is implemented for: Float, Int"));
-        assert!(
-            err.hint
-                .as_deref()
-                .is_some_and(|hint| hint.contains("Call target signature: Numeric::add"))
-        );
+        assert!(err
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("Call target signature: Numeric::add")));
     }
 
     #[test]

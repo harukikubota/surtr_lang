@@ -222,6 +222,7 @@ fn import_module_into_scope(
                 module_name
             ),
             span,
+            related_labels: Vec::new(),
         })
     } else if matches!(
         import_context.declaration_index.get(module_name),
@@ -232,11 +233,13 @@ fn import_module_into_scope(
         Err(ResolveError {
             message: format!("Import target `{}` is not importable", module_name),
             span,
+            related_labels: Vec::new(),
         })
     } else {
         Err(ResolveError {
             message: format!("Unknown module import: {}", module_name),
             span,
+            related_labels: Vec::new(),
         })
     }
 }
@@ -255,6 +258,7 @@ fn import_trait_into_scope(
         return Err(ResolveError {
             message: format!("Unknown module import: {}", trait_name),
             span,
+            related_labels: Vec::new(),
         });
     };
 
@@ -262,6 +266,7 @@ fn import_trait_into_scope(
         return Err(ResolveError {
             message: format!("Import target `{}` is not importable", trait_name),
             span,
+            related_labels: Vec::new(),
         });
     }
 
@@ -275,6 +280,7 @@ fn import_trait_into_scope(
                 trait_name
             ),
             span,
+            related_labels: Vec::new(),
         });
     }
 
@@ -311,6 +317,7 @@ fn import_trait_into_scope(
                     method_entry.fq_name
                 ),
                 span: span.clone(),
+                related_labels: Vec::new(),
             });
         }
         let method_uid = import_context.declaration_uids[&method_entry.fq_name];
@@ -363,6 +370,7 @@ fn import_single_into_scope(
                 format!("Unknown module import: {}", module_name)
             },
             span,
+            related_labels: Vec::new(),
         });
     };
 
@@ -370,12 +378,14 @@ fn import_single_into_scope(
         return Err(ResolveError {
             message: format!("Import target `{}` is not importable", fq_name),
             span,
+            related_labels: Vec::new(),
         });
     }
     if entry.visibility != Visibility::Public {
         return Err(ResolveError {
             message: format!("Import target `{}` is private", fq_name),
             span,
+            related_labels: Vec::new(),
         });
     }
 
@@ -386,6 +396,7 @@ fn import_single_into_scope(
                 fq_name
             ),
             span,
+            related_labels: Vec::new(),
         });
     }
 
@@ -427,6 +438,7 @@ fn import_single_into_scope(
                         method_entry.fq_name
                     ),
                     span: span.clone(),
+                    related_labels: Vec::new(),
                 });
             }
             bind_import_name(
@@ -530,6 +542,7 @@ fn bind_import_name(
                     short_name, existing_name, incoming_name
                 ),
                 span,
+                related_labels: Vec::new(),
             });
         }
         let existing_name = import_context
@@ -560,6 +573,7 @@ fn bind_import_name(
                 short_name, module_name
             ),
             span,
+            related_labels: Vec::new(),
         });
     }
 
@@ -584,6 +598,7 @@ impl ImportState {
             return Err(ResolveError {
                 message: format!("Duplicate import: {}", module_name),
                 span: span.clone(),
+                related_labels: Vec::new(),
             });
         }
         self.imported_modules.insert(module_name.to_string());
@@ -601,6 +616,7 @@ impl ImportState {
             return Err(ResolveError {
                 message: format!("Duplicate import: {}::{}", module_name, name),
                 span: span.clone(),
+                related_labels: Vec::new(),
             });
         }
         self.imported_members.insert(member);

@@ -441,6 +441,7 @@ impl ReplEngine {
                     short_name, module_name
                 ),
                 span: span.clone(),
+                related_labels: Vec::new(),
             });
         }
 
@@ -489,11 +490,13 @@ impl ReplEngine {
                     module_name
                 ),
                 span: span.clone(),
+                related_labels: Vec::new(),
             })
         } else {
             Err(ResolveError {
                 message: format!("Unknown module import: {}", module_name),
                 span: span.clone(),
+                related_labels: Vec::new(),
             })
         }
     }
@@ -518,6 +521,7 @@ impl ReplEngine {
                     format!("Unknown module import: {}", module_name)
                 },
                 span: span.clone(),
+                related_labels: Vec::new(),
             });
         };
 
@@ -528,6 +532,7 @@ impl ReplEngine {
                     fq_name
                 ),
                 span: span.clone(),
+                related_labels: Vec::new(),
             });
         }
 
@@ -540,6 +545,7 @@ impl ReplEngine {
                     fq_name
                 ),
                 span: span.clone(),
+                related_labels: Vec::new(),
             })?;
         self.bind_import_name(name, uid, module_name, span, imported_symbols)
     }
@@ -566,6 +572,7 @@ impl ReplEngine {
                         module_name
                     ),
                     span: span.clone(),
+                    related_labels: Vec::new(),
                 });
             }
 

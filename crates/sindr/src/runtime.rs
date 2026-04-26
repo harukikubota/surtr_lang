@@ -262,6 +262,13 @@ fn quote_surtr_string_literal(input: &str) -> String {
     out
 }
 
+fn visible_runtime_error_message(message: &str) -> &str {
+    message
+        .split_once("\t@@lhs=")
+        .map(|(head, _)| head)
+        .unwrap_or(message)
+}
+
 impl HashMapHandle {
     pub fn empty() -> Self {
         Self {
@@ -428,10 +435,18 @@ impl RichError {
     }
 
     pub fn to_eprint_lines(&self) -> Vec<String> {
-        let mut lines = vec![format!("Error: {}: {}", self.kind, self.message)];
+        let mut lines = vec![format!(
+            "Error: {}: {}",
+            self.kind,
+            visible_runtime_error_message(&self.message)
+        )];
         let mut next = self.cause.as_deref();
         while let Some(cause) = next {
-            lines.push(format!("Caused by: {}: {}", cause.kind, cause.message));
+            lines.push(format!(
+                "Caused by: {}: {}",
+                cause.kind,
+                visible_runtime_error_message(&cause.message)
+            ));
             next = cause.cause.as_deref();
         }
         lines
@@ -774,6 +789,28 @@ mod tests {
                 "Error: Higher: higher".to_string(),
                 "Caused by: Lower: lower".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn rich_error_eprint_lines_hide_runtime_literal_metadata() {
+        let rich = RichError {
+            kind: "PatternMismatch".into(),
+            message: "Pattern did not match.\t@@lhs=\"1\"\t@@rhs=\"2\"".into(),
+            location: Location {
+                file: "<repl>".into(),
+                func: "f".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+        };
+
+        assert_eq!(
+            rich.to_eprint_lines(),
+            vec!["Error: PatternMismatch: Pattern did not match.".to_string()]
         );
     }
 }

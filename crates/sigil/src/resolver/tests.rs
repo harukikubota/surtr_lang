@@ -270,6 +270,9 @@ impl User {
     assert!(err
         .message
         .contains("Multiple impl blocks for `User` are not allowed"));
+    assert_eq!(err.related_labels.len(), 2);
+    assert_eq!(err.related_labels[0].message, "first definition");
+    assert_eq!(err.related_labels[1].message, "conflicting definition");
 }
 
 #[test]
@@ -336,6 +339,9 @@ impl Numeric for Int {
     assert!(err.message.contains("Multiple trait impl blocks for `"));
     assert!(err.message.contains("Numeric"));
     assert!(err.message.contains("Int"));
+    assert_eq!(err.related_labels.len(), 2);
+    assert_eq!(err.related_labels[0].message, "first definition");
+    assert_eq!(err.related_labels[1].message, "conflicting definition");
 }
 
 #[test]
