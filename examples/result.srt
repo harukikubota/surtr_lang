@@ -15,7 +15,7 @@ def render(n: Int) -> String {
   "count=" ++ to_string(n)
 }
 
-format_count: (Int) -> String = &double >> &render
+format_count: (Int -> String) = &double >> &render
 parsed_label: (String -> Result<String>) = &parse_count >* &render
 checked_label: (String -> Result<String>) = &parse_count >=> &require_small >* format_count
 
