@@ -11,6 +11,7 @@ REPL でそのまま試しやすい題材を優先しており、実行例は `s
 - [各種定義と使い方](./definitions-and-usage.md)
 - [型注釈](./type-annotations.md)
 - [トレイト実装](./trait-impls.md)
+- [構造体](./structs.md)
 - [Lens](./lens.md)
 - [Kernel](./kernel.md)
 - [Regex](./regex.md)

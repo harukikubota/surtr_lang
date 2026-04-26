@@ -57,6 +57,9 @@ impl User {
 
 呼び出し側は `Type::method(...)` で読みます。
 
+`new`、構造体リテラル、`deconstruct`、private field、property access のまとまった説明は
+`./structs.md` にあります。
+
 ## `Result`
 
 Surtr では失敗も値として扱います。

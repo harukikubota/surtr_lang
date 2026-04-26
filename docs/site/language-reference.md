@@ -355,6 +355,9 @@ value: Int =? parse_int("1")
 - list pattern
 - 入れ子になった constructor pattern
 
+構造体の constructor pattern は attached extractor `Type::deconstruct(...)` を通ります。  
+詳細は `./structs.md` と `./extractors.md` を参照してください。
+
 ## 6. フィールドアクセス
 
 ```surtr
@@ -369,6 +372,9 @@ value.field
 - `Type(...)` は `Type::new(...)` の糖衣として解決される
 - `Type { ... }` 構造体リテラルは `impl Type` の同型メソッド本体内でのみ使用可能
 - `Type::new` は import 対象外
+- `Type(...)` の pattern 側は `Type::deconstruct(...)` を要求する
+
+private field と property access を含む構造体全体の契約は `./structs.md` を参照してください。
 
 ### 引数規約
 

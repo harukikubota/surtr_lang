@@ -274,7 +274,9 @@ Surtr には `defstruct` / `defrecord` / `defenum` があります。
 
 ### `defstruct`
 
-`defstruct` は名前付きフィールドを持つデータ型です。
+`defstruct` は名前付きフィールドを持つデータ型です。  
+構造体リテラル、`new`、`deconstruct`、private field、property access、`match` での分解は
+`./structs.md` にまとめています。
 
 ```surtr
 defstruct User {
@@ -292,6 +294,12 @@ user: User = User("alice", 30)
 print(to_string(user.name))
 print(to_string(user.age))
 ```
+
+ここでは最小限だけ押さえると十分です。
+
+- `User(...)` は `User::new(...)` の糖衣
+- `User { ... }` は `impl User` 内でのみ使う
+- 分解は field pattern ではなく `User::deconstruct` を通す
 
 ### `defrecord`
 

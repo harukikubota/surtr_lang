@@ -46,6 +46,7 @@ pattern position の `[head, ..tail]` は sequence decomposition として読ま
 
 ## 関連ページ
 
+- struct pattern と `deconstruct` は `./structs.md`
 - extractor の形は `./extractors.md`
 - `Kernel::uncons` は `./kernel.md`
 - 制約一覧は `./language-reference.md`
