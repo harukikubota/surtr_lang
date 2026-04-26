@@ -217,6 +217,34 @@ impl User {
 }
 
 #[test]
+fn test_precollect_impl_extractors_for_enum_types() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"defenum Light {
+  Red,
+  Green,
+}
+
+impl Light {
+  defextractor stop_code(self: Self) -> MatchResult<Int, Error> {
+    MatchResult::NoMatch
+  }
+}"#,
+            "",
+        ),
+    )]];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    let stop_code = index
+        .get("Light::stop_code")
+        .expect("enum extractor should be indexed");
+    assert_eq!(stop_code.module_path, "Light");
+    assert_eq!(stop_code.name, "stop_code");
+    assert_eq!(stop_code.kind, DeclarationKind::Extractor);
+}
+
+#[test]
 fn test_precollect_rejects_multiple_impl_blocks_for_same_type() {
     let module_stages = vec![vec![staged_module(
         "",

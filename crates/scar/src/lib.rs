@@ -1027,6 +1027,31 @@ print(match user {
     }
 
     #[test]
+    fn enum_impl_extractor_can_be_used_in_matchblock() {
+        let resolved = resolve_with_builtin_prelude(
+            r#"defenum Light {
+  Red,
+  Green,
+}
+impl Light {
+  defextractor stop_code(self: Self) -> MatchResult<Int, Error> {
+    match self {
+      Light::Red => MatchResult::Success(1),
+      _ => MatchResult::NoMatch,
+    }
+  }
+}
+light = Light::Red
+print(match light {
+  Light::stop_code(code) => to_string(code),
+  _ => "fallback",
+})"#,
+        );
+        let typed = typecheck(resolved).expect("enum impl extractor should typecheck");
+        assert!(!typed.is_empty());
+    }
+
+    #[test]
     fn forward_struct_type_annotation_and_literal_are_allowed() {
         let resolved = resolve_with_builtin_prelude(
             r#"user: User = User("alice", 30)
