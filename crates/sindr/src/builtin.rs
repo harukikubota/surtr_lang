@@ -431,6 +431,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &["$T"],
     },
     BuiltinTypeMeta {
+        name: "Hole",
+        params: &[],
+    },
+    BuiltinTypeMeta {
         name: "Lens",
         params: &["$S", "$A"],
     },

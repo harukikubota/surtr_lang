@@ -1,0 +1,9 @@
+always: (_ -> Int) = const(1)
+print(to_string(always("ignored")))
+
+def make() -> (_ -> Int) {
+  const(2)
+}
+
+next = make()
+print(to_string(next(False)))

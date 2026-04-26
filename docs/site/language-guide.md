@@ -215,6 +215,17 @@ deftrait Decode<$To> {
 このときも `TypeRef<$To>` は ordinary value にはならず、
 trait method parameter の中だけで target type witness として使われます。
 
+ignored-input callable を表す `_` も、同じく compiler-special な扱いを持ちます。
+
+```surtr
+always: (_ -> Int) = const(1)
+```
+
+この `_` は generic wildcard ではなく、internal な `Hole` marker の surface です。  
+「何か 1 つ受けるが、その値は見ない callable」を stable に表示・注釈するためにあります。
+
+`TypeRef<$T>` と `Hole` のまとまった説明は `./special-types.md` を参照してください。
+
 ### 5.4 関数コールと関数値
 
 Surtr では、次の見た目がそれぞれ別物です。
@@ -710,7 +721,7 @@ f = &`+`   # 未実装
 現在の Surtr では、標準モジュールを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
+Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。
@@ -718,10 +729,11 @@ Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, T
 - `Bootstrap`
   - auto-import の起点になる安定アンカー
   - `NoneError` などの bootstrap concrete error
+- `SpecialTypes`
+  - `Unit`, `TypeRef<$T>`, `Hole` の canonical builtin type 宣言
 - `Kernel`
   - auto import される最小の標準 API
   - `defmod Kernel` 配下に置かれる `print` のような cross-cutting builtin
-  - 専用 file を持たない `Unit` の type 宣言
 - `Numeric`
   - compile-time trait dispatch の基準になる trait 宣言
   - `Int` / `Float` が共有する `add`, `sub`, `mul`, `safe_div`, `abs`, `min`, `max` の契約
@@ -750,7 +762,7 @@ User-visible integer values backed by BigInt.
 利用者として押さえておくとよい点は次のとおりです。
 
 - canonical builtin type head は各対応 file のトップレベルに並ぶ
-- `Unit` だけは専用 module file を持たず `kernel.srt` に置かれる
+- compiler-special type (`Unit`, `TypeRef<$T>`, `Hole`) は `special_types.srt` に集約される
 - 各 `defmod Name { ... }` がモジュール API になる
 - builtin type、module、関数、標準 error には `@@doc` を付けられる
 

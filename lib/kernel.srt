@@ -1,15 +1,4 @@
 @@doc """
-Standard `Unit` type declaration.
-`Unit` is the type of `()`, typically used for effectful functions that do not
-return a meaningful value.
-
-There is intentionally no dedicated `unit.srt`.
-Instead, `Unit` lives in `kernel.srt` because it behaves more like shared
-execution glue than a user-facing namespace with its own helper family.
-"""
-@@builtin type Unit
-
-@@doc """
 Kernel module.
 
 Provides the small auto-imported standard surface for cross-cutting builtins
@@ -212,6 +201,22 @@ xldr(1)> tap(3, {|n| print(to_string(n))})
   def tap(value: $A, f: ($A -> Unit)) -> $A {
     f(value)
     value
+  }
+
+  @@doc """
+  Return a callable that ignores its input and always yields `value`.
+
+  This is a small pure helper for const-like closure behavior in pipelines and
+  composition.
+
+## REPL
+xldr(1)> always = const(1)
+> always: (_ -> Int)
+xldr(2)> always("ignored")
+1
+  """
+  def const(value: $A) -> (_ -> $A) {
+    {|_| value}
   }
 
   @@doc """

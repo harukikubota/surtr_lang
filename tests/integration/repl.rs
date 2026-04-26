@@ -235,6 +235,24 @@ fn repl_infers_closure_argument_type_from_add_constraint() {
 }
 
 #[test]
+fn repl_displays_const_helper_with_hole_callable_surface() {
+    let output = run_repl_session("always = const(1)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("always: (_ -> Int)"),
+        "expected const helper to display Hole callable surface, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_auto_imports_concat_trait_helper() {
     let output = run_repl_session("concat(\"q\", \"q\")\n:quit\n");
     assert!(

@@ -1,6 +1,7 @@
 use super::scope_init::initialize_scope;
 use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
+use sindr::builtin::builtin_type_meta_by_name;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
@@ -717,6 +718,16 @@ pub fn precollect_declaration_index(
                 }
 
                 if let Ast::EnumDef(span, name, _, variants, _) = stmt {
+                    if builtin_type_meta_by_name(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Type name `{}` is reserved by a canonical builtin type declaration",
+                                name
+                            ),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
                     let fq_name = if module.module_path.is_empty() {
                         name.to_string()
                     } else {
@@ -842,6 +853,23 @@ pub fn precollect_declaration_index(
                 if matches!(stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
                 {
                     continue;
+                }
+
+                if matches!(
+                    stmt,
+                    Ast::StructDef(_, name, _)
+                        | Ast::RecordDef(_, name, _)
+                        | Ast::DeferrorDef(_, name, _, _, _)
+                        if builtin_type_meta_by_name(name).is_some()
+                ) {
+                    return Err(ResolveError {
+                        message: format!(
+                            "Type name `{}` is reserved by a canonical builtin type declaration",
+                            name
+                        ),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
                 }
 
                 let fq_name = if module.module_path.is_empty() {
@@ -1310,6 +1338,16 @@ impl Resolver {
                 Ast::StructDef(span, name, _)
                 | Ast::RecordDef(span, name, _)
                 | Ast::DeferrorDef(span, name, _, _, _) => {
+                    if builtin_type_meta_by_name(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Type name `{}` is reserved by a canonical builtin type declaration",
+                                name
+                            ),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
@@ -1348,6 +1386,16 @@ impl Resolver {
                     self.scope.define_with_id(name, uid);
                 }
                 Ast::EnumDef(span, name, _, variants, _) => {
+                    if builtin_type_meta_by_name(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Type name `{}` is reserved by a canonical builtin type declaration",
+                                name
+                            ),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),

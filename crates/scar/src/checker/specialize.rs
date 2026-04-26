@@ -1158,7 +1158,7 @@ impl Checker {
                     self.collect_bound_tyvars_in_ty(&arg, ordered, seen);
                 }
             }
-            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error => {}
+            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error | Ty::Hole => {}
         }
     }
 

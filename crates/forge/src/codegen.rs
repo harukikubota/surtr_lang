@@ -601,6 +601,7 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Str => "String".into(),
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
+        Ty::Hole => "_".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
         Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
         Ty::Lens(source, focus) => {

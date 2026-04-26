@@ -20,6 +20,7 @@ mod tests {
     use spire::ast::Ast;
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
+    const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/special_types.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
     const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
@@ -67,13 +68,13 @@ mod tests {
 
     fn parse_std_module_stage(
         source: &str,
-        fallback_module_path: &str,
+        _fallback_module_path: &str,
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             &strip_test_annotations(source),
             spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
-        .unwrap_or_else(|err| panic!("std module {fallback_module_path} should parse: {err:?}"));
+        .unwrap_or_else(|err| panic!("std module {_fallback_module_path} should parse: {err:?}"));
 
         let shared_imports = ast
             .iter()
@@ -121,7 +122,7 @@ mod tests {
             let mut global_ast = shared_imports.clone();
             global_ast.extend(shared_result_ctor_contracts);
             lowered.push(sigil::StagedModuleAst {
-                module_path: fallback_module_path.to_string(),
+                module_path: String::new(),
                 ast: global_ast,
                 module_doc: None,
                 auto_import: false,
@@ -146,6 +147,7 @@ mod tests {
         vec![
             parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
             [
+                ("SpecialTypes", SPECIAL_TYPES_SOURCE),
                 ("Kernel", KERNEL_PRELUDE_SOURCE),
                 ("Numeric", NUMERIC_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),

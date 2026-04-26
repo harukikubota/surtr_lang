@@ -111,6 +111,9 @@ match expr {
 - `TypeRef<$T>` は compiler-reserved な target type witness
 - `TypeRef<$T>` は trait head で宣言された型引数に対応するときだけ、trait method parameter 型として使える
 - `TypeRef<$T>` は通常関数の引数型、戻り値型、field、local binding には使えない
+- `Hole` は compiler-reserved な ignored-input callable marker
+- `_` は `Hole` の surface 表記
+- `Hole` / `_` は data type wildcard ではなく、限定された callable surface にだけ現れる
 
 ### `from` / `try_from`
 
@@ -501,7 +504,7 @@ Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, T
 @@builtin type Result<$T>
 ```
 
-`unit.srt` は意図的に作らず、`Unit` だけは `kernel.srt` に置きます。
+`Unit`, `TypeRef<$T>`, `Hole` は `special_types.srt` に集約します。
 `Numeric` trait 宣言は `numeric.srt` のトップレベルに置きます。
 
 ### import の重複

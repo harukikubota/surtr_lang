@@ -35,7 +35,7 @@ impl Checker {
         if self.in_extractor_body {
             TypeSyntaxContext::ExtractorBody
         } else {
-            TypeSyntaxContext::General
+            TypeSyntaxContext::BindingAnnotation
         }
     }
 
@@ -49,6 +49,28 @@ impl Checker {
                 "Use TypeRef<$T> only in deftrait / impl Trait method parameters, not in ordinary signatures or return types."
                     .into(),
             ),
+        }
+    }
+
+    fn hole_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "`_` is only allowed as an ignored-input marker inside callable types used by variable annotations or function return signatures.".into(),
+            span: span.clone(),
+            hint: Some(
+                "Use `_` only in signatures such as `(_ -> Int)` or `(... -> (_ -> Int))`; it cannot appear as a plain value type, function parameter type, or container element."
+                    .into(),
+            ),
+        }
+    }
+
+    fn resolve_hole_surface_ty(
+        &self,
+        span: &Span,
+        context: TypeSyntaxContext,
+    ) -> Result<Ty, TypeError> {
+        match context {
+            TypeSyntaxContext::HoleClosureParam => Ok(Ty::Hole),
+            _ => Err(self.hole_not_allowed_error(span)),
         }
     }
 
@@ -198,6 +220,7 @@ impl Checker {
 
         match ast_ty {
             AstTy::Named(span, name) => match name.as_str() {
+                "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
                 "Seq" => Err(self.seq_not_allowed_error(span)),
                 "Int" => Ok(Ty::Int),
                 "Float" => Ok(Ty::Float),
@@ -406,9 +429,21 @@ impl Checker {
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
-                    .map(|p| self.resolve_ast_ty_in_context(p, TypeSyntaxContext::General))
+                    .map(|p| {
+                        self.resolve_ast_ty_in_context(
+                            p,
+                            match context {
+                                TypeSyntaxContext::BindingAnnotation
+                                | TypeSyntaxContext::FunctionReturn
+                                | TypeSyntaxContext::HoleClosureParam => {
+                                    TypeSyntaxContext::HoleClosureParam
+                                }
+                                _ => TypeSyntaxContext::General,
+                            },
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_ast_ty_in_context(ret, TypeSyntaxContext::General)?;
+                let ret = self.resolve_ast_ty_in_context(ret, context)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             AstTy::ImplTrait(span, name) => Err(TypeError {
@@ -453,6 +488,9 @@ impl Checker {
                 let fresh = self.env.fresh_tyvar();
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
+            }
+            AstTy::Named(span, name) if name == "_" || name == "Hole" => {
+                self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::ImplTrait(_, trait_name) => {
@@ -678,14 +716,21 @@ impl Checker {
                     .map(|param| {
                         self.resolve_signature_ast_ty_in_context(
                             param,
-                            TypeSyntaxContext::General,
+                            match context {
+                                TypeSyntaxContext::BindingAnnotation
+                                | TypeSyntaxContext::FunctionReturn
+                                | TypeSyntaxContext::HoleClosureParam => {
+                                    TypeSyntaxContext::HoleClosureParam
+                                }
+                                _ => TypeSyntaxContext::General,
+                            },
                             tyvars,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let ret = self.resolve_signature_ast_ty_in_context(
                     ret,
-                    TypeSyntaxContext::General,
+                    context,
                     tyvars,
                 )?;
                 Ok(Ty::Func(params, Box::new(ret)))
@@ -735,6 +780,9 @@ impl Checker {
                 let fresh = self.env.fresh_tyvar();
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
+            }
+            AstTy::Named(span, name) if name == "_" || name == "Hole" => {
+                self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::ImplTrait(span, trait_name) => Err(TypeError {
@@ -964,7 +1012,14 @@ impl Checker {
                     .map(|param| {
                         self.resolve_trait_signature_ast_ty_in_context(
                             param,
-                            TypeSyntaxContext::General,
+                            match context {
+                                TypeSyntaxContext::BindingAnnotation
+                                | TypeSyntaxContext::FunctionReturn
+                                | TypeSyntaxContext::HoleClosureParam => {
+                                    TypeSyntaxContext::HoleClosureParam
+                                }
+                                _ => TypeSyntaxContext::General,
+                            },
                             self_ty,
                             tyvars,
                         )
@@ -972,7 +1027,7 @@ impl Checker {
                     .collect::<Result<Vec<_>, _>>()?;
                 let ret = self.resolve_trait_signature_ast_ty_in_context(
                     ret,
-                    TypeSyntaxContext::General,
+                    context,
                     self_ty,
                     tyvars,
                 )?;
@@ -1005,6 +1060,9 @@ impl Checker {
                 let fresh = self.env.fresh_tyvar();
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
+            }
+            AstTy::Named(span, name) if name == "_" || name == "Hole" => {
+                self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::Generic(span, name, _) if name == "TypeRef" => {
@@ -1177,14 +1235,21 @@ impl Checker {
                     .map(|p| {
                         self.resolve_builtin_ast_ty_in_context(
                             p,
-                            TypeSyntaxContext::General,
+                            match context {
+                                TypeSyntaxContext::BindingAnnotation
+                                | TypeSyntaxContext::FunctionReturn
+                                | TypeSyntaxContext::HoleClosureParam => {
+                                    TypeSyntaxContext::HoleClosureParam
+                                }
+                                _ => TypeSyntaxContext::General,
+                            },
                             tyvars,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let ret = self.resolve_builtin_ast_ty_in_context(
                     ret,
-                    TypeSyntaxContext::General,
+                    context,
                     tyvars,
                 )?;
                 Ok(Ty::Func(params, Box::new(ret)))
@@ -1243,6 +1308,7 @@ impl Checker {
         let expected = self.resolve_ty(expected);
         let got = self.resolve_ty(got);
         let result = match (&expected, &got) {
+            (Ty::Hole, Ty::Hole) => true,
             (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
             (Ty::Int, Ty::Int)
             | (Ty::Float, Ty::Float)
@@ -1339,6 +1405,7 @@ impl Checker {
     pub(super) fn ty_contains_var(&self, ty: &Ty, needle: u32) -> bool {
         match self.resolve_ty(ty) {
             Ty::Var(var) => var == needle,
+            Ty::Hole => false,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
             Ty::TypeRef(inner) => self.ty_contains_var(&inner, needle),
             Ty::Lens(source, focus) => {
@@ -1375,6 +1442,7 @@ impl Checker {
                 None => Ty::Var(*var),
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
+            Ty::Hole => Ty::Hole,
             Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
             Ty::Lens(source, focus) => Ty::Lens(
                 Box::new(self.resolve_ty(source)),
@@ -1446,6 +1514,7 @@ impl Checker {
                 })
                 .clone(),
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
+            Ty::Hole => Ty::Hole,
             Ty::TypeRef(inner) => {
                 Ty::TypeRef(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
             }
@@ -1566,6 +1635,7 @@ impl Checker {
             Ty::Bool => "Boolean".into(),
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
+            Ty::Hole => "_".into(),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
             Ty::Lens(source, focus) => {
@@ -1633,7 +1703,14 @@ impl Checker {
             Ty::Result(ok, err) => {
                 self.ty_contains_lens(ok.as_ref()) || self.ty_contains_lens(err.as_ref())
             }
-            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Var(_) | Ty::Error => false,
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Var(_)
+            | Ty::Error
+            | Ty::Hole => false,
         }
     }
 

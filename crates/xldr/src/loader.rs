@@ -7,6 +7,9 @@ use diagnostics::{SourceId, SourceRegistry};
 const BUILTIN_PRELUDE_FILE: &str = "bootstrap.srt";
 const BUILTIN_PRELUDE_MODULE_PATH: &str = "Bootstrap";
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
+const SPECIAL_TYPES_FILE: &str = "special_types.srt";
+const SPECIAL_TYPES_MODULE_PATH: &str = "SpecialTypes";
+const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/special_types.srt");
 const KERNEL_PRELUDE_FILE: &str = "kernel.srt";
 const KERNEL_PRELUDE_MODULE_PATH: &str = "Kernel";
 const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
@@ -110,7 +113,7 @@ const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
 /// Logical source categories that drive parser/typechecker policy selection.
 ///
 /// The loader always materializes standard sources in the fixed order
-/// `Bootstrap -> [Kernel + other standard modules] -> user source`.
+/// `Bootstrap -> [SpecialTypes + Kernel + other standard modules] -> user source`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Script,
@@ -510,6 +513,7 @@ pub fn collect_module_sources_with_modules(
 
 pub fn is_default_std_module_path(module_path: &str) -> bool {
     module_path == BUILTIN_PRELUDE_MODULE_PATH
+        || module_path == SPECIAL_TYPES_MODULE_PATH
         || module_path == KERNEL_PRELUDE_MODULE_PATH
         || DEFAULT_STD_MODULES
             .iter()
@@ -518,6 +522,7 @@ pub fn is_default_std_module_path(module_path: &str) -> bool {
 
 pub fn is_default_std_module_file_name(file_name: &str) -> bool {
     file_name == BUILTIN_PRELUDE_FILE
+        || file_name == SPECIAL_TYPES_FILE
         || file_name == KERNEL_PRELUDE_FILE
         || DEFAULT_STD_MODULES
             .iter()
@@ -530,7 +535,7 @@ pub fn collect_module_sources_with_extra_std_sources(
 ) -> Result<ModuleSources, LoadError> {
     // Stage 0/1 are reserved for the built-in standard layers. User-provided
     // modules are appended afterwards so they can depend on
-    // `Bootstrap -> [Kernel + other std modules]` but never precede them.
+    // `Bootstrap -> [SpecialTypes + Kernel + other std modules]` but never precede them.
     let mut stage_specs = vec![
         vec![SourceDescriptor::std_module(
             BUILTIN_PRELUDE_FILE,
@@ -538,10 +543,15 @@ pub fn collect_module_sources_with_extra_std_sources(
             BUILTIN_PRELUDE_MODULE_PATH,
         )],
         std::iter::once(SourceDescriptor::std_module(
+            SPECIAL_TYPES_FILE,
+            SPECIAL_TYPES_SOURCE,
+            SPECIAL_TYPES_MODULE_PATH,
+        ))
+        .chain(std::iter::once(SourceDescriptor::std_module(
             KERNEL_PRELUDE_FILE,
             KERNEL_PRELUDE_SOURCE,
             KERNEL_PRELUDE_MODULE_PATH,
-        ))
+        )))
         .chain(
             DEFAULT_STD_MODULES
                 .iter()
@@ -721,12 +731,12 @@ mod tests {
         );
         assert_eq!(
             loaded.module_source_ids.len(),
-            2 + DEFAULT_STD_MODULES.len()
+            3 + DEFAULT_STD_MODULES.len()
         );
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
-        assert_eq!(loaded.module_stages[1].len(), 1 + DEFAULT_STD_MODULES.len());
+        assert_eq!(loaded.module_stages[1].len(), 2 + DEFAULT_STD_MODULES.len());
         let std_paths = loaded.module_stages[1]
             .iter()
             .map(|module| module.module_path.as_str())
@@ -734,6 +744,7 @@ mod tests {
         assert_eq!(
             std_paths,
             vec![
+                "SpecialTypes",
                 "Kernel",
                 "Numeric",
                 "Show",
@@ -819,7 +830,7 @@ mod tests {
 
         assert_eq!(loaded.module_stages.len(), 4);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap
-        assert_eq!(loaded.module_stages[1].len(), 1 + DEFAULT_STD_MODULES.len()); // kernel + other std modules
+        assert_eq!(loaded.module_stages[1].len(), 2 + DEFAULT_STD_MODULES.len()); // special types + kernel + other std modules
         assert_eq!(loaded.module_stages[2].len(), 1);
         assert_eq!(loaded.module_stages[3].len(), 2);
         assert_eq!(
@@ -848,6 +859,7 @@ mod tests {
         assert_eq!(
             std_paths,
             vec![
+                "SpecialTypes",
                 "Kernel",
                 "Numeric",
                 "Show",

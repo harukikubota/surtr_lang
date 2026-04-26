@@ -131,11 +131,33 @@ xldr(2)>
 
 この `String` は ordinary value ではなく、変換先型の指定です。
 
+`TypeRef<$T>` の詳しい背景と利用境界は `./special-types.md` を参照してください。
+
+## `_` / `Hole`
+
+ignored-input callable を表すときは `_` が現れます。
+
+```surtr
+always: (_ -> Int) = const(1)
+```
+
+この `_` は wildcard ではなく、internal な `Hole` marker の surface 表記です。
+
+- callable input を 1 つ受ける
+- その入力値は観測しない
+- data type としては扱わない
+
+許可されるのは、変数注釈や関数戻り値に現れる callable type など、
+かなり限定された場所だけです。
+
+詳しいルールは `./special-types.md` を参照してください。
+
 ## 関連ページ
 
 - trait 実装側の話は `./trait-impls.md`
 - 利用例は `./definitions-and-usage.md`
 - 制約一覧は `./language-reference.md`
+- special type 全体は `./special-types.md`
 
 ## 確認したソース
 

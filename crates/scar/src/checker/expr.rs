@@ -991,7 +991,9 @@ impl Checker {
             });
         }
         for (expected, arg) in params.iter().zip(&args) {
-            if !self.types_compatible(expected, &arg.ty) {
+            if !matches!(self.resolve_ty(expected), Ty::Hole)
+                && !self.types_compatible(expected, &arg.ty)
+            {
                 return Err(TypeError {
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",
@@ -1485,7 +1487,9 @@ impl Checker {
         self.ensure_no_runtime_lens_args(&typed_args, span, op_name)?;
 
         for (expected, arg) in params.iter().skip(1).zip(&typed_args) {
-            if !self.types_compatible(expected, &arg.ty) {
+            if !matches!(self.resolve_ty(expected), Ty::Hole)
+                && !self.types_compatible(expected, &arg.ty)
+            {
                 return Err(TypeError {
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",
@@ -1591,7 +1595,7 @@ impl Checker {
         let typed_left = self.check_node(left)?;
         let typed_right = self.check_apply_callable(right, "`|>`")?;
         let (param, ret) = self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
-        if !self.types_compatible(&param, &typed_left.ty) {
+        if !matches!(self.resolve_ty(&param), Ty::Hole) && !self.types_compatible(&param, &typed_left.ty) {
             return Err(TypeError {
                 message: format!(
                     "`|>` type mismatch: expected {}, got {}",
@@ -2334,9 +2338,15 @@ impl Checker {
                     span: span.clone(),
                     hint: None,
                 })?;
-                let typed = self.check_node_with_expected(expr, Some(expected_ty))?;
+                let typed = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
+                    self.check_node(expr)?
+                } else {
+                    self.check_node_with_expected(expr, Some(expected_ty))?
+                };
                 self.ensure_no_runtime_lens_value(&typed, "Function call arguments")?;
-                if !self.types_compatible(expected_ty, &typed.ty) {
+                if !matches!(self.resolve_ty(expected_ty), Ty::Hole)
+                    && !self.types_compatible(expected_ty, &typed.ty)
+                {
                     return Err(TypeError {
                         message: format!(
                             "Argument type mismatch: expected {}, got {}",
@@ -2368,9 +2378,15 @@ impl Checker {
             let ResolvedRecordLitArg::Positional(expr) = arg else {
                 unreachable!("validated argument form above")
             };
-            let typed = self.check_node_with_expected(expr, Some(expected_ty))?;
+            let typed = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
+                self.check_node(expr)?
+            } else {
+                self.check_node_with_expected(expr, Some(expected_ty))?
+            };
             self.ensure_no_runtime_lens_value(&typed, "Function call arguments")?;
-            if !self.types_compatible(expected_ty, &typed.ty) {
+            if !matches!(self.resolve_ty(expected_ty), Ty::Hole)
+                && !self.types_compatible(expected_ty, &typed.ty)
+            {
                 return Err(TypeError {
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",
@@ -2903,14 +2919,17 @@ impl Checker {
                     .iter()
                     .zip(params.iter())
                     .map(|(arg, expected)| match arg {
-                        ResolvedRecordLitArg::Positional(expr) => {
-                            self.check_node_with_expected(expr, Some(expected))
-                        }
+                        ResolvedRecordLitArg::Positional(expr) => match self.resolve_ty(expected) {
+                            Ty::Hole => self.check_node(expr),
+                            _ => self.check_node_with_expected(expr, Some(expected)),
+                        },
                         ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 for (param, arg) in params.iter().zip(&typed_args) {
-                    if !self.types_compatible(param, &arg.ty) {
+                    if !matches!(self.resolve_ty(param), Ty::Hole)
+                        && !self.types_compatible(param, &arg.ty)
+                    {
                         return Err(TypeError {
                             message: format!(
                                 "Argument type mismatch: expected {}, got {}",
@@ -3040,14 +3059,17 @@ impl Checker {
                     .iter()
                     .zip(params.iter())
                     .map(|(arg, expected)| match arg {
-                        ResolvedRecordLitArg::Positional(expr) => {
-                            self.check_node_with_expected(expr, Some(expected))
-                        }
+                        ResolvedRecordLitArg::Positional(expr) => match self.resolve_ty(expected) {
+                            Ty::Hole => self.check_node(expr),
+                            _ => self.check_node_with_expected(expr, Some(expected)),
+                        },
                         ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 for (param, arg) in params.iter().zip(&typed_args) {
-                    if !self.types_compatible(param, &arg.ty) {
+                    if !matches!(self.resolve_ty(param), Ty::Hole)
+                        && !self.types_compatible(param, &arg.ty)
+                    {
                         return Err(TypeError {
                             message: format!(
                                 "Argument type mismatch: expected {}, got {}",
@@ -3250,11 +3272,19 @@ impl Checker {
         let typed_args: Vec<TypedNode> = args
             .iter()
             .zip(params.iter())
-            .map(|(arg, expected)| self.check_node_with_expected(arg, Some(expected)))
+            .map(|(arg, expected)| {
+                if matches!(self.resolve_ty(expected), Ty::Hole) {
+                    self.check_node(arg)
+                } else {
+                    self.check_node_with_expected(arg, Some(expected))
+                }
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         for (param, arg) in params.iter().zip(&typed_args) {
-            if !self.types_compatible(param, &arg.ty) {
+            if !matches!(self.resolve_ty(param), Ty::Hole)
+                && !self.types_compatible(param, &arg.ty)
+            {
                 return Err(TypeError {
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",

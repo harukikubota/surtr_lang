@@ -23,6 +23,7 @@ mod tests {
     use spire::ast::Ast;
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
+    const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/special_types.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
     const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
@@ -87,7 +88,7 @@ defmod Generator {}"#;
 
     fn parse_std_module_stage(
         source: &str,
-        fallback_module_path: &str,
+        _fallback_module_path: &str,
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             &strip_test_annotations(source),
@@ -141,7 +142,7 @@ defmod Generator {}"#;
             let mut global_ast = shared_imports.clone();
             global_ast.extend(shared_result_ctor_contracts);
             lowered.push(sigil::StagedModuleAst {
-                module_path: fallback_module_path.to_string(),
+                module_path: String::new(),
                 ast: global_ast,
                 module_doc: None,
                 auto_import: false,
@@ -166,12 +167,61 @@ defmod Generator {}"#;
         std_module_stages_with_overrides(&[])
     }
 
+    fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
+        let ast = spire::parse_with_context(source, spire::ParserContext::module(0, None))
+            .expect("module source should parse");
+
+        let shared_imports = ast
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Import(_, _, _) => Some(stmt.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut lowered = Vec::new();
+        let mut shared_global_defs = Vec::new();
+
+        for stmt in ast {
+            match stmt {
+                Ast::Defmod(_, module_path, body, attrs) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.extend(body);
+                    lowered.push(sigil::StagedModuleAst {
+                        module_path,
+                        ast: module_ast,
+                        module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
+                    });
+                }
+                Ast::Import(_, _, _) => {}
+                other => shared_global_defs.push(other),
+            }
+        }
+
+        if !shared_global_defs.is_empty() {
+            let mut global_ast = shared_imports;
+            global_ast.extend(shared_global_defs);
+            lowered.push(sigil::StagedModuleAst {
+                module_path: String::new(),
+                ast: global_ast,
+                module_doc: None,
+                auto_import: false,
+            });
+        }
+
+        lowered
+    }
+
     fn std_module_stages_with_overrides(
         overrides: &[(&str, &str)],
     ) -> Vec<Vec<sigil::StagedModuleAst>> {
         vec![
             parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
             [
+                (
+                    "SpecialTypes",
+                    pick_override("SpecialTypes", SPECIAL_TYPES_SOURCE, overrides),
+                ),
                 (
                     "Kernel",
                     pick_override("Kernel", KERNEL_PRELUDE_SOURCE, overrides),
@@ -314,6 +364,20 @@ defmod Generator {}"#;
                 enforce_builtin_type_contracts: false,
             },
         )
+    }
+
+    fn typecheck_module_source_result(source: &str) -> Result<Vec<TypedNode>, String> {
+        let source = source.to_owned();
+        run_with_large_stack("typecheck_module_source_result", move || {
+            let mut module_stages = std_module_stages();
+            module_stages.push(parse_user_module_stage(&source));
+            let declaration_index = sigil::precollect_declaration_index(&module_stages)
+                .map_err(|err| format!("resolve precollect failed: {}", err.message))?;
+            let resolved =
+                sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+                    .map_err(|err| format!("resolve failed: {}", err.message))?;
+            typecheck(resolved).map_err(|err| err.message)
+        })
     }
 
     fn typecheck_std_modules_with_overrides(
@@ -1243,6 +1307,48 @@ print(to_string(add3(z: 3, y: 2, x: 1)))"#,
     }
 
     #[test]
+    fn canonical_builtin_type_name_hole_is_reserved_for_structs() {
+        let err = typecheck_module_source_result(
+            r#"defstruct Hole {
+  value: Int,
+}"#,
+        )
+        .expect_err("Hole should be reserved");
+        assert!(
+            err.contains("Type name `Hole` is reserved by a canonical builtin type declaration"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn canonical_builtin_type_name_hole_is_reserved_for_enums() {
+        let err = typecheck_module_source_result(
+            r#"defenum Hole {
+  Filled,
+}"#,
+        )
+        .expect_err("Hole should be reserved");
+        assert!(
+            err.contains("Type name `Hole` is reserved by a canonical builtin type declaration"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn canonical_builtin_type_name_hole_is_reserved_for_errors() {
+        let err = typecheck_module_source_result(
+            r#"deferror Hole {
+  "reserved"
+}"#,
+        )
+        .expect_err("Hole should be reserved");
+        assert!(
+            err.contains("Type name `Hole` is reserved by a canonical builtin type declaration"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn trailing_block_calls_typecheck_inside_script_module_scope() {
         let typed = typecheck_with_builtin_prelude_in_script_module(
             r#"def take(flag: Boolean, value: Int) -> Int {
@@ -1537,9 +1643,7 @@ guard = assert(False, make_error(True))"#,
     fn kernel_and_contract_rejects_lazy_signature() {
         let err = typecheck_std_modules_with_overrides(&[(
             "Kernel",
-            r#"@@builtin type Unit
-
-defmod Kernel {
+            r#"defmod Kernel {
   @@builtin def and(left: Boolean, right: (-> Boolean)) -> Boolean
 }"#,
         )])
@@ -1573,9 +1677,7 @@ defmod Boolean {
     fn kernel_does_not_allow_removed_concat_builtin() {
         let module_stages = std_module_stages_with_overrides(&[(
             "Kernel",
-            r#"@@builtin type Unit
-
-defmod Kernel {
+            r#"defmod Kernel {
   @@builtin def concat(left: $A, right: $A) -> String
 }"#,
         )]);

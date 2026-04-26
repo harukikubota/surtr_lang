@@ -58,11 +58,27 @@ xldr(2)> print(inspect(pair))
 xldr(3)>
 ```
 
+## `const`
+
+`const(value)` は ignored-input callable を返します。
+
+```text
+xldr(1)> always = const(1)
+> always: (_ -> Int)
+xldr(2)> print(to_string(always("ignored")))
+1
+xldr(3)>
+```
+
+ここで見えている `_` は、internal な `Hole` marker の surface 表記です。  
+詳しくは `./special-types.md` を参照してください。
+
 ## 関連ページ
 
 - pattern 利用は `./pattern-matching.md`
 - extractor 利用は `./extractors.md`
 - 標準モジュール全体は `./standard-modules.md`
+- `TypeRef` / `Hole` / `Unit` は `./special-types.md`
 
 ## 確認したソース
 

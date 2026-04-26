@@ -659,7 +659,7 @@ impl Checker {
                     Self::collect_ty_vars(field_ty, out);
                 }
             }
-            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error => {}
+            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error | Ty::Hole => {}
         }
     }
 

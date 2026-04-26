@@ -231,7 +231,9 @@ impl TypecheckProfiler {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TypeSyntaxContext {
     General,
+    BindingAnnotation,
     FunctionReturn,
+    HoleClosureParam,
     ExtractorReturn,
     ExtractorBody,
     ErrorMarker,

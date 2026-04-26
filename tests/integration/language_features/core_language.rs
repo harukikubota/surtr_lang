@@ -249,6 +249,24 @@ printer("hello")"#,
     );
 }
 
+fn const_helper_and_hole_return_surface_work() {
+    assert_output(
+        r#"always: (_ -> Int) = const(1)
+print(to_string(always("ignored")))
+
+def make() -> (_ -> Int) {
+  const(2)
+}
+
+next = make()
+print(to_string(next(False)))
+
+ten = {|_| 10}
+print(to_string(ten([1, 2, 3])))"#,
+        &["1", "2", "10"],
+    );
+}
+
 fn func_literal_infix_invocation_works() {
     assert_output(
         r#"def eq(left: Int, right: Int) -> Boolean {
@@ -904,6 +922,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
             closure_argument_type_infers_from_add_constraint as fn(),
         ),
         ("closure_builtin_capture", closure_builtin_capture as fn()),
+        (
+            "const_helper_and_hole_return_surface_work",
+            const_helper_and_hole_return_surface_work as fn(),
+        ),
         (
             "func_literal_infix_invocation_works",
             func_literal_infix_invocation_works as fn(),

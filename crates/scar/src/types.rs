@@ -25,6 +25,11 @@ pub enum Ty {
     /// Compiler-managed lens path capability: `Lens<S, A>`
     Lens(Box<Ty>, Box<Ty>),
 
+    /// Compiler-reserved ignored-input closure marker.
+    /// This is not a first-class data type and only appears in restricted
+    /// callable surface positions.
+    Hole,
+
     /// Built-in function with a known name (for codegen dispatch)
     BuiltinFunc {
         name: String,

@@ -44,7 +44,6 @@ concrete error は、最初の標準ステージから使えるようここに�
 
 - `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `concat`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
 - auto import される最小の標準 API を置く
-- 専用 file を持たない `Unit` の builtin type 宣言を置く
 
 primitive type に強く結びつかない builtin は、ここへ集めます。
 特に `if` / `if_then` は言語特性に近い special form ですが、source 上の契約と
@@ -53,6 +52,13 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 評価へ lower する call-style helper としてここに置きます。
 comparison / concat 系の call-style helper (`eq`, `lt`, `concat` など) も
 primitive module をまたぐ読みやすさを優先して `Kernel` に置きます。
+
+### `SpecialTypes`
+
+- `special_types.srt` に compiler-special builtin type を集約する
+- 現在は `Unit`, `TypeRef<$T>`, `Hole` をここへ置く
+- `defmod` は持たず、top-level canonical type declaration だけを持つ
+- user-facing な振る舞いは各 trait / callable / module surface 側から現れる
 
 ### type modules
 
@@ -89,14 +95,17 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 標準型宣言は、各対応 file のトップレベルで canonical shape を宣言します。
 
 ```surtr
-// kernel.srt
+// special_types.srt
 @@builtin type Unit
+
+// special_types.srt
+@@builtin type TypeRef<$T>
+
+// special_types.srt
+@@builtin type Hole
 
 // int.srt
 @@builtin type Int
-
-// compiler-reserved type witness
-@@builtin type TypeRef<$T>
 
 // list.srt
 @@builtin type List<$A>
@@ -117,10 +126,12 @@ compiler はこの head 自体を契約として扱います。
 - `HashMap` は `HashMap<$V>`（key は常に `String`）
 - `Result` は `Result<$T>`
 - `TypeRef` は `TypeRef<$T>`
+- `Hole` は ignored-input callable marker
 
 `Result<T, E>` は builtin type declaration ではなく、戻り値位置での error contract 記法として扱います。
 `TypeRef<$T>` は ordinary value type ではなく、target type witness 専用の
 compiler-reserved builtin type です。
+`Hole` は ordinary data type ではなく、`_` の背後にある callable marker です。
 
 `TypeRef<$T>` の使い道は限定されています。
 
@@ -134,6 +145,8 @@ compiler-reserved builtin type です。
 - field type
 - local binding の型注釈
 - first-class value としての生成・保存・返却
+
+compiler-special type の詳しい説明は `./special-types.md` を参照してください。
 
 ## 4. `Error` と `Result` の読み方
 
