@@ -5,6 +5,10 @@ It is not part of Surtr's failure-propagation machinery: `=?` and the
 Result-oriented function operators do not treat `Option` like `Result`.
 Convert explicitly when a missing value should participate in Result control
 flow.
+
+## REPL
+xldr(1)> Option::is_some(Option::Some(1))
+True
 """
 defenum Option<$T> {
   Some($T),
@@ -12,6 +16,7 @@ defenum Option<$T> {
 }
 
 impl Option {
+  # Return `True` when the option is `Some(...)`.
   def is_some(value: Option<$T>) -> Boolean {
     match value {
       Option::Some(_) => True,
@@ -19,16 +24,19 @@ impl Option {
     }
   }
 
+  # Return `True` when the option is `None`.
   def is_none(value: Option<$T>) -> Boolean {
     Boolean::not(Option::is_some(value))
   }
 
+  # Wrap the value in the module constructor.
   def wrap(value: $T) -> Option<$T> {
     Option::Some(value)
   }
 }
 
 impl From<Result<$T>> for Option<$T> {
+  # Convert the value into the requested target type.
   def from(self: Self, to: TypeRef<Result<$T>>) -> Result<$T> {
     match self {
       Option::Some(value) => Ok(value),
@@ -38,6 +46,7 @@ impl From<Result<$T>> for Option<$T> {
 }
 
 impl From<Option<$T>> for Result<$T> {
+  # Convert the value into the requested target type.
   def from(self: Self, to: TypeRef<Option<$T>>) -> Option<$T> {
     match self {
       Ok(value) => Option::Some(value),

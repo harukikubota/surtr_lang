@@ -13,6 +13,9 @@ Groups boolean-specific helpers and connective-style combinators.
 defmod Boolean {
   @@doc """
   Return the logical negation of `value`.
+  ## REPL
+  xldr(1)> Boolean::not(True)
+  False
   """
   def not(value: Boolean) -> Boolean {
     if(value, False, True)
@@ -20,6 +23,9 @@ defmod Boolean {
 
   @@doc """
   Return `True` when exactly one input is `True`.
+  ## REPL
+  xldr(1)> Boolean::xor(True, False)
+  True
   """
   def xor(left: Boolean, right: Boolean) -> Boolean {
     if(left, not(right), right)
@@ -27,6 +33,9 @@ defmod Boolean {
 
   @@doc """
   Return `True` when both inputs have the same truth value.
+  ## REPL
+  xldr(1)> Boolean::eqv(True, True)
+  True
   """
   def eqv(left: Boolean, right: Boolean) -> Boolean {
     if(left, right, not(right))
@@ -34,6 +43,9 @@ defmod Boolean {
 
   @@doc """
   Return material implication `left -> right`.
+  ## REPL
+  xldr(1)> Boolean::implies(True, False)
+  False
   """
   def implies(left: Boolean, right: Boolean) -> Boolean {
     if(left, right, True)

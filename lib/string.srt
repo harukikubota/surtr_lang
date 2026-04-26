@@ -203,6 +203,9 @@ defmod String {
 
   @@doc """
   Return `True` when `value` is the empty string.
+  ## REPL
+  xldr(1)> String::is_empty("")
+  True
   """
   def is_empty(value: String) -> Boolean {
     value == ""
@@ -210,6 +213,9 @@ defmod String {
 
   @@doc """
   Return `True` when `value` is not the empty string.
+  ## REPL
+  xldr(1)> String::non_empty("a")
+  True
   """
   def non_empty(value: String) -> Boolean {
     value != ""
@@ -217,6 +223,9 @@ defmod String {
 
   @@doc """
   Return the number of surface characters in `value`.
+  ## REPL
+  xldr(1)> String::len("hello")
+  5
   """
   def len(value: String) -> Int {
     match value {
@@ -227,6 +236,9 @@ defmod String {
 
   @@doc """
   Wrap `value` with `prefix` and `suffix`.
+  ## REPL
+  xldr(1)> String::surround("x", "[", "]")
+  "[x]"
   """
   def surround(value: String, prefix: String, suffix: String) -> String {
     prefix ++ value ++ suffix
@@ -242,6 +254,9 @@ defmod String {
   @@doc """
   Join string elements with `separator`.
   Empty input returns the empty string.
+  ## REPL
+  xldr(1)> String::join(["a", "b"], ",")
+  "a,b"
   """
   def join(parts: List<String>, separator: String) -> String {
     match parts {
@@ -257,6 +272,9 @@ defmod String {
   @@doc """
   Repeat `value` `count` times.
   Negative counts return `Err(NegativeRepeatCount(...))`.
+  ## REPL
+  xldr(1)> String::repeat("ha", 3)
+  Ok("hahaha")
   """
   def repeat(value: String, count: Int) -> Result<String, NegativeRepeatCount> {
     if(
@@ -269,6 +287,9 @@ defmod String {
   @@doc """
   Return `True` when `value` starts with `prefix`.
   The empty prefix always matches.
+  ## REPL
+  xldr(1)> String::starts_with("hello", "he")
+  True
   """
   def starts_with(value: String, prefix: String) -> Boolean {
     Result::is_ok(String::strip_prefix(value, prefix))
@@ -277,6 +298,9 @@ defmod String {
   @@doc """
   Return `True` when `value` ends with `suffix`.
   The empty suffix always matches.
+  ## REPL
+  xldr(1)> String::ends_with("hello", "lo")
+  True
   """
   def ends_with(value: String, suffix: String) -> Boolean {
     Result::is_ok(String::strip_suffix(value, suffix))
@@ -285,6 +309,9 @@ defmod String {
   @@doc """
   Remove `prefix` from the start of `value`.
   Missing prefixes return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> String::strip_prefix("hello", "he")
+  Ok("llo")
   """
   def strip_prefix(value: String, prefix: String) -> Result<String, NoneError> {
     match prefix {
@@ -303,6 +330,9 @@ defmod String {
   @@doc """
   Remove `suffix` from the end of `value`.
   Missing suffixes return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> String::strip_suffix("hello", "lo")
+  Ok("hel")
   """
   def strip_suffix(value: String, suffix: String) -> Result<String, NoneError> {
     reversed_rest =? _strip_prefix_chars(
@@ -316,6 +346,9 @@ defmod String {
   Split `value` at the first occurrence of `separator`.
   Success returns `StringSplit::Split(before, after)`.
   Missing separators return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> String::split_once("a,b", ",")
+  Ok(StringSplit::Split("a", "b"))
   """
   def split_once(value: String, separator: String) -> Result<StringSplit, NoneError> {
     _split_once_go(value, separator, [])
@@ -324,6 +357,9 @@ defmod String {
   @@doc """
   Return `True` when `needle` occurs anywhere inside `value`.
   The empty needle always matches.
+  ## REPL
+  xldr(1)> String::contains("hello", "ell")
+  True
   """
   def contains(value: String, needle: String) -> Boolean {
     Result::is_ok(String::split_once(value, needle))
@@ -332,6 +368,9 @@ defmod String {
   @@doc """
   Replace every non-overlapping occurrence of `from` with `to`.
   The empty `from` string leaves `value` unchanged.
+  ## REPL
+  xldr(1)> String::replace("abc", "b", "B")
+  "aBc"
   """
   def replace(value: String, from: String, to: String) -> String {
     if(from == "", value, _replace_go(value, from, to))
@@ -340,6 +379,9 @@ defmod String {
   @@doc """
   Split `value` at every occurrence of `separator`.
   An empty `separator` returns `chars(value)`.
+  ## REPL
+  xldr(1)> String::split("a,b,c", ",")
+  Ok(["a", "b", "c"] )
   """
   def split(value: String, separator: String) -> List<String> {
     if(
@@ -356,6 +398,9 @@ defmod String {
   Split `value` into lines.
   Lines are separated by `\n`, and a trailing `\r` in each line is removed.
   A final empty line produced by a trailing newline is omitted.
+  ## REPL
+  xldr(1)> String::lines("a\nb")
+  ["a", "b"]
   """
   def lines(value: String) -> List<String> {
     if(
@@ -370,6 +415,9 @@ defmod String {
 
   @@doc """
   Expand `value` into a list of single-character `String` values.
+  ## REPL
+  xldr(1)> String::chars("ab")
+  ["a", "b"]
   """
   def chars(value: String) -> List<String> {
     match value {
@@ -381,6 +429,9 @@ defmod String {
   @@doc """
   Build a string from a list of single-character strings.
   Non-character elements return `Err(InvalidCharList(...))`.
+  ## REPL
+  xldr(1)> String::from_chars(["a", "b"])
+  Ok("ab")
   """
   def from_chars(chars: List<String>) -> Result<String, InvalidCharList> {
     _validated =? _validate_char_list(chars, 0)
@@ -391,6 +442,9 @@ defmod String {
   Convert `value` into an encoding-specific integer sequence.
   `Utf8` returns raw byte values.
   `Ascii` returns 7-bit ASCII codes and rejects non-ASCII text.
+  ## REPL
+  xldr(1)> String::codepoints("AB", StringEncoding::Ascii)
+  Ok([65, 66])
   """
   @@builtin
   def codepoints(value: String, encoding: StringEncoding) -> Result<List<Int>, InvalidStringEncoding>
@@ -399,6 +453,9 @@ defmod String {
   Restore a string from an encoding-specific integer sequence.
   `Utf8` expects raw byte values in the range `0..255`.
   `Ascii` expects byte values in the range `0..127`.
+  ## REPL
+  xldr(1)> String::from_codepoints([65, 66], StringEncoding::Ascii)
+  Ok("AB")
   """
   @@builtin
   def from_codepoints(values: List<Int>, encoding: StringEncoding) -> Result<String, InvalidStringEncoding>
@@ -406,6 +463,9 @@ defmod String {
   @@doc """
   Remove ASCII whitespace from the start of `value`.
   Trimmed characters are space, newline, tab, and carriage return.
+  ## REPL
+  xldr(1)> String::trim_start("  hi")
+  "hi"
   """
   def trim_start(value: String) -> String {
     _from_chars_go(_trim_start_chars(chars(value)), "")
@@ -414,6 +474,9 @@ defmod String {
   @@doc """
   Remove ASCII whitespace from the end of `value`.
   Trimmed characters are space, newline, tab, and carriage return.
+  ## REPL
+  xldr(1)> String::trim_end("hi  ")
+  "hi"
   """
   def trim_end(value: String) -> String {
     trimmed_rev = _trim_start_chars(List::reverse(chars(value)))
@@ -423,6 +486,9 @@ defmod String {
   @@doc """
   Remove ASCII whitespace from both ends of `value`.
   Trimmed characters are space, newline, tab, and carriage return.
+  ## REPL
+  xldr(1)> String::trim("  hi  ")
+  "hi"
   """
   def trim(value: String) -> String {
     trim_end(trim_start(value))
@@ -431,6 +497,9 @@ defmod String {
   @@doc """
   Parse `value` as a base-10 `Int`.
   Accepts an optional leading `+` or `-`.
+  ## REPL
+  xldr(1)> String::try_to_int("42")
+  Ok(42)
   """
   def try_to_int(value: String) -> Result<Int, InvalidIntegerLiteral> {
     value_chars = chars(value)
@@ -456,6 +525,9 @@ defmod String {
   @@doc """
   Parse `value` as a `Boolean`.
   Accepts `True`, `False`, `true`, and `false`.
+  ## REPL
+  xldr(1)> String::try_to_boolean("true")
+  Ok(True)
   """
   def try_to_boolean(value: String) -> Result<Boolean, InvalidBooleanLiteral> {
     match value {

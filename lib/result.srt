@@ -65,6 +65,9 @@ defmod Result {
   This is not a general-purpose combinator, but it is a common enough pattern that it deserves a helper.
   The `is_ok` name is a bit of a misnomer since it returns `True` for any `Ok(...)` value, even if the inner value is an error type.
   It's really more of an `is_ok_variant` check, but the shorter name is more ergonomic for common use.
+  ## REPL
+  xldr(1)> Result::is_ok(Ok(1))
+  True
   """
   def is_ok(result: Result<$T>) -> Boolean {
     match result {
@@ -80,6 +83,9 @@ defmod Result {
   The `is_err` name is a bit of a misnomer since it returns `True` for any `Err(...)` value,
   even if the inner error is an `Ok`-wrapped success type. It's really more of an `is_err_variant` check,
   but the shorter name is more ergonomic for common use.
+  ## REPL
+  xldr(1)> Result::is_err(Err(NoneError))
+  True
   """
   def is_err(result: Result<$T>) -> Boolean {
     Boolean::not(is_ok(result))
@@ -92,6 +98,9 @@ defmod Result {
   - `Err(old)` becomes `Err(err)`
 
   Use `cause(...)` when the previous error should remain in the chain.
+  ## REPL
+  xldr(1)> Result::map_err(Err(NoneError), EmptyList)
+  Err(EmptyList("Empty List."))
   """
   @@builtin def map_err(result: Result<$T>, err: Error) -> Result<$T>
 
@@ -102,6 +111,9 @@ defmod Result {
   - `Err(old)` becomes `Err(err)` and the previous error is appended to the new error's cause chain
 
   This keeps `Error` runtime-managed and opaque while still allowing domain layering.
+  ## REPL
+  xldr(1)> Result::cause(Ok(1), EmptyList)
+  Ok(1)
   """
   @@builtin def cause(result: Result<$T>, err: Error) -> Result<$T>
 
@@ -114,6 +126,9 @@ defmod Result {
   - `chain(Err(left), Err(right))` returns `Err(right)` and appends `left` to the tail of `right`
 
   This keeps the success value on the left and uses the right side only for trailing error-capable work.
+  ## REPL
+  xldr(1)> Result::chain(Ok(1), Ok(()))
+  Ok(1)
   """
   @@builtin def chain(head: Result<$T>, tail: Result<()>) -> Result<$T>
 
@@ -122,6 +137,9 @@ defmod Result {
 
   The handler body is evaluated only when `value` is `Err(...)`; `Ok(value)`
   returns unchanged.
+  ## REPL
+  xldr(1)> Result::recover(Err(NoneError), {|| Ok(1)})
+  Ok(1)
   """
   def recover(value: Result<$A>, handler: (-> Result<$A>)) -> Result<$A> {
     match value {
@@ -136,11 +154,17 @@ defmod Result {
   This is a special form: `marker` is treated as a `deferror` kind marker and
   is not evaluated as an ordinary `Error` value. The handler is evaluated only
   when `value` is `Err(...)` with the same concrete kind.
+  ## REPL
+  xldr(1)> Result::recover_kind(Err(NoneError), NoneError, {|_| Ok(1)})
+  Ok(1)
   """
   @@builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>
 
   @@doc """
   Apply a function wrapped in `Result` to a value wrapped in `Result`.
+  ## REPL
+  xldr(1)> Result::lift(Ok({|n| n + 1}), Ok(1))
+  Ok(2)
   """
   def lift(f: Result<($A -> $B)>, value: Result<$A>) -> Result<$B> {
     ff =? f
@@ -150,6 +174,9 @@ defmod Result {
 
   @@doc """
   Apply a 2-argument function wrapped in `Result` to two `Result` values.
+  ## REPL
+  xldr(1)> Result::lift2(Ok({|a, b| a + b}), Ok(1), Ok(2))
+  Ok(3)
   """
   def lift2(f: Result<($A, $B -> $C)>, left: Result<$A>, right: Result<$B>) -> Result<$C> {
     ff =? f
@@ -160,6 +187,9 @@ defmod Result {
 
   @@doc """
   Apply a 3-argument function wrapped in `Result` to three `Result` values.
+  ## REPL
+  xldr(1)> Result::lift3(Ok({|a, b, c| a + b + c}), Ok(1), Ok(2), Ok(3))
+  Ok(6)
   """
   def lift3(f: Result<($A, $B, $C -> $D)>, a: Result<$A>, b: Result<$B>, c: Result<$C>) -> Result<$D> {
     ff =? f
@@ -171,6 +201,9 @@ defmod Result {
 
   @@doc """
   Apply a `Result`-returning function wrapped in `Result` to one `Result` value.
+  ## REPL
+  xldr(1)> Result::flat_lift(Ok({|n| Ok(n + 1)}), Ok(1))
+  Ok(2)
   """
   def flat_lift(f: Result<($A -> Result<$B>)>, value: Result<$A>) -> Result<$B> {
     ff =? f
@@ -180,6 +213,9 @@ defmod Result {
 
   @@doc """
   Apply a `Result`-returning 2-argument function wrapped in `Result`.
+  ## REPL
+  xldr(1)> Result::flat_lift2(Ok({|a, b| Ok(a + b)}), Ok(1), Ok(2))
+  Ok(3)
   """
   def flat_lift2(
     f: Result<($A, $B -> Result<$C>)>,
@@ -194,6 +230,9 @@ defmod Result {
 
   @@doc """
   Apply a `Result`-returning 3-argument function wrapped in `Result`.
+  ## REPL
+  xldr(1)> Result::flat_lift3(Ok({|a, b, c| Ok(a + b + c)}), Ok(1), Ok(2), Ok(3))
+  Ok(6)
   """
   def flat_lift3(
     f: Result<($A, $B, $C -> Result<$D>)>,
@@ -210,6 +249,9 @@ defmod Result {
 
   @@doc """
   Pipeline-friendly `lift` variant with value first.
+  ## REPL
+  xldr(1)> Result::with(Ok(1), Ok({|n| n + 1}))
+  Ok(2)
   """
   def with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B> {
     lift(f, value)
@@ -217,6 +259,9 @@ defmod Result {
 
   @@doc """
   Pipeline-friendly `lift2` variant with values first.
+  ## REPL
+  xldr(1)> Result::with2(Ok(1), Ok(2), Ok({|a, b| a + b}))
+  Ok(3)
   """
   def with2(left: Result<$A>, right: Result<$B>, f: Result<($A, $B -> $C)>) -> Result<$C> {
     lift2(f, left, right)
@@ -224,6 +269,9 @@ defmod Result {
 
   @@doc """
   Pipeline-friendly `lift3` variant with values first.
+  ## REPL
+  xldr(1)> Result::with3(Ok(1), Ok(2), Ok(3), Ok({|a, b, c| a + b + c}))
+  Ok(6)
   """
   def with3(
     a: Result<$A>,
@@ -236,6 +284,9 @@ defmod Result {
 
   @@doc """
   Pipeline-friendly `flat_lift` variant with value first.
+  ## REPL
+  xldr(1)> Result::flat_with(Ok(1), Ok({|n| Ok(n + 1)}))
+  Ok(2)
   """
   def flat_with(value: Result<$A>, f: Result<($A -> Result<$B>)>) -> Result<$B> {
     flat_lift(f, value)
@@ -243,6 +294,9 @@ defmod Result {
 
   @@doc """
   Pipeline-friendly `flat_lift2` variant with values first.
+  ## REPL
+  xldr(1)> Result::flat_with2(Ok(1), Ok(2), Ok({|a, b| Ok(a + b)}))
+  Ok(3)
   """
   def flat_with2(
     left: Result<$A>,
@@ -254,6 +308,9 @@ defmod Result {
 
   @@doc """
   Pipeline-friendly `flat_lift3` variant with values first.
+  ## REPL
+  xldr(1)> Result::flat_with3(Ok(1), Ok(2), Ok(3), Ok({|a, b, c| Ok(a + b + c)}))
+  Ok(6)
   """
   def flat_with3(
     a: Result<$A>,
@@ -266,6 +323,9 @@ defmod Result {
 
   @@doc """
   Bundle two `Result` values into one tuple-shaped `Result`.
+  ## REPL
+  xldr(1)> Result::zip(Ok(1), Ok(2))
+  Ok((1, 2))
   """
   def zip(left: Result<$A>, right: Result<$B>) -> Result<($A, $B)> {
     ll =? left
@@ -275,6 +335,9 @@ defmod Result {
 
   @@doc """
   Bundle three `Result` values into one tuple-shaped `Result`.
+  ## REPL
+  xldr(1)> Result::zip3(Ok(1), Ok(2), Ok(3))
+  Ok((1, 2, 3))
   """
   def zip3(a: Result<$A>, b: Result<$B>, c: Result<$C>) -> Result<($A, $B, $C)> {
     aa =? a
@@ -285,6 +348,9 @@ defmod Result {
 
   @@doc """
   Convert `List<Result<$A>>` into `Result<List<$A>>`.
+  ## REPL
+  xldr(1)> Result::all([Ok(1), Ok(2)])
+  Ok([1, 2])
   """
   def all(values: List<Result<$A>>) -> Result<List<$A>> {
     _all_go(values, [])
@@ -292,6 +358,9 @@ defmod Result {
 
   @@doc """
   Flatten one level of nested `Result`.
+  ## REPL
+  xldr(1)> Result::flatten(Ok(Ok(1)))
+  Ok(1)
   """
   def flatten(value: Result<Result<$A>>) -> Result<$A> {
     inner =? value
@@ -300,6 +369,9 @@ defmod Result {
 
   @@doc """
   Observe success values and return the original `Result` unchanged.
+  ## REPL
+  xldr(1)> Result::tap_ok(Ok(1), {|_| ()})
+  Ok(1)
   """
   def tap_ok(value: Result<$A>, f: ($A -> Unit)) -> Result<$A> {
     match value {
@@ -313,6 +385,9 @@ defmod Result {
 
   @@doc """
   Observe failure values and return the original `Result` unchanged.
+  ## REPL
+  xldr(1)> Result::tap_err(Err(NoneError), {|_| ()})
+  Err(NoneError)
   """
   def tap_err(value: Result<$A>, f: (Error -> Unit)) -> Result<$A> {
     match value {
@@ -326,6 +401,9 @@ defmod Result {
 
   @@doc """
   Continue with `next` only when the left `Result` is `Ok(...)`.
+  ## REPL
+  xldr(1)> Result::then(Ok(1), {|| Ok(2)})
+  Ok(2)
   """
   def then(value: Result<$A>, next: (-> Result<$B>)) -> Result<$B> {
     flat_lift(Ok({|_| next()}), value)

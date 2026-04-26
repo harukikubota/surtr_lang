@@ -4,8 +4,13 @@ Standard `Concat` trait declaration.
 The unqualified `concat(...)` helper comes from this auto-imported trait
 surface, while concrete `String` dispatch may still lower to an optimized
 runtime opcode.
+
+## REPL
+xldr(1)> concat("a", "b")
+"ab"
 """
 @@autoimport
 deftrait Concat {
+  # Combine two values using the module-specific concatenation rule.
   def concat(self: Self, rhs: Self) -> Self
 }

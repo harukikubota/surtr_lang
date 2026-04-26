@@ -325,12 +325,12 @@ fn repl_value_recall_by_line_number() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("surtr(1)>"),
+        stdout.contains("xldr(1)>"),
         "expected numbered prompt for first line, got:\n{}",
         stdout
     );
     assert!(
-        stdout.contains("surtr(2)>"),
+        stdout.contains("xldr(2)>"),
         "expected numbered prompt for second line, got:\n{}",
         stdout
     );

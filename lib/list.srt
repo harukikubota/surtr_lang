@@ -27,6 +27,9 @@ defmod List {
   @@doc """
   Prepend one element onto the front of a list.
   `cons` is the canonical value-level constructor for list growth.
+  ## REPL
+  xldr(1)> List::cons(1, [2, 3])
+  [1, 2, 3]
   """
   def cons(head: $A, tail: List<$A>) -> List<$A> {
     [head, ..tail]
@@ -34,6 +37,9 @@ defmod List {
 
   @@doc """
   Return the first element of a list, or `Err(NoneError)` for `[]`.
+  ## REPL
+  xldr(1)> List::first([1, 2])
+  Ok(1)
   """
   def first(values: List<$A>) -> Result<$A, NoneError> {
     match values {
@@ -44,6 +50,9 @@ defmod List {
 
   @@doc """
   Return the last element of a list, or `Err(NoneError)` for `[]`.
+  ## REPL
+  xldr(1)> List::last([1, 2])
+  Ok(2)
   """
   def last(values: List<$A>) -> Result<$A, NoneError> {
     match values {
@@ -56,6 +65,9 @@ defmod List {
   Return the number of elements in a list.
   This stays a core helper so the runtime can keep the O(1) handle-based length
   contract.
+  ## REPL
+  xldr(1)> List::len([1, 2, 3])
+  3
   """
   @@builtin def len(values: List<$A>) -> Int
 
@@ -193,6 +205,9 @@ defmod List {
   @@doc """
   Append `right` after `left`.
   This keeps the left-to-right order of both lists.
+  ## REPL
+  xldr(1)> List::append([1], [2, 3])
+  [1, 2, 3]
   """
   def append(left: List<$A>, right: List<$A>) -> List<$A> {
     match left {
@@ -203,6 +218,9 @@ defmod List {
 
   @@doc """
   Map each element to a list and concatenate the results.
+  ## REPL
+  xldr(1)> List::flat_map([1, 2], {|n| [n, n + 10]})
+  [1, 11, 2, 12]
   """
   def flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B> {
     reverse(
@@ -214,6 +232,9 @@ defmod List {
 
   @@doc """
   Concatenate a list of lists into one list.
+  ## REPL
+  xldr(1)> List::concat([[1, 2], [3]])
+  [1, 2, 3]
   """
   def concat(values: List<List<$A>>) -> List<$A> {
     match values {
@@ -224,6 +245,9 @@ defmod List {
 
   @@doc """
   Reverse the order of a list.
+  ## REPL
+  xldr(1)> List::reverse([1, 2, 3])
+  [3, 2, 1]
   """
   def reverse(values: List<$A>) -> List<$A> {
     _list_reverse_go(values, [])
@@ -232,6 +256,9 @@ defmod List {
   @@doc """
   Return the element at `index`.
   Negative indices and out-of-range access return `Err(IndexOutOfBounds(...))`.
+  ## REPL
+  xldr(1)> List::at([1, 2, 3], 1)
+  Ok(2)
   """
   def at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds> {
     value_len = len(values)
@@ -240,6 +267,9 @@ defmod List {
 
   @@doc """
   Fold a list from left to right.
+  ## REPL
+  xldr(1)> List::reduce([1, 2, 3], 0, {|acc, n| acc + n})
+  6
   """
   def reduce(values: List<$A>, init: $B, f: ($B, $A -> $B)) -> $B {
     match values {
@@ -250,6 +280,9 @@ defmod List {
 
   @@doc """
   Fold a list from left to right with early exit.
+  ## REPL
+  xldr(1)> List::reduce_while([1, 2, 3], 0, {|acc, n| if(acc + n < 3, ReduceStep::Resume(acc + n), ReduceStep::Stop(acc + n))})
+  3
   """
   def reduce_while(values: List<$A>, init: $B, f: ($B, $A -> ReduceStep<$B>)) -> $B {
     match values {
@@ -264,6 +297,9 @@ defmod List {
   @@doc """
   Map a plain unary callable over each element and keep the list shape.
   This matches the semantics of `|*>` on `List`.
+  ## REPL
+  xldr(1)> List::map([1, 2], {|n| n + 1})
+  [2, 3]
   """
   def map(values: List<$A>, f: ($A -> $B)) -> List<$B> {
     reverse(
@@ -275,6 +311,9 @@ defmod List {
 
   @@doc """
   Keep only the elements that satisfy `pred`.
+  ## REPL
+  xldr(1)> List::filter([1, 2, 3], {|n| Int::is_even(n)})
+  [2]
   """
   def filter(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
     reverse(
@@ -286,6 +325,9 @@ defmod List {
 
   @@doc """
   Return the first element that satisfies `pred`.
+  ## REPL
+  xldr(1)> List::find([1, 2, 3], {|n| n > 1})
+  Ok(2)
   """
   def find(values: List<$A>, pred: ($A -> Boolean)) -> Result<$A, NoneError> {
     match values {
@@ -296,6 +338,9 @@ defmod List {
 
   @@doc """
   Return the first successful mapped value.
+  ## REPL
+  xldr(1)> List::find_map([1, 2, 3], {|n| if(n > 1, Ok(to_string(n)), Err(NoneError))})
+  Ok("2")
   """
   def find_map(values: List<$A>, f: ($A -> Result<$B>)) -> Result<$B, NoneError> {
     match values {
@@ -309,6 +354,9 @@ defmod List {
 
   @@doc """
   Return `True` when at least one element satisfies `pred`.
+  ## REPL
+  xldr(1)> List::any([1, 2, 3], {|n| n > 2})
+  True
   """
   def any(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
     match values {
@@ -319,6 +367,9 @@ defmod List {
 
   @@doc """
   Return `True` when every element satisfies `pred`.
+  ## REPL
+  xldr(1)> List::all([2, 4], {|n| Int::is_even(n)})
+  True
   """
   def all(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
     match values {
@@ -329,6 +380,9 @@ defmod List {
 
   @@doc """
   Count how many elements satisfy `pred`.
+  ## REPL
+  xldr(1)> List::count([1, 2, 3], {|n| n > 1})
+  2
   """
   def count(values: List<$A>, pred: ($A -> Boolean)) -> Int {
     reduce(values, 0, {|acc, value|
@@ -339,6 +393,9 @@ defmod List {
   @@doc """
   Sum all integer elements in a list.
   Empty lists return `0`.
+  ## REPL
+  xldr(1)> List::sum([1, 2, 3])
+  6
   """
   def sum(values: List<Int>) -> Int {
     reduce(values, 0, {|acc, value|
@@ -349,6 +406,9 @@ defmod List {
   @@doc """
   Return the largest integer in a list.
   Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::max([1, 3, 2])
+  Ok(3)
   """
   def max(values: List<Int>) -> Result<Int, NoneError> {
     match values {
@@ -360,6 +420,9 @@ defmod List {
   @@doc """
   Return the smallest integer in a list.
   Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::min([1, 3, 2])
+  Ok(1)
   """
   def min(values: List<Int>) -> Result<Int, NoneError> {
     match values {
@@ -372,6 +435,9 @@ defmod List {
   Return the largest element according to `cmp`.
   `cmp(left, right)` must return `Ordering::Greater` when `left` should win.
   Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::max_by([1, 3, 2], {|l, r| if(l < r, Ordering::Less, if(l > r, Ordering::Greater, Ordering::Equal))})
+  Ok(3)
   """
   def max_by(values: List<$A>, cmp: ($A, $A -> Ordering)) -> Result<$A, NoneError> {
     match values {
@@ -384,6 +450,9 @@ defmod List {
   Return the smallest element according to `cmp`.
   `cmp(left, right)` must return `Ordering::Less` when `left` should win.
   Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::min_by([1, 3, 2], {|l, r| if(l < r, Ordering::Less, if(l > r, Ordering::Greater, Ordering::Equal))})
+  Ok(1)
   """
   def min_by(values: List<$A>, cmp: ($A, $A -> Ordering)) -> Result<$A, NoneError> {
     match values {
@@ -395,6 +464,9 @@ defmod List {
   @@doc """
   Keep at most the first `count` elements.
   `count <= 0` returns `[]`.
+  ## REPL
+  xldr(1)> List::take([1, 2, 3], 2)
+  [1, 2]
   """
   def take(values: List<$A>, count: Int) -> List<$A> {
     _take_go(values, count)
@@ -403,6 +475,9 @@ defmod List {
   @@doc """
   Skip the first `count` elements.
   `count <= 0` returns the input unchanged.
+  ## REPL
+  xldr(1)> List::drop([1, 2, 3], 1)
+  [2, 3]
   """
   def drop(values: List<$A>, count: Int) -> List<$A> {
     _drop_go(values, count)
@@ -410,6 +485,9 @@ defmod List {
 
   @@doc """
   Keep the longest prefix whose elements satisfy `pred`.
+  ## REPL
+  xldr(1)> List::take_while([1, 2, 3], {|n| n < 3})
+  [1, 2]
   """
   def take_while(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
     _take_while_go(values, pred)
@@ -417,6 +495,9 @@ defmod List {
 
   @@doc """
   Drop the longest prefix whose elements satisfy `pred`.
+  ## REPL
+  xldr(1)> List::drop_while([1, 2, 3], {|n| n < 3})
+  [3]
   """
   def drop_while(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
     _drop_while_go(values, pred)
@@ -424,6 +505,9 @@ defmod List {
 
   @@doc """
   Split a list into the longest matching prefix and the remaining suffix.
+  ## REPL
+  xldr(1)> List::span([1, 2, 3], {|n| n < 3})
+  ([1, 2], [3])
   """
   def span(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
     (take_while(values, pred), drop_while(values, pred))
@@ -432,6 +516,9 @@ defmod List {
   @@doc """
   Split a list into elements that satisfy `pred` and the rest.
   Both output lists keep the original order.
+  ## REPL
+  xldr(1)> List::partition([1, 2, 3], {|n| Int::is_even(n)})
+  ([2], [1, 3])
   """
   def partition(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
     _partition_go(values, pred)
@@ -440,11 +527,17 @@ defmod List {
   @@doc """
   Count repeated values while keeping first-seen group order.
   Requires `Eq` for the element type and returns `(value, count)` tuples.
+  ## REPL
+  xldr(1)> List::group_count([1, 1, 2, 2, 2])
+  [(1, 2), (2, 3)]
   """
   @@builtin def group_count(values: List<$A>) -> List<($A, Int)>
 
   @@doc """
   Remove duplicate values while keeping the first-seen order.
+  ## REPL
+  xldr(1)> List::dedup([1, 1, 2, 2, 3])
+  [1, 2, 3]
   """
   def dedup(values: List<$A>) -> List<$A> {
     _dedup_groups(group_count(values))
@@ -453,6 +546,9 @@ defmod List {
   @@doc """
   Pair elements from two lists until either side runs out.
   Each output element is a `(left, right)` tuple.
+  ## REPL
+  xldr(1)> List::zip([1, 2], ["a", "b"])
+  [(1, "a"), (2, "b")]
   """
   @@builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
 }

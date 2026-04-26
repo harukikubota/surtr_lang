@@ -10,10 +10,6 @@ library.
 Cross-cutting builtin values live in `kernel.srt`, builtin type declarations
 live at the top level of their corresponding files, and the abstract `Error`
 type itself lives in `error.srt`.
-
-Language-provided top-level macros such as `import` and `include` are also
-documented here as builtin bootstrap functions with macro-style surface syntax.
-They still stay unavailable inside ordinary code blocks.
 """
 
 @@autoimport
@@ -39,6 +35,10 @@ defmod Bootstrap {
   - `import Mod::{name1, name2}`
 
   It stays invalid inside ordinary code blocks and in expression position.
+  ## REPL
+  xldr(1)> import Option::wrap
+  xldr(2)> Option::is_some(wrap(1))
+  True
   """
   @@builtin def import() -> Unit
 
@@ -54,6 +54,9 @@ defmod Bootstrap {
 
   It accepts exactly one string literal path in source syntax and stays invalid
   inside ordinary code blocks and in expression position.
+  ## REPL
+  xldr(1)> include "./path/to/module.srt"
+  # loads declarations with no direct value output
   """
   @@builtin def include(path: String) -> Unit
 }

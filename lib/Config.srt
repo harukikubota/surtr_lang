@@ -1,3 +1,6 @@
+# Standard helper struct for project-style configuration examples.
+# `Config` is handy in REPL-facing docs because it is already loaded with the
+# standard library and has named fields that work well with `Lens`.
 defstruct Config {
   name: String,
   entrypoint: String,
@@ -5,14 +8,20 @@ defstruct Config {
 }
 
 impl Config {
+  # Build a config with a default entrypoint and no extra paths.
+  # Construct a new value of the surrounding type.
   def new(name: String) -> Self {
     Config { name: name, entrypoint: "Main::main", paths: [] }
   }
 
+  # Replace the entrypoint symbol and return the updated config.
+  # Replace the config entrypoint symbol.
   def entry_fun(self: Self, symbol: String) -> Self {
     Config { name: self.name, entrypoint: symbol, paths: self.paths }
   }
 
+  # Append one search path and return the updated config.
+  # Append one search path to the config.
   def add_path(self: Self, path: String) -> Self {
     Config {
       name: self.name,

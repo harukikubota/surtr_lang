@@ -66,35 +66,53 @@ defmod Int {
   Divide two values and return `Err(ZeroDivisionError)` instead of trapping.
   The success case keeps the same value type as the inputs.
   This follows the `Result`/`Either` style of representing failure as a value.
+  ## REPL
+  xldr(1)> Int::safe_div(8, 2)
+  Ok(4)
   """
   @@builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
 
   @@doc """
   Compute `a mod b` for integers and return `Err(ZeroDivisionError)` on zero.
   Failure stays on the value side rather than becoming an implicit exception.
+  ## REPL
+  xldr(1)> Int::safe_mod(7, 3)
+  Ok(1)
   """
   @@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 
   @@doc """
   Return the bitwise AND of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::bit_and(6, 3)
+  2
   """
   @@builtin
   def bit_and(a: Int, b: Int) -> Int
 
   @@doc """
   Return the bitwise OR of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::bit_or(6, 3)
+  7
   """
   @@builtin
   def bit_or(a: Int, b: Int) -> Int
 
   @@doc """
   Return the bitwise XOR of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::bit_xor(6, 3)
+  5
   """
   @@builtin
   def bit_xor(a: Int, b: Int) -> Int
 
   @@doc """
   Return the bitwise complement of `value`.
+  ## REPL
+  xldr(1)> Int::bit_not(0)
+  -1
   """
   @@builtin
   def bit_not(value: Int) -> Int
@@ -102,6 +120,9 @@ defmod Int {
   @@doc """
   Return whether the bit at `index` is set on `value`.
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
+  ## REPL
+  xldr(1)> Int::test_bit(4, 2)
+  Ok(True)
   """
   @@builtin
   def test_bit(value: Int, index: Int) -> Result<Boolean, NegativeBitIndex>
@@ -109,6 +130,9 @@ defmod Int {
   @@doc """
   Return `value` with the bit at `index` set.
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
+  ## REPL
+  xldr(1)> Int::set_bit(0, 1)
+  Ok(2)
   """
   @@builtin
   def set_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
@@ -116,6 +140,9 @@ defmod Int {
   @@doc """
   Return `value` with the bit at `index` cleared.
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
+  ## REPL
+  xldr(1)> Int::clear_bit(7, 1)
+  Ok(5)
   """
   @@builtin
   def clear_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
@@ -123,6 +150,9 @@ defmod Int {
   @@doc """
   Return `value` with the bit at `index` toggled.
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
+  ## REPL
+  xldr(1)> Int::toggle_bit(5, 0)
+  Ok(4)
   """
   @@builtin
   def toggle_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
@@ -176,6 +206,9 @@ defmod Int {
   @@doc """
   Resolve a `BitWidth` selector to its concrete bit count.
   `BitWidth::Any(bits)` accepts only positive widths.
+  ## REPL
+  xldr(1)> Int::width_bits(BitWidth::W8)
+  Ok(8)
   """
   def width_bits(width: BitWidth) -> Result<Int, InvalidBitWidth> {
     match width {
@@ -192,6 +225,9 @@ defmod Int {
   @@doc """
   Return the all-ones mask for `width`.
   For example, `W8` returns `255`.
+  ## REPL
+  xldr(1)> Int::mask(BitWidth::W8)
+  Ok(255)
   """
   def mask(width: BitWidth) -> Result<Int, InvalidBitWidth> {
     bits =? width_bits(width)
@@ -200,6 +236,9 @@ defmod Int {
 
   @@doc """
   Wrap `value` into the unsigned range represented by `width`.
+  ## REPL
+  xldr(1)> Int::wrap_unsigned(-1, BitWidth::W8)
+  Ok(255)
   """
   def wrap_unsigned(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
     bits =? width_bits(width)
@@ -208,6 +247,9 @@ defmod Int {
 
   @@doc """
   Wrap `value` into the signed two's-complement range represented by `width`.
+  ## REPL
+  xldr(1)> Int::wrap_signed(255, BitWidth::W8)
+  Ok(-1)
   """
   def wrap_signed(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
     bits =? width_bits(width)
@@ -220,6 +262,9 @@ defmod Int {
   @@doc """
   Return the fixed-width bitwise complement of `value`.
   `value` is first wrapped into the unsigned range of `width`.
+  ## REPL
+  xldr(1)> Int::bit_not_in(0, BitWidth::W8)
+  Ok(255)
   """
   def bit_not_in(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
     bits =? width_bits(width)
@@ -231,6 +276,9 @@ defmod Int {
   @@doc """
   Return whether the fixed-width bit at `index` is set on `value`.
   Indexes must satisfy `0 <= index < width`.
+  ## REPL
+  xldr(1)> Int::test_bit_in(4, 2, BitWidth::W8)
+  Ok(True)
   """
   def test_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Boolean> {
     bits =? width_bits(width)
@@ -243,6 +291,9 @@ defmod Int {
   @@doc """
   Return `value` with the fixed-width bit at `index` set.
   Indexes must satisfy `0 <= index < width`.
+  ## REPL
+  xldr(1)> Int::set_bit_in(0, 1, BitWidth::W8)
+  Ok(2)
   """
   def set_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
     bits =? width_bits(width)
@@ -255,6 +306,9 @@ defmod Int {
   @@doc """
   Return `value` with the fixed-width bit at `index` cleared.
   Indexes must satisfy `0 <= index < width`.
+  ## REPL
+  xldr(1)> Int::clear_bit_in(7, 1, BitWidth::W8)
+  Ok(5)
   """
   def clear_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
     bits =? width_bits(width)
@@ -268,6 +322,9 @@ defmod Int {
   @@doc """
   Return `value` with the fixed-width bit at `index` toggled.
   Indexes must satisfy `0 <= index < width`.
+  ## REPL
+  xldr(1)> Int::toggle_bit_in(5, 0, BitWidth::W8)
+  Ok(4)
   """
   def toggle_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
     bits =? width_bits(width)
@@ -280,6 +337,9 @@ defmod Int {
   @@doc """
   Shift `value` left inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::shl_in(3, 2, BitWidth::W8)
+  Ok(12)
   """
   def shl_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
     width_size =? width_bits(width)
@@ -291,6 +351,9 @@ defmod Int {
   @@doc """
   Shift `value` right logically inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::shr_logical_in(128, 7, BitWidth::W8)
+  Ok(1)
   """
   def shr_logical_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
     width_size =? width_bits(width)
@@ -302,6 +365,9 @@ defmod Int {
   @@doc """
   Rotate `value` left inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::rotl_in(129, 1, BitWidth::W8)
+  Ok(3)
   """
   def rotl_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
     width_size =? width_bits(width)
@@ -316,6 +382,9 @@ defmod Int {
   @@doc """
   Rotate `value` right inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::rotr_in(3, 1, BitWidth::W8)
+  Ok(129)
   """
   def rotr_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
     width_size =? width_bits(width)
@@ -330,6 +399,9 @@ defmod Int {
   @@doc """
   Shift `value` left by `bits`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::shl(3, 2)
+  Ok(12)
   """
   @@builtin
   def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
@@ -337,12 +409,18 @@ defmod Int {
   @@doc """
   Shift `value` right by `bits`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::shr(12, 2)
+  Ok(3)
   """
   @@builtin
   def shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
 
   @@doc """
   Return the absolute value of `value`.
+  ## REPL
+  xldr(1)> Int::abs(-4)
+  4
   """
   def abs(value: Int) -> Int {
     if(value < 0, 0 - value, value)
@@ -350,6 +428,9 @@ defmod Int {
 
   @@doc """
   Return the smaller of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::min(1, 2)
+  1
   """
   def min(a: Int, b: Int) -> Int {
     if(a <= b, a, b)
@@ -357,6 +438,9 @@ defmod Int {
 
   @@doc """
   Return the larger of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::max(1, 2)
+  2
   """
   def max(a: Int, b: Int) -> Int {
     if(a >= b, a, b)
@@ -364,6 +448,9 @@ defmod Int {
 
   @@doc """
   Return `-1`, `0`, or `1` depending on the sign of `value`.
+  ## REPL
+  xldr(1)> Int::sign(-3)
+  -1
   """
   def sign(value: Int) -> Int {
     if(value < 0, -1, if(value > 0, 1, 0))
@@ -371,6 +458,9 @@ defmod Int {
 
   @@doc """
   Return `True` when `value` is divisible by two.
+  ## REPL
+  xldr(1)> Int::is_even(4)
+  True
   """
   def is_even(value: Int) -> Boolean {
     match safe_mod(value, 2) {
@@ -381,6 +471,9 @@ defmod Int {
 
   @@doc """
   Return `True` when `value` is not divisible by two.
+  ## REPL
+  xldr(1)> Int::is_odd(5)
+  True
   """
   def is_odd(value: Int) -> Boolean {
     match safe_mod(value, 2) {

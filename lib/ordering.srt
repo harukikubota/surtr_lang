@@ -3,6 +3,10 @@ Standard `Ordering` enum.
 Represents the three-way result of an ordering comparison.
 This is the shared result type used by the `Compare` trait, while boolean
 ordering helpers remain available through `Ord`.
+
+## REPL
+xldr(1)> Ordering::Less
+Ordering::Less
 """
 defenum Ordering {
   Less,
@@ -11,16 +15,19 @@ defenum Ordering {
 }
 
 impl Show for Ordering {
+  # Standard `Show` impl for `Ordering`.
   def to_string(self: Self) -> String {
     inspect(self)
   }
 }
 
 impl Eq for Ordering {
+  # Standard `Eq` impl method for `Ordering`.
   def eq(self: Self, rhs: Self) -> Boolean {
     self == rhs
   }
 
+  # Standard `Eq` impl method for `Ordering`.
   def neq(self: Self, rhs: Self) -> Boolean {
     self != rhs
   }

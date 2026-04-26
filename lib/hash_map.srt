@@ -30,6 +30,9 @@ defmod HashMap {
 
   @@doc """
   Return the empty map.
+  ## REPL
+  xldr(1)> HashMap::empty_map()
+  HashMap()
   """
   @@builtin def empty_map() -> HashMap<$V>
 
@@ -40,6 +43,9 @@ defmod HashMap {
   @@doc """
   Build a map from `(String, value)` entries.
   Later duplicates overwrite values.
+  ## REPL
+  xldr(1)> HashMap::map_from_entries([("a", 1)])
+  HashMap("a" => 1)
   """
   @@builtin def map_from_entries(entries: List<(String, $V)>) -> HashMap<$V>
 
@@ -49,6 +55,9 @@ defmod HashMap {
 
   @@doc """
   Return the number of entries.
+  ## REPL
+  xldr(1)> HashMap::map_len(HashMap::from_entries([("a", 1), ("b", 2)]))
+  2
   """
   @@builtin def map_len(map: HashMap<$V>) -> Int
 
@@ -58,6 +67,9 @@ defmod HashMap {
 
   @@doc """
   Return `True` when `key` exists in `map`.
+  ## REPL
+  xldr(1)> HashMap::map_contains_key(HashMap::from_entries([("a", 1)]), "a")
+  True
   """
   @@builtin def map_contains_key(map: HashMap<$V>, key: String) -> Boolean
 
@@ -67,6 +79,9 @@ defmod HashMap {
 
   @@doc """
   Return `Ok(value)` when the key exists, otherwise `Err(NoneError)`.
+  ## REPL
+  xldr(1)> HashMap::map_get(HashMap::from_entries([("a", 1)]), "a")
+  Ok(1)
   """
   @@builtin def map_get(map: HashMap<$V>, key: String) -> Result<$V, NoneError>
 
@@ -76,6 +91,9 @@ defmod HashMap {
 
   @@doc """
   Return a new map with `key` set to `value`.
+  ## REPL
+  xldr(1)> HashMap::map_insert(HashMap::empty(), "a", 1)
+  HashMap("a" => 1)
   """
   @@builtin def map_insert(map: HashMap<$V>, key: String, value: $V) -> HashMap<$V>
 
@@ -86,6 +104,9 @@ defmod HashMap {
   @@doc """
   Return a new map without `key`.
   Missing keys are no-op.
+  ## REPL
+  xldr(1)> HashMap::map_remove(HashMap::from_entries([("a", 1)]), "a")
+  HashMap()
   """
   @@builtin def map_remove(map: HashMap<$V>, key: String) -> HashMap<$V>
 
@@ -95,6 +116,9 @@ defmod HashMap {
 
   @@doc """
   Return keys in deterministic key-sorted order.
+  ## REPL
+  xldr(1)> HashMap::map_keys(HashMap::from_entries([("b", 2), ("a", 1)]))
+  ["a", "b"]
   """
   @@builtin def map_keys(map: HashMap<$V>) -> List<String>
 
@@ -104,6 +128,9 @@ defmod HashMap {
 
   @@doc """
   Return values in the same deterministic order as `keys(map)`.
+  ## REPL
+  xldr(1)> HashMap::map_values_list(HashMap::from_entries([("b", 2), ("a", 1)]))
+  [1, 2]
   """
   @@builtin def map_values_list(map: HashMap<$V>) -> List<$V>
 
@@ -113,6 +140,9 @@ defmod HashMap {
 
   @@doc """
   Return `(key, value)` entries in deterministic key-sorted order.
+  ## REPL
+  xldr(1)> HashMap::entries(HashMap::from_entries([("b", 2), ("a", 1)]))
+  [("a", 1), ("b", 2)]
   """
   def entries(map: HashMap<$V>) -> List<(String, $V)> {
     List::zip(keys(map), values(map))
@@ -121,6 +151,9 @@ defmod HashMap {
   @@doc """
   Return a new map with the same keys and transformed values.
   The visible order remains deterministic and sorted by key.
+  ## REPL
+  xldr(1)> HashMap::map_values(HashMap::from_entries([("a", 1), ("b", 2)]), {|n| n + 1})
+  HashMap("a" => 2, "b" => 3)
   """
   def map_values(map: HashMap<$A>, f: ($A -> $B)) -> HashMap<$B> {
     _map_values_go(map, keys(map), f, empty())

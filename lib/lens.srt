@@ -16,6 +16,7 @@ Common path forms:
 - tuple field: `Tuple._0`, `Tuple._1`, ...
 - nested path: `Lens::compose(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
+- value sugar: `value.segment`
 
 `Lens` is compile-time only in Stage1.
 You may bind it in the same scope:
@@ -25,6 +26,9 @@ You may bind it in the same scope:
 but you may not pass it as a function argument, return it, capture it in a
 closure, or store it inside runtime containers such as `List`, tuples, `Ok(...)`
 or `Err(...)`.
+
+Private field paths follow the same visibility rules as ordinary field access.
+Outside the allowed scope, `User.secret`-style path roots are compile errors.
 """
 @@builtin type Lens<$S, $A>
 
@@ -39,24 +43,42 @@ Typical workflow:
 2. Read with `Lens::view(...)` or `value.segment`
 3. Update with `Lens::set(...)` or `Lens::over(...)`
 
-Examples:
+## REPL
+Struct path create/get/set/update:
+xldr(1)> cfg = Config::new("demo")
+> cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+xldr(2)> cfg.entrypoint
+"Main::main"
+xldr(3)> cfg2 =? Lens::set(Config.entrypoint, cfg, "App::main")
+> cfg2: Config = Config { name: "demo", entrypoint: "App::main", paths: [] }
+xldr(4)> cfg3 =? Lens::over(Config.entrypoint, cfg2, {|entry| Ok(entry ++ "!")})
+> cfg3: Config = Config { name: "demo", entrypoint: "App::main!", paths: [] }
 
-```surtr
-defstruct Profile {
-  name: String
-}
+Tuple path create/get/set/update:
+xldr(1)> pair = ("alice", 42)
+> pair: (String, Int) = ("alice", 42)
+xldr(2)> pair._0
+"alice"
+xldr(3)> pair2 =? Lens::set(Tuple._1, pair, 99)
+> pair2: (String, Int) = ("alice", 99)
+xldr(4)> pair3 =? Lens::over(Tuple._1, pair2, {|n| Ok(n + 1)})
+> pair3: (String, Int) = ("alice", 100)
 
-defstruct User {
-  profile: Profile,
-  pair: (String, Int)
-}
+Enum path create/get/set/update:
+xldr(1)> Lens::view(BitWidth.Any, BitWidth::Any(5))
+Ok(5)
+xldr(2)> bw2 =? Lens::set(BitWidth.Any, BitWidth::Any(5), 7)
+> bw2: BitWidth = BitWidth::Any(7)
+xldr(3)> bw3 =? Lens::over(BitWidth.Any, bw2, {|n| Ok(n + 1)})
+> bw3: BitWidth = BitWidth::Any(8)
 
-user = User(Profile("alice"), ("admin", 3))
+Record path surface:
+- create path: `Record.field`
+- get: `value.field` or `Lens::view(Record.field, value)`
+- set: `Lens::set(Record.field, value, next)`
+- update: `Lens::over(Record.field, value, updater)`
 
-name = Lens::view(Lens::compose(User.profile, Profile.name), user)
-first = Lens::view(Tuple._0, user.pair)
-updated =? Lens::set(Lens::compose(User.profile, Profile.name), user, "bob")
-```
+Use `docs/site/lens.md` for the longer walkthrough.
 """
 @@autoimport
 defmod Lens {
@@ -72,32 +94,28 @@ How to read the return type:
 - if the path contains an enum variant selector such as `Expr.Add`, the result
   is promoted to `Result<A>`
 
-Examples:
-
-```surtr
-name = Lens::view(User.name, user)
-first = Lens::view(Tuple._0, pair)
-value = Lens::view(Lens::compose(User.profile, Profile.name), user)
-```
-
 `value.segment` is shorthand for the same read:
-
-```surtr
-name = user.name
-first = pair._0
-```
+`cfg.entrypoint`
+`pair._0`
 
 Variant paths are fallible because the runtime value may be a different
 variant:
 
-```surtr
-match Lens::view(Expr.Add, expr) {
-  Ok(add) => ...,
-  Err(err) => ...,
-}
-```
-
 When the selector does not match, the result is `Err(VariantMismatch(...))`.
+
+## REPL
+xldr(1)> cfg = Config::new("demo")
+> cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+xldr(2)> cfg.entrypoint
+"Main::main"
+
+xldr(1)> pair = ("alice", 42)
+> pair: (String, Int) = ("alice", 42)
+xldr(2)> pair._0
+"alice"
+
+xldr(1)> Lens::view(BitWidth.Any, BitWidth::Any(5))
+Ok(5)
   """
   @@builtin def view(lens: Lens<$S, $A>, source: $S) -> Result<$A>
 
@@ -107,20 +125,24 @@ When the selector does not match, the result is `Err(VariantMismatch(...))`.
 
 Use `set` when you already have the replacement value.
 
-```surtr
-updated =? Lens::set(User.name, user, "bob")
-pair2 =? Lens::set(Tuple._1, pair, 4)
-```
-
 For nested updates, compose the path first:
-
-```surtr
-name_lens = Lens::compose(User.profile, Profile.name)
-updated =? Lens::set(name_lens, user, "bob")
-```
 
 If the path contains a variant selector, `set` fails with
 `Err(VariantMismatch(...))` when the current value is not on that variant.
+
+## REPL
+xldr(1)> cfg = Config::new("demo")
+> cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+xldr(2)> cfg2 =? Lens::set(Config.entrypoint, cfg, "App::main")
+> cfg2: Config = Config { name: "demo", entrypoint: "App::main", paths: [] }
+
+xldr(1)> pair = ("alice", 42)
+> pair: (String, Int) = ("alice", 42)
+xldr(2)> pair2 =? Lens::set(Tuple._1, pair, 99)
+> pair2: (String, Int) = ("alice", 99)
+
+xldr(1)> bw2 =? Lens::set(BitWidth.Any, BitWidth::Any(5), 7)
+> bw2: BitWidth = BitWidth::Any(7)
   """
   @@builtin def set(lens: Lens<$S, $A>, source: $S, value: $A) -> Result<$S>
 
@@ -130,18 +152,22 @@ If the path contains a variant selector, `set` fails with
 
 Use `over` when the new value depends on the current focused value.
 
-```surtr
-user2 =? Lens::over(User.name, user, {|name|
-  Ok(name ++ "!")
-})
-
-pair2 =? Lens::over(Tuple._1, pair, {|n|
-  Ok(n + 1)
-})
-```
-
 `update_fun` must return `Result`.
 If `update_fun` returns `Err(...)`, that error is propagated as-is.
+
+## REPL
+xldr(1)> cfg = Config::new("demo")
+> cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+xldr(2)> cfg2 =? Lens::over(Config.entrypoint, cfg, {|entry| Ok(entry ++ "!")})
+> cfg2: Config = Config { name: "demo", entrypoint: "Main::main!", paths: [] }
+
+xldr(1)> pair = ("alice", 42)
+> pair: (String, Int) = ("alice", 42)
+xldr(2)> pair2 =? Lens::over(Tuple._1, pair, {|n| Ok(n + 1)})
+> pair2: (String, Int) = ("alice", 43)
+
+xldr(1)> bw2 =? Lens::over(BitWidth.Any, BitWidth::Any(7), {|n| Ok(n + 1)})
+> bw2: BitWidth = BitWidth::Any(8)
   """
   @@builtin def over(lens: Lens<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
 
@@ -151,13 +177,6 @@ If `update_fun` returns `Err(...)`, that error is propagated as-is.
 
 Use this for nested access and updates.
 
-```surtr
-profile_name = Lens::compose(User.profile, Profile.name)
-
-name = Lens::view(profile_name, user)
-user2 =? Lens::set(profile_name, user, "bob")
-```
-
 The types must line up:
 
 - `outer: Lens<S, A>`
@@ -165,6 +184,17 @@ The types must line up:
 - result: `Lens<S, B>`
 
 This is the canonical path-composition API.
+
+Private field segments keep their visibility rules after composition.
+If one segment is private and the current scope cannot see it, the composed
+path is rejected at compile time.
+
+## REPL
+Compose is easiest to try with a user-defined nested type in a source file.
+In the REPL, use the same shape as:
+outer = User.profile
+inner = Profile.name
+path = Lens::compose(outer, inner)
   """
   @@builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
 }

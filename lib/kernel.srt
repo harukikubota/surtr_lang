@@ -17,6 +17,12 @@ and special forms.
 Use this layer for operations that are not owned by a single primitive module
 such as conditional special forms, printing, debug inspection, sequence
 decomposition, and process-oriented entrypoint control.
+
+## REPL
+xldr(1)> "hello"
+hello
+xldr(2)> ("alice", 42)
+("alice", 42)
 """
 @@autoimport
 defmod Kernel {
@@ -37,6 +43,10 @@ defmod Kernel {
 
   In other words, the signature describes the language semantics, while the
   surface syntax keeps the convenient expression-oriented style.
+
+## REPL
+xldr(1)> if_then(True, print("flag is true"))
+flag is true
   """
   @@builtin def if_then(flag: Boolean, then_branch: (-> Unit)) -> Unit
 
@@ -59,6 +69,10 @@ defmod Kernel {
 
   When the branches both return `Unit`, prefer `if_then(...)` to make the
   intent explicit.
+
+## REPL
+xldr(1)> if(True, "ok", "ng")
+"ok"
   """
   @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
 
@@ -74,6 +88,10 @@ defmod Kernel {
 
   Any bindings introduced by the pattern are available only inside the
   successful branch body.
+
+## REPL
+xldr(1)> if_let(Ok(1), Ok(value), to_string(value), "miss")
+"1"
   """
   @@builtin def if_let(value: $A, pattern: $Pattern, then_branch: (-> $B), else_branch: (-> $B)) -> $B
 
@@ -86,6 +104,10 @@ defmod Kernel {
   The input value is evaluated once.
   The branch expression is evaluated only when the pattern matches.
   Non-match returns `Unit` without evaluating the branch expression.
+
+## REPL
+xldr(1)> if_let_then(Ok(1), Ok(value), print(to_string(value)))
+1
   """
   @@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: (-> Unit)) -> Unit
 
@@ -99,6 +121,10 @@ defmod Kernel {
   This form does not permit binding variables in the pattern argument.
   Use `_` to ignore values, or switch to `if_let` / `match` when bindings
   are required.
+
+## REPL
+xldr(1)> is_match(Ok(1), Ok(_))
+True
   """
   @@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean
 
@@ -112,6 +138,10 @@ defmod Kernel {
   the compiler evaluates the right-hand side only when the left-hand side is
   `True`.
   This keeps call-style source syntax while preserving short-circuit behavior.
+
+## REPL
+xldr(1)> and(True, False)
+False
   """
   @@builtin def and(left: Boolean, right: Boolean) -> Boolean
 
@@ -125,6 +155,10 @@ defmod Kernel {
   `False`.
   Like `and`, this is exposed as ordinary call-style syntax while keeping
   short-circuit semantics.
+
+## REPL
+xldr(1)> or(False, True)
+True
   """
   @@builtin def or(left: Boolean, right: Boolean) -> Boolean
 
@@ -139,6 +173,10 @@ defmod Kernel {
 
   Ordinary expression form stays available:
   `assert(user.age >= 0, InvalidUserAge(user.age))`
+
+## REPL
+xldr(1)> assert(True, NoneError)
+Ok(())
   """
   @@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>
 
@@ -155,12 +193,21 @@ defmod Kernel {
   The predicate must be a unary callable value such as a capture or closure:
   `ensure(num, &is_even, SomeError)` or `ensure(num, {|x| x > 0 }, SomeError)`.
   Call expressions such as `ensure(num, is_even(), SomeError)` are rejected.
+
+## REPL
+xldr(1)> ensure(3, {|n| n > 0}, NoneError)
+Ok(3)
   """
   @@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>
 
   @@doc """
   Observe `value` for side effects and return it unchanged.
   This is useful in pipelines for logging or metrics without changing the data.
+
+## REPL
+xldr(1)> tap(3, {|n| print(to_string(n))})
+3
+3
   """
   def tap(value: $A, f: ($A -> Unit)) -> $A {
     f(value)
@@ -181,6 +228,10 @@ defmod Kernel {
   semantics, so `["t", ..source]` is still a list expression.
 
   Empty input returns `NoMatch`.
+
+## REPL
+xldr(1)> match [1, 2] { [head, ..tail] => to_string(head), [] => "empty", }
+"1"
   """
   @@builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>
 
@@ -189,6 +240,10 @@ defmod Kernel {
   Use `to_string(...)` first when the value is not already `String`.
   This builtin belongs under `Kernel` because printing is part of the shared
   execution surface rather than a helper owned by one primitive type.
+
+## REPL
+xldr(1)> print("hello")
+hello
   """
   @@builtin def print(a: String) -> Unit
 
@@ -197,6 +252,10 @@ defmod Kernel {
   Prefer this when structure is more important than presentation polish.
   Bare callable values are shown with module/name/signature metadata when it is
   available at runtime.
+
+## REPL
+xldr(1)> ("alice", 42)
+("alice", 42)
   """
   @@builtin def inspect(a: $A) -> String
 
@@ -204,6 +263,10 @@ defmod Kernel {
   Print an `Error` value to stderr-oriented output.
   This stays under `Kernel` because it is part of the cross-cutting runtime
   surface, not an `Error`-specific helper family.
+
+## REPL
+xldr(1)> eprint(NoneError)
+Error: NoneError
   """
   @@builtin def eprint(err: Error) -> Unit
 
@@ -211,6 +274,9 @@ defmod Kernel {
   Request a process exit code for the current entrypoint execution.
   This is effectful and compile-unit aware, so it stays in the `Kernel`
   surface instead of a primitive-type module.
+
+## REPL
+xldr(1)> set_exit_code(7)
   """
   @@builtin def set_exit_code(code: Int) -> Unit
 
@@ -218,23 +284,30 @@ defmod Kernel {
   Return CLI arguments passed after `--` in `surtr run`.
   This allows zero-argument `main()` entrypoints to read runtime arguments
   through module-level helpers.
+
+## REPL
+xldr(1)> project_args()
+[]
   """
   @@builtin def project_args() -> List<String>
 }
 
 impl Show for Unit {
+  # Standard `Show` impl for `Unit`.
   def to_string(self: Self) -> String {
     inspect(self)
   }
 }
 
 impl From<Unit> for Unit {
+  # Standard `From` impl entry for `Unit` conversions.
   def from(self: Self, to: TypeRef<Unit>) -> Unit {
     self
   }
 }
 
 impl From<String> for Unit {
+  # Standard `From` impl entry for `Unit` conversions.
   def from(self: Self, to: TypeRef<String>) -> String {
     to_string(self)
   }

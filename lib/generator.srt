@@ -28,16 +28,27 @@ operations.
 defmod Generator {
   @@doc """
   Internal runtime bridge: construct an opaque `Generator` from `(idx, items)`.
+  ## REPL
+  xldr(1)> Generator::gen_make(3, [1, 2])
+  (3, [1, 2])
   """
   @@builtin def gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
 
   @@doc """
   Internal runtime bridge: read the cursor (`idx`) from a generator handle.
+  ## REPL
+  xldr(1)> g =? Generator::gen_make(3, [1, 2])
+  xldr(2)> Generator::gen_idx(g)
+  3
   """
   @@builtin def gen_idx(gen: Generator<$State, $Item>) -> Int
 
   @@doc """
   Internal runtime bridge: read remaining items from a generator handle.
+  ## REPL
+  xldr(1)> g =? Generator::gen_make(3, [1, 2])
+  xldr(2)> Generator::gen_items(g)
+  [1, 2]
   """
   @@builtin def gen_items(gen: Generator<$State, $Item>) -> List<$Item>
 
@@ -184,6 +195,9 @@ defmod Generator {
 
   @@doc """
   Inclusive ascending integer range with unit step.
+  ## REPL
+  xldr(1)> Generator::to_list(Generator::range(1, 3))
+  [1, 2, 3]
   """
   def range(start: Int, stop: Int) -> Generator<Int, Int> {
     unfold(start, {|current, _idx|
@@ -196,6 +210,9 @@ defmod Generator {
   - `step > 0`: ascending
   - `step < 0`: descending
   - `step == 0`: `Err(InvalidRangeStep(...))`
+  ## REPL
+  xldr(1)> Generator::range_step(1, 5, 2)
+  Ok((0, [1, 3, 5]))
   """
   def range_step(start: Int, stop: Int, step: Int) -> Result<Generator<Int, Int>, Error> {
     if(
@@ -216,6 +233,9 @@ defmod Generator {
   @@doc """
   Inclusive character range helper.
   Characters are validated as single ASCII chars for now.
+  ## REPL
+  xldr(1)> Generator::range_char("a", "c")
+  Ok((0, ["a", "b", "c"]))
   """
   def range_char(start: String, stop: String) -> Result<Generator<String, String>, Error> {
     range_char_step(start, stop, 1)
@@ -224,6 +244,9 @@ defmod Generator {
   @@doc """
   Inclusive character range with explicit step.
   `step == 0` returns `Err(InvalidRangeStep(...))`.
+  ## REPL
+  xldr(1)> Generator::range_char_step("a", "e", 2)
+  Ok((0, ["a", "c", "e"]))
   """
   def range_char_step(
     start: String,

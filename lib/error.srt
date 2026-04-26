@@ -16,16 +16,25 @@ Provides runtime inspection helpers for abstract `Error` values.
 defmod Error {
   @@doc """
   Return the concrete `deferror` kind name stored in an `Error` value.
+  ## REPL
+  xldr(1)> Error::kind(NoneError)
+  "NoneError"
   """
   @@builtin def kind(err: Error) -> String
 
   @@doc """
   Return the human message stored in an `Error` value.
+  ## REPL
+  xldr(1)> Error::message(NoneError)
+  "None Value."
   """
   @@builtin def message(err: Error) -> String
 
   @@doc """
   Render an `Error` into the same human-oriented multiline text used by `eprint`.
+  ## REPL
+  xldr(1)> Error::format(NoneError)
+  "Error: NoneError: None Value."
   """
   @@builtin def format(err: Error) -> String
 }

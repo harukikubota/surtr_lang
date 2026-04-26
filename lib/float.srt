@@ -17,6 +17,9 @@ are independent of rounding-policy decisions.
 defmod Float {
   @@doc """
   Return the absolute value of `value`.
+  ## REPL
+  xldr(1)> Float::abs(-1.5)
+  1.5
   """
   def abs(value: Float) -> Float {
     if(value < 0.0, 0.0 - value, value)
@@ -24,6 +27,9 @@ defmod Float {
 
   @@doc """
   Return the smaller of `a` and `b`.
+  ## REPL
+  xldr(1)> Float::min(1.5, 2.0)
+  1.5
   """
   def min(a: Float, b: Float) -> Float {
     if(a <= b, a, b)
@@ -31,6 +37,9 @@ defmod Float {
 
   @@doc """
   Return the larger of `a` and `b`.
+  ## REPL
+  xldr(1)> Float::max(1.5, 2.0)
+  2.0
   """
   def max(a: Float, b: Float) -> Float {
     if(a >= b, a, b)

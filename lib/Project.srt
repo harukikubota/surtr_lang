@@ -3,22 +3,27 @@ defstruct Project {
 }
 
 impl Project {
+  # Construct a new value of the surrounding type.
   def new(entries: List<Config>) -> Self {
     Project { entries: entries }
   }
 
+  # Return runtime project arguments.
   def args() -> List<String> {
     Kernel::project_args()
   }
 
+  # Construct the empty surrounding value.
   def empty() -> Self {
     Project::new([])
   }
 
+  # Build a project by applying the configuration builder.
   def config(builder: (Project -> Project)) -> Self {
     builder(Project::empty())
   }
 
+  # Append one configured entrypoint to the project.
   def entrypoint(project: Self, name: String, builder: (Config -> Config)) -> Self {
     base = Config::new(name)
     configured = builder(base)
