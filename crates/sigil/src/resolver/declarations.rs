@@ -529,26 +529,36 @@ pub fn precollect_declaration_index(
 
                     let method_module_path = impl_method_module_path(&module.module_path, target);
                     for method in methods {
-                        let Ast::Def(method_span, method_name, _, _, _, _, attrs) = method else {
-                            return Err(ResolveError {
-                                message: "impl body may only contain `def` declarations"
-                                    .to_string(),
-                                span: span.clone(),
-                            });
-                        };
-
-                        let kind = if method_name == "new" {
-                            if !matches!(target_kind, &DeclarationKind::Struct) {
+                        let (method_span, method_name, kind, attrs) = match method {
+                            Ast::Def(method_span, method_name, _, _, _, _, attrs) => {
+                                let kind = if method_name == "new" {
+                                    if !matches!(target_kind, &DeclarationKind::Struct) {
+                                        return Err(ResolveError {
+                                            message: "`new` is only allowed in impl blocks for struct types"
+                                                .to_string(),
+                                            span: method_span.clone(),
+                                        });
+                                    }
+                                    DeclarationKind::ImplCtorNew
+                                } else {
+                                    DeclarationKind::ImplMethod
+                                };
+                                (method_span, method_name, kind, attrs)
+                            }
+                            Ast::ExtractorDef(method_span, method_name, _, _, _, _, attrs) => (
+                                method_span,
+                                method_name,
+                                DeclarationKind::Extractor,
+                                attrs,
+                            ),
+                            _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "`new` is only allowed in impl blocks for struct types"
+                                        "impl body may only contain `def` / `defextractor` declarations"
                                             .to_string(),
-                                    span: method_span.clone(),
+                                    span: span.clone(),
                                 });
                             }
-                            DeclarationKind::ImplCtorNew
-                        } else {
-                            DeclarationKind::ImplMethod
                         };
 
                         let fq_name = format!("{}::{}", method_module_path, method_name);

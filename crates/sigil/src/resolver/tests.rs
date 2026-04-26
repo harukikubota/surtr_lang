@@ -186,6 +186,10 @@ impl User {
   def normalize(self) -> Self {
     self
   }
+
+  defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
+    MatchResult::NoMatch
+  }
 }"#,
             "",
         ),
@@ -203,6 +207,13 @@ impl User {
     assert_eq!(normalize.module_path, "User");
     assert_eq!(normalize.name, "normalize");
     assert_eq!(normalize.kind, DeclarationKind::ImplMethod);
+
+    let deconstruct = index
+        .get("User::deconstruct")
+        .expect("deconstruct should be indexed");
+    assert_eq!(deconstruct.module_path, "User");
+    assert_eq!(deconstruct.name, "deconstruct");
+    assert_eq!(deconstruct.kind, DeclarationKind::Extractor);
 }
 
 #[test]
