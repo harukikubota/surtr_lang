@@ -203,14 +203,24 @@ fn run_eldr_file(
         )
     })?;
 
-    let source_context = embedded_source_context_from_bytecode(&bytecode);
-    execute_bytecode(env, bytecode, cli_args, source_context, None, vm_dump)
+    let runtime_sources = source_registry_from_bytecode(&bytecode);
+    let source_context = runtime_sources
+        .as_ref()
+        .and_then(|(sources, source_id)| sources.owned_context(*source_id));
+    execute_bytecode(
+        env,
+        bytecode,
+        cli_args,
+        source_context,
+        runtime_sources,
+        vm_dump,
+    )
 }
 
-fn embedded_source_context_from_bytecode(
+fn source_registry_from_bytecode(
     bytecode: &forge::bytecode::Bytecode,
-) -> Option<(String, String)> {
-    bytecode
+) -> Option<(diagnostics::SourceRegistry, diagnostics::SourceId)> {
+    let mut embedded_sources = bytecode
         .sources
         .iter()
         .filter_map(|entry| {
@@ -227,8 +237,23 @@ fn embedded_source_context_from_bytecode(
                 (entry.source_id, text.clone(), file_name)
             })
         })
-        .max_by_key(|(source_id, _, _)| *source_id)
-        .map(|(_, source, file_name)| (source, file_name))
+        .collect::<Vec<_>>();
+    embedded_sources.sort_by_key(|(source_id, _, _)| *source_id);
+    let primary_embedded_source_id = embedded_sources
+        .iter()
+        .map(|(source_id, _, _)| *source_id)
+        .max()?;
+
+    let mut sources = diagnostics::SourceRegistry::new();
+    let mut primary_source_id = None;
+    for (embedded_source_id, source, file_name) in embedded_sources {
+        let source_id = sources.register(file_name, source);
+        if embedded_source_id == primary_embedded_source_id {
+            primary_source_id = Some(source_id);
+        }
+    }
+
+    primary_source_id.map(|source_id| (sources, source_id))
 }
 
 fn execute_bytecode(
@@ -446,7 +471,7 @@ fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_run_options, VmDumpMode};
+    use super::{parse_run_options, source_registry_from_bytecode, VmDumpMode};
     use forge::bytecode::{Bytecode, SourceFileEntry};
 
     #[test]
@@ -519,15 +544,22 @@ mod tests {
             ..Bytecode::default()
         };
 
-        let context = super::embedded_source_context_from_bytecode(&bytecode)
+        let (sources, source_id) =
+            source_registry_from_bytecode(&bytecode).expect("embedded registry should be resolved");
+        let context = sources
+            .owned_context(source_id)
             .expect("embedded context should be resolved");
-        assert!(
-            context.0.contains("main"),
-            "expected embedded source text to include main call"
+        assert!(context.0.contains("main"), "expected main source text");
+        assert!(context.1.contains("main.srt"), "expected main file hint");
+        assert_eq!(
+            sources.entries().len(),
+            2,
+            "only embedded text sources register"
         );
-        assert!(
-            context.1.contains("main.srt"),
-            "expected file hint to include main.srt"
+        assert_eq!(
+            sources.file_name(source_id),
+            Some("/tmp/main.srt"),
+            "highest embedded source id should remain the primary context"
         );
     }
 
@@ -543,7 +575,7 @@ mod tests {
             }],
             ..Bytecode::default()
         };
-        assert!(super::embedded_source_context_from_bytecode(&bytecode).is_none());
+        assert!(source_registry_from_bytecode(&bytecode).is_none());
     }
 
     #[test]

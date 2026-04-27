@@ -1734,12 +1734,12 @@ impl VM {
                     span_start,
                     span_end,
                 };
-                self.stack.push(Value::Error(Box::new(RichError {
-                    kind: template.kind.clone(),
+                self.stack.push(Value::Error(Box::new(RichError::new(
+                    template.kind.clone(),
                     message,
                     location,
-                    cause: None,
-                })));
+                    None,
+                ))));
             }
             Opcode::MakeErrorLiteral {
                 kind_const_idx,
@@ -1779,10 +1779,10 @@ impl VM {
                     .source()
                     .map(|source| line_column_for_offset(source, 0))
                     .unwrap_or((0, 0));
-                self.stack.push(Value::Error(Box::new(RichError {
+                self.stack.push(Value::Error(Box::new(RichError::new(
                     kind,
                     message,
-                    location: Location {
+                    Location {
                         file: self
                             .source_file()
                             .map(|s| s.to_string())
@@ -1793,8 +1793,8 @@ impl VM {
                         span_start: 0,
                         span_end: 0,
                     },
-                    cause: None,
-                })));
+                    None,
+                ))));
             }
 
             Opcode::CaptureClosure(num_captured) => {

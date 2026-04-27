@@ -6,6 +6,4 @@ description = "Old Norse for fire — the Surtr virtual machine"
 
 [dependencies]
 sindr = { path = "../sindr" }
-diagnostics = { path = "../diagnostics" }
-ariadne = "0.6.0"
 regex = "1.11.1"

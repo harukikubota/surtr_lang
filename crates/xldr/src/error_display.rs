@@ -318,7 +318,11 @@ fn runtime_value_cause_help(value: &sindr::runtime::RichError) -> Option<String>
     let mut lines = Vec::new();
     let mut next = value.cause.as_deref();
     while let Some(cause) = next {
-        lines.push(format!("Caused by: {}: {}", cause.kind, cause.message));
+        lines.push(format!(
+            "Caused by: {}: {}",
+            cause.kind,
+            cause.visible_message()
+        ));
         next = cause.cause.as_deref();
     }
     if lines.is_empty() {
@@ -427,10 +431,16 @@ fn error_spec_from_value_error_with_source(
     value: &sindr::runtime::RichError,
     source: &str,
 ) -> DiagnosticSpec {
+    let message = match value.diagnostic.as_ref() {
+        Some(sindr::runtime::RuntimeErrorDiagnostic::LiteralPatternMismatch { lhs, rhs }) => {
+            format!("{}\t@@lhs={lhs}\t@@rhs={rhs}", value.visible_message())
+        }
+        None => value.message.clone(),
+    };
     diagnostics::runtime_value_error_spec(
         source,
         value.kind.clone(),
-        value.message.clone(),
+        message,
         value.location.span_start as usize,
         value.location.span_end as usize,
         runtime_value_cause_help(value),
@@ -444,7 +454,7 @@ pub fn runtime_value_error_text_from_vm(vm: &eldr::VM, value: &Value) -> String 
                 let spec = error_spec_from_value_error_with_source(rich, source);
                 diagnostic_text(file_name, source, &spec)
             } else {
-                format!("Error: {}: {}", rich.kind, rich.message)
+                format!("Error: {}: {}", rich.kind, rich.visible_message())
             }
         }
         other => format!("Error: {}", inspect_value(vm, other)),
@@ -597,6 +607,7 @@ mod tests {
                 span_start: 0,
                 span_end: 6,
             },
+            diagnostic: None,
             cause: Some(Box::new(RichError {
                 kind: "Lower".into(),
                 message: "lower".into(),
@@ -608,6 +619,7 @@ mod tests {
                     span_start: 0,
                     span_end: 6,
                 },
+                diagnostic: None,
                 cause: None,
             })),
         }));
@@ -632,6 +644,7 @@ mod tests {
                 span_start: 7,
                 span_end: 12,
             },
+            diagnostic: None,
             cause: None,
         }));
 
@@ -658,6 +671,7 @@ mod tests {
                 span_start: 12,
                 span_end: 14,
             },
+            diagnostic: None,
             cause: None,
         }));
 
@@ -682,6 +696,7 @@ mod tests {
                 span_start: 0,
                 span_end: 1,
             },
+            diagnostic: None,
             cause: None,
         }));
 

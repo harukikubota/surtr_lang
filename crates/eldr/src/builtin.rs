@@ -357,7 +357,7 @@ fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
 
 fn builtin_error_message(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let rich = decode_error_arg(&args[0], "message", "err")?;
-    Ok(Value::Str(rich.message))
+    Ok(Value::Str(rich.visible_message().to_string()))
 }
 
 fn builtin_error_format(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -407,27 +407,13 @@ fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
 fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match &args[0] {
         Value::Error(rich) => {
-            if vm.is_stderr_captured() {
-                for line in rich.to_eprint_lines() {
-                    vm.emit_stderr_line(line);
+            if !vm.is_stderr_captured() {
+                if let Some((file, line, column)) = error_display_site(rich) {
+                    vm.emit_stderr_line(format!("{}:{}:{}", file, line, column));
                 }
-            } else if let (Some(source), Some(file)) = (vm.source(), vm.source_file()) {
-                let spec = diagnostics::runtime_value_error_spec(
-                    source,
-                    rich.kind.clone(),
-                    rich.message.clone(),
-                    rich.location.span_start as usize,
-                    rich.location.span_end as usize,
-                    rich_error_cause_help(rich),
-                );
-                eprint!("{}", diagnostics::render_error(file, source, &spec));
-                for line in rich.to_eprint_lines().into_iter().skip(1) {
-                    eprintln!("{}", line);
-                }
-            } else {
-                for line in rich.to_eprint_lines() {
-                    vm.emit_stderr_line(line);
-                }
+            }
+            for line in rich.to_eprint_lines() {
+                vm.emit_stderr_line(line);
             }
         }
         other => {
@@ -438,18 +424,18 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
     Ok(Value::Unit)
 }
 
-fn rich_error_cause_help(rich: &RichError) -> Option<String> {
-    let mut lines = Vec::new();
-    let mut next = rich.cause.as_deref();
-    while let Some(cause) = next {
-        lines.push(format!("Caused by: {}: {}", cause.kind, cause.message));
-        next = cause.cause.as_deref();
+fn error_display_site(rich: &RichError) -> Option<(String, u32, u32)> {
+    if rich.location.line == 0 || rich.location.column == 0 {
+        return None;
     }
-    if lines.is_empty() {
-        None
-    } else {
-        Some(lines.join("\n"))
+    if rich.location.file == "REPL" {
+        return Some((rich.location.file.clone(), rich.location.line + 1, 1));
     }
+    Some((
+        rich.location.file.clone(),
+        rich.location.line,
+        rich.location.column,
+    ))
 }
 
 fn builtin_set_exit_code(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1613,6 +1599,7 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
         kind: kind.into(),
         message: message.into(),
         location,
+        diagnostic: None,
         cause: None,
     })
 }
@@ -1665,6 +1652,7 @@ mod tests {
                 span_start: 0,
                 span_end: 0,
             },
+            diagnostic: None,
             cause: None,
         }
     }
@@ -2587,6 +2575,7 @@ mod tests {
                 span_start: 0,
                 span_end: 4,
             },
+            diagnostic: None,
             cause: Some(Box::new(sindr::runtime::RichError {
                 kind: "Root".into(),
                 message: "root cause".into(),
@@ -2598,6 +2587,7 @@ mod tests {
                     span_start: 0,
                     span_end: 4,
                 },
+                diagnostic: None,
                 cause: None,
             })),
         }));

@@ -269,6 +269,28 @@ fn visible_runtime_error_message(message: &str) -> &str {
         .unwrap_or(message)
 }
 
+fn split_runtime_error_diagnostic(
+    kind: &str,
+    message: &str,
+) -> (String, Option<RuntimeErrorDiagnostic>) {
+    if kind != "PatternMismatch" {
+        return (message.to_string(), None);
+    }
+    let Some((base, rest)) = message.split_once("\t@@lhs=") else {
+        return (message.to_string(), None);
+    };
+    let Some((lhs, rhs)) = rest.split_once("\t@@rhs=") else {
+        return (message.to_string(), None);
+    };
+    (
+        base.to_string(),
+        Some(RuntimeErrorDiagnostic::LiteralPatternMismatch {
+            lhs: lhs.to_string(),
+            rhs: rhs.to_string(),
+        }),
+    )
+}
+
 impl HashMapHandle {
     pub fn empty() -> Self {
         Self {
@@ -408,14 +430,42 @@ impl Iterator for ListIter {
 
 /// Rich error value produced by `deferror`.
 #[derive(Debug, Clone, PartialEq)]
+pub enum RuntimeErrorDiagnostic {
+    LiteralPatternMismatch { lhs: String, rhs: String },
+}
+
+/// Rich error value produced by `deferror`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct RichError {
     pub kind: String,
     pub message: String,
     pub location: Location,
     pub cause: Option<Box<RichError>>,
+    pub diagnostic: Option<RuntimeErrorDiagnostic>,
 }
 
 impl RichError {
+    pub fn new(
+        kind: impl Into<String>,
+        message: impl Into<String>,
+        location: Location,
+        cause: Option<Box<RichError>>,
+    ) -> Self {
+        let kind = kind.into();
+        let (message, diagnostic) = split_runtime_error_diagnostic(&kind, &message.into());
+        Self {
+            kind,
+            message,
+            location,
+            cause,
+            diagnostic,
+        }
+    }
+
+    pub fn visible_message(&self) -> &str {
+        visible_runtime_error_message(&self.message)
+    }
+
     pub fn to_display_string(&self) -> String {
         self.to_display_lines().join("\n")
     }
@@ -435,17 +485,13 @@ impl RichError {
     }
 
     pub fn to_eprint_lines(&self) -> Vec<String> {
-        let mut lines = vec![format!(
-            "Error: {}: {}",
-            self.kind,
-            visible_runtime_error_message(&self.message)
-        )];
+        let mut lines = vec![format!("Error: {}: {}", self.kind, self.visible_message())];
         let mut next = self.cause.as_deref();
         while let Some(cause) = next {
             lines.push(format!(
                 "Caused by: {}: {}",
                 cause.kind,
-                visible_runtime_error_message(&cause.message)
+                cause.visible_message()
             ));
             next = cause.cause.as_deref();
         }
@@ -466,7 +512,12 @@ impl RichError {
     }
 
     fn push_display_lines(&self, lines: &mut Vec<String>, first_prefix: &str, child_prefix: &str) {
-        lines.push(format!("{}{}({:?})", first_prefix, self.kind, self.message));
+        lines.push(format!(
+            "{}{}({:?})",
+            first_prefix,
+            self.kind,
+            self.visible_message()
+        ));
         if let Some(cause) = self.cause.as_deref() {
             cause.push_display_lines(
                 lines,
@@ -558,6 +609,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         }));
         assert_eq!(value.to_display_string(&registry), "TestError(\"boom\")");
     }
@@ -577,6 +629,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         };
         value.append_cause_tail(RichError {
             kind: "Inner".into(),
@@ -590,6 +643,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         });
         value.append_cause_tail(RichError {
             kind: "Leaf".into(),
@@ -603,6 +657,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         });
 
         let rendered = Value::Error(Box::new(value));
@@ -706,6 +761,7 @@ mod tests {
                     span_end: 1,
                 },
                 cause: None,
+                diagnostic: None,
             }))],
         };
         assert_eq!(
@@ -729,6 +785,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         };
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
@@ -742,6 +799,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         });
 
         let value = Value::Tagged {
@@ -768,6 +826,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         };
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
@@ -781,6 +840,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         });
 
         assert_eq!(
@@ -806,6 +866,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         };
 
         assert_eq!(
