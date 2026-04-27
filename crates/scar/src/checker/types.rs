@@ -3,6 +3,7 @@ use super::*;
 impl Checker {
     fn match_result_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
+        labels: Vec::new(),
             message: "MatchResult is extractor-only and can only be used in extractor definitions"
                 .into(),
             span: span.clone(),
@@ -15,6 +16,7 @@ impl Checker {
 
     fn seq_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
+        labels: Vec::new(),
             message: "Seq is not a surface type in this version of Surtr".into(),
             span: span.clone(),
             hint: Some(
@@ -41,6 +43,7 @@ impl Checker {
 
     fn type_ref_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
+        labels: Vec::new(),
             message:
                 "TypeRef<$T> is only allowed as a trait method parameter tied to a trait head type parameter."
                     .into(),
@@ -54,6 +57,7 @@ impl Checker {
 
     fn hole_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
+        labels: Vec::new(),
             message: "`_` is only allowed as an ignored-input marker inside callable types used by variable annotations or function return signatures.".into(),
             span: span.clone(),
             hint: Some(
@@ -90,6 +94,7 @@ impl Checker {
         }
         if args.len() != 1 {
             return Err(TypeError {
+                labels: Vec::new(),
                 message: "TypeRef<T> requires exactly 1 type argument".into(),
                 span: span.clone(),
                 hint: None,
@@ -102,6 +107,7 @@ impl Checker {
                     .get(name)
                     .cloned()
                     .ok_or_else(|| TypeError {
+                    labels: Vec::new(),
                         message: format!(
                             "TypeRef<{}> must refer to a type parameter declared on the surrounding trait head",
                             name
@@ -118,6 +124,7 @@ impl Checker {
             )?,
             _ => {
                 return Err(TypeError {
+                labels: Vec::new(),
                     message:
                         "TypeRef<$T> in trait declarations must point at a trait head type parameter."
                             .into(),
@@ -129,6 +136,7 @@ impl Checker {
 
         if matches!(inner, Ty::TypeRef(_)) {
             return Err(TypeError {
+                labels: Vec::new(),
                 message: "Nested TypeRef is not supported".into(),
                 span: span.clone(),
                 hint: None,
@@ -246,6 +254,7 @@ impl Checker {
                                     Ok(Ty::Enum(def.name.clone(), Vec::new()))
                                 } else {
                                     Err(TypeError {
+                                        labels: Vec::new(),
                                         message: format!(
                                             "Type {} requires {} type argument(s)",
                                             other,
@@ -259,6 +268,7 @@ impl Checker {
                         }
                     } else {
                         Err(TypeError {
+                            labels: Vec::new(),
                             message: format!("Unknown type: {}", other),
                             span: span.clone(),
                             hint: None,
@@ -277,6 +287,7 @@ impl Checker {
                     }
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
+                        labels: Vec::new(),
                             message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
                             span: span.clone(),
                             hint: None,
@@ -289,6 +300,7 @@ impl Checker {
                             self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
                         if !matches!(err, Ty::Error) {
                             return Err(TypeError {
+                            labels: Vec::new(),
                                 message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
                                 span: span.clone(),
                                 hint: None,
@@ -300,6 +312,7 @@ impl Checker {
                 "List" => {
                     if args.len() != 1 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "List<T> requires exactly 1 type argument".into(),
                             span: span.clone(),
                             hint: None,
@@ -312,6 +325,7 @@ impl Checker {
                 "HashMap" => {
                     if args.len() != 1 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "HashMap<V> requires exactly 1 type argument".into(),
                             span: span.clone(),
                             hint: None,
@@ -324,6 +338,7 @@ impl Checker {
                 "Generator" => {
                     if args.len() != 2 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Generator<State, Item> requires exactly 2 type arguments"
                                 .into(),
                             span: span.clone(),
@@ -339,6 +354,7 @@ impl Checker {
                 "Lens" => {
                     if args.len() != 2 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Lens<S, A> requires exactly 2 type arguments".into(),
                             span: span.clone(),
                             hint: None,
@@ -353,6 +369,7 @@ impl Checker {
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Result<T> or Result<T, E> requires 1 or 2 type arguments"
                                 .into(),
                             span: span.clone(),
@@ -364,6 +381,7 @@ impl Checker {
                     let err = if args.len() == 2 {
                         if context != TypeSyntaxContext::FunctionReturn {
                             return Err(TypeError {
+                                labels: Vec::new(),
                                 message:
                                     "Result<T, E> is only allowed in function return signatures."
                                         .into(),
@@ -379,12 +397,14 @@ impl Checker {
                 }
                 other => {
                     let def = self.env.lookup_type_def(other).ok_or_else(|| TypeError {
+                        labels: Vec::new(),
                         message: format!("Unknown generic type: {}", other),
                         span: span.clone(),
                         hint: None,
                     })?;
                     if def.type_params.len() != args.len() {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: format!(
                                 "Type {} requires {} type argument(s), got {}",
                                 other,
@@ -402,6 +422,7 @@ impl Checker {
                     match def.kind {
                         crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
                         _ => Err(TypeError {
+                            labels: Vec::new(),
                             message: format!(
                                 "Generic type {} is not supported in this context",
                                 other
@@ -415,6 +436,7 @@ impl Checker {
             AstTy::Tuple(span, items) => {
                 if items.len() < 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Tuple types require at least 2 item types".into(),
                         span: span.clone(),
                         hint: None,
@@ -447,6 +469,7 @@ impl Checker {
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             AstTy::ImplTrait(span, name) => Err(TypeError {
+                labels: Vec::new(),
                 message: format!(
                     "`impl {}` is only supported in function and extractor parameters",
                     name
@@ -475,6 +498,7 @@ impl Checker {
             AstTy::Named(_, name) if name.starts_with('$') => {
                 if context == TypeSyntaxContext::ErrorMarker {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message:
                             "The error marker E in Result<T, E> must be a deferror-defined type."
                                 .into(),
@@ -496,6 +520,7 @@ impl Checker {
             AstTy::ImplTrait(_, trait_name) => {
                 if context == TypeSyntaxContext::ErrorMarker {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message:
                             "The error marker E in Result<T, E> must be a deferror-defined type."
                                 .into(),
@@ -516,6 +541,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "List<T> requires exactly 1 type argument".into(),
                         span: span.clone(),
                         hint: None,
@@ -531,6 +557,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "HashMap" => {
                 if args.len() != 1 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "HashMap<V> requires exactly 1 type argument".into(),
                         span: span.clone(),
                         hint: None,
@@ -546,6 +573,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "Generator" => {
                 if args.len() != 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Generator<State, Item> requires exactly 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -566,6 +594,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "Lens" => {
                 if args.len() != 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Lens<S, A> requires exactly 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -589,6 +618,7 @@ impl Checker {
                 }
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
+                    labels: Vec::new(),
                         message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -607,6 +637,7 @@ impl Checker {
                     )?;
                     if !matches!(err, Ty::Error) {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message:
                                 "MatchResult<$Value, Error> requires Error as the second argument"
                                     .into(),
@@ -620,6 +651,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "Result" => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -633,6 +665,7 @@ impl Checker {
                 let err = if args.len() == 2 {
                     if context != TypeSyntaxContext::FunctionReturn {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Result<T, E> is only allowed in function return signatures."
                                 .into(),
                             span: span.clone(),
@@ -652,6 +685,7 @@ impl Checker {
             AstTy::Tuple(span, items) => {
                 if items.len() < 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Tuple types require at least 2 item types".into(),
                         span: span.clone(),
                         hint: None,
@@ -675,12 +709,14 @@ impl Checker {
                     .lookup_type_def(name)
                     .cloned()
                     .ok_or_else(|| TypeError {
+                        labels: Vec::new(),
                         message: format!("Unknown generic type: {}", name),
                         span: span.clone(),
                         hint: None,
                     })?;
                 if def.type_params.len() != args.len() {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "Type {} requires {} type argument(s), got {}",
                             name,
@@ -704,6 +740,7 @@ impl Checker {
                 match def.kind {
                     crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
                     _ => Err(TypeError {
+                        labels: Vec::new(),
                         message: format!("Generic type {} is not supported in this context", name),
                         span: span.clone(),
                         hint: None,
@@ -763,6 +800,7 @@ impl Checker {
             AstTy::Named(_, name) if name.starts_with('$') => {
                 if context == TypeSyntaxContext::ErrorMarker {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message:
                             "The error marker E in Result<T, E> must be a deferror-defined type."
                                 .into(),
@@ -782,6 +820,7 @@ impl Checker {
             }
             AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
             AstTy::ImplTrait(span, trait_name) => Err(TypeError {
+                labels: Vec::new(),
                 message: format!(
                     "`impl {}` is not supported inside trait method signatures",
                     trait_name
@@ -796,6 +835,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "List<T> requires exactly 1 type argument".into(),
                         span: span.clone(),
                         hint: None,
@@ -812,6 +852,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "HashMap" => {
                 if args.len() != 1 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "HashMap<V> requires exactly 1 type argument".into(),
                         span: span.clone(),
                         hint: None,
@@ -828,6 +869,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "Generator" => {
                 if args.len() != 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Generator<State, Item> requires exactly 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -850,6 +892,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "Lens" => {
                 if args.len() != 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Lens<S, A> requires exactly 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -875,6 +918,7 @@ impl Checker {
                 }
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
+                    labels: Vec::new(),
                         message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -895,6 +939,7 @@ impl Checker {
                     )?;
                     if !matches!(err, Ty::Error) {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message:
                                 "MatchResult<$Value, Error> requires Error as the second argument"
                                     .into(),
@@ -908,6 +953,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if name == "Result" => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -922,6 +968,7 @@ impl Checker {
                 let err = if args.len() == 2 {
                     if context != TypeSyntaxContext::FunctionReturn {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Result<T, E> is only allowed in function return signatures."
                                 .into(),
                             span: span.clone(),
@@ -942,6 +989,7 @@ impl Checker {
             AstTy::Tuple(span, items) => {
                 if items.len() < 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Tuple types require at least 2 item types".into(),
                         span: span.clone(),
                         hint: None,
@@ -966,12 +1014,14 @@ impl Checker {
                     .lookup_type_def(name)
                     .cloned()
                     .ok_or_else(|| TypeError {
+                        labels: Vec::new(),
                         message: format!("Unknown generic type: {}", name),
                         span: span.clone(),
                         hint: None,
                     })?;
                 if def.type_params.len() != args.len() {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "Type {} requires {} type argument(s), got {}",
                             name,
@@ -996,6 +1046,7 @@ impl Checker {
                 match def.kind {
                     crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
                     _ => Err(TypeError {
+                        labels: Vec::new(),
                         message: format!("Generic type {} is not supported in this context", name),
                         span: span.clone(),
                         hint: None,
@@ -1039,6 +1090,7 @@ impl Checker {
             AstTy::Named(_, name) if name.starts_with('$') => {
                 if context == TypeSyntaxContext::ErrorMarker {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message:
                             "The error marker E in Result<T, E> must be a deferror-defined type."
                                 .into(),
@@ -1068,6 +1120,7 @@ impl Checker {
                     }
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
+                        labels: Vec::new(),
                             message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
                             span: span.clone(),
                             hint: None,
@@ -1086,6 +1139,7 @@ impl Checker {
                         )?;
                         if !matches!(err, Ty::Error) {
                             return Err(TypeError {
+                            labels: Vec::new(),
                                 message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
                                 span: span.clone(),
                                 hint: None,
@@ -1097,6 +1151,7 @@ impl Checker {
                 "List" => {
                     if args.len() != 1 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "List<T> requires exactly 1 type argument".into(),
                             span: span.clone(),
                             hint: None,
@@ -1112,6 +1167,7 @@ impl Checker {
                 "HashMap" => {
                     if args.len() != 1 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "HashMap<V> requires exactly 1 type argument".into(),
                             span: span.clone(),
                             hint: None,
@@ -1127,6 +1183,7 @@ impl Checker {
                 "Generator" => {
                     if args.len() != 2 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Generator<State, Item> requires exactly 2 type arguments"
                                 .into(),
                             span: span.clone(),
@@ -1148,6 +1205,7 @@ impl Checker {
                 "Lens" => {
                     if args.len() != 2 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Lens<S, A> requires exactly 2 type arguments".into(),
                             span: span.clone(),
                             hint: None,
@@ -1168,6 +1226,7 @@ impl Checker {
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Result<T> or Result<T, E> requires 1 or 2 type arguments"
                                 .into(),
                             span: span.clone(),
@@ -1182,6 +1241,7 @@ impl Checker {
                     let err = if args.len() == 2 {
                         if context != TypeSyntaxContext::FunctionReturn {
                             return Err(TypeError {
+                                labels: Vec::new(),
                                 message:
                                     "Result<T, E> is only allowed in function return signatures."
                                         .into(),
@@ -1204,6 +1264,7 @@ impl Checker {
             AstTy::Tuple(span, items) => {
                 if items.len() < 2 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Tuple types require at least 2 item types".into(),
                         span: span.clone(),
                         hint: None,
@@ -1250,6 +1311,7 @@ impl Checker {
         let span = Self::ast_ty_span(ast_ty).clone();
         let AstTy::Named(_, name) = ast_ty else {
             return Err(TypeError {
+                labels: Vec::new(),
                 message: "The error marker E in Result<T, E> must be a deferror-defined type."
                     .into(),
                 span,
@@ -1262,6 +1324,7 @@ impl Checker {
         }
 
         let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
+            labels: Vec::new(),
             message: "The error marker E in Result<T, E> must be a deferror-defined type.".into(),
             span: span.clone(),
             hint: None,
@@ -1270,6 +1333,7 @@ impl Checker {
         if let Ok(def) = def {
             if def.kind != crate::env::TypeKind::Error {
                 return Err(TypeError {
+                    labels: Vec::new(),
                     message: "The error marker E in Result<T, E> must be a deferror-defined type."
                         .into(),
                     span,
@@ -1281,6 +1345,7 @@ impl Checker {
 
         if !self.env.is_declared_error_type_name(name) {
             return Err(TypeError {
+                labels: Vec::new(),
                 message: "The error marker E in Result<T, E> must be a deferror-defined type."
                     .into(),
                 span,

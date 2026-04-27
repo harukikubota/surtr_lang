@@ -35,6 +35,7 @@ impl Checker {
                     self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                 if !self.types_compatible(&expected, rhs_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "expected {}, got {}",
                             self.ty_name(&expected),
@@ -54,6 +55,7 @@ impl Checker {
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     if !self.types_compatible(&expected, &inner_ty) {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: format!(
                                 "expected {}, got {}",
                                 self.ty_name(&expected),
@@ -81,6 +83,7 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 let Ty::Tuple(item_tys) = &rhs_ty else {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "tuple pattern requires tuple scrutinee, got {}",
                             self.ty_name(&rhs_ty)
@@ -91,6 +94,7 @@ impl Checker {
                 };
                 if items.len() != item_tys.len() {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "tuple pattern expects {} value(s), got {}",
                             item_tys.len(),
@@ -108,6 +112,7 @@ impl Checker {
                 Ok((TypedPattern::Tuple(rhs_ty.clone(), typed_items), rhs_ty))
             }
             ResolvedPattern::Or(_) => Err(TypeError {
+                labels: Vec::new(),
                 message: "Pattern alternatives are only supported in match expressions.".into(),
                 span: span.clone(),
                 hint: None,
@@ -118,6 +123,7 @@ impl Checker {
                     Ty::List(_) => Ok((TypedPattern::ListNil(rhs_ty.clone()), rhs_ty)),
                     Ty::Str => Ok((TypedPattern::StrLit(Ty::Str, String::new()), rhs_ty)),
                     other => Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "empty list pattern requires List<...> or String, got {}",
                             self.ty_name(&other)
@@ -166,6 +172,7 @@ impl Checker {
                         ))
                     }
                     other => Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "list pattern requires List<...> or String, got {}",
                             self.ty_name(other)
@@ -179,6 +186,7 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !self.types_compatible(&Ty::Int, &rhs_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "integer literal pattern requires Int, got {}",
                             self.ty_name(&rhs_ty)
@@ -193,6 +201,7 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !self.types_compatible(&Ty::Str, &rhs_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "string literal pattern requires String, got {}",
                             self.ty_name(&rhs_ty)
@@ -207,6 +216,7 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !self.types_compatible(&Ty::Bool, &rhs_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "boolean literal pattern requires Boolean, got {}",
                             self.ty_name(&rhs_ty)
@@ -220,6 +230,7 @@ impl Checker {
             ResolvedPattern::Constructor(ctor_id, inners) => {
                 if ctor_id.name != "Ok" {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "SafeBind constructor pattern only supports Ok(...), got {}(...)",
                             ctor_id.name
@@ -234,6 +245,7 @@ impl Checker {
                     Ty::Result(ok, _) => ok.as_ref().clone(),
                     other => {
                         return Err(TypeError {
+                        labels: Vec::new(),
                             message: format!(
                                 "`Ok(...)` pattern requires Result<...>, got {}",
                                 self.ty_name(other)
@@ -248,6 +260,7 @@ impl Checker {
 
                 if inners.len() != 1 {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "SafeBind Ok(...) pattern requires exactly one inner pattern"
                             .into(),
                         span: ctor_id.span.clone(),
@@ -271,6 +284,7 @@ impl Checker {
                     )?;
                 if !self.types_compatible(&input_ty, &rhs_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "Extractor {} expects {}, got {}",
                             extractor_id.name,
@@ -288,6 +302,7 @@ impl Checker {
                 }
                 if items.len() != seq_tys.len() {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "Extractor {} returns {} value(s), but pattern expects {}",
                             extractor_id.name,

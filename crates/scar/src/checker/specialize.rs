@@ -89,6 +89,7 @@ impl Checker {
                     if needs_specialization.contains(fun_idx) {
                         let original_def =
                             defs_by_fun_idx.get(fun_idx).ok_or_else(|| TypeError {
+                                labels: Vec::new(),
                                 message: format!(
                                     "Missing generic definition for fun_idx {}",
                                     fun_idx
@@ -176,6 +177,7 @@ impl Checker {
                     TraitDispatch::Pending => self
                         .trait_dispatch_target(&trait_name, &method_name, &receiver_ty)
                         .ok_or_else(|| TypeError {
+                            labels: Vec::new(),
                             message: format!(
                                 "{}::{} could not be specialized to a concrete dispatch target",
                                 trait_name, method_name
@@ -796,6 +798,7 @@ impl Checker {
             .get(&original_fun_idx)
             .cloned()
             .ok_or_else(|| TypeError {
+                labels: Vec::new(),
                 message: format!(
                     "Missing generic definition for fun_idx {}",
                     original_fun_idx
@@ -860,6 +863,7 @@ impl Checker {
             }
             other => {
                 return Err(TypeError {
+                    labels: Vec::new(),
                     message: format!("Expected def/extractor for specialization, got {:?}", other),
                     span,
                     hint: None,
@@ -888,6 +892,7 @@ impl Checker {
             TypedInner::ExtractorDef(_, _, _, param, _, _, _) => vec![param.ty.clone()],
             other => {
                 return Err(TypeError {
+                    labels: Vec::new(),
                     message: format!("Expected def/extractor for specialization, got {:?}", other),
                     span: def.span.clone(),
                     hint: None,

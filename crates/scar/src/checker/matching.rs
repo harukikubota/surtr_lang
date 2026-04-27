@@ -17,6 +17,7 @@ impl Checker {
             if let Some(ref rt) = result_ty {
                 if !self.types_compatible(rt, &body_node.ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "Match arm type mismatch: expected {}, got {}",
                             self.ty_name(rt),
@@ -78,6 +79,7 @@ impl Checker {
                         missing.push("False");
                     }
                     Err(TypeError {
+                        labels: Vec::new(),
                         message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
                         span: span.clone(),
                         hint: None,
@@ -105,6 +107,7 @@ impl Checker {
                         missing.push("Err");
                     }
                     Err(TypeError {
+                        labels: Vec::new(),
                         message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
                         span: span.clone(),
                         hint: None,
@@ -133,6 +136,7 @@ impl Checker {
                     Ok(())
                 } else {
                     Err(TypeError {
+                        labels: Vec::new(),
                         message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
                         span: span.clone(),
                         hint: None,
@@ -157,6 +161,7 @@ impl Checker {
                         missing.push("[head, ..tail]");
                     }
                     Err(TypeError {
+                        labels: Vec::new(),
                         message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
                         span: span.clone(),
                         hint: None,
@@ -191,6 +196,7 @@ impl Checker {
                         missing.push("[head, ..tail]");
                     }
                     Err(TypeError {
+                        labels: Vec::new(),
                         message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
                         span: span.clone(),
                         hint: None,
@@ -198,6 +204,7 @@ impl Checker {
                 }
             }
             _ => Err(TypeError {
+                labels: Vec::new(),
                 message: "Non-exhaustive match. Missing: _".into(),
                 span: span.clone(),
                 hint: None,
@@ -219,6 +226,7 @@ impl Checker {
             let typed_guard = arm_checker.check_node(guard)?;
             if !arm_checker.types_compatible(&Ty::Bool, &typed_guard.ty) {
                 return Err(TypeError {
+                    labels: Vec::new(),
                     message: format!(
                         "match guard must be Boolean, got {}",
                         arm_checker.ty_name(&typed_guard.ty)
@@ -258,6 +266,7 @@ impl Checker {
                     self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                 if !self.types_compatible(&expected, expected_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "expected {}, got {}",
                             self.ty_name(&expected),
@@ -278,6 +287,7 @@ impl Checker {
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     if !self.types_compatible(&expected, expected_ty) {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: format!(
                                 "expected {}, got {}",
                                 self.ty_name(&expected),
@@ -299,6 +309,7 @@ impl Checker {
                 let expected_ty = self.resolve_ty(expected_ty);
                 let Ty::Tuple(item_tys) = &expected_ty else {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "tuple pattern requires tuple scrutinee, got {}",
                             self.ty_name(&expected_ty)
@@ -309,6 +320,7 @@ impl Checker {
                 };
                 if items.len() != item_tys.len() {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "tuple pattern expects {} value(s), got {}",
                             item_tys.len(),
@@ -327,6 +339,7 @@ impl Checker {
             ResolvedPattern::BoolLit(span, b) => {
                 if !self.types_compatible(&Ty::Bool, expected_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Boolean pattern on non-Boolean scrutinee".into(),
                         span: span.clone(),
                         hint: None,
@@ -337,6 +350,7 @@ impl Checker {
             ResolvedPattern::IntLit(span, n) => {
                 if !self.types_compatible(&Ty::Int, expected_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Int pattern on non-Int scrutinee".into(),
                         span: span.clone(),
                         hint: None,
@@ -347,6 +361,7 @@ impl Checker {
             ResolvedPattern::StrLit(span, s) => {
                 if !self.types_compatible(&Ty::Str, expected_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "String pattern on non-String scrutinee".into(),
                         span: span.clone(),
                         hint: None,
@@ -357,6 +372,7 @@ impl Checker {
             ResolvedPattern::Or(items) => {
                 if items.is_empty() {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "empty pattern alternative".into(),
                         span: Span { start: 0, end: 0 },
                         hint: None,
@@ -367,6 +383,7 @@ impl Checker {
                     let typed_item = self.check_match_subpattern(item, expected_ty)?;
                     if self.match_pattern_has_bindings(&typed_item) {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Pattern alternatives cannot bind names directly.".into(),
                             span: Span { start: 0, end: 0 },
                             hint: Some(
@@ -384,6 +401,7 @@ impl Checker {
                 {
                     if !inner_pats.is_empty() {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: "Error kind patterns do not destructure payloads yet.".into(),
                             span: ctor_id.span.clone(),
                             hint: Some(
@@ -399,6 +417,7 @@ impl Checker {
                         "Err" => 1u32,
                         _ => {
                             return Err(TypeError {
+                                labels: Vec::new(),
                                 message: format!("Unknown constructor: {}", ctor_id.name),
                                 span: ctor_id.span.clone(),
                                 hint: None,
@@ -407,6 +426,7 @@ impl Checker {
                     };
                     if inner_pats.len() != 1 {
                         return Err(TypeError {
+                            labels: Vec::new(),
                             message: format!(
                                 "{}(...) match pattern requires exactly one argument",
                                 ctor_id.name
@@ -430,6 +450,7 @@ impl Checker {
 
                 let Ty::Enum(expected_enum_name, _) = expected_ty else {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: "Constructor pattern on non-enum/non-Result scrutinee".into(),
                         span: ctor_id.span.clone(),
                         hint: None,
@@ -438,6 +459,7 @@ impl Checker {
                 let variant = self
                     .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
                     .ok_or_else(|| TypeError {
+                        labels: Vec::new(),
                         message: format!("Unknown constructor: {}", ctor_id.name),
                         span: ctor_id.span.clone(),
                         hint: None,
@@ -446,6 +468,7 @@ impl Checker {
                 let variant = self.instantiate_enum_variant(&variant);
                 if &variant.enum_name != expected_enum_name {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "Constructor {} does not belong to enum {}",
                             ctor_id.name, expected_enum_name
@@ -456,6 +479,7 @@ impl Checker {
                 }
                 if !self.types_compatible(&variant.enum_ty, expected_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "Constructor {} does not match expected type {}",
                             ctor_id.name,
@@ -467,6 +491,7 @@ impl Checker {
                 }
                 if inner_pats.len() != variant.payload.len() {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "{} pattern expects {} argument(s), got {}",
                             ctor_id.name,
@@ -492,6 +517,7 @@ impl Checker {
                 Ty::List(_) => Ok(TypedMatchPattern::ListNil),
                 Ty::Str => Ok(TypedMatchPattern::StrLit(String::new())),
                 _ => Err(TypeError {
+                    labels: Vec::new(),
                     message: "empty list pattern on non-List/String scrutinee".into(),
                     span: span.clone(),
                     hint: None,
@@ -532,6 +558,7 @@ impl Checker {
                     })
                 }
                 other => Err(TypeError {
+                    labels: Vec::new(),
                     message: format!(
                         "list pattern requires List<...> or String, got {}",
                         self.ty_name(&other)
@@ -550,6 +577,7 @@ impl Checker {
                     )?;
                 if !self.types_compatible(&input_ty, &expected_ty) {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "Extractor {} expects {}, got {}",
                             extractor_id.name,
@@ -567,6 +595,7 @@ impl Checker {
                 }
                 if items.len() != seq_tys.len() {
                     return Err(TypeError {
+                        labels: Vec::new(),
                         message: format!(
                             "Extractor {} returns {} value(s), but pattern expects {}",
                             extractor_id.name,

@@ -15,212 +15,286 @@ use std::collections::HashMap;
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
 
 struct BuiltinImpl {
+    name: &'static str,
     func: BuiltinFn,
 }
 
 // Eldr keeps implementation pointers only. Metadata lives in sindr::builtin.
 const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
+        name: "print",
         func: builtin_print,
     },
     BuiltinImpl {
+        name: "to_string",
         func: builtin_to_string,
     },
     BuiltinImpl {
+        name: "inspect",
         func: builtin_inspect,
     },
     BuiltinImpl {
+        name: "safe_div",
         func: builtin_safe_div,
     },
     BuiltinImpl {
+        name: "safe_mod",
         func: builtin_safe_mod,
     },
     BuiltinImpl {
+        name: "eprint",
         func: builtin_eprint,
     },
     BuiltinImpl {
+        name: "set_exit_code",
         func: builtin_set_exit_code,
     },
-    BuiltinImpl { func: builtin_shl },
-    BuiltinImpl { func: builtin_shr },
     BuiltinImpl {
+        name: "shl",
+        func: builtin_shl,
+    },
+    BuiltinImpl {
+        name: "shr",
+        func: builtin_shr,
+    },
+    BuiltinImpl {
+        name: "len",
         func: builtin_list_len,
     },
     BuiltinImpl {
+        name: "gen_make",
         func: builtin_gen_make,
     },
     BuiltinImpl {
+        name: "gen_idx",
         func: builtin_gen_idx,
     },
     BuiltinImpl {
+        name: "gen_items",
         func: builtin_gen_items,
     },
     BuiltinImpl {
+        name: "bit_and",
         func: builtin_bit_and,
     },
     BuiltinImpl {
+        name: "bit_or",
         func: builtin_bit_or,
     },
     BuiltinImpl {
+        name: "bit_xor",
         func: builtin_bit_xor,
     },
     BuiltinImpl {
+        name: "bit_not",
         func: builtin_bit_not,
     },
     BuiltinImpl {
+        name: "test_bit",
         func: builtin_test_bit,
     },
     BuiltinImpl {
+        name: "set_bit",
         func: builtin_set_bit,
     },
     BuiltinImpl {
+        name: "clear_bit",
         func: builtin_clear_bit,
     },
     BuiltinImpl {
+        name: "toggle_bit",
         func: builtin_toggle_bit,
     },
     BuiltinImpl {
+        name: "codepoints",
         func: builtin_codepoints,
     },
     BuiltinImpl {
+        name: "from_codepoints",
         func: builtin_from_codepoints,
     },
     BuiltinImpl {
+        name: "map_err",
         func: builtin_result_map_err,
     },
     BuiltinImpl {
+        name: "cause",
         func: builtin_result_cause,
     },
     BuiltinImpl {
+        name: "chain",
         func: builtin_result_chain,
     },
     BuiltinImpl {
+        name: "__test_push",
         func: builtin_test_push,
     },
     BuiltinImpl {
+        name: "__test_pop",
         func: builtin_test_pop,
     },
     BuiltinImpl {
+        name: "__test_pass",
         func: builtin_test_pass,
     },
     BuiltinImpl {
+        name: "__test_fail",
         func: builtin_test_fail,
     },
     BuiltinImpl {
+        name: "__test_fail_current",
         func: builtin_test_fail_current,
     },
     BuiltinImpl {
+        name: "group_count",
         func: builtin_list_group_count,
     },
     BuiltinImpl {
+        name: "zip",
         func: builtin_list_zip,
     },
     BuiltinImpl {
+        name: "empty_map",
         func: builtin_empty_map,
     },
     BuiltinImpl {
+        name: "map_from_entries",
         func: builtin_map_from_entries,
     },
     BuiltinImpl {
+        name: "map_len",
         func: builtin_map_len,
     },
     BuiltinImpl {
+        name: "map_contains_key",
         func: builtin_map_contains_key,
     },
     BuiltinImpl {
+        name: "map_get",
         func: builtin_map_get,
     },
     BuiltinImpl {
+        name: "map_insert",
         func: builtin_map_insert,
     },
     BuiltinImpl {
+        name: "map_remove",
         func: builtin_map_remove,
     },
     BuiltinImpl {
+        name: "map_keys",
         func: builtin_map_keys,
     },
     BuiltinImpl {
+        name: "map_values_list",
         func: builtin_map_values_list,
     },
     BuiltinImpl {
+        name: "view",
         func: builtin_lens_view,
     },
     BuiltinImpl {
+        name: "compose",
         func: builtin_lens_compose,
     },
     BuiltinImpl {
+        name: "set",
         func: builtin_lens_set,
     },
     BuiltinImpl {
+        name: "over",
         func: builtin_lens_over,
     },
     BuiltinImpl {
+        name: "__test_capture_stdout",
         func: builtin_test_capture_stdout,
     },
     BuiltinImpl {
+        name: "__test_capture_stderr",
         func: builtin_test_capture_stderr,
     },
     BuiltinImpl {
+        name: "compile",
         func: builtin_regex_compile,
     },
     BuiltinImpl {
+        name: "is_match",
         func: builtin_regex_is_match,
     },
     BuiltinImpl {
+        name: "captures",
         func: builtin_regex_captures,
     },
     BuiltinImpl {
+        name: "whole",
         func: builtin_regex_whole,
     },
     BuiltinImpl {
+        name: "capture_count",
         func: builtin_regex_capture_count,
     },
     BuiltinImpl {
+        name: "get",
         func: builtin_regex_get,
     },
     BuiltinImpl {
+        name: "get_name",
         func: builtin_regex_get_name,
     },
     BuiltinImpl {
+        name: "find",
         func: builtin_regex_find,
     },
     BuiltinImpl {
+        name: "find_all",
         func: builtin_regex_find_all,
     },
     BuiltinImpl {
+        name: "split",
         func: builtin_regex_split,
     },
     BuiltinImpl {
+        name: "replace",
         func: builtin_regex_replace,
     },
     BuiltinImpl {
+        name: "replace_all",
         func: builtin_regex_replace_all,
     },
     BuiltinImpl {
+        name: "escape",
         func: builtin_regex_escape,
     },
     BuiltinImpl {
+        name: "group_names",
         func: builtin_regex_group_names,
     },
     BuiltinImpl {
+        name: "text",
         func: builtin_regex_match_text,
     },
     BuiltinImpl {
+        name: "start",
         func: builtin_regex_match_start,
     },
     BuiltinImpl {
+        name: "end",
         func: builtin_regex_match_end,
     },
     BuiltinImpl {
+        name: "project_args",
         func: builtin_project_args,
     },
     BuiltinImpl {
+        name: "kind",
         func: builtin_error_kind,
     },
     BuiltinImpl {
+        name: "message",
         func: builtin_error_message,
     },
     BuiltinImpl {
+        name: "format",
         func: builtin_error_format,
     },
 ];
@@ -245,17 +319,18 @@ pub(crate) fn call_builtin(
         )));
     }
 
-    let func = BUILTIN_IMPLS
-        .get(builtin_id as usize)
-        .ok_or_else(|| {
-            RuntimeError::new(format!(
-                "Missing builtin implementation for id {}",
-                builtin_id
-            ))
-        })?
-        .func;
+    let builtin = BUILTIN_IMPLS.get(builtin_id as usize).ok_or_else(|| {
+        RuntimeError::new(format!(
+            "Missing builtin implementation for id {}",
+            builtin_id
+        ))
+    })?;
+    debug_assert_eq!(
+        builtin.name, meta.name,
+        "builtin implementation order drifted from BUILTIN_METAS"
+    );
 
-    func(vm, args)
+    (builtin.func)(vm, args)
 }
 
 fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1548,9 +1623,9 @@ fn none_result(vm: &VM) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_builtin, err_result_from_rich_error, inspect_value};
+    use super::{call_builtin, err_result_from_rich_error, inspect_value, BUILTIN_IMPLS};
     use crate::vm::VM;
-    use sindr::builtin::{builtin_id_by_name, builtin_meta_by_name};
+    use sindr::builtin::{builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name};
     use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
     use sindr::primitives::int;
     use sindr::runtime::{
@@ -1600,6 +1675,14 @@ mod tests {
 
     fn builtin_id(name: &str) -> u16 {
         builtin_id_by_name(name).unwrap_or_else(|| panic!("missing builtin metadata for {name}"))
+    }
+
+    #[test]
+    fn builtin_impl_order_matches_metadata() {
+        for (id, builtin) in BUILTIN_IMPLS.iter().enumerate() {
+            let meta = builtin_meta_by_id(id as u16).expect("builtin metadata by id");
+            assert_eq!(builtin.name, meta.name, "builtin impl mismatch at id {id}");
+        }
     }
 
     /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
