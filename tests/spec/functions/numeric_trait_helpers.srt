@@ -1,4 +1,4 @@
-def double<$N: Numeric>(x: $N) -> $N {
+def double<$N: Add>(x: $N) -> $N {
   x + x
 }
 
@@ -11,6 +11,7 @@ def pick_max<$N: Numeric>(left: $N, right: $N) -> $N {
 }
 
 print(to_string(add(1, 2)))
+print(to_string(Add::add(1, 2)))
 print(to_string(double(21)))
 print(to_string(double(1.25)))
 print(to_string(pick_max(3, 7)))

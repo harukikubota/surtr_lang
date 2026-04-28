@@ -1,17 +1,12 @@
 @@doc """
 Standard `Ord` trait declaration.
-`Ord` models ordering comparisons for values that can be ordered.
-This boolean helper surface is layered on top of `Compare`, which returns the
-three-way `Ordering` result directly.
-The unqualified helpers `lt(...)`, `lte(...)`, `gt(...)`, and `gte(...)` come
-from this auto-imported trait surface rather than from a compiler-only builtin
-shim.
+`Ord` is a compatibility helper trait for grouped ordering functions.
+Operator dispatch uses the per-operator `Lt`, `Lte`, `Gt`, and `Gte` traits.
 
 ## REPL
 xldr(1)> lte(1, 2)
 True
 """
-@@autoimport
 deftrait Ord {
   # Return `True` when the left value is strictly smaller.
   def lt(self: Self, rhs: Self) -> Boolean

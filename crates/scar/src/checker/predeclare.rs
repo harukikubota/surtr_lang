@@ -726,16 +726,24 @@ impl Checker {
     }
 
     fn compiler_trait_target_names(&self, trait_name: &str) -> &'static [&'static str] {
-        if self.trait_matches_short_name(trait_name, "Numeric") {
+        if self.trait_matches_short_name(trait_name, "Numeric")
+            || self.trait_matches_short_name(trait_name, "Add")
+            || self.trait_matches_short_name(trait_name, "Sub")
+            || self.trait_matches_short_name(trait_name, "Mul")
+            || self.trait_matches_short_name(trait_name, "Lt")
+            || self.trait_matches_short_name(trait_name, "Lte")
+            || self.trait_matches_short_name(trait_name, "Gt")
+            || self.trait_matches_short_name(trait_name, "Gte")
+        {
             return &["Float", "Int"];
         }
         if self.trait_matches_short_name(trait_name, "Concat") {
             return &["String"];
         }
-        if self.trait_matches_short_name(trait_name, "Ord") {
-            return &["Float", "Int"];
-        }
         if self.trait_matches_short_name(trait_name, "Eq") {
+            return &["Boolean", "Float", "Int", "String"];
+        }
+        if self.trait_matches_short_name(trait_name, "Neq") {
             return &["Boolean", "Float", "Int", "String"];
         }
         if self.trait_matches_short_name(trait_name, "Show") {
@@ -812,16 +820,33 @@ impl Checker {
         method_name: &str,
         target_name: &str,
     ) -> Option<TraitDispatchTarget> {
+        if matches!(target_name, "Int" | "Float") {
+            let op = if self.trait_matches_short_name(trait_name, "Add") && method_name == "add" {
+                Some(BinOp::Add)
+            } else if self.trait_matches_short_name(trait_name, "Sub") && method_name == "sub" {
+                Some(BinOp::Sub)
+            } else if self.trait_matches_short_name(trait_name, "Mul") && method_name == "mul" {
+                Some(BinOp::Mul)
+            } else if self.trait_matches_short_name(trait_name, "Lt") && method_name == "lt" {
+                Some(BinOp::Lt)
+            } else if self.trait_matches_short_name(trait_name, "Lte") && method_name == "lte" {
+                Some(BinOp::Lte)
+            } else if self.trait_matches_short_name(trait_name, "Gt") && method_name == "gt" {
+                Some(BinOp::Gt)
+            } else if self.trait_matches_short_name(trait_name, "Gte") && method_name == "gte" {
+                Some(BinOp::Gte)
+            } else {
+                None
+            };
+            if let Some(op) = op {
+                return Some(TraitDispatchTarget::BinOp(op));
+            }
+        }
         if self.trait_matches_short_name(trait_name, "Numeric")
             && matches!(target_name, "Int" | "Float")
+            && method_name == "safe_div"
         {
-            return match method_name {
-                "add" => Some(TraitDispatchTarget::BinOp(BinOp::Add)),
-                "sub" => Some(TraitDispatchTarget::BinOp(BinOp::Sub)),
-                "mul" => Some(TraitDispatchTarget::BinOp(BinOp::Mul)),
-                "safe_div" => Some(TraitDispatchTarget::Builtin("safe_div".into())),
-                _ => None,
-            };
+            return Some(TraitDispatchTarget::Builtin("safe_div".into()));
         }
         if self.trait_matches_short_name(trait_name, "Show")
             && matches!(
@@ -834,23 +859,15 @@ impl Checker {
         }
         if self.trait_matches_short_name(trait_name, "Eq")
             && matches!(target_name, "Int" | "Float" | "String" | "Boolean")
+            && method_name == "eq"
         {
-            return match method_name {
-                "eq" => Some(TraitDispatchTarget::BinOp(BinOp::Eq)),
-                "neq" => Some(TraitDispatchTarget::BinOp(BinOp::Neq)),
-                _ => None,
-            };
+            return Some(TraitDispatchTarget::BinOp(BinOp::Eq));
         }
-        if self.trait_matches_short_name(trait_name, "Ord")
-            && matches!(target_name, "Int" | "Float")
+        if self.trait_matches_short_name(trait_name, "Neq")
+            && matches!(target_name, "Int" | "Float" | "String" | "Boolean")
+            && method_name == "neq"
         {
-            return match method_name {
-                "lt" => Some(TraitDispatchTarget::BinOp(BinOp::Lt)),
-                "lte" => Some(TraitDispatchTarget::BinOp(BinOp::Lte)),
-                "gt" => Some(TraitDispatchTarget::BinOp(BinOp::Gt)),
-                "gte" => Some(TraitDispatchTarget::BinOp(BinOp::Gte)),
-                _ => None,
-            };
+            return Some(TraitDispatchTarget::BinOp(BinOp::Neq));
         }
         if self.trait_matches_short_name(trait_name, "Concat") && target_name == "String" {
             return (method_name == "concat").then(|| TraitDispatchTarget::BinOp(BinOp::Concat));
@@ -866,7 +883,9 @@ impl Checker {
                 Ty::Var(_) | Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error
             );
         }
-        if self.trait_matches_short_name(trait_name, "Eq") {
+        if self.trait_matches_short_name(trait_name, "Eq")
+            || self.trait_matches_short_name(trait_name, "Neq")
+        {
             return matches!(ty, Ty::Enum(_, _));
         }
         false
@@ -890,6 +909,11 @@ impl Checker {
         if self.trait_matches_short_name(trait_name, "Eq") {
             return match (method_name, target_ty) {
                 ("eq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Eq)),
+                _ => None,
+            };
+        }
+        if self.trait_matches_short_name(trait_name, "Neq") {
+            return match (method_name, target_ty) {
                 ("neq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Neq)),
                 _ => None,
             };
@@ -1136,6 +1160,7 @@ impl Checker {
                             &method.method_name,
                             &target_name,
                         ),
+                        is_builtin: method.is_builtin,
                     },
                 );
             }
@@ -1527,6 +1552,9 @@ impl Checker {
 
             for (method_name, method) in methods {
                 if !trait_impl_method_ids_in_stmts.contains(&method.function_id.unique_id) {
+                    continue;
+                }
+                if method.is_builtin {
                     continue;
                 }
                 self.register_function_id(&method.function_id);

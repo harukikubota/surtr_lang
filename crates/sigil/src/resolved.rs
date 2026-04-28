@@ -299,6 +299,7 @@ pub struct ResolvedTraitImplMethod {
     pub body: Box<Resolved>,
     pub attrs: ResolvedDeclAttrs,
     pub span: Span,
+    pub is_builtin: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

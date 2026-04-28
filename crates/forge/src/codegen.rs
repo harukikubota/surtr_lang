@@ -1834,8 +1834,8 @@ impl Codegen {
             TypedInner::Capture(target, args) => {
                 if !args.is_empty() {
                     return Err(CodegenError {
-                        message:
-                            "capture calls with arguments should be lowered before codegen".into(),
+                        message: "capture calls with arguments should be lowered before codegen"
+                            .into(),
                         span: node.span.clone(),
                     });
                 }

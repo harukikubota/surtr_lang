@@ -390,6 +390,44 @@ fn test_trait_impl_parses_and_keeps_methods() {
 }
 
 #[test]
+fn test_trait_impl_accepts_builtin_def_method() {
+    let ast = parse_with_context(
+        r#"impl Add for Int {
+  @@builtin def add(self: Self, rhs: Self) -> Self
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("trait impl builtin method should parse");
+
+    match ast.as_slice() {
+        [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), methods, _)] => {
+            assert_eq!(trait_name, "Add");
+            assert_eq!(target, "Int");
+            assert!(matches!(
+                methods.as_slice(),
+                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Named(_, ret)), _)]
+                    if name == "add" && ret == "Self"
+            ));
+        }
+        _ => panic!("Expected TraitImplDef"),
+    }
+}
+
+#[test]
+fn test_trait_impl_rejects_builtin_defp_method() {
+    let err = parse_with_context(
+        r#"impl Add for Int {
+  @@builtin defp add(self: Self, rhs: Self) -> Self
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect_err("trait impl builtin private method should be rejected");
+    assert!(err
+        .message()
+        .contains("@@builtin is not allowed before `defp` impl members"));
+}
+
+#[test]
 fn test_doc_attributes_parse_for_trait_and_impl_decls() {
     let ast = parse_with_context(
         r#"@@doc """Trait docs."""
@@ -1451,8 +1489,10 @@ fn test_identity_anonymous_capture_reports_id_hint() {
 
 #[test]
 fn test_anonymous_capture_reports_named_function_hint() {
-    let err = parse(r#"f = &(&1 + &2)
-g = &(print("Hello"))"#)
+    let err = parse(
+        r#"f = &(&1 + &2)
+g = &(print("Hello"))"#,
+    )
     .expect_err("anonymous capture forms must fail");
     assert!(err
         .message()

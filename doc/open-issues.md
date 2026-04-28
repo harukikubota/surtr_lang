@@ -34,7 +34,7 @@
 - `.eldr` viewer 向け chunk 基盤
   - `Code`, `Cnst`, `Func`, `Type`, `ErrT`, `CInf`, `LblT`, `ImpT`, `ExpT`, `LitT`, `Line`, `SpnT`, `SrcP`, `PcSp`
 - 標準モジュールの type 単位分割
-  - `Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user`
+  - `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user`
   - cross-cutting builtin は `kernel.srt` へ置く
   - builtin type 宣言は各対応 `lib/*.srt` のトップレベルへ置く
 - `List` 最小 surface の固定
@@ -75,7 +75,7 @@
 補足:
 
 - `Bootstrap` / `Kernel` 分離
-- `Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> ユーザ拡張` のロード順
+- `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> ユーザ拡張` のロード順
 - `Bootstrap` / `Kernel` の auto import と明示 import 禁止
 - `@@builtin` は `SourceKind::StdModule` のみ許可
 

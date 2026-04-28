@@ -320,7 +320,10 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
 
     if message == "anonymous capture is not supported; use `&id` instead" {
         if let Some(rewrite) = rewrite_line_at_span(source, &span, "&id") {
-            spec.help = Some(format!("Replace this anonymous capture with:\n\n  {}", rewrite));
+            spec.help = Some(format!(
+                "Replace this anonymous capture with:\n\n  {}",
+                rewrite
+            ));
         }
     }
 
@@ -1501,12 +1504,15 @@ fn parse_binary_operator_error(message: &str) -> Option<ParsedBinaryOperatorErro
             failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
         });
     }
-    if let Some(op_name) = message
-        .strip_prefix("Operator ")
-        .and_then(|tail| tail.strip_suffix(" requires both operands to implement Numeric"))
+    if let Some((symbol, trait_name)) = message
+        .strip_prefix('`')
+        .and_then(|tail| tail.split_once("` requires both operands to implement "))
     {
         return Some(ParsedBinaryOperatorError {
-            op_name_hint: Some(binary_canonical_op_name(op_name)?),
+            op_name_hint: Some(
+                binary_op_name_from_symbol(symbol)
+                    .or_else(|| binary_canonical_op_name(trait_name))?,
+            ),
             left_ty: None,
             right_ty: None,
             failure_kind: BinaryOperatorFailureKind::MissingImplementation,
@@ -1553,7 +1559,7 @@ fn build_binary_operator_view<'a>(
         "Add" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A + A -> A (where A: Numeric)".into(),
+            op_rule: "A + A -> A (where A: Add)".into(),
             step: format!("{lhs_display} + {rhs_display} -> <type error>"),
             reason: binary_operator_reason(
                 op_name,
@@ -1562,12 +1568,12 @@ fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same Numeric type on both sides, for example `Int + Int` or `Float + Float`.".into(),
+            help: "Use the same Add type on both sides, for example `Int + Int` or `Float + Float`.".into(),
         },
         "Sub" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A - A -> A (where A: Numeric)".into(),
+            op_rule: "A - A -> A (where A: Sub)".into(),
             step: format!("{lhs_display} - {rhs_display} -> <type error>"),
             reason: binary_operator_reason(
                 op_name,
@@ -1576,12 +1582,12 @@ fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same Numeric type on both sides, for example `Int - Int` or `Float - Float`.".into(),
+            help: "Use the same Sub type on both sides, for example `Int - Int` or `Float - Float`.".into(),
         },
         "Mul" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A * A -> A (where A: Numeric)".into(),
+            op_rule: "A * A -> A (where A: Mul)".into(),
             step: format!("{lhs_display} * {rhs_display} -> <type error>"),
             reason: binary_operator_reason(
                 op_name,
@@ -1590,7 +1596,7 @@ fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same Numeric type on both sides, for example `Int * Int` or `Float * Float`.".into(),
+            help: "Use the same Mul type on both sides, for example `Int * Int` or `Float * Float`.".into(),
         },
         "Eq" => BinaryOperatorView {
             lhs_actual: left_ty,
@@ -1623,7 +1629,7 @@ fn build_binary_operator_view<'a>(
         "Lt" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A < A -> Boolean (where A: Ord)".into(),
+            op_rule: "A < A -> Boolean (where A: Lt)".into(),
             step: format!("{lhs_display} < {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -1637,7 +1643,7 @@ fn build_binary_operator_view<'a>(
         "Lte" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A <= A -> Boolean (where A: Ord)".into(),
+            op_rule: "A <= A -> Boolean (where A: Lte)".into(),
             step: format!("{lhs_display} <= {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -1651,7 +1657,7 @@ fn build_binary_operator_view<'a>(
         "Gt" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A > A -> Boolean (where A: Ord)".into(),
+            op_rule: "A > A -> Boolean (where A: Gt)".into(),
             step: format!("{lhs_display} > {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -1665,7 +1671,7 @@ fn build_binary_operator_view<'a>(
         "Gte" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A >= A -> Boolean (where A: Ord)".into(),
+            op_rule: "A >= A -> Boolean (where A: Gte)".into(),
             step: format!("{lhs_display} >= {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -2234,12 +2240,12 @@ fn binary_operator_reason(
             "Add" | "Sub" | "Mul" => {
                 if lhs_display == rhs_display {
                     format!(
-                        "Reason: `{}` requires a Numeric type, but both sides are {}.",
+                "Reason: `{}` requires an operator trait implementation, but both sides are {}.",
                         op_symbol, lhs_display
                     )
                 } else {
                     format!(
-                        "Reason: `{}` requires the same Numeric type on both sides, but got {} and {}.",
+                        "Reason: `{}` requires the same operator trait type on both sides, but got {} and {}.",
                         op_symbol, lhs_display, rhs_display
                     )
                 }
@@ -2263,16 +2269,16 @@ fn binary_operator_reason(
         },
         BinaryOperatorFailureKind::MissingImplementation => match op_name {
             "Add" | "Sub" | "Mul" => format!(
-                "Reason: {} does not implement Numeric, so `{}` is not available.",
-                lhs_display, op_symbol
+                "Reason: {} does not implement {}, so `{}` is not available.",
+                lhs_display, op_name, op_symbol
             ),
             "Eq" | "Neq" => format!(
                 "Reason: {} does not implement Eq, so `{}` is not available.",
                 lhs_display, op_symbol
             ),
             "Lt" | "Lte" | "Gt" | "Gte" => format!(
-                "Reason: {} does not implement Ord, so `{}` is not available.",
-                lhs_display, op_symbol
+                "Reason: {} does not implement {}, so `{}` is not available.",
+                lhs_display, op_name, op_symbol
             ),
             "Concat" => format!(
                 "Reason: {} does not implement Concat, so `++` is not available.",
@@ -3963,7 +3969,11 @@ fn rewrite_line_at_span(source: &str, span: &Span, replacement: &str) -> Option<
     }
     let before = slice_chars(source, line_start, span.start);
     let after = slice_chars(source, span.end, line_end);
-    Some(format!("{}{}{}", before, replacement, after).trim().to_string())
+    Some(
+        format!("{}{}{}", before, replacement, after)
+            .trim()
+            .to_string(),
+    )
 }
 
 const MAX_PIPE_SLOT_REWRITE_DEPTH: usize = 3;
@@ -4155,7 +4165,10 @@ fn replace_first_standalone_pipe_slot(expr: &str, replacement: &str) -> Option<S
             continue;
         }
 
-        let prev = idx.checked_sub(1).and_then(|prev_idx| chars.get(prev_idx)).copied();
+        let prev = idx
+            .checked_sub(1)
+            .and_then(|prev_idx| chars.get(prev_idx))
+            .copied();
         let next = chars.get(idx + 2).copied();
         if prev == Some('.')
             || prev.is_some_and(is_identifier_char)
@@ -5163,24 +5176,22 @@ mod tests {
             .labels
             .iter()
             .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
-        assert!(
-            spec.labels
-                .iter()
-                .any(|label| strip_ansi(&label.message)
-                    == "   OP rule: A + A -> A (where A: Numeric)")
-        );
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A (where A: Add)"));
         assert!(spec
             .labels
             .iter()
             .any(|label| strip_ansi(&label.message) == "RHS actual: String"));
         assert!(notes_text.contains("Step: Int + String -> <type error>"));
         assert!(notes_text.contains(
-            "Reason: `+` requires the same Numeric type on both sides, but got Int and String."
+            "Reason: `+` requires the same operator trait type on both sides, but got Int and String."
         ));
         assert!(spec
             .help
             .as_deref()
-            .is_some_and(|help| help.contains("same Numeric type")));
+            .is_some_and(|help| help.contains("same Add type")));
     }
 
     #[test]
@@ -5204,7 +5215,7 @@ mod tests {
         let op = spec
             .labels
             .iter()
-            .find(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A (where A: Numeric)")
+            .find(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A (where A: Add)")
             .expect("operator label");
         let lhs = spec
             .labels
@@ -5299,7 +5310,7 @@ mod tests {
             .join("\n");
 
         assert!(spec.labels.iter().any(
-            |label| strip_ansi(&label.message) == "   OP rule: A < A -> Boolean (where A: Ord)"
+            |label| strip_ansi(&label.message) == "   OP rule: A < A -> Boolean (where A: Lt)"
         ));
         assert!(notes_text.contains("Step: Int < Boolean -> Boolean"));
         assert!(notes_text.contains(
@@ -5450,7 +5461,7 @@ mod tests {
         assert!(label_text.contains(&"RHS".into()));
         assert!(notes_text.contains("Step: Int + String -> <type error>"));
         assert!(notes_text.contains(
-            "Reason: `+` requires the same Numeric type on both sides, but got Int and String."
+            "Reason: `+` requires the same operator trait type on both sides, but got Int and String."
         ));
     }
 

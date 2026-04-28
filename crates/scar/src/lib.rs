@@ -25,10 +25,18 @@ mod tests {
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/special_types.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+    const ADD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/add.srt");
+    const SUB_MODULE_SOURCE: &str = include_str!("../../../lib/trait/sub.srt");
+    const MUL_MODULE_SOURCE: &str = include_str!("../../../lib/trait/mul.srt");
     const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
+    const NEQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/neq.srt");
     const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/compare.srt");
+    const LT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/lt.srt");
+    const LTE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/lte.srt");
+    const GT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/gt.srt");
+    const GTE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/gte.srt");
     const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
@@ -246,25 +254,33 @@ impl Generator {}"#;
                     "Kernel",
                     pick_override("Kernel", KERNEL_PRELUDE_SOURCE, overrides),
                 ),
+                ("Add", pick_override("Add", ADD_MODULE_SOURCE, overrides)),
+                ("Sub", pick_override("Sub", SUB_MODULE_SOURCE, overrides)),
+                ("Mul", pick_override("Mul", MUL_MODULE_SOURCE, overrides)),
+                ("Eq", pick_override("Eq", EQ_MODULE_SOURCE, overrides)),
+                ("Neq", pick_override("Neq", NEQ_MODULE_SOURCE, overrides)),
+                (
+                    "Compare",
+                    pick_override("Compare", COMPARE_MODULE_SOURCE, overrides),
+                ),
+                ("Lt", pick_override("Lt", LT_MODULE_SOURCE, overrides)),
+                ("Lte", pick_override("Lte", LTE_MODULE_SOURCE, overrides)),
+                ("Gt", pick_override("Gt", GT_MODULE_SOURCE, overrides)),
+                ("Gte", pick_override("Gte", GTE_MODULE_SOURCE, overrides)),
+                (
+                    "Concat",
+                    pick_override("Concat", CONCAT_MODULE_SOURCE, overrides),
+                ),
                 (
                     "Numeric",
                     pick_override("Numeric", NUMERIC_MODULE_SOURCE, overrides),
                 ),
                 ("Show", pick_override("Show", SHOW_MODULE_SOURCE, overrides)),
-                ("Eq", pick_override("Eq", EQ_MODULE_SOURCE, overrides)),
                 (
                     "Ordering",
                     pick_override("Ordering", ORDERING_MODULE_SOURCE, overrides),
                 ),
-                (
-                    "Compare",
-                    pick_override("Compare", COMPARE_MODULE_SOURCE, overrides),
-                ),
                 ("Ord", pick_override("Ord", ORD_MODULE_SOURCE, overrides)),
-                (
-                    "Concat",
-                    pick_override("Concat", CONCAT_MODULE_SOURCE, overrides),
-                ),
                 ("From", pick_override("From", FROM_MODULE_SOURCE, overrides)),
                 (
                     "TryFrom",
@@ -2229,7 +2245,7 @@ impl User {
     }
 
     #[test]
-    fn numeric_trait_calls_typecheck_with_static_dispatch() {
+    fn operator_and_numeric_trait_calls_typecheck_with_static_dispatch() {
         let typed = typecheck_with_builtin_prelude(
             r#"sum = 1 + 2
 quot = Numeric::safe_div(8, 2)
@@ -2255,7 +2271,7 @@ largest = Numeric::max(1.5, 2.5)"#,
         assert!(trait_calls
             .iter()
             .any(|(trait_name, method_name, dispatch)| {
-                *trait_name == "Numeric"
+                *trait_name == "Add"
                     && *method_name == "add"
                     && matches!(
                         dispatch,
@@ -2291,7 +2307,7 @@ largest = Numeric::max(1.5, 2.5)"#,
     }
 
     #[test]
-    fn bounded_numeric_generics_specialize_without_pending_trait_calls() {
+    fn bounded_add_generics_specialize_without_pending_trait_calls() {
         fn has_pending_trait_call(node: &TypedNode) -> bool {
             match &node.node {
                 TypedInner::TraitCall { dispatch, args, .. } => {
@@ -2372,7 +2388,7 @@ largest = Numeric::max(1.5, 2.5)"#,
         }
 
         let typed = typecheck_with_builtin_prelude(
-            r#"def double<$N: Numeric>(x: $N) -> $N { x + x }
+            r#"def double<$N: Add>(x: $N) -> $N { x + x }
 a = double(21)
 b = double(1.5)"#,
         );
@@ -2454,35 +2470,31 @@ b = double(1.5)"#,
     }
 
     #[test]
-    fn numeric_trait_mismatch_lists_available_implementations() {
-        let resolved = resolve_with_builtin_prelude("value = Numeric::add(1, False)");
-        let err = typecheck(resolved).expect_err("mismatched numeric trait call must fail");
-        assert!(err.message.contains("Numeric::add expects argument 2"));
+    fn add_trait_mismatch_lists_available_implementations() {
+        let resolved = resolve_with_builtin_prelude("value = Add::add(1, False)");
+        let err = typecheck(resolved).expect_err("mismatched add trait call must fail");
+        assert!(err.message.contains("Add::add expects argument 2"));
         assert!(err.message.contains("receiver type Int"));
         assert!(err.message.contains("got Boolean"));
-        assert!(err
-            .message
-            .contains("Numeric is implemented for: Float, Int"));
+        assert!(err.message.contains("Add is implemented for: Float, Int"));
         assert!(err
             .hint
             .as_deref()
-            .is_some_and(|hint| hint.contains("Call target signature: Numeric::add")));
+            .is_some_and(|hint| hint.contains("Call target signature: Add::add")));
     }
 
     #[test]
-    fn numeric_trait_missing_receiver_lists_available_implementations() {
-        let resolved = resolve_with_builtin_prelude("value = Numeric::add(False, True)");
-        let err = typecheck(resolved).expect_err("invalid numeric receiver must fail");
+    fn add_trait_missing_receiver_lists_available_implementations() {
+        let resolved = resolve_with_builtin_prelude("value = Add::add(False, True)");
+        let err = typecheck(resolved).expect_err("invalid add receiver must fail");
         assert!(err
             .message
-            .contains("Numeric::add requires a receiver type implementing Numeric, got Boolean"));
-        assert!(err
-            .message
-            .contains("Numeric is implemented for: Float, Int"));
+            .contains("Add::add requires a receiver type implementing Add, got Boolean"));
+        assert!(err.message.contains("Add is implemented for: Float, Int"));
         assert!(err
             .hint
             .as_deref()
-            .is_some_and(|hint| hint.contains("Call target signature: Numeric::add")));
+            .is_some_and(|hint| hint.contains("Call target signature: Add::add")));
     }
 
     #[test]

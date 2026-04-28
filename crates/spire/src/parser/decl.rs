@@ -439,6 +439,124 @@ impl Parser<'_> {
         ))
     }
 
+    pub(super) fn parse_builtin_impl_method_decl(
+        &mut self,
+        target: &str,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Def)?;
+        let (name, _) = self.expect_builtin_decl_name()?;
+        let type_params = self.parse_decl_type_params()?;
+        if !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                "@@builtin impl method declarations do not accept method type parameters",
+                type_params[0].span.clone(),
+            ));
+        }
+
+        let mut params = Vec::new();
+        if matches!(self.peek(), Token::Unit) {
+            self.advance();
+        } else {
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+            let mut first_param = true;
+            if !matches!(self.peek(), Token::RParen) {
+                loop {
+                    if matches!(self.peek(), Token::Eof) {
+                        return Err(ParseError::incomplete(")", self.peek_span()));
+                    }
+                    self.skip_newlines();
+                    let (param_name, param_span) = self.expect_ident()?;
+                    let param_ty = if param_name == "self" {
+                        if !first_param {
+                            return Err(ParseError::syntax(
+                                "`self` is only allowed as the first parameter of impl methods",
+                                param_span,
+                            ));
+                        }
+                        if matches!(self.peek(), Token::Colon) {
+                            self.advance();
+                            self.skip_newlines();
+                            let ty = self.parse_type_in_impl_context(Some(target.to_string()))?;
+                            if !Self::is_self_type(&ty) {
+                                return Err(ParseError::syntax(
+                                    "`self` receiver type must be `Self`",
+                                    ast_ty_span(&ty).clone(),
+                                ));
+                            }
+                            ty
+                        } else {
+                            AstTy::Named(param_span.clone(), "Self".to_string())
+                        }
+                    } else {
+                        self.expect(&Token::Colon)?;
+                        self.skip_newlines();
+                        self.parse_type_in_impl_context(Some(target.to_string()))?
+                    };
+                    params.push(FunParam {
+                        name: param_name,
+                        ty: param_ty,
+                        span: param_span,
+                    });
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                    first_param = false;
+                }
+            }
+            self.expect(&Token::RParen)?;
+        }
+
+        let ret_ty = if matches!(self.peek(), Token::Arrow) {
+            self.advance();
+            self.skip_newlines();
+            Some(self.parse_type_in_impl_context(Some(target.to_string()))?)
+        } else {
+            None
+        };
+        self.reject_where_clause()?;
+
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::Newline)
+        ) {
+            lookahead += 1;
+        }
+        if matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::LBrace)
+        ) {
+            return Err(ParseError::syntax(
+                "@@builtin declaration must not have a function body",
+                self.tokens[lookahead].span.clone(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+
+        Ok(Ast::BuiltinDecl(
+            Span { start, end },
+            name,
+            params,
+            ret_ty,
+            attrs,
+        ))
+    }
+
     pub(super) fn parse_impl_extractor_method_with_attrs(
         &mut self,
         target: &str,
@@ -501,12 +619,6 @@ impl Parser<'_> {
             self.skip_newlines();
             match name.as_str() {
                 "builtin" => {
-                    if trait_impl_only {
-                        return Err(ParseError::syntax(
-                            "@@builtin is not allowed before trait impl members",
-                            annotator_span,
-                        ));
-                    }
                     if saw_builtin {
                         return Err(ParseError::syntax(
                             "@@builtin may only appear once before an impl member",
@@ -555,6 +667,33 @@ impl Parser<'_> {
             ));
         }
 
+        if saw_builtin {
+            let start = start_span
+                .map(|span| span.start)
+                .unwrap_or_else(|| self.peek_span().start);
+            return match self.peek() {
+                Token::Def if trait_impl_only => {
+                    self.parse_builtin_impl_method_decl(target, start, attrs)
+                }
+                Token::Def => self.parse_builtin_decl(start, attrs),
+                Token::Defextractor if !trait_impl_only => {
+                    self.parse_builtin_extractor_decl(start, attrs)
+                }
+                Token::Defextractor => Err(ParseError::syntax(
+                    "trait impl body may only contain `@@builtin def` declarations",
+                    self.peek_span(),
+                )),
+                Token::Defp => Err(ParseError::syntax(
+                    "@@builtin is not allowed before `defp` impl members",
+                    self.peek_span(),
+                )),
+                _ => Err(ParseError::syntax(
+                    "impl body may only contain `@@builtin def` / `@@builtin defextractor` declarations",
+                    self.peek_span(),
+                )),
+            };
+        }
+
         if trait_impl_only {
             if !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
@@ -567,24 +706,6 @@ impl Parser<'_> {
                 "impl body may only contain `def` / `defp` / `defextractor` declarations",
                 self.peek_span(),
             ));
-        }
-
-        if saw_builtin {
-            let start = start_span
-                .map(|span| span.start)
-                .unwrap_or_else(|| self.peek_span().start);
-            return match self.peek() {
-                Token::Def => self.parse_builtin_decl(start, attrs),
-                Token::Defextractor => self.parse_builtin_extractor_decl(start, attrs),
-                Token::Defp => Err(ParseError::syntax(
-                    "@@builtin is not allowed before `defp` impl members",
-                    self.peek_span(),
-                )),
-                _ => Err(ParseError::syntax(
-                    "impl body may only contain `@@builtin def` / `@@builtin defextractor` declarations",
-                    self.peek_span(),
-                )),
-            };
         }
 
         self.parse_impl_method_with_attrs(target, attrs)

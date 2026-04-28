@@ -193,12 +193,11 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 .as_slice()
                 .split_first()
                 .is_some_and(|(_, rest)| {
-                    !rest.is_empty()
-                        && body.split("::").all(|segment| {
-                            let mut chars = segment.chars();
-                            matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
-                                && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-                        })
+                    !rest.is_empty() && body.split("::").all(|segment| {
+                        let mut chars = segment.chars();
+                        matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
+                            && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                    })
                 });
             let is_supported_operator = matches!(
                 body.as_str(),

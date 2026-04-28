@@ -297,6 +297,98 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         name: "format",
         func: builtin_error_format,
     },
+    BuiltinImpl {
+        name: "__operator_int_add",
+        func: builtin_operator_int_add,
+    },
+    BuiltinImpl {
+        name: "__operator_int_sub",
+        func: builtin_operator_int_sub,
+    },
+    BuiltinImpl {
+        name: "__operator_int_mul",
+        func: builtin_operator_int_mul,
+    },
+    BuiltinImpl {
+        name: "__operator_float_add",
+        func: builtin_operator_float_add,
+    },
+    BuiltinImpl {
+        name: "__operator_float_sub",
+        func: builtin_operator_float_sub,
+    },
+    BuiltinImpl {
+        name: "__operator_float_mul",
+        func: builtin_operator_float_mul,
+    },
+    BuiltinImpl {
+        name: "__operator_int_eq",
+        func: builtin_operator_int_eq,
+    },
+    BuiltinImpl {
+        name: "__operator_int_neq",
+        func: builtin_operator_int_neq,
+    },
+    BuiltinImpl {
+        name: "__operator_int_lt",
+        func: builtin_operator_int_lt,
+    },
+    BuiltinImpl {
+        name: "__operator_int_lte",
+        func: builtin_operator_int_lte,
+    },
+    BuiltinImpl {
+        name: "__operator_int_gt",
+        func: builtin_operator_int_gt,
+    },
+    BuiltinImpl {
+        name: "__operator_int_gte",
+        func: builtin_operator_int_gte,
+    },
+    BuiltinImpl {
+        name: "__operator_float_eq",
+        func: builtin_operator_float_eq,
+    },
+    BuiltinImpl {
+        name: "__operator_float_neq",
+        func: builtin_operator_float_neq,
+    },
+    BuiltinImpl {
+        name: "__operator_float_lt",
+        func: builtin_operator_float_lt,
+    },
+    BuiltinImpl {
+        name: "__operator_float_lte",
+        func: builtin_operator_float_lte,
+    },
+    BuiltinImpl {
+        name: "__operator_float_gt",
+        func: builtin_operator_float_gt,
+    },
+    BuiltinImpl {
+        name: "__operator_float_gte",
+        func: builtin_operator_float_gte,
+    },
+    BuiltinImpl {
+        name: "__operator_string_eq",
+        func: builtin_operator_string_eq,
+    },
+    BuiltinImpl {
+        name: "__operator_string_neq",
+        func: builtin_operator_string_neq,
+    },
+    BuiltinImpl {
+        name: "__operator_boolean_eq",
+        func: builtin_operator_boolean_eq,
+    },
+    BuiltinImpl {
+        name: "__operator_boolean_neq",
+        func: builtin_operator_boolean_neq,
+    },
+    BuiltinImpl {
+        name: "__operator_string_concat",
+        func: builtin_operator_string_concat,
+    },
 ];
 
 const _: () = {
@@ -402,6 +494,158 @@ fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
             left, right
         ))),
     }
+}
+
+fn expect_int_pair(args: &[Value], name: &str) -> Result<(SurtrInt, SurtrInt), RuntimeError> {
+    let (Value::Int(left), Value::Int(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(format!("{} expects (Int, Int)", name)));
+    };
+    Ok((left.clone(), right.clone()))
+}
+
+fn expect_float_pair(args: &[Value], name: &str) -> Result<(f64, f64), RuntimeError> {
+    let (Value::Float(left), Value::Float(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(format!(
+            "{} expects (Float, Float)",
+            name
+        )));
+    };
+    Ok((*left, *right))
+}
+
+fn builtin_operator_int_add(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_add")?;
+    Ok(Value::Int(left + right))
+}
+
+fn builtin_operator_int_sub(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_sub")?;
+    Ok(Value::Int(left - right))
+}
+
+fn builtin_operator_int_mul(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_mul")?;
+    Ok(Value::Int(left * right))
+}
+
+fn builtin_operator_float_add(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_add")?;
+    Ok(Value::Float(left + right))
+}
+
+fn builtin_operator_float_sub(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_sub")?;
+    Ok(Value::Float(left - right))
+}
+
+fn builtin_operator_float_mul(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_mul")?;
+    Ok(Value::Float(left * right))
+}
+
+fn builtin_operator_int_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_eq")?;
+    Ok(Value::Bool(left == right))
+}
+
+fn builtin_operator_int_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_neq")?;
+    Ok(Value::Bool(left != right))
+}
+
+fn builtin_operator_int_lt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_lt")?;
+    Ok(Value::Bool(left < right))
+}
+
+fn builtin_operator_int_lte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_lte")?;
+    Ok(Value::Bool(left <= right))
+}
+
+fn builtin_operator_int_gt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_gt")?;
+    Ok(Value::Bool(left > right))
+}
+
+fn builtin_operator_int_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_gte")?;
+    Ok(Value::Bool(left >= right))
+}
+
+fn builtin_operator_float_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_eq")?;
+    Ok(Value::Bool(left == right))
+}
+
+fn builtin_operator_float_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_neq")?;
+    Ok(Value::Bool(left != right))
+}
+
+fn builtin_operator_float_lt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_lt")?;
+    Ok(Value::Bool(left < right))
+}
+
+fn builtin_operator_float_lte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_lte")?;
+    Ok(Value::Bool(left <= right))
+}
+
+fn builtin_operator_float_gt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_gt")?;
+    Ok(Value::Bool(left > right))
+}
+
+fn builtin_operator_float_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_gte")?;
+    Ok(Value::Bool(left >= right))
+}
+
+fn builtin_operator_string_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_string_eq expects (String, String)",
+        ));
+    };
+    Ok(Value::Bool(left == right))
+}
+
+fn builtin_operator_string_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_string_neq expects (String, String)",
+        ));
+    };
+    Ok(Value::Bool(left != right))
+}
+
+fn builtin_operator_boolean_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Bool(left), Value::Bool(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_boolean_eq expects (Boolean, Boolean)",
+        ));
+    };
+    Ok(Value::Bool(left == right))
+}
+
+fn builtin_operator_boolean_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Bool(left), Value::Bool(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_boolean_neq expects (Boolean, Boolean)",
+        ));
+    };
+    Ok(Value::Bool(left != right))
+}
+
+fn builtin_operator_string_concat(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_string_concat expects (String, String)",
+        ));
+    };
+    Ok(Value::Str(format!("{}{}", left, right)))
 }
 
 fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

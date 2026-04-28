@@ -1,0 +1,13 @@
+@@doc """
+Standard `Lte` operator trait declaration.
+`Lte` models the `<=` / `lte(...)` contract.
+
+## REPL
+xldr(1)> lte(1, 2)
+True
+"""
+@@autoimport
+deftrait Lte {
+  # Return `True` when the left value is smaller or equal.
+  def lte(self: Self, rhs: Self) -> Boolean
+}

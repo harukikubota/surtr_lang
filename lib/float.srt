@@ -46,37 +46,37 @@ impl Float {
   }
 }
 
-impl Numeric for Float {
+impl Add for Float {
   @@doc """
   Return the sum of the two float values.
   ## REPL
   xldr(1)> add(1.5, 2.0)
   3.5
   """
-  def add(self: Self, rhs: Self) -> Self {
-    self + rhs
-  }
+  @@builtin def add(self: Self, rhs: Self) -> Self
+}
 
+impl Sub for Float {
   @@doc """
   Return the difference of the two float values.
   ## REPL
   xldr(1)> sub(3.5, 1.0)
   2.5
   """
-  def sub(self: Self, rhs: Self) -> Self {
-    self - rhs
-  }
+  @@builtin def sub(self: Self, rhs: Self) -> Self
+}
 
+impl Mul for Float {
   @@doc """
   Return the product of the two float values.
   ## REPL
   xldr(1)> mul(1.5, 2.0)
   3.0
   """
-  def mul(self: Self, rhs: Self) -> Self {
-    self * rhs
-  }
+  @@builtin def mul(self: Self, rhs: Self) -> Self
+}
 
+impl Numeric for Float {
   @@doc """
   Divide by `rhs`, returning `Err(ZeroDivisionError)` for zero divisors.
   ## REPL
@@ -161,19 +161,17 @@ impl Eq for Float {
   xldr(1)> eq(1.5, 1.5)
   True
   """
-  def eq(self: Self, rhs: Self) -> Boolean {
-    self == rhs
-  }
+  @@builtin def eq(self: Self, rhs: Self) -> Boolean
+}
 
+impl Neq for Float {
   @@doc """
   Return `True` when the float values differ.
   ## REPL
   xldr(1)> neq(1.5, 2.0)
   True
   """
-  def neq(self: Self, rhs: Self) -> Boolean {
-    self != rhs
-  }
+  @@builtin def neq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Compare for Float {
@@ -244,4 +242,44 @@ impl Ord for Float {
       Ordering::Equal | Ordering::Greater => True,
     }
   }
+}
+
+impl Lt for Float {
+  @@doc """
+  Return `True` when the left float is strictly less than the right float.
+  ## REPL
+  xldr(1)> lt(1.5, 2.0)
+  True
+  """
+  @@builtin def lt(self: Self, rhs: Self) -> Boolean
+}
+
+impl Lte for Float {
+  @@doc """
+  Return `True` when the left float is less than or equal to the right float.
+  ## REPL
+  xldr(1)> lte(1.5, 1.5)
+  True
+  """
+  @@builtin def lte(self: Self, rhs: Self) -> Boolean
+}
+
+impl Gt for Float {
+  @@doc """
+  Return `True` when the left float is strictly greater than the right float.
+  ## REPL
+  xldr(1)> gt(2.0, 1.5)
+  True
+  """
+  @@builtin def gt(self: Self, rhs: Self) -> Boolean
+}
+
+impl Gte for Float {
+  @@doc """
+  Return `True` when the left float is greater than or equal to the right float.
+  ## REPL
+  xldr(1)> gte(2.0, 2.0)
+  True
+  """
+  @@builtin def gte(self: Self, rhs: Self) -> Boolean
 }

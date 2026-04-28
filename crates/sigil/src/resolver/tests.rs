@@ -402,28 +402,25 @@ normalized = User::normalize(user)"#,
 #[test]
 fn test_precollect_trait_methods_as_trait_namespace_members() {
     let module_stages = vec![vec![staged_module(
-        "Numeric",
+        "Add",
         parse_module_ast(
-            r#"deftrait Numeric {
+            r#"deftrait Add {
   def add(self: Self, rhs: Self) -> Self
-  def safe_div(self: Self, rhs: Self) -> Result<Self, Error>
 }"#,
-            "Numeric",
+            "Add",
         ),
     )]];
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
-    let trait_entry = index
-        .get("Numeric::Numeric")
-        .expect("trait should be indexed");
-    assert_eq!(trait_entry.name, "Numeric");
+    let trait_entry = index.get("Add::Add").expect("trait should be indexed");
+    assert_eq!(trait_entry.name, "Add");
     assert_eq!(trait_entry.kind, DeclarationKind::Trait);
 
     let add = index
-        .get("Numeric::Numeric::add")
+        .get("Add::Add::add")
         .expect("trait method should be indexed");
-    assert_eq!(add.module_path, "Numeric");
-    assert_eq!(add.name, "Numeric::add");
+    assert_eq!(add.module_path, "Add");
+    assert_eq!(add.name, "Add::add");
     assert_eq!(add.kind, DeclarationKind::TraitMethod);
 }
 
@@ -581,30 +578,57 @@ impl User {
 #[test]
 fn test_resolve_trait_def_and_impl_preserve_nodes() {
     let ast = parse_module_ast(
-        r#"deftrait Numeric {
+        r#"deftrait Add {
   def add(self: Self, rhs: Self) -> Self
 }
 
-impl Numeric for Int {
+impl Add for Int {
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
   }
 }"#,
-        "Numeric",
+        "Add",
     );
 
     let resolved = resolve(ast).expect("trait nodes should resolve");
     assert!(matches!(
         &resolved[0],
         Resolved::TraitDef(_, id, _, methods, _)
-            if id.name == "Numeric"
+            if id.name == "Add"
                 && methods.len() == 1
-                && methods[0].id.qualified_name.as_deref() == Some("Numeric::add")
+                && methods[0].id.qualified_name.as_deref() == Some("Add::add")
     ));
     assert!(matches!(
         &resolved[1],
         Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
-            if id.name == "Numeric" && target == "Int" && methods.len() == 1
+            if id.name == "Add" && target == "Int" && methods.len() == 1
+    ));
+}
+
+#[test]
+fn test_resolve_trait_impl_builtin_method_preserves_private_name() {
+    let ast = parse_module_ast(
+        r#"deftrait Add {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+impl Add for Int {
+  @@builtin def add(self: Self, rhs: Self) -> Self
+}"#,
+        "Add",
+    );
+
+    let resolved = resolve(ast).expect("trait impl builtin method should resolve");
+    assert!(matches!(
+        &resolved[1],
+        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
+            if id.name == "Add"
+                && target == "Int"
+                && methods.len() == 1
+                && methods[0].is_builtin
+                && methods[0].function_id.qualified_name.as_deref().is_some_and(|name| {
+                    name.contains("__traitimpl__") && name.contains("Add")
+                })
     ));
 }
 
@@ -1022,7 +1046,6 @@ fn test_eq_helper_resolves_via_autoimport_trait() {
             r#"@@autoimport
 deftrait Eq {
   def eq(self: Self, rhs: Self) -> Boolean
-  def neq(self: Self, rhs: Self) -> Boolean
 }"#,
             "Eq",
         ),
@@ -1055,14 +1078,13 @@ deftrait Eq {
 #[test]
 fn test_neq_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
-        "Eq",
+        "Neq",
         parse_module_ast(
             r#"@@autoimport
-deftrait Eq {
-  def eq(self: Self, rhs: Self) -> Boolean
+deftrait Neq {
   def neq(self: Self, rhs: Self) -> Boolean
 }"#,
-            "Eq",
+            "Neq",
         ),
     )]];
 
@@ -1079,7 +1101,7 @@ deftrait Eq {
                 match func.as_ref() {
                     Resolved::Var(_, id) => {
                         assert_eq!(id.name, "neq");
-                        assert_eq!(id.qualified_name.as_deref(), Some("Eq::Eq::neq"));
+                        assert_eq!(id.qualified_name.as_deref(), Some("Neq::Neq::neq"));
                     }
                     other => panic!("expected helper var, got {:?}", other),
                 }
@@ -1652,10 +1674,8 @@ g = &print"#,
 
 #[test]
 fn test_capture_placeholder_lowers_to_closure() {
-    let resolved = parse_and_resolve(
-        "def add(x: Int, y: Int) -> Int { x + y }\ninc = &add(&1, 1)",
-    )
-    .unwrap();
+    let resolved =
+        parse_and_resolve("def add(x: Int, y: Int) -> Int { x + y }\ninc = &add(&1, 1)").unwrap();
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Closure(_, params, _, body) => {
@@ -1670,7 +1690,8 @@ fn test_capture_placeholder_lowers_to_closure() {
 
 #[test]
 fn test_backtick_name_capture_resolves_like_plain_capture() {
-    let resolved = parse_and_resolve("captured = &`print`").expect("backtick capture should resolve");
+    let resolved =
+        parse_and_resolve("captured = &`print`").expect("backtick capture should resolve");
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Capture(_, target, args) => {
@@ -1715,14 +1736,17 @@ fn test_backtick_qualified_capture_resolves_like_plain_capture() {
 
 #[test]
 fn test_backtick_operator_capture_lowers_to_closure() {
-    let resolved = parse_and_resolve("inc = &`+`(&1, 1)\nadd = &`+`")
-        .expect("operator capture should lower");
+    let resolved =
+        parse_and_resolve("inc = &`+`(&1, 1)\nadd = &`+`").expect("operator capture should lower");
 
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Closure(_, params, _, body) => {
                 assert_eq!(params.len(), 1);
-                assert!(matches!(body.as_ref(), Resolved::BinOp(_, BinOp::Add, _, _)));
+                assert!(matches!(
+                    body.as_ref(),
+                    Resolved::BinOp(_, BinOp::Add, _, _)
+                ));
             }
             other => panic!("Expected lowered closure, got {:?}", other),
         },
@@ -1733,7 +1757,10 @@ fn test_backtick_operator_capture_lowers_to_closure() {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Closure(_, params, _, body) => {
                 assert_eq!(params.len(), 2);
-                assert!(matches!(body.as_ref(), Resolved::BinOp(_, BinOp::Add, _, _)));
+                assert!(matches!(
+                    body.as_ref(),
+                    Resolved::BinOp(_, BinOp::Add, _, _)
+                ));
             }
             other => panic!("Expected lowered closure, got {:?}", other),
         },
@@ -1743,10 +1770,9 @@ fn test_backtick_operator_capture_lowers_to_closure() {
 
 #[test]
 fn test_pipe_slot_lowers_to_closure() {
-    let resolved = parse_and_resolve(
-        "def add(x: Int, y: Int) -> Int { x + y }\nout = 1 |> add(10, _1)",
-    )
-    .unwrap();
+    let resolved =
+        parse_and_resolve("def add(x: Int, y: Int) -> Int { x + y }\nout = 1 |> add(10, _1)")
+            .unwrap();
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Pipe(_, _, right) => {
@@ -1770,9 +1796,7 @@ fn test_nested_capture_argument_block_is_rejected_inside_placeholder_capture() {
 
 #[test]
 fn test_pipe_slot_cannot_be_used_more_than_once() {
-    let err = parse_and_resolve(
-        "def add(x: Int, y: Int) -> Int { x + y }\nbad = 1 |> add(_1, _1)",
-    )
+    let err = parse_and_resolve("def add(x: Int, y: Int) -> Int { x + y }\nbad = 1 |> add(_1, _1)")
         .expect_err("duplicate pipe slot must fail");
     assert!(err.message.contains("can only be used once"));
 }

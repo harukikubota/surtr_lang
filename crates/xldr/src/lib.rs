@@ -388,16 +388,28 @@ fn collect_doc_entries_for_ast(
                     });
                 }
                 for method in methods {
-                    if let spire::ast::Ast::Def(
-                        _,
-                        name,
-                        type_params,
-                        params,
-                        ret_ty,
-                        _,
-                        method_attrs,
-                    ) = method
-                    {
+                    let method_parts = match method {
+                        spire::ast::Ast::Def(
+                            _,
+                            name,
+                            type_params,
+                            params,
+                            ret_ty,
+                            _,
+                            method_attrs,
+                        ) => Some((
+                            name,
+                            type_params.as_slice(),
+                            params.as_slice(),
+                            ret_ty,
+                            method_attrs,
+                        )),
+                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, method_attrs) => {
+                            Some((name, [].as_slice(), params.as_slice(), ret_ty, method_attrs))
+                        }
+                        _ => None,
+                    };
+                    if let Some((name, type_params, params, ret_ty, method_attrs)) = method_parts {
                         if let Some(doc) = &method_attrs.doc {
                             let rendered = format_trait_impl_method_signature(
                                 trait_name,

@@ -269,6 +269,7 @@ struct TraitImplMethodInfo {
     attrs: ResolvedDeclAttrs,
     span: Span,
     dispatch_override: Option<TraitDispatchTarget>,
+    is_builtin: bool,
 }
 
 #[allow(dead_code)]

@@ -593,19 +593,17 @@ impl Eq for String {
   xldr(1)> eq("a", "a")
   True
   """
-  def eq(self: Self, rhs: Self) -> Boolean {
-    self == rhs
-  }
+  @@builtin def eq(self: Self, rhs: Self) -> Boolean
+}
 
+impl Neq for String {
   @@doc """
   Return `True` when the string values differ.
   ## REPL
   xldr(1)> neq("a", "b")
   True
   """
-  def neq(self: Self, rhs: Self) -> Boolean {
-    self != rhs
-  }
+  @@builtin def neq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Concat for String {
@@ -615,7 +613,5 @@ impl Concat for String {
   xldr(1)> concat("ab", "cd")
   "abcd"
   """
-  def concat(self: Self, rhs: Self) -> Self {
-    self ++ rhs
-  }
+  @@builtin def concat(self: Self, rhs: Self) -> Self
 }

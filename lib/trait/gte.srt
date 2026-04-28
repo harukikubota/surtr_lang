@@ -1,0 +1,13 @@
+@@doc """
+Standard `Gte` operator trait declaration.
+`Gte` models the `>=` / `gte(...)` contract.
+
+## REPL
+xldr(1)> gte(2, 1)
+True
+"""
+@@autoimport
+deftrait Gte {
+  # Return `True` when the left value is greater or equal.
+  def gte(self: Self, rhs: Self) -> Boolean
+}

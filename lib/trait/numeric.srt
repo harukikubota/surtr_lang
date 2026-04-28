@@ -1,7 +1,6 @@
 @@doc """
 Standard `Numeric` trait declaration.
-`Numeric` is Surtr V1's first trait and provides the arithmetic contract shared
-by concrete numeric types.
+`Numeric` provides helper functions shared by concrete numeric types.
 As with other function-bearing surfaces in Surtr, `deftrait` introduces its own
 namespace, but it carries signatures only and no concrete method bodies.
 Dispatch is compile-time only: implementations lower to existing concrete
@@ -14,12 +13,6 @@ xldr(1)> Numeric::abs(-4)
 """
 @@autoimport
 deftrait Numeric {
-  # Return the addition result.
-  def add(self: Self, rhs: Self) -> Self
-  # Return the subtraction result.
-  def sub(self: Self, rhs: Self) -> Self
-  # Return the multiplication result.
-  def mul(self: Self, rhs: Self) -> Self
   # Divide and return `Err(ZeroDivisionError)` on zero.
   def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError>
   # Return the absolute value.

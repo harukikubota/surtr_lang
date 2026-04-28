@@ -51,12 +51,12 @@ Xldr は対話セッション中に次を保持する。
 
 ### 3.2 初期化
 
-- セッション開始時に標準 module source を `Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float]` の順で読み込む
+- セッション開始時に標準 module source を `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float]` の順で読み込む
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
 - `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole` の canonical builtin type head を登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin を登録する
 - 各 type file の top-level では対応する canonical builtin type head を登録する
-- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/kernel.srt`, `lib/trait/numeric.srt`, `lib/trait/show.srt`, `lib/trait/eq.srt`, `lib/trait/ordering.srt`, `lib/trait/compare.srt`, `lib/trait/ord.srt`, `lib/trait/concat.srt`, `lib/trait/from.srt`, `lib/trait/try_from.srt`, `lib/int.srt`, `lib/string.srt`, `lib/regex.srt`, `lib/boolean.srt`, `lib/error.srt`, `lib/list.srt`, `lib/hash_map.srt`, `lib/result.srt`, `lib/lens.srt`, `lib/float.srt` を同一段として読み込む
+- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/special_types.srt`, `lib/kernel.srt`, operator trait modules, helper trait modules, type modules を同一段として読み込む
 - loader は追加標準 module も `./lib/*.srt` から収集し、built-in 標準 module と重複するものはデフォルト入力から除外する
 - REPL user chunk は標準 module 読み込み後に `SourceKind::ReplChunk` として追加される
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、型定義・`impl`・`defmod` は parse error とする

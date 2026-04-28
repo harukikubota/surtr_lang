@@ -356,7 +356,7 @@ pub enum Ast {
     /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
     ImplDef(Span, Symbol, Vec<Ast>, DeclAttrs),
 
-    /// Trait definition: `deftrait Numeric<$T> { def add(self: Self, rhs: Self) -> Self }`
+    /// Trait definition: `deftrait Add { def add(self: Self, rhs: Self) -> Self }`
     TraitDef(Span, Symbol, Vec<TypeParam>, Vec<TraitMethodSig>, DeclAttrs),
 
     /// Trait impl definition:

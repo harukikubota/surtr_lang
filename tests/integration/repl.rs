@@ -843,8 +843,8 @@ fn repl_duplicate_function_name_is_rejected() {
 }
 
 #[test]
-fn repl_numeric_trait_errors_list_available_implementations() {
-    let output = run_repl_session("Numeric::add(1,False)\nNumeric::add(False, True)\n:quit\n");
+fn repl_add_trait_errors_list_available_implementations() {
+    let output = run_repl_session("Add::add(1,False)\nAdd::add(False, True)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -854,22 +854,22 @@ fn repl_numeric_trait_errors_list_available_implementations() {
 
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(
-        stderr.contains("Numeric::add expects argument 2 to match receiver type Int, got Boolean"),
-        "expected Numeric mismatch detail in stderr, got:\n{}",
+        stderr.contains("Add::add expects argument 2 to match receiver type Int, got Boolean"),
+        "expected Add mismatch detail in stderr, got:\n{}",
         stderr
     );
     assert!(
-        stderr.contains("Numeric::add requires a receiver type implementing Numeric, got Boolean"),
+        stderr.contains("Add::add requires a receiver type implementing Add, got Boolean"),
         "expected missing receiver impl detail in stderr, got:\n{}",
         stderr
     );
     assert!(
-        stderr.contains("Numeric is implemented for: Float, Int"),
+        stderr.contains("Add is implemented for: Float, Int"),
         "expected trait implementation list in stderr, got:\n{}",
         stderr
     );
     assert!(
-        stderr.contains("Help: Call target signature: Numeric::add("),
+        stderr.contains("Help: Call target signature: Add::add("),
         "expected trait call signature help in stderr, got:\n{}",
         stderr
     );
@@ -877,7 +877,7 @@ fn repl_numeric_trait_errors_list_available_implementations() {
 
 #[test]
 fn repl_call_errors_show_target_signature() {
-    let output = run_repl_session("print()\nprint(1)\nNumeric::add(2, \"a\")\n:quit\n");
+    let output = run_repl_session("print()\nprint(1)\nAdd::add(2, \"a\")\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -892,8 +892,8 @@ fn repl_call_errors_show_target_signature() {
         stderr
     );
     assert!(
-        stderr.contains("Help: Call target signature: Numeric::add("),
-        "expected Numeric call signature help in stderr, got:\n{}",
+        stderr.contains("Help: Call target signature: Add::add("),
+        "expected Add call signature help in stderr, got:\n{}",
         stderr
     );
 }

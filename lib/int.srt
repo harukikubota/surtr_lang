@@ -483,37 +483,37 @@ impl Int {
   }
 }
 
-impl Numeric for Int {
+impl Add for Int {
   @@doc """
   Return the sum of the two integer values.
   ## REPL
   xldr(1)> add(1, 2)
   3
   """
-  def add(self: Self, rhs: Self) -> Self {
-    self + rhs
-  }
+  @@builtin def add(self: Self, rhs: Self) -> Self
+}
 
+impl Sub for Int {
   @@doc """
   Return the difference of the two integer values.
   ## REPL
   xldr(1)> sub(5, 2)
   3
   """
-  def sub(self: Self, rhs: Self) -> Self {
-    self - rhs
-  }
+  @@builtin def sub(self: Self, rhs: Self) -> Self
+}
 
+impl Mul for Int {
   @@doc """
   Return the product of the two integer values.
   ## REPL
   xldr(1)> mul(3, 4)
   12
   """
-  def mul(self: Self, rhs: Self) -> Self {
-    self * rhs
-  }
+  @@builtin def mul(self: Self, rhs: Self) -> Self
+}
 
+impl Numeric for Int {
   @@doc """
   Divide by `rhs`, returning `Err(ZeroDivisionError)` for zero divisors.
   ## REPL
@@ -598,19 +598,17 @@ impl Eq for Int {
   xldr(1)> eq(2, 2)
   True
   """
-  def eq(self: Self, rhs: Self) -> Boolean {
-    self == rhs
-  }
+  @@builtin def eq(self: Self, rhs: Self) -> Boolean
+}
 
+impl Neq for Int {
   @@doc """
   Return `True` when the integer values differ.
   ## REPL
   xldr(1)> neq(2, 3)
   True
   """
-  def neq(self: Self, rhs: Self) -> Boolean {
-    self != rhs
-  }
+  @@builtin def neq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Compare for Int {
@@ -681,4 +679,44 @@ impl Ord for Int {
       Ordering::Equal | Ordering::Greater => True,
     }
   }
+}
+
+impl Lt for Int {
+  @@doc """
+  Return `True` when the left integer is strictly less than the right integer.
+  ## REPL
+  xldr(1)> lt(1, 2)
+  True
+  """
+  @@builtin def lt(self: Self, rhs: Self) -> Boolean
+}
+
+impl Lte for Int {
+  @@doc """
+  Return `True` when the left integer is less than or equal to the right integer.
+  ## REPL
+  xldr(1)> lte(2, 2)
+  True
+  """
+  @@builtin def lte(self: Self, rhs: Self) -> Boolean
+}
+
+impl Gt for Int {
+  @@doc """
+  Return `True` when the left integer is strictly greater than the right integer.
+  ## REPL
+  xldr(1)> gt(3, 2)
+  True
+  """
+  @@builtin def gt(self: Self, rhs: Self) -> Boolean
+}
+
+impl Gte for Int {
+  @@doc """
+  Return `True` when the left integer is greater than or equal to the right integer.
+  ## REPL
+  xldr(1)> gte(2, 2)
+  True
+  """
+  @@builtin def gte(self: Self, rhs: Self) -> Boolean
 }

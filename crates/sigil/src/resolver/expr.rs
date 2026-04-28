@@ -106,11 +106,11 @@ impl Resolver {
             "<=" => BinOp::Lte,
             ">=" => BinOp::Gte,
             _ => {
-            return Err(ResolveError {
-                message: format!("unsupported operator capture target `{}`", body),
-                span: span.clone(),
-                related_labels: Vec::new(),
-            });
+                return Err(ResolveError {
+                    message: format!("unsupported operator capture target `{}`", body),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                });
             }
         };
         Ok(Ast::BinOp(
@@ -162,8 +162,8 @@ impl Resolver {
             Ast::CapturePlaceholder(span, index) => {
                 if !allow_placeholders {
                     return Err(ResolveError {
-                        message:
-                            "capture placeholders are only valid in the outer capture body".into(),
+                        message: "capture placeholders are only valid in the outer capture body"
+                            .into(),
                         span: span.clone(),
                         related_labels: Vec::new(),
                     });
@@ -358,8 +358,8 @@ impl Resolver {
             Ast::CapturePlaceholder(span, index) => {
                 if !allow_placeholders {
                     return Err(ResolveError {
-                        message:
-                            "capture placeholders are only valid in the outer capture body".into(),
+                        message: "capture placeholders are only valid in the outer capture body"
+                            .into(),
                         span,
                         related_labels: Vec::new(),
                     });
@@ -401,7 +401,8 @@ impl Resolver {
             )),
             Ast::Block(span, stmts) => Ok(Ast::Block(
                 span,
-                stmts.into_iter()
+                stmts
+                    .into_iter()
                     .map(|stmt| {
                         self.rewrite_capture_placeholders(
                             stmt,
@@ -555,7 +556,8 @@ impl Resolver {
             )),
             Ast::ListLiteral(span, elems) => Ok(Ast::ListLiteral(
                 span,
-                elems.into_iter()
+                elems
+                    .into_iter()
                     .map(|elem| {
                         self.rewrite_capture_placeholders(
                             elem,
@@ -568,7 +570,8 @@ impl Resolver {
             )),
             Ast::TupleLiteral(span, elems) => Ok(Ast::TupleLiteral(
                 span,
-                elems.into_iter()
+                elems
+                    .into_iter()
                     .map(|elem| {
                         self.rewrite_capture_placeholders(
                             elem,
@@ -590,7 +593,8 @@ impl Resolver {
             )),
             Ast::InterpolatedStr(span, parts) => Ok(Ast::InterpolatedStr(
                 span,
-                parts.into_iter()
+                parts
+                    .into_iter()
                     .map(|part| match part {
                         InterpolatedPart::Text(text) => Ok(InterpolatedPart::Text(text)),
                         InterpolatedPart::Expr(expr) => Ok(InterpolatedPart::Expr(Box::new(
@@ -860,8 +864,9 @@ impl Resolver {
                 }
             }),
             Ast::Closure(_, _, body) => Self::pipe_slot_span(body),
-            Ast::Capture(_, target, args) => Self::pipe_slot_span(target)
-                .or_else(|| args.iter().find_map(Self::pipe_slot_span)),
+            Ast::Capture(_, target, args) => {
+                Self::pipe_slot_span(target).or_else(|| args.iter().find_map(Self::pipe_slot_span))
+            }
             Ast::FuncLiteralRef(_, _) => None,
             _ => None,
         }
@@ -886,10 +891,7 @@ impl Resolver {
             match arg {
                 RecordLitArg::Positional(Ast::Var(arg_span, name)) if name == "_1" => {
                     slot_count += 1;
-                    let lowered = Ast::Var(
-                        arg_span.clone(),
-                        Self::pipe_slot_param_name(&span),
-                    );
+                    let lowered = Ast::Var(arg_span.clone(), Self::pipe_slot_param_name(&span));
                     lowered_args.push(lowered.clone());
                     positional_only.push(RecordLitArg::Positional(lowered));
                 }
@@ -914,7 +916,8 @@ impl Resolver {
                     }
                     if slot_count > 0 {
                         return Err(ResolveError {
-                            message: "pipe placeholder `_1` does not support named arguments".into(),
+                            message: "pipe placeholder `_1` does not support named arguments"
+                                .into(),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
@@ -1834,7 +1837,7 @@ impl Resolver {
                 };
                 let mut resolved_methods = Vec::new();
                 for method in methods {
-                    let Ast::Def(
+                    let (
                         method_span,
                         method_name,
                         type_params,
@@ -1842,16 +1845,46 @@ impl Resolver {
                         ret_ty,
                         body,
                         attrs,
-                    ) = method
-                    else {
-                        return Err(ResolveError {
-                            message: "trait impl body may only contain `def` declarations"
-                                .to_string(),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
+                        is_builtin,
+                    ) = match method {
+                        Ast::Def(
+                            method_span,
+                            method_name,
+                            type_params,
+                            params,
+                            ret_ty,
+                            body,
+                            attrs,
+                        ) => (
+                            method_span,
+                            method_name,
+                            type_params,
+                            params,
+                            ret_ty,
+                            Some(body),
+                            attrs,
+                            false,
+                        ),
+                        Ast::BuiltinDecl(method_span, method_name, params, ret_ty, attrs) => (
+                            method_span,
+                            method_name,
+                            Vec::new(),
+                            params,
+                            ret_ty,
+                            None,
+                            attrs,
+                            true,
+                        ),
+                        _ => {
+                            return Err(ResolveError {
+                                message:
+                                    "trait impl body may only contain `def` / `@@builtin def` declarations"
+                                        .to_string(),
+                                span: span.clone(),
+                                related_labels: Vec::new(),
+                            });
+                        }
                     };
-
                     let qualified_function_name = trait_impl_method_qualified_name(
                         self.current_module_path.as_deref(),
                         &trait_name,
@@ -1865,19 +1898,24 @@ impl Resolver {
                         .get(&qualified_function_name)
                         .copied()
                         .unwrap_or_else(|| self.scope.reserve_id());
-                    let mut body_scope = self.scope.clone();
-                    body_scope.define_with_id(&method_name, method_uid);
-                    let mut body_resolver = Resolver::with_scope(body_scope);
-                    body_resolver.declaration_uids = self.declaration_uids.clone();
-                    body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
-                    body_resolver.current_module_path = self.current_module_path.clone();
-                    body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                    let mut method_scope = self.scope.clone();
+                    method_scope.define_with_id(&method_name, method_uid);
+                    let mut method_resolver = Resolver::with_scope(method_scope);
+                    method_resolver.declaration_uids = self.declaration_uids.clone();
+                    method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                    method_resolver.current_module_path = self.current_module_path.clone();
+                    method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                     let resolved_params = params
                         .into_iter()
-                        .map(|param| body_resolver.resolve_fun_param(param))
+                        .map(|param| method_resolver.resolve_fun_param(param))
                         .collect::<Result<Vec<_>, ResolveError>>()?;
-                    let resolved_body = body_resolver.resolve_node(*body)?;
-                    self.scope.advance_next_id_to(body_resolver.scope.next_id());
+                    let resolved_body = if let Some(body) = body {
+                        method_resolver.resolve_node(*body)?
+                    } else {
+                        Resolved::Lit(method_span.clone(), spire::ast::Lit::Unit)
+                    };
+                    self.scope
+                        .advance_next_id_to(method_resolver.scope.next_id());
                     let local_function_name = if trait_args.is_empty() {
                         format!("{}::{}", target_key, method_name)
                     } else {
@@ -1905,6 +1943,7 @@ impl Resolver {
                         body: Box::new(resolved_body),
                         attrs: resolve_decl_attrs(&attrs),
                         span: method_span,
+                        is_builtin,
                     });
                 }
 

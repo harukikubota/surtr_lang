@@ -21,10 +21,7 @@ impl Parser<'_> {
         }
 
         if body.contains("::") {
-            let segments = body
-                .split("::")
-                .map(str::to_string)
-                .collect::<Vec<_>>();
+            let segments = body.split("::").map(str::to_string).collect::<Vec<_>>();
             let is_valid_path = segments.len() >= 2
                 && segments.iter().all(|segment| {
                     let mut chars = segment.chars();
@@ -258,8 +255,11 @@ impl Parser<'_> {
                     left = Self::lower_func_literal_call(left, Ast::Var(func_span, name), right);
                 }
                 FuncLiteralBodyKind::Path(path) => {
-                    left =
-                        Self::lower_func_literal_call(left, Ast::Path(path.span.clone(), path), right);
+                    left = Self::lower_func_literal_call(
+                        left,
+                        Ast::Path(path.span.clone(), path),
+                        right,
+                    );
                 }
             }
         }
@@ -1140,8 +1140,7 @@ impl Parser<'_> {
                 let (name, name_span) = self.expect_ident()?;
                 let mut path_segments = vec![name.clone()];
                 let mut path_end = name_span.end;
-                while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_)))
-                {
+                while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
                     self.consume_path_separator()?;
                     let (seg, seg_span) = self.expect_ident()?;
                     path_end = seg_span.end;
@@ -1170,7 +1169,9 @@ impl Parser<'_> {
             Token::FuncLiteral(body) => {
                 let func_span = self.advance().span.clone();
                 match Self::parse_func_literal_body(&body, func_span.clone())? {
-                    FuncLiteralBodyKind::Name(name) => (Ast::Var(func_span.clone(), name), func_span.end),
+                    FuncLiteralBodyKind::Name(name) => {
+                        (Ast::Var(func_span.clone(), name), func_span.end)
+                    }
                     FuncLiteralBodyKind::Path(path) => {
                         let end = path.span.end;
                         (Ast::Path(path.span.clone(), path), end)

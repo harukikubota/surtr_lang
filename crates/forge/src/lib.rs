@@ -22,10 +22,18 @@ mod tests {
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/special_types.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+    const ADD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/add.srt");
+    const SUB_MODULE_SOURCE: &str = include_str!("../../../lib/trait/sub.srt");
+    const MUL_MODULE_SOURCE: &str = include_str!("../../../lib/trait/mul.srt");
     const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
+    const NEQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/neq.srt");
     const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/compare.srt");
+    const LT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/lt.srt");
+    const LTE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/lte.srt");
+    const GT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/gt.srt");
+    const GTE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/gte.srt");
     const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
@@ -159,13 +167,21 @@ mod tests {
             [
                 ("SpecialTypes", SPECIAL_TYPES_SOURCE),
                 ("Kernel", KERNEL_PRELUDE_SOURCE),
+                ("Add", ADD_MODULE_SOURCE),
+                ("Sub", SUB_MODULE_SOURCE),
+                ("Mul", MUL_MODULE_SOURCE),
+                ("Eq", EQ_MODULE_SOURCE),
+                ("Neq", NEQ_MODULE_SOURCE),
+                ("Compare", COMPARE_MODULE_SOURCE),
+                ("Lt", LT_MODULE_SOURCE),
+                ("Lte", LTE_MODULE_SOURCE),
+                ("Gt", GT_MODULE_SOURCE),
+                ("Gte", GTE_MODULE_SOURCE),
+                ("Concat", CONCAT_MODULE_SOURCE),
                 ("Numeric", NUMERIC_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),
-                ("Eq", EQ_MODULE_SOURCE),
                 ("Ordering", ORDERING_MODULE_SOURCE),
-                ("Compare", COMPARE_MODULE_SOURCE),
                 ("Ord", ORD_MODULE_SOURCE),
-                ("Concat", CONCAT_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
                 ("Int", INT_MODULE_SOURCE),
@@ -482,9 +498,9 @@ Lens::view(Expr.Add, expr)"#,
     }
 
     #[test]
-    fn bounded_numeric_generic_helpers_emit_specialized_functions() {
+    fn bounded_add_generic_helpers_emit_specialized_functions() {
         let bytecode = codegen_source(
-            r#"def double<$N: Numeric>(x: $N) -> $N { x + x }
+            r#"def double<$N: Add>(x: $N) -> $N { x + x }
 a = double(21)
 b = double(1.5)"#,
         );

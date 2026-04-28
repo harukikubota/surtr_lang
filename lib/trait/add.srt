@@ -1,0 +1,13 @@
+@@doc """
+Standard `Add` operator trait declaration.
+`Add` models the `+` / `add(...)` contract.
+
+## REPL
+xldr(1)> add(1, 2)
+3
+"""
+@@autoimport
+deftrait Add {
+  # Return the addition result.
+  def add(self: Self, rhs: Self) -> Self
+}

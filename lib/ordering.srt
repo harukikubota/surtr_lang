@@ -36,7 +36,9 @@ impl Eq for Ordering {
   def eq(self: Self, rhs: Self) -> Boolean {
     self == rhs
   }
+}
 
+impl Neq for Ordering {
   @@doc """
   Return `True` when the ordering values differ.
   ## REPL

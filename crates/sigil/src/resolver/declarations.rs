@@ -722,13 +722,20 @@ pub fn precollect_declaration_index(
                     stmt
                 {
                     for method in methods {
-                        let Ast::Def(method_span, method_name, _, _, _, _, _) = method else {
-                            return Err(ResolveError {
-                                message: "trait impl body may only contain `def` declarations"
-                                    .to_string(),
-                                span: span.clone(),
-                                related_labels: Vec::new(),
-                            });
+                        let (method_span, method_name) = match method {
+                            Ast::Def(method_span, method_name, _, _, _, _, _)
+                            | Ast::BuiltinDecl(method_span, method_name, _, _, _) => {
+                                (method_span, method_name)
+                            }
+                            _ => {
+                                return Err(ResolveError {
+                                    message:
+                                        "trait impl body may only contain `def` / `@@builtin def` declarations"
+                                            .to_string(),
+                                    span: span.clone(),
+                                    related_labels: Vec::new(),
+                                });
+                            }
                         };
                         let internal_name = trait_impl_method_qualified_name(
                             Some(module.module_path.as_str()),

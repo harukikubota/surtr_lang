@@ -1422,7 +1422,11 @@ impl Checker {
                     let left_ty = self.ty_name(&typed_args[0].ty);
                     let right_ty = self.ty_name(&typed_args[1].ty);
                     if self.trait_matches_short_name(trait_name, "Eq")
-                        || self.trait_matches_short_name(trait_name, "Ord")
+                        || self.trait_matches_short_name(trait_name, "Neq")
+                        || self.trait_matches_short_name(trait_name, "Lt")
+                        || self.trait_matches_short_name(trait_name, "Lte")
+                        || self.trait_matches_short_name(trait_name, "Gt")
+                        || self.trait_matches_short_name(trait_name, "Gte")
                     {
                         return Err(TypeError {
                             labels: Vec::new(),
@@ -3478,8 +3482,7 @@ impl Checker {
         if !args.is_empty() {
             return Err(TypeError {
                 labels: Vec::new(),
-                message:
-                    "capture calls with arguments must be lowered before type checking".into(),
+                message: "capture calls with arguments must be lowered before type checking".into(),
                 span: span.clone(),
                 hint: None,
             });
@@ -3505,10 +3508,7 @@ impl Checker {
         };
         Ok(TypedNode {
             ty: Ty::Func(
-                params
-                    .into_iter()
-                    .map(|ty| self.resolve_ty(&ty))
-                    .collect(),
+                params.into_iter().map(|ty| self.resolve_ty(&ty)).collect(),
                 Box::new(self.resolve_ty(&ret)),
             ),
             span: span.clone(),
@@ -3573,10 +3573,10 @@ impl Checker {
 
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul => {
-                let method_name = match op {
-                    BinOp::Add => "add",
-                    BinOp::Sub => "sub",
-                    BinOp::Mul => "mul",
+                let (trait_short_name, method_name, symbol) = match op {
+                    BinOp::Add => ("Add", "add", "+"),
+                    BinOp::Sub => ("Sub", "sub", "-"),
+                    BinOp::Mul => ("Mul", "mul", "*"),
                     _ => unreachable!("validated above"),
                 };
                 if !compatible {
@@ -3603,23 +3603,26 @@ impl Checker {
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
-                let numeric_trait =
-                    self.trait_key_by_short_name("Numeric")
+                let operator_trait =
+                    self.trait_key_by_short_name(trait_short_name)
                         .ok_or_else(|| TypeError {
                             labels: Vec::new(),
-                            message: "Unknown trait: Numeric".into(),
+                            message: format!("Unknown trait: {}", trait_short_name),
                             span: span.clone(),
                             hint: None,
                         })?;
                 let dispatch = self
-                    .trait_dispatch_target(&numeric_trait, method_name, &receiver_ty)
+                    .trait_dispatch_target(&operator_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
                         message: format!(
-                            "Operator {:?} requires both operands to implement Numeric",
-                            op
+                            "`{}` requires both operands to implement {}",
+                            symbol, trait_short_name
                         ),
                         span: typed_right.span.clone(),
-                        hint: Some("Add a `Numeric` bound or use `Int` / `Float` values.".into()),
+                        hint: Some(format!(
+                            "Add a `{}` bound or use a type that implements `{}`.",
+                            trait_short_name, trait_short_name
+                        )),
                         labels: self.lhs_op_rhs_labels(
                             typed_left.span.clone(),
                             span,
@@ -3627,7 +3630,7 @@ impl Checker {
                         ),
                     })?;
                 Ok(make_trait_call(
-                    numeric_trait,
+                    operator_trait,
                     method_name,
                     receiver_ty.clone(),
                     dispatch,
@@ -3655,27 +3658,25 @@ impl Checker {
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
+                let (trait_short_name, method_name, symbol) = match op {
+                    BinOp::Eq => ("Eq", "eq", "=="),
+                    BinOp::Neq => ("Neq", "neq", "!="),
+                    _ => unreachable!("validated above"),
+                };
                 let eq_trait = self
-                    .trait_key_by_short_name("Eq")
+                    .trait_key_by_short_name(trait_short_name)
                     .ok_or_else(|| TypeError {
                         labels: Vec::new(),
-                        message: "Unknown trait: Eq".into(),
+                        message: format!("Unknown trait: {}", trait_short_name),
                         span: span.clone(),
                         hint: None,
                     })?;
-                let method_name = match op {
-                    BinOp::Eq => "eq",
-                    BinOp::Neq => "neq",
-                    _ => unreachable!("validated above"),
-                };
                 let dispatch = self
                     .trait_dispatch_target(&eq_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
                         message: format!(
-                            "{} / {} not supported for {}",
-                            "==",
-                            "!=",
-                            self.ty_name(&receiver_ty)
+                            "`{}` requires both operands to implement {}",
+                            symbol, trait_short_name
                         ),
                         span: typed_right.span.clone(),
                         hint: None,
@@ -3714,28 +3715,27 @@ impl Checker {
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
-                let ord_trait = self
-                    .trait_key_by_short_name("Ord")
-                    .ok_or_else(|| TypeError {
-                        labels: Vec::new(),
-                        message: "Unknown trait: Ord".into(),
-                        span: span.clone(),
-                        hint: None,
-                    })?;
-                let method_name = match op {
-                    BinOp::Lt => "lt",
-                    BinOp::Gt => "gt",
-                    BinOp::Lte => "lte",
-                    BinOp::Gte => "gte",
+                let (trait_short_name, method_name, symbol) = match op {
+                    BinOp::Lt => ("Lt", "lt", "<"),
+                    BinOp::Gt => ("Gt", "gt", ">"),
+                    BinOp::Lte => ("Lte", "lte", "<="),
+                    BinOp::Gte => ("Gte", "gte", ">="),
                     _ => unreachable!("validated above"),
                 };
+                let ord_trait =
+                    self.trait_key_by_short_name(trait_short_name)
+                        .ok_or_else(|| TypeError {
+                            labels: Vec::new(),
+                            message: format!("Unknown trait: {}", trait_short_name),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
                 let dispatch = self
                     .trait_dispatch_target(&ord_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
                         message: format!(
-                            "Cannot compare {} and {}",
-                            self.ty_name(&lt),
-                            self.ty_name(&rt)
+                            "`{}` requires both operands to implement {}",
+                            symbol, trait_short_name
                         ),
                         span: typed_right.span.clone(),
                         hint: None,

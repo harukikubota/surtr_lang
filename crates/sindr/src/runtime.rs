@@ -227,7 +227,11 @@ impl Value {
             Value::Callable(callable) => match callable.target {
                 CallableTarget::Builtin(id) => format!("<builtin:{}>", id),
                 CallableTarget::Function(fun_idx) => {
-                    format!("<function:{}; lexical_captures={}>", fun_idx, callable.lexical_captures.len())
+                    format!(
+                        "<function:{}; lexical_captures={}>",
+                        fun_idx,
+                        callable.lexical_captures.len()
+                    )
                 }
             },
             Value::Error(rich) => rich.to_display_string(),

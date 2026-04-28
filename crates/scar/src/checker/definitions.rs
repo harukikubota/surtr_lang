@@ -909,6 +909,7 @@ impl Checker {
                 attrs: method.attrs.clone(),
                 span: method.span.clone(),
                 dispatch_override: None,
+                is_builtin: method.is_builtin,
             };
             let (param_tys, expected_ret, type_params) = self.resolve_trait_impl_method_signature(
                 &trait_info,
@@ -926,6 +927,10 @@ impl Checker {
                     id: param.id.clone(),
                     ty: param_ty.clone(),
                 });
+            }
+
+            if method.is_builtin {
+                continue;
             }
 
             let impl_target = self

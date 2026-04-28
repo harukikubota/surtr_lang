@@ -1,7 +1,7 @@
 @@doc """
 Standard `Eq` trait declaration.
-`Eq` models equality and inequality for values that support exact comparison.
-The unqualified helpers `eq(...)` / `neq(...)` come from this auto-imported
+`Eq` models equality for values that support exact comparison.
+The unqualified helper `eq(...)` comes from this auto-imported
 trait surface rather than from a compiler-only builtin shim.
 
 ## REPL
@@ -12,6 +12,4 @@ True
 deftrait Eq {
   # Return `True` when both values are equal.
   def eq(self: Self, rhs: Self) -> Boolean
-  # Return `True` when both values are not equal.
-  def neq(self: Self, rhs: Self) -> Boolean
 }

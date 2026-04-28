@@ -367,6 +367,121 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 1,
         sig_str: "(Error) -> String",
     },
+    BuiltinMeta {
+        name: "__operator_int_add",
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "__operator_int_sub",
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "__operator_int_mul",
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "__operator_float_add",
+        arity: 2,
+        sig_str: "(Float, Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "__operator_float_sub",
+        arity: 2,
+        sig_str: "(Float, Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "__operator_float_mul",
+        arity: 2,
+        sig_str: "(Float, Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "__operator_int_eq",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_neq",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_lt",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_lte",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_gt",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_gte",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_eq",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_neq",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_lt",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_lte",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_gt",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_gte",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_string_eq",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_string_neq",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_boolean_eq",
+        arity: 2,
+        sig_str: "(Boolean, Boolean) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_boolean_neq",
+        arity: 2,
+        sig_str: "(Boolean, Boolean) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_string_concat",
+        arity: 2,
+        sig_str: "(String, String) -> String",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from std-module sources.
