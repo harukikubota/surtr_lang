@@ -985,6 +985,30 @@ fn test_func_literal_name_lowers_to_binary_call() {
 }
 
 #[test]
+fn test_func_literal_qualified_path_lowers_to_binary_call() {
+    let ast = parse("x = left `Boolean::not_eq` right").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Ast::Path(_, path)
+                        if path.segments == vec!["Boolean".to_string(), "not_eq".to_string()]
+                ));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "left")
+                            && matches!(right, Ast::Var(_, name) if name == "right")
+                ));
+            }
+            other => panic!("Expected lowered App, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_func_literal_comparison_name_uses_logical_tier() {
     let ast = parse("x = a `eq` b + c").unwrap();
     match &ast[0] {
@@ -1453,6 +1477,48 @@ fn test_qualified_capture_and_flow_parse() {
             other => panic!("Expected left-associative flow parse, got {:?}", other),
         },
         _ => panic!("Expected bind"),
+    }
+}
+
+#[test]
+fn test_backtick_qualified_capture_and_operator_capture_parse() {
+    let ast = parse("reader = &`User::get_name`\ninc = &`+`(&1, 10)\nadd = &`+`").unwrap();
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(), Ast::Path(_, path)
+                            if path.segments == vec!["User".to_string(), "get_name".to_string()])
+            ));
+        }
+        other => panic!("Expected qualified capture bind, got {:?}", other),
+    }
+
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.len() == 2
+                        && matches!(target.as_ref(), Ast::FuncLiteralRef(_, func) if func.body == "+")
+            ));
+        }
+        other => panic!("Expected operator capture bind, got {:?}", other),
+    }
+
+    match &ast[2] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(), Ast::FuncLiteralRef(_, func) if func.body == "+")
+            ));
+        }
+        other => panic!("Expected bare operator capture bind, got {:?}", other),
     }
 }
 

@@ -766,6 +766,39 @@ fn test_module_builtin_can_be_resolved_by_qualified_name() {
 }
 
 #[test]
+fn test_qualified_func_literal_path_resolves_via_module_namespace() {
+    let module_stages = vec![vec![staged_module(
+        "Boolean",
+        parse_module_ast(
+            r#"def eq(lhs: Boolean, rhs: Boolean) -> Boolean { lhs }"#,
+            "Boolean",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules("value = True `Boolean::eq` False", &module_stages)
+        .expect("qualified func literal path should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("expected bind");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Resolved::Var(_, id)
+                        if id.name == "Boolean::eq"
+                            && id.qualified_name.as_deref() == Some("Boolean::eq")
+                ));
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("Expected app, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_named_args_resolution() {
     let resolved = parse_and_resolve(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -1628,6 +1661,79 @@ fn test_capture_placeholder_lowers_to_closure() {
             Resolved::Closure(_, params, _, body) => {
                 assert_eq!(params.len(), 1);
                 assert!(matches!(body.as_ref(), Resolved::App(_, _, _)));
+            }
+            other => panic!("Expected lowered closure, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_backtick_name_capture_resolves_like_plain_capture() {
+    let resolved = parse_and_resolve("captured = &`print`").expect("backtick capture should resolve");
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Capture(_, target, args) => {
+                assert!(args.is_empty());
+                assert!(matches!(target.as_ref(), Resolved::Var(_, id) if id.name == "print"));
+            }
+            other => panic!("Expected capture, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_backtick_qualified_capture_resolves_like_plain_capture() {
+    let module_stages = vec![vec![staged_module(
+        "Boolean",
+        parse_module_ast(r#"def not(value: Boolean) -> Boolean { value }"#, "Boolean"),
+    )]];
+
+    let resolved = resolve_user_with_modules("captured = &`Boolean::not`", &module_stages)
+        .expect("qualified backtick capture should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("expected bind");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Capture(_, target, args) => {
+                assert!(args.is_empty());
+                assert!(matches!(
+                    target.as_ref(),
+                    Resolved::Var(_, id)
+                        if id.name == "Boolean::not"
+                            && id.qualified_name.as_deref() == Some("Boolean::not")
+                ));
+            }
+            other => panic!("Expected capture, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_backtick_operator_capture_lowers_to_closure() {
+    let resolved = parse_and_resolve("inc = &`+`(&1, 1)\nadd = &`+`")
+        .expect("operator capture should lower");
+
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Closure(_, params, _, body) => {
+                assert_eq!(params.len(), 1);
+                assert!(matches!(body.as_ref(), Resolved::BinOp(_, BinOp::Add, _, _)));
+            }
+            other => panic!("Expected lowered closure, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Closure(_, params, _, body) => {
+                assert_eq!(params.len(), 2);
+                assert!(matches!(body.as_ref(), Resolved::BinOp(_, BinOp::Add, _, _)));
             }
             other => panic!("Expected lowered closure, got {:?}", other),
         },

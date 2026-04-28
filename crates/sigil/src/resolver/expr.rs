@@ -6,7 +6,7 @@ use super::scope_init::{
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
-use spire::ast::InterpolatedPart;
+use spire::ast::{BinOp, InterpolatedPart};
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 
@@ -85,6 +85,70 @@ impl Resolver {
                 args.into_iter().map(RecordLitArg::Positional).collect(),
             )),
         )
+    }
+
+    fn make_operator_capture_body(
+        &self,
+        span: &Span,
+        body: &str,
+        left: Ast,
+        right: Ast,
+    ) -> Result<Ast, ResolveError> {
+        let op = match body {
+            "+" => BinOp::Add,
+            "-" => BinOp::Sub,
+            "*" => BinOp::Mul,
+            "++" => BinOp::Concat,
+            "==" => BinOp::Eq,
+            "!=" => BinOp::Neq,
+            "<" => BinOp::Lt,
+            ">" => BinOp::Gt,
+            "<=" => BinOp::Lte,
+            ">=" => BinOp::Gte,
+            _ => {
+            return Err(ResolveError {
+                message: format!("unsupported operator capture target `{}`", body),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            });
+            }
+        };
+        Ok(Ast::BinOp(
+            span.clone(),
+            op,
+            Box::new(left),
+            Box::new(right),
+        ))
+    }
+
+    fn validate_capture_placeholders(
+        &self,
+        span: &Span,
+        args: &[Ast],
+    ) -> Result<usize, ResolveError> {
+        let mut used = HashSet::new();
+        for arg in args {
+            self.collect_capture_placeholders(arg, true, true, &mut used)?;
+        }
+        if used.is_empty() {
+            return Err(ResolveError {
+                message: "capture call is missing placeholder arguments".into(),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            });
+        }
+
+        let max_index = *used.iter().max().expect("used is not empty");
+        for index in 1..=max_index {
+            if !used.contains(&index) {
+                return Err(ResolveError {
+                    message: format!("capture placeholder &{} is missing", index),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                });
+            }
+        }
+        Ok(max_index)
     }
 
     fn collect_capture_placeholders(
@@ -262,6 +326,7 @@ impl Resolver {
             Ast::Lit(_, _)
             | Ast::Var(_, _)
             | Ast::Path(_, _)
+            | Ast::FuncLiteralRef(_, _)
             | Ast::ListNil(_)
             | Ast::StructDef(_, _, _)
             | Ast::RecordDef(_, _, _)
@@ -668,32 +733,69 @@ impl Resolver {
         target: Ast,
         args: Vec<Ast>,
     ) -> Result<Ast, ResolveError> {
+        if let Ast::FuncLiteralRef(_, func) = target {
+            if args.is_empty() {
+                let left_name = Self::capture_placeholder_param_name(&span, 1);
+                let right_name = Self::capture_placeholder_param_name(&span, 2);
+                let body = self.make_operator_capture_body(
+                    &span,
+                    &func.body,
+                    Ast::Var(span.clone(), left_name.clone()),
+                    Ast::Var(span.clone(), right_name.clone()),
+                )?;
+                return Ok(Ast::Closure(
+                    span.clone(),
+                    vec![
+                        ClosureParam {
+                            name: left_name,
+                            ty: None,
+                            span: span.clone(),
+                        },
+                        ClosureParam {
+                            name: right_name,
+                            ty: None,
+                            span: span.clone(),
+                        },
+                    ],
+                    Box::new(body),
+                ));
+            }
+
+            if args.len() != 2 {
+                return Err(ResolveError {
+                    message: format!(
+                        "operator capture `{}` expects exactly 2 argument expressions",
+                        func.body
+                    ),
+                    span,
+                    related_labels: Vec::new(),
+                });
+            }
+
+            let max_index = self.validate_capture_placeholders(&span, &args)?;
+            let rewritten_args = args
+                .into_iter()
+                .map(|arg| self.rewrite_capture_placeholders(arg, &span, true, true))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut rewritten_args = rewritten_args.into_iter();
+            let left = rewritten_args.next().expect("checked len == 2");
+            let right = rewritten_args.next().expect("checked len == 2");
+            let body = self.make_operator_capture_body(&span, &func.body, left, right)?;
+            let params = (1..=max_index)
+                .map(|index| ClosureParam {
+                    name: Self::capture_placeholder_param_name(&span, index),
+                    ty: None,
+                    span: span.clone(),
+                })
+                .collect();
+            return Ok(Ast::Closure(span, params, Box::new(body)));
+        }
+
         if args.is_empty() {
             return Ok(Ast::Capture(span, Box::new(target), args));
         }
 
-        let mut used = HashSet::new();
-        for arg in &args {
-            self.collect_capture_placeholders(arg, true, true, &mut used)?;
-        }
-        if used.is_empty() {
-            return Err(ResolveError {
-                message: "capture call is missing placeholder arguments".into(),
-                span: span.clone(),
-                related_labels: Vec::new(),
-            });
-        }
-
-        let max_index = *used.iter().max().expect("used is not empty");
-        for index in 1..=max_index {
-            if !used.contains(&index) {
-                return Err(ResolveError {
-                    message: format!("capture placeholder &{} is missing", index),
-                    span: span.clone(),
-                    related_labels: Vec::new(),
-                });
-            }
-        }
+        let max_index = self.validate_capture_placeholders(&span, &args)?;
 
         let rewritten_args = args
             .into_iter()
@@ -760,6 +862,7 @@ impl Resolver {
             Ast::Closure(_, _, body) => Self::pipe_slot_span(body),
             Ast::Capture(_, target, args) => Self::pipe_slot_span(target)
                 .or_else(|| args.iter().find_map(Self::pipe_slot_span)),
+            Ast::FuncLiteralRef(_, _) => None,
             _ => None,
         }
     }
@@ -1163,6 +1266,14 @@ impl Resolver {
                     },
                 ))
             }
+            Ast::FuncLiteralRef(span, func) => Err(ResolveError {
+                message: format!(
+                    "standalone func literal ref `{}` must be lowered before resolution",
+                    func.body
+                ),
+                span,
+                related_labels: Vec::new(),
+            }),
 
             Ast::App(span, func, args) => {
                 // Check for special forms

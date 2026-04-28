@@ -387,11 +387,9 @@
 - closure の `expected=None` 推論強化
   - 期待型や注釈なしでも強く推論する方向は別 issue で扱う
   - let-generalization を入れない current baseline を前提に reopen する
-- FuncLiteral の未実装部分
-  - `&` 側の operator capture (`&`+``)
-  - placeholder capture (`&1`, `&2`, ...)
-  - qualified backtick path (`\`Type::method\``)
-  - これらは v1 範囲外のため、仕様を詰めてから reopen する
+- FuncLiteral surface の将来拡張
+  - backtick capture / qualified FuncLiteral path / operator capture は実装済み
+  - 今後 reopen する場合は、現在の `ident | qualified_path | operator` を超える surface 追加に限定する
 - OOM / host failure policy
   - 上限値、停止文言、回復可否は host 依存方針のまま、詳細契約は将来確定する
 - Enum conversion helper

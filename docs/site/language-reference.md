@@ -330,11 +330,13 @@ value: Int =? parse_int("1")
 - `pipeline = parse >=> validate` も不許可
 - 関数値として保持できるのは capture、closure、または `Ty::Func` を持つ変数・式
 - backtick FuncLiteral は中置位置専用で、値にはならない
+- FuncLiteral body は `ident | qualified_path | operator`
 - ``left `name` right`` は `name(left, right)` に lower される
 - ``left `operator` right`` は対応する通常演算に lower される
-- V1 の FuncLiteral は unqualified name と symbolic operator のみを許可する
-- `` `Type::method` `` のような qualified backtick path は未対応
-- `&` 側で operator を capture する構文と placeholder capture (`&1`) は未実装
+- ``left `Type::method` right`` は `Type::method(left, right)` に lower される
+- `&`name`` / `&`Type::method`` はそれぞれ通常の capture と同義
+- `&`op`` は 2 引数 callable に lower される
+- `&`op`(args...)`` は placeholder capture 規約で lower される
 - bare capture を `inspect` / `to_string` すると、metadata があれば
   `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
 - `Result` と `List` を `|*>`, `|>=`, `>*`, `>=>` で混在させない

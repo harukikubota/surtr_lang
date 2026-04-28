@@ -3,7 +3,7 @@
 Surtr では、見た目が似ていても次の 4 つは役割が違います。
 
 - call 式: `add(1, 2)`
-- capture: `&add`, `&User::get_name`, `&add(&1, 10)`
+- capture: `&add`, `&User::get_name`, `&add(&1, 10)`, `&`+``, `&`Boolean::not``
 - closure: `{|x| x + 1}`
 - backtick FuncLiteral: ``1 `add` 2``, ``1 `+` 2``
 
@@ -69,12 +69,14 @@ value |> (make_normalizer(10))
 
 ## capture 演算子 `&`
 
-`&` は関数や method を「あとで呼べる関数値」にします。
+`&` は関数や method、operator surface を「あとで呼べる関数値」にします。
 
 ```surtr
 inc = &add(&1, 1)
 show_name = &User::get_name
 trim = &String::trim
+negate = &`Boolean::not`
+adder: (Int, Int -> Int) = &`+`
 ```
 
 読み方は次です。
@@ -82,6 +84,8 @@ trim = &String::trim
 - `&add` は既存関数そのものを捕まえる
 - `&add(&1, 1)` は placeholder を使って unary callable を作る
 - `&User::get_name` は qualified method capture
+- `&`Boolean::not`` は backtick 付きの qualified capture
+- `&`+`` は 2 引数 operator callable
 
 例:
 
@@ -92,6 +96,7 @@ inc = &add(&1, 1)
 print(to_string(inc(41)))
 
 names = users |*> &User::get_name
+print(to_string(adder(1, 2)))
 ```
 
 `inspect(...)` すると bare capture の metadata を観察できます。
@@ -197,10 +202,9 @@ plus = {|x| x + 1}
 
 ### 現時点の制約
 
-- V1 の FuncLiteral は unqualified name と symbolic operator のみ
-- `` `Type::method` `` のような qualified path は未対応
-- `&\`+\`` のような operator capture は未実装
-- placeholder capture (`&1`, `&2`) は未実装
+- backtick FuncLiteral 自体は値にならない
+- bare operator capture を変数へ束縛するときは、必要に応じて型注釈や使用側の期待型で文脈を与える
+- `&1` 単体や `&add(10)` のような prefix partial capture は不許可
 
 ## trailing block
 
@@ -225,6 +229,7 @@ pipeline = parse >=> check   # NG
 pipeline = &parse >=> &check # OK
 
 1 `+` 2                      # OK
+True `Boolean::eqv` False    # OK
 f = `+`                      # NG
 ```
 

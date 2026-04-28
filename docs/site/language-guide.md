@@ -685,8 +685,7 @@ print("a" `concat` "b")
 - ``left `name` right`` は `name(left, right)` と同じ
 - ``left `+` right`` のような operator 版は対応する通常演算と同じ
 - 単独の `` `eq` `` のような書き方はできない
-- V1 では unqualified name と symbolic operator だけを対象にする
-- `` `Type::method` `` のような qualified backtick path は未対応
+- qualified path も使えるので、``left `Type::method` right`` は `Type::method(left, right)` と同じ
 
 優先度は通常の pipeline / compose より強く、comparison より強い `Expr` クラスとして扱います。  
 `+`, `-`, `*`, `++` は同列・左結合です。
@@ -695,10 +694,11 @@ print("a" `concat` "b")
 print(to_string(2 + 3 * 4))   # => 20
 ```
 
-一方、capture 側の operator 版や placeholder capture はまだありません。
+capture 側でも backtick 版を使えます。
 
 ```surtr
-f = &`+`   # 未実装
+inc = &`+`(&1, 1)
+not_fn = &`Boolean::not`
 ```
 
 ## 11. 組込み関数

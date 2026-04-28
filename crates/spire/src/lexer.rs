@@ -186,11 +186,25 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
                     && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
             };
+            let is_qualified_ident = body
+                .split("::")
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .as_slice()
+                .split_first()
+                .is_some_and(|(_, rest)| {
+                    !rest.is_empty()
+                        && body.split("::").all(|segment| {
+                            let mut chars = segment.chars();
+                            matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
+                                && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                        })
+                });
             let is_supported_operator = matches!(
                 body.as_str(),
                 "+" | "-" | "*" | "++" | "==" | "!=" | "<" | ">" | "<=" | ">="
             );
-            if !is_ident && !is_supported_operator {
+            if !is_ident && !is_qualified_ident && !is_supported_operator {
                 return Err(ParseError::syntax(
                     format!("Unsupported FuncLiteral body: `{}`", body),
                     Span { start, end: i + 1 },
@@ -547,10 +561,11 @@ mod tests {
 
     #[test]
     fn test_func_literal_tokens() {
-        let tokens = tokenize("a `eq` b `+` c `<=` d").unwrap();
+        let tokens = tokenize("a `eq` b `+` c `<=` d `User::cmp` e").unwrap();
         assert!(matches!(tokens[1].token, Token::FuncLiteral(ref body) if body == "eq"));
         assert!(matches!(tokens[3].token, Token::FuncLiteral(ref body) if body == "+"));
         assert!(matches!(tokens[5].token, Token::FuncLiteral(ref body) if body == "<="));
+        assert!(matches!(tokens[7].token, Token::FuncLiteral(ref body) if body == "User::cmp"));
     }
 
     #[test]
@@ -567,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_unsupported_func_literal_body_is_error() {
-        let err = tokenize("`User::cmp`").expect_err("expected lexer error");
+        let err = tokenize("`User::1`").expect_err("expected lexer error");
         assert!(err.message().contains("Unsupported FuncLiteral body"));
     }
 }

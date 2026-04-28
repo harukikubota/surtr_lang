@@ -5,7 +5,44 @@ use sindr::primitives::ToPrimitive;
 
 use super::Parser;
 
+#[derive(Debug, Clone, PartialEq)]
+enum FuncLiteralBodyKind {
+    Name(Symbol),
+    Path(AstPath),
+    Operator(String),
+}
+
 impl Parser<'_> {
+    fn parse_func_literal_body(body: &str, span: Span) -> Result<FuncLiteralBodyKind, ParseError> {
+        if Self::expr_binop_from_func_literal(body).is_some()
+            || Self::logical_binop_from_func_literal(body).is_some()
+        {
+            return Ok(FuncLiteralBodyKind::Operator(body.to_string()));
+        }
+
+        if body.contains("::") {
+            let segments = body
+                .split("::")
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let is_valid_path = segments.len() >= 2
+                && segments.iter().all(|segment| {
+                    let mut chars = segment.chars();
+                    matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
+                        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                });
+            if !is_valid_path {
+                return Err(ParseError::syntax(
+                    format!("Unsupported FuncLiteral body: `{}`", body),
+                    span,
+                ));
+            }
+            return Ok(FuncLiteralBodyKind::Path(AstPath { span, segments }));
+        }
+
+        Ok(FuncLiteralBodyKind::Name(body.to_string()))
+    }
+
     fn flow_op_kind(tok: &Token) -> Option<u8> {
         match tok {
             Token::PipeApply => Some(0),
@@ -169,19 +206,14 @@ impl Parser<'_> {
         Ast::BinOp(span, op, Box::new(left), Box::new(right))
     }
 
-    pub(super) fn lower_func_literal_call(
-        left: Ast,
-        func_span: Span,
-        name: Symbol,
-        right: Ast,
-    ) -> Ast {
+    pub(super) fn lower_func_literal_call(left: Ast, func: Ast, right: Ast) -> Ast {
         let span = Span {
             start: left.span().start,
             end: right.span().end,
         };
         Ast::App(
             span,
-            Box::new(Ast::Var(func_span, name)),
+            Box::new(func),
             vec![
                 RecordLitArg::Positional(left),
                 RecordLitArg::Positional(right),
@@ -203,23 +235,33 @@ impl Parser<'_> {
             let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
                 break;
             };
+            let func_span = self.peek_span();
+            let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
 
-            if let Some(op) = Self::expr_binop_from_func_literal(&body) {
-                self.advance();
-                let right = self.parse_postfix()?;
-                left = Self::lower_binop(left, op, right);
-                continue;
-            }
-
-            if Self::logical_binop_from_func_literal(&body).is_some()
-                || Self::logical_func_literal_name(&body)
+            if matches!(func_kind, FuncLiteralBodyKind::Operator(ref op_body)
+                if Self::logical_binop_from_func_literal(op_body).is_some())
+                || matches!(func_kind, FuncLiteralBodyKind::Name(ref name)
+                    if Self::logical_func_literal_name(name))
             {
                 break;
             }
 
-            let func_span = self.advance().span.clone();
+            self.advance();
             let right = self.parse_postfix()?;
-            left = Self::lower_func_literal_call(left, func_span, body, right);
+            match func_kind {
+                FuncLiteralBodyKind::Operator(op_body) => {
+                    let op = Self::expr_binop_from_func_literal(&op_body)
+                        .expect("expr operator classification checked above");
+                    left = Self::lower_binop(left, op, right);
+                }
+                FuncLiteralBodyKind::Name(name) => {
+                    left = Self::lower_func_literal_call(left, Ast::Var(func_span, name), right);
+                }
+                FuncLiteralBodyKind::Path(path) => {
+                    left =
+                        Self::lower_func_literal_call(left, Ast::Path(path.span.clone(), path), right);
+                }
+            }
         }
 
         Ok(left)
@@ -239,18 +281,24 @@ impl Parser<'_> {
             let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
                 break;
             };
+            let func_span = self.peek_span();
+            let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
 
-            if let Some(op) = Self::logical_binop_from_func_literal(&body) {
-                self.advance();
-                let right = self.parse_expr_class_expr()?;
-                left = Self::lower_binop(left, op, right);
-                continue;
+            if let FuncLiteralBodyKind::Operator(ref op_body) = func_kind {
+                if let Some(op) = Self::logical_binop_from_func_literal(op_body) {
+                    self.advance();
+                    let right = self.parse_expr_class_expr()?;
+                    left = Self::lower_binop(left, op, right);
+                    continue;
+                }
             }
 
-            if Self::comparison_func_literal_name(&body) {
-                let func_span = self.advance().span.clone();
+            if matches!(func_kind, FuncLiteralBodyKind::Name(ref name)
+                if Self::comparison_func_literal_name(name))
+            {
+                self.advance();
                 let right = self.parse_expr_class_expr()?;
-                left = Self::lower_func_literal_call(left, func_span, body, right);
+                left = Self::lower_func_literal_call(left, Ast::Var(func_span, body), right);
                 continue;
             }
 
@@ -267,13 +315,18 @@ impl Parser<'_> {
             let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
                 break;
             };
-            if !Self::and_or_func_literal_name(&body) {
+            let func_span = self.peek_span();
+            let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
+            let FuncLiteralBodyKind::Name(name) = func_kind else {
+                break;
+            };
+            if !Self::and_or_func_literal_name(&name) {
                 break;
             }
 
-            let func_span = self.advance().span.clone();
+            self.advance();
             let right = self.parse_logical_expr()?;
-            left = Self::lower_func_literal_call(left, func_span, body, right);
+            left = Self::lower_func_literal_call(left, Ast::Var(func_span, name), right);
         }
 
         Ok(left)
@@ -1082,18 +1135,67 @@ impl Parser<'_> {
                 },
             ));
         }
-        let (name, name_span) = self.expect_ident()?;
-        let mut path_segments = vec![name.clone()];
-        let mut path_end = name_span.end;
-        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
-            self.consume_path_separator()?;
-            let (seg, seg_span) = self.expect_ident()?;
-            path_end = seg_span.end;
-            path_segments.push(seg);
-        }
+        let (target, mut end) = match self.peek().clone() {
+            Token::Ident(_) => {
+                let (name, name_span) = self.expect_ident()?;
+                let mut path_segments = vec![name.clone()];
+                let mut path_end = name_span.end;
+                while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_)))
+                {
+                    self.consume_path_separator()?;
+                    let (seg, seg_span) = self.expect_ident()?;
+                    path_end = seg_span.end;
+                    path_segments.push(seg);
+                }
+
+                let target = if path_segments.len() == 1 {
+                    Ast::Var(name_span.clone(), name)
+                } else {
+                    Ast::Path(
+                        Span {
+                            start: name_span.start,
+                            end: path_end,
+                        },
+                        AstPath {
+                            span: Span {
+                                start: name_span.start,
+                                end: path_end,
+                            },
+                            segments: path_segments,
+                        },
+                    )
+                };
+                (target, path_end)
+            }
+            Token::FuncLiteral(body) => {
+                let func_span = self.advance().span.clone();
+                match Self::parse_func_literal_body(&body, func_span.clone())? {
+                    FuncLiteralBodyKind::Name(name) => (Ast::Var(func_span.clone(), name), func_span.end),
+                    FuncLiteralBodyKind::Path(path) => {
+                        let end = path.span.end;
+                        (Ast::Path(path.span.clone(), path), end)
+                    }
+                    FuncLiteralBodyKind::Operator(body) => (
+                        Ast::FuncLiteralRef(
+                            func_span.clone(),
+                            FuncLiteralRef {
+                                span: func_span.clone(),
+                                body,
+                            },
+                        ),
+                        func_span.end,
+                    ),
+                }
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    format!("Expected identifier, got {:?}", self.peek()),
+                    self.peek_span(),
+                ))
+            }
+        };
 
         let mut parsed_args = Vec::new();
-        let mut end = path_end;
         if matches!(self.peek(), Token::LParen) {
             self.advance();
             self.skip_newlines();
@@ -1128,24 +1230,6 @@ impl Parser<'_> {
                 }
             }
         }
-
-        let target = if path_segments.len() == 1 {
-            Ast::Var(name_span, name)
-        } else {
-            Ast::Path(
-                Span {
-                    start: name_span.start,
-                    end: path_end,
-                },
-                AstPath {
-                    span: Span {
-                        start: name_span.start,
-                        end: path_end,
-                    },
-                    segments: path_segments,
-                },
-            )
-        };
 
         Ok(Ast::Capture(
             Span {

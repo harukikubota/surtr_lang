@@ -245,14 +245,19 @@ expanded = [1, 2, 3] |>= duplicate()
 value |> normalize          # 不可
 pipeline = parse >=> check  # 不可
 parse() >=> check()         # 不可
-f = &`+`                    # 未実装
 ```
 
 理由は次です。
 
 - 裸の関数参照は関数値として扱わない
 - compose は関数の「実行結果」ではなく関数値同士をつなぐ
-- operator capture や placeholder capture はまだ未実装
+
+一方で、operator capture と placeholder capture は使えます。
+
+```surtr
+f: (Int, Int -> Int) = &`+`
+inc = &`+`(&1, 1)
+```
 
 ## 迷ったときの選び方
 

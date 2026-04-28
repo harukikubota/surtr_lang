@@ -872,6 +872,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*target, delta)),
             args.into_iter().map(|a| shift_ast_span(a, delta)).collect(),
         ),
+        Ast::FuncLiteralRef(span, func) => Ast::FuncLiteralRef(
+            shift_span(span, delta),
+            FuncLiteralRef {
+                span: shift_span(func.span, delta),
+                body: func.body,
+            },
+        ),
         Ast::CapturePlaceholder(span, index) => {
             Ast::CapturePlaceholder(shift_span(span, delta), index)
         }
@@ -890,6 +897,7 @@ impl Ast {
             Ast::Lit(s, _)
             | Ast::Var(s, _)
             | Ast::Path(s, _)
+            | Ast::FuncLiteralRef(s, _)
             | Ast::App(s, _, _)
             | Ast::Block(s, _)
             | Ast::Bind(s, _, _)

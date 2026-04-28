@@ -6,7 +6,8 @@ Surtr の `&` は、既存の関数や method を「あとで呼べる関数値�
 ## 先に覚えるルール
 
 - `&f` は named capture です
-- `&Type::method` も capture できます
+- `&Type::method` や `&`Type::method`` も capture できます
+- `&`+`` のような operator capture もできます
 - 引数位置を調整したいときは `&1`, `&2`, ... を使います
 - `&f(10)` のような旧 partial capture は使えません
 - placeholder は outermost な capture の中だけで有効です
@@ -28,9 +29,33 @@ qualified path も同じです。
 ```surtr
 trim = &String::trim
 show = &User::get_name
+negate = &`Boolean::not`
 ```
 
 これは「その関数そのものを値として取り出す」と読むと分かりやすいです。
+
+## operator capture
+
+operator も backtick 経由で capture できます。
+
+```surtr
+add: (Int, Int -> Int) = &`+`
+eqv = &`Boolean::eqv`
+```
+
+`&`+`` は 2 引数 callable を作ります。
+
+```surtr
+print(to_string(add(1, 2)))
+print(to_string(eqv(True, False)))
+```
+
+placeholder capture と組み合わせることもできます。
+
+```surtr
+inc = &`+`(&1, 1)
+flip_sub = &`-`(&2, &1)
+```
 
 ## placeholder capture
 
@@ -64,6 +89,7 @@ placeholder の規則は次です。
 &ensure(&1, &pred, err)
 &pair(&1, &2)
 &sub(&2, &1)
+&`+`(&1, 10)
 ```
 
 次は不許可です。
@@ -178,9 +204,11 @@ def wrap(value: String, left: String, right: String) -> String {
 
 inc = &add(&1, 1)
 bracket = &wrap(&1, "[", "]")
+adder: (Int, Int -> Int) = &`+`
 
 print(to_string(inc(41)))
 print(bracket("name"))
+print(to_string(adder(1, 2)))
 ```
 
 ## 関連ページ

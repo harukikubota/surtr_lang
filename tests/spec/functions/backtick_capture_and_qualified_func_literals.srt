@@ -1,0 +1,13 @@
+printer = &`print`
+printer("hello")
+
+negate = &`Boolean::not`
+print(to_string(negate(False)))
+
+inc = &`+`(&1, 10)
+print(to_string(inc(32)))
+
+adder: (Int, Int -> Int) = &`+`
+print(to_string(adder(1, 2)))
+
+print(to_string(True `Boolean::eqv` False))

@@ -202,6 +202,13 @@ pub struct AstPath {
     pub segments: Vec<Symbol>,
 }
 
+/// Parser-only backtick capture target for operator forms such as `&`+``.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FuncLiteralRef {
+    pub span: Span,
+    pub body: Symbol,
+}
+
 /// Import selector.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImportSpec {
@@ -225,6 +232,9 @@ pub enum Ast {
 
     /// Qualified path reference: `Kernel::add`
     Path(Span, AstPath),
+
+    /// Parser-only backtick capture target such as `&`+``.
+    FuncLiteralRef(Span, FuncLiteralRef),
 
     /// Function application: `print("hello")`, `to_string(42)`, `add(y: 2, x: 1)`
     App(Span, Box<Ast>, Vec<RecordLitArg>),
