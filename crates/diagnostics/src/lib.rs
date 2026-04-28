@@ -490,7 +490,6 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
         error.span.clone(),
         error.hint.clone(),
     );
-    let has_structured_labels = !error.labels.is_empty();
 
     if let Some(labels) = infer_trait_impl_signature_mismatch_labels(source, &error.message) {
         if let Some(primary) = labels
@@ -511,35 +510,13 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
         spec.labels.extend(labels);
     }
 
-    if has_structured_labels {
-        let structured_labels = error
-            .labels
-            .iter()
-            .map(|label| DiagnosticLabel {
-                source_id: None,
-                span: label.span.clone(),
-                message: label.message.clone(),
-                color: structured_type_error_label_color(&label.message),
-            })
-            .collect::<Vec<_>>();
-        if let Some(primary) = structured_labels
-            .iter()
-            .find(|label| spans_overlap(&label.span, &error.span))
-            .or_else(|| structured_labels.first())
-        {
-            spec.primary_span = primary.span.clone();
-        }
-        spec.labels.extend(structured_labels);
-    }
-
     let replace_help = is_flow_operator_message(&error.message)
         || parse_binary_operator_error(&error.message).is_some();
-    if let Some(template) =
-        infer_type_error_template(source, &error.span, &error.message, error.hint.as_deref())
-    {
-        if !has_structured_labels {
-            spec.labels.extend(template.labels);
-        }
+    let inferred_template =
+        infer_type_error_template(source, &error.span, &error.message, error.hint.as_deref());
+
+    if let Some(template) = inferred_template {
+        spec.labels.extend(template.labels);
         spec.notes.extend(template.notes);
         if let Some(help) = template.help {
             spec.help = Some(if replace_help {
@@ -572,19 +549,6 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
     }
 
     spec
-}
-
-fn structured_type_error_label_color(message: &str) -> Option<Color> {
-    match message {
-        "LHS" => Some(Color::Blue),
-        "OP" => Some(Color::Magenta),
-        "RHS" => Some(Color::Yellow),
-        _ => Some(Color::Red),
-    }
-}
-
-fn spans_overlap(left: &Span, right: &Span) -> bool {
-    left.start < right.end && right.start < left.end
 }
 
 pub fn type_error_spec_by_id(
@@ -4985,7 +4949,6 @@ fn find_subslice_outside_literals(chars: &[char], needle: &[char], start: usize)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scar::error::TypeErrorLabel;
 
     struct FailingWriter;
 
@@ -5155,7 +5118,6 @@ mod tests {
     fn type_error_spec_labels_backtick_operator_operands() {
         let source = "bad = 1 `+` \"oops\"";
         let err = TypeError {
-        labels: Vec::new(),
             message: "Cannot apply Add to Int and String".into(),
             span: Span { start: 6, end: 18 },
             hint: Some(
@@ -5199,7 +5161,6 @@ mod tests {
         let source = r#""+" + "value""#;
         let rhs_start = source.rfind("\"value\"").expect("rhs literal");
         let err = TypeError {
-        labels: Vec::new(),
             message: "Cannot apply Add to String and String".into(),
             span: Span {
                 start: rhs_start,
@@ -5231,7 +5192,6 @@ mod tests {
     fn type_error_spec_formats_eq_operator_with_three_captions() {
         let source = "print(to_string(1 == True))";
         let err = TypeError {
-            labels: Vec::new(),
             message: "Cannot compare Int and Boolean".into(),
             span: Span { start: 16, end: 25 },
             hint: None,
@@ -5267,7 +5227,6 @@ mod tests {
     fn type_error_spec_distinguishes_neq_operator_from_source() {
         let source = "print(to_string(1 != True))";
         let err = TypeError {
-            labels: Vec::new(),
             message: "Cannot compare Int and Boolean".into(),
             span: Span { start: 16, end: 25 },
             hint: None,
@@ -5295,7 +5254,6 @@ mod tests {
     fn type_error_spec_distinguishes_lt_operator_from_source() {
         let source = "print(to_string(1 < True))";
         let err = TypeError {
-            labels: Vec::new(),
             message: "Cannot compare Int and Boolean".into(),
             span: Span { start: 16, end: 24 },
             hint: None,
@@ -5322,7 +5280,6 @@ mod tests {
     fn type_error_spec_formats_concat_operator_with_three_captions() {
         let source = "print(1 ++ \"x\")";
         let err = TypeError {
-            labels: Vec::new(),
             message: "++ requires (String, String), got (Int, String)".into(),
             span: Span { start: 6, end: 14 },
             hint: None,
@@ -5358,7 +5315,6 @@ mod tests {
     fn type_error_spec_colors_generic_binary_operator_note_only() {
         let source = "bad = 1 `*` \"oops\"";
         let err = TypeError {
-            labels: Vec::new(),
             message: "Cannot apply Mul to Int and String".into(),
             span: Span { start: 6, end: 18 },
             hint: None,
@@ -5383,7 +5339,6 @@ mod tests {
     fn type_error_spec_labels_flow_operator_parts() {
         let source = "bad = parse(1) |> &inc";
         let err = TypeError {
-            labels: Vec::new(),
             message: "`|>` type mismatch: expected Int, got Result<Int>".into(),
             span: Span { start: 6, end: 14 },
             hint: Some(
@@ -5418,58 +5373,9 @@ mod tests {
     }
 
     #[test]
-    fn type_error_spec_prefers_structured_lhs_op_rhs_labels() {
-        let source = "bad = 1 + \"oops\"";
-        let err = TypeError {
-            message: "Cannot apply Add to Int and String".into(),
-            span: Span { start: 10, end: 16 },
-            hint: Some(
-                "Operator `Add` requires compatible operand types. Left operand is Int, right operand is String."
-                    .into(),
-            ),
-            labels: vec![
-                TypeErrorLabel {
-                    span: Span { start: 6, end: 7 },
-                    message: "LHS".into(),
-                },
-                TypeErrorLabel {
-                    span: Span { start: 8, end: 9 },
-                    message: "OP".into(),
-                },
-                TypeErrorLabel {
-                    span: Span { start: 10, end: 16 },
-                    message: "RHS".into(),
-                },
-            ],
-        };
-
-        let spec = type_error_spec(source, &err);
-        let label_text = spec
-            .labels
-            .iter()
-            .map(|label| strip_ansi(&label.message))
-            .collect::<Vec<_>>();
-        let notes_text = spec
-            .notes
-            .iter()
-            .map(|note| strip_ansi(note))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert!(label_text.contains(&"LHS".into()));
-        assert!(label_text.contains(&"OP".into()));
-        assert!(label_text.contains(&"RHS".into()));
-        assert!(notes_text.contains("Step: Int + String -> <type error>"));
-        assert!(notes_text.contains(
-            "Reason: `+` requires the same operator trait type on both sides, but got Int and String."
-        ));
-    }
-
-    #[test]
     fn type_error_spec_splits_annotation_mismatch_on_same_line() {
         let source = "result: Int = make_text(1)";
         let err = TypeError {
-            labels: Vec::new(),
             message: "expected Int, got String".into(),
             span: Span {
                 start: 0,
@@ -5500,7 +5406,6 @@ mod tests {
         let source = "ret: String =\n    fun1()\n    |> fun2()\n    |> fun3()";
         let fun3_start = source.find("fun3").expect("source has final rhs call");
         let err = TypeError {
-            labels: Vec::new(),
             message: "expected String, got Int".into(),
             span: Span {
                 start: fun3_start,
@@ -5532,7 +5437,6 @@ mod tests {
     fn render_flow_operator_error_keeps_actual_types_out_of_help() {
         let source = "bad = 1 |>= &inc";
         let err = TypeError {
-        labels: Vec::new(),
             message: "`|>=` requires Result or List on the left, got Int".into(),
             span: Span { start: 6, end: 7 },
             hint: Some(
@@ -5563,7 +5467,6 @@ mod tests {
         let source = r#"re"^a$" |>= Regex::is_match("a")"#;
         let rhs_start = source.find("Regex::is_match").expect("rhs call");
         let err = TypeError {
-        labels: Vec::new(),
             message: "`|>=` requires the right-hand side to return Result, got Boolean".into(),
             span: Span {
                 start: rhs_start,
@@ -5601,7 +5504,6 @@ mod tests {
     fn type_error_spec_labels_ensure_predicate_call() {
         let source = "guard = ensure(4, is_even(), NoneError)";
         let err = TypeError {
-        labels: Vec::new(),
             message: "ensure requires a closure or capture predicate".into(),
             span: Span { start: 18, end: 27 },
             hint: Some(
@@ -5625,7 +5527,6 @@ mod tests {
     fn type_error_spec_labels_ensure_predicate_call_with_string_comma() {
         let source = r#"guard = ensure(4, invalid("a,b"), NoneError)"#;
         let err = TypeError {
-            labels: Vec::new(),
             message: "ensure requires a closure or capture predicate".into(),
             span: Span { start: 18, end: 32 },
             hint: None,
@@ -5652,7 +5553,6 @@ mod tests {
     fn type_error_spec_labels_compose_call_operands_without_unknown_types() {
         let source = "bad = inc(1) >> inc(1)";
         let err = TypeError {
-        labels: Vec::new(),
             message: "`>>` requires a function value".into(),
             span: Span { start: 6, end: 12 },
             hint: Some(
@@ -5688,7 +5588,6 @@ impl Summable for Int {
 }"#;
         let string_start = source.find("String").expect("impl type");
         let err = TypeError {
-        labels: Vec::new(),
             message:
                 "Trait impl method Summable::add has incompatible parameter type: expected Int, got String"
                     .into(),
@@ -5751,7 +5650,6 @@ impl Summable for Int {
 }
 bad = &add(&1, "oops")"#;
         let err = TypeError {
-        labels: Vec::new(),
             message: "Argument type mismatch: expected Int, got String".into(),
             span: Span { start: 60, end: 66 },
             hint: Some(
@@ -5790,7 +5688,6 @@ bad = &add(&1, "oops")"#;
 bad = add("oops", 1)"#;
         let source_id = sources.register("main.srt", source);
         let err = TypeError {
-        labels: Vec::new(),
             message: "Argument type mismatch: expected Int, got String".into(),
             span: Span { start: 52, end: 58 },
             hint: Some(
@@ -5912,7 +5809,6 @@ bad = add("oops", 1)"#;
     fn type_error_spec_labels_extractor_pattern_for_safebind_rhs() {
         let source = "uncons(head, tail) =? True";
         let err = TypeError {
-            labels: Vec::new(),
             message: "Extractor uncons expects List<...> or String, got Boolean".into(),
             span: Span { start: 0, end: 6 },
             hint: None,
@@ -5930,7 +5826,6 @@ bad = add("oops", 1)"#;
     fn type_error_spec_splits_total_bind_pattern_error_into_lhs_op_rhs() {
         let source = "[h, ..t] = [1]";
         let err = TypeError {
-            labels: Vec::new(),
             message: "Only total MatchBlock patterns can be used with `=`".into(),
             span: Span {
                 start: 0,
@@ -5969,7 +5864,6 @@ bad = add("oops", 1)"#;
             "@@builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>",
         );
         let err = TypeError {
-            labels: Vec::new(),
             message: "Extractor uncons expects List<...> or String, got Boolean".into(),
             span: Span { start: 22, end: 28 },
             hint: None,

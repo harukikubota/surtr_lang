@@ -3,7 +3,6 @@ use super::*;
 impl Checker {
     pub(super) fn match_result_value_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
-        labels: Vec::new(),
             message: "MatchResult values are extractor-only and can only be constructed inside extractor definitions"
                 .into(),
             span: span.clone(),
@@ -47,7 +46,6 @@ impl Checker {
                         .contains_key(qualified_name)
                 }) {
                     return Err(TypeError {
-                    labels: Vec::new(),
                         message: format!(
                             "Trait helper `{}` cannot be referenced directly",
                             id.name
@@ -86,7 +84,6 @@ impl Checker {
                             });
                         }
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: "Lens value is not statically resolvable at this usage site"
                                 .into(),
                             span: span.clone(),
@@ -109,7 +106,6 @@ impl Checker {
                     }
                     if !variant.payload.is_empty() {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: format!(
                                 "Enum constructor {} expects {} argument(s)",
                                 id.name,
@@ -133,7 +129,6 @@ impl Checker {
 
                 if let Some(index) = Self::parse_standalone_tuple_root_index(id.name.as_str()) {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "Standalone tuple root _{} is not allowed; use tuple access with ._{}",
                             index, index
@@ -144,7 +139,6 @@ impl Checker {
                 }
 
                 Err(TypeError {
-                    labels: Vec::new(),
                     message: format!("Undefined variable: {}", id.name),
                     span: span.clone(),
                     hint: None,
@@ -170,18 +164,12 @@ impl Checker {
 
             Resolved::Bind(span, pat, rhs) => {
                 if !Self::is_total_bind_pattern(pat) {
-                    let pat_span = Self::resolved_pattern_span(pat);
                     return Err(TypeError {
                         message: "Only total MatchBlock patterns can be used with `=`".into(),
                         span: span.clone(),
                         hint: Some(
                             "Use `=?` for partial destructuring and extractor-driven matches."
                                 .into(),
-                        ),
-                        labels: self.lhs_op_rhs_labels(
-                            pat_span,
-                            span,
-                            self.resolved_span(rhs).clone(),
                         ),
                     });
                 }
@@ -199,7 +187,6 @@ impl Checker {
                 };
                 if matches!(typed_rhs.ty, Ty::Error) {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: "Error values must be wrapped with Err(...)".into(),
                         span: typed_rhs.span.clone(),
                         hint: None,
@@ -381,7 +368,6 @@ impl Checker {
             }
             TypedPattern::Wildcard(_) => Ok(()),
             _ => Err(TypeError {
-                labels: Vec::new(),
                 message: "Lens values can only be bound to variables or `_` patterns".into(),
                 span: span.clone(),
                 hint: Some("Use `lens = User.name` or `_ = User.name`.".into()),
@@ -433,11 +419,6 @@ impl Checker {
                 message: "Lens values cannot be bound with `=?`".into(),
                 span: typed_rhs.span.clone(),
                 hint: Some("Use `=` for compile-time Lens bindings.".into()),
-                labels: self.lhs_op_rhs_labels(
-                    Self::resolved_pattern_span(pat),
-                    span,
-                    typed_rhs.span.clone(),
-                ),
             });
         }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
@@ -448,11 +429,6 @@ impl Checker {
                 hint: Some(
                     "Convert explicitly with Option::to_result(value, err) before using `=?`."
                         .into(),
-                ),
-                labels: self.lhs_op_rhs_labels(
-                    Self::resolved_pattern_span(pat),
-                    span,
-                    typed_rhs.span.clone(),
                 ),
             });
         }
@@ -488,11 +464,6 @@ impl Checker {
                         ),
                         span: span.clone(),
                         hint: None,
-                        labels: self.lhs_op_rhs_labels(
-                            Self::resolved_pattern_span(pat),
-                            span,
-                            typed_rhs.span.clone(),
-                        ),
                     });
                 }
             };
@@ -509,11 +480,6 @@ impl Checker {
                         ),
                         span: typed_rhs.span.clone(),
                         hint: None,
-                        labels: self.lhs_op_rhs_labels(
-                            Self::resolved_pattern_span(pat),
-                            span,
-                            typed_rhs.span.clone(),
-                        ),
                     });
                 }
             }
@@ -543,7 +509,6 @@ impl Checker {
                 self.check_function_value_operand(node, op_name)
             }
             _ => Err(TypeError {
-            labels: Vec::new(),
                 message: format!("{} requires a function value", op_name),
                 span: self.resolved_span(node).clone(),
                 hint: Some(format!(
@@ -574,7 +539,6 @@ impl Checker {
             }
             Resolved::App(span, func, args) => self.check_injected_call(span, func, args, op_name),
             _ => Err(TypeError {
-            labels: Vec::new(),
                 message: format!(
                     "{} requires a function value or a function call like `f(...)`",
                     op_name
@@ -600,7 +564,6 @@ impl Checker {
             let span = typed.span.clone();
             let hint = self.compose_function_value_hint(&typed, op_name);
             Err(TypeError {
-                labels: Vec::new(),
                 message: format!("{} requires a function value", op_name),
                 span,
                 hint: Some(hint),
@@ -630,7 +593,6 @@ impl Checker {
         }
 
         TypeError {
-        labels: Vec::new(),
             message: format!("Undefined function {}/{}", name, arity),
             span: self.resolved_span(func).clone(),
             hint: Some(format!(
@@ -747,76 +709,6 @@ impl Checker {
             | Resolved::Capture(span, _, _)
             | Resolved::Semi(span, _) => span,
         }
-    }
-
-    fn resolved_pattern_span(pat: &ResolvedPattern) -> Span {
-        match pat {
-            ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => id.span.clone(),
-            ResolvedPattern::Wildcard(span)
-            | ResolvedPattern::ListNil(span)
-            | ResolvedPattern::IntLit(span, _)
-            | ResolvedPattern::StrLit(span, _)
-            | ResolvedPattern::BoolLit(span, _) => span.clone(),
-            ResolvedPattern::ListCons(head, tail) => Span {
-                start: Self::resolved_pattern_span(head).start,
-                end: Self::resolved_pattern_span(tail).end,
-            },
-            ResolvedPattern::Constructor(id, items) | ResolvedPattern::Extractor(id, items) => {
-                let end = items
-                    .last()
-                    .map(Self::resolved_pattern_span)
-                    .map(|span| span.end)
-                    .unwrap_or(id.span.end);
-                Span {
-                    start: id.span.start,
-                    end,
-                }
-            }
-            ResolvedPattern::Tuple(items) | ResolvedPattern::Or(items) => {
-                let start = items
-                    .first()
-                    .map(Self::resolved_pattern_span)
-                    .map(|span| span.start)
-                    .unwrap_or(0);
-                let end = items
-                    .last()
-                    .map(Self::resolved_pattern_span)
-                    .map(|span| span.end)
-                    .unwrap_or(start);
-                Span { start, end }
-            }
-            ResolvedPattern::As(inner, alias, _) => Span {
-                start: Self::resolved_pattern_span(inner).start,
-                end: alias.span.end,
-            },
-        }
-    }
-
-    fn operator_span_between(lhs: &Span, rhs: &Span, whole: &Span) -> Span {
-        let start = lhs.end.max(whole.start).min(whole.end);
-        let end = rhs.start.max(start.saturating_add(1)).min(whole.end);
-        if end > start {
-            Span { start, end }
-        } else {
-            whole.clone()
-        }
-    }
-
-    fn lhs_op_rhs_labels(&self, lhs: Span, whole: &Span, rhs: Span) -> Vec<TypeErrorLabel> {
-        vec![
-            TypeErrorLabel {
-                span: lhs.clone(),
-                message: "LHS".into(),
-            },
-            TypeErrorLabel {
-                span: Self::operator_span_between(&lhs, &rhs, whole),
-                message: "OP".into(),
-            },
-            TypeErrorLabel {
-                span: rhs,
-                message: "RHS".into(),
-            },
-        ]
     }
 
     pub(super) fn function_parts<'a>(&'a self, ty: &'a Ty) -> Option<(&'a [Ty], &'a Ty)> {
@@ -1007,7 +899,6 @@ impl Checker {
     ) -> Result<(Ty, Ty), TypeError> {
         let Some((params, ret)) = self.function_parts(ty) else {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!("{} expects a function value", op_name),
                 span: span.clone(),
                 hint: None,
@@ -1015,7 +906,6 @@ impl Checker {
         };
         if params.len() != 1 {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!("{} expects a unary callable", op_name),
                 span: span.clone(),
                 hint: Some(format!(
@@ -1038,7 +928,6 @@ impl Checker {
             .get(name)
             .cloned()
             .ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: format!("Missing helper function: {}", name),
                 span: span.clone(),
                 hint: None,
@@ -1048,7 +937,6 @@ impl Checker {
             .lookup_var(id.unique_id)
             .cloned()
             .ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: format!("Missing helper function type: {}", name),
                 span: span.clone(),
                 hint: None,
@@ -1083,7 +971,6 @@ impl Checker {
             }
             other => {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!("Not a function: {}", self.ty_name(&other)),
                     span: span.clone(),
                     hint: None,
@@ -1092,7 +979,6 @@ impl Checker {
         };
         if params.len() != args.len() {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "function expects {} argument(s), got {}",
                     params.len(),
@@ -1107,7 +993,6 @@ impl Checker {
                 && !self.types_compatible(expected, &arg.ty)
             {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",
                         self.ty_name(expected),
@@ -1312,7 +1197,6 @@ impl Checker {
             "try_from"
         };
         Some(TypeError {
-            labels: Vec::new(),
             message: format!(
                 "{} -> {} implements {}, not {}. Use {}(value, {}).",
                 receiver_name,
@@ -1343,7 +1227,6 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "{}::{} does not accept named arguments",
                     trait_name, method_name
@@ -1358,7 +1241,6 @@ impl Checker {
             .get(trait_name)
             .cloned()
             .ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: format!("Unknown trait: {}", trait_name),
                 span: span.clone(),
                 hint: None,
@@ -1368,7 +1250,6 @@ impl Checker {
             .get(method_name)
             .cloned()
             .ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: format!("Unknown trait method: {}::{}", trait_name, method_name),
                 span: span.clone(),
                 hint: None,
@@ -1391,7 +1272,6 @@ impl Checker {
 
         if args.len() != param_tys.len() {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "{}::{} expects {} argument(s), got {}",
                     trait_name,
@@ -1429,7 +1309,6 @@ impl Checker {
                         || self.trait_matches_short_name(trait_name, "Gte")
                     {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: format!(
                                 "Cannot compare {} and {}. {}",
                                 left_ty, right_ty, trait_impl_summary
@@ -1440,7 +1319,6 @@ impl Checker {
                     }
                     if self.trait_matches_short_name(trait_name, "Concat") {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: format!(
                                 "++ requires (String, String), got ({}, {}). {}",
                                 left_ty, right_ty, trait_impl_summary
@@ -1455,7 +1333,6 @@ impl Checker {
                     && self.trait_impl_exists(trait_name, &receiver_ty)
                 {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "{}::{} expects argument {} to match receiver type {}, got {}. {}",
                             trait_display_name,
@@ -1470,7 +1347,6 @@ impl Checker {
                     });
                 }
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Argument type mismatch in {}::{}: expected {}, got {}. {}",
                         trait_display_name,
@@ -1522,7 +1398,6 @@ impl Checker {
                 &trait_arg_tys,
             )
             .ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "{}::{} requires a receiver type implementing {}, got {}. {}",
                     trait_call_display_name,
@@ -1560,7 +1435,6 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "{} does not support named arguments on the right-hand side",
                     op_name
@@ -1578,7 +1452,6 @@ impl Checker {
             Ty::Func(params, ret) => (params, ret.as_ref().clone()),
             other => {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "{} right-hand side is not a function call target: {}",
                         op_name,
@@ -1592,7 +1465,6 @@ impl Checker {
 
         if params.len() != args.len() + 1 {
             return Err(TypeError {
-            labels: Vec::new(),
                 message: format!(
                     "{} injects the left value as the first argument, so the call expects {} explicit argument(s), got {}",
                     op_name,
@@ -1621,7 +1493,6 @@ impl Checker {
                 && !self.types_compatible(expected, &arg.ty)
             {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",
                         self.ty_name(expected),
@@ -1651,7 +1522,6 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let TypedInner::InjectCall(func, mut args) = callable.node else {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "internal error: expected injected call".into(),
                 span: span.clone(),
                 hint: None,
@@ -1674,7 +1544,6 @@ impl Checker {
             Ty::BuiltinFunc { ref name, .. } => {
                 let builtin_id =
                     sindr::builtin::builtin_id_by_name(name).ok_or_else(|| TypeError {
-                        labels: Vec::new(),
                         message: format!("Unknown builtin helper: {}", helper_name),
                         span: span.clone(),
                         hint: None,
@@ -1682,7 +1551,6 @@ impl Checker {
                 Ok(ListHelperRef::Builtin(builtin_id))
             }
             _ => Err(TypeError {
-                labels: Vec::new(),
                 message: format!("{} must be a callable helper", helper_name),
                 span: span.clone(),
                 hint: None,
@@ -1709,7 +1577,6 @@ impl Checker {
     ) -> Result<(), TypeError> {
         match self.resolve_ty(output_ty) {
             Ty::Result(_, _) | Ty::List(_) => Err(TypeError {
-            labels: Vec::new(),
                 message: format!(
                     "{} expects a plain function on the right-hand side; use `|>=` for contextual output",
                     op_name
@@ -1747,11 +1614,6 @@ impl Checker {
                     &typed_right.ty,
                     None,
                 )),
-                labels: self.lhs_op_rhs_labels(
-                    typed_left.span.clone(),
-                    span,
-                    typed_right.span.clone(),
-                ),
             });
         }
         match typed_right.node {
@@ -1793,11 +1655,6 @@ impl Checker {
                             &typed_right.ty,
                             None,
                         )),
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     });
                 }
                 Ok(TypedNode {
@@ -1822,11 +1679,6 @@ impl Checker {
                             &typed_right.ty,
                             None,
                         )),
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     });
                 }
                 self.build_list_helper_call("List::map", span, typed_left, typed_right)
@@ -1847,11 +1699,6 @@ impl Checker {
                         self.ty_name(&other)
                     )),
                 )),
-                labels: self.lhs_op_rhs_labels(
-                    typed_left.span.clone(),
-                    span,
-                    typed_right.span.clone(),
-                ),
             }),
         }
     }
@@ -1887,11 +1734,6 @@ impl Checker {
                                 self.ty_name(next_ok.as_ref())
                             )),
                         )),
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     });
                 }
                 Ok(TypedNode {
@@ -1919,11 +1761,6 @@ impl Checker {
                             &typed_right.ty,
                             Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List.".into()),
                         )),
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     });
                 }
                 self.build_list_helper_call("List::flat_map", span, typed_left, typed_right)
@@ -1938,11 +1775,6 @@ impl Checker {
                     &typed_right.ty,
                     Some("Result and List containers cannot be mixed in one bind operator.".into()),
                 )),
-                labels: self.lhs_op_rhs_labels(
-                    typed_left.span.clone(),
-                    span,
-                    typed_right.span.clone(),
-                ),
             }),
             (Ty::Result(_, _), rhs_plain) => Err(TypeError {
                 message: format!(
@@ -1960,11 +1792,6 @@ impl Checker {
                         self.ty_name(&rhs_plain)
                     )),
                 )),
-                labels: self.lhs_op_rhs_labels(
-                    typed_left.span.clone(),
-                    span,
-                    typed_right.span.clone(),
-                ),
             }),
             (Ty::List(_), rhs_plain) => Err(TypeError {
                 message: format!(
@@ -1982,11 +1809,6 @@ impl Checker {
                         self.ty_name(&rhs_plain)
                     )),
                 )),
-                labels: self.lhs_op_rhs_labels(
-                    typed_left.span.clone(),
-                    span,
-                    typed_right.span.clone(),
-                ),
             }),
             (other, _) => Err(TypeError {
                 message: format!(
@@ -2004,11 +1826,6 @@ impl Checker {
                         self.ty_name(&other)
                     )),
                 )),
-                labels: self.lhs_op_rhs_labels(
-                    typed_left.span.clone(),
-                    span,
-                    typed_right.span.clone(),
-                ),
             }),
         }
     }
@@ -2036,7 +1853,6 @@ impl Checker {
                 _ => None,
             };
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "`>>` requires the left output type to match the right input type".into(),
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
@@ -2081,7 +1897,6 @@ impl Checker {
             Ty::Result(ok, err) => {
                 if !self.types_compatible(ok.as_ref(), &right_in) {
                     return Err(TypeError {
-                    labels: Vec::new(),
                         message:
                             "`>*` requires the left contextual output to match the right input type"
                                 .into(),
@@ -2118,7 +1933,6 @@ impl Checker {
             Ty::List(item) => {
                 if !self.types_compatible(item.as_ref(), &right_in) {
                     return Err(TypeError {
-                    labels: Vec::new(),
                         message:
                             "`>*` requires the left contextual output to match the right input type"
                                 .into(),
@@ -2152,7 +1966,6 @@ impl Checker {
                 })
             }
             _ => Err(TypeError {
-            labels: Vec::new(),
                 message: "`>*` requires Result or List on the left-hand side".into(),
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
@@ -2187,7 +2000,6 @@ impl Checker {
                     || !self.types_compatible(err.as_ref(), next_err.as_ref())
                 {
                     return Err(TypeError {
-                    labels: Vec::new(),
                         message: "`>=>` requires matching Result context on both sides".into(),
                         span: span.clone(),
                         hint: Some(self.operator_rule_hint(
@@ -2222,7 +2034,6 @@ impl Checker {
             (Ty::List(item), Ty::List(next_item)) => {
                 if !self.types_compatible(item.as_ref(), &right_in) {
                     return Err(TypeError {
-                    labels: Vec::new(),
                         message: "`>=>` requires matching List element types across both sides"
                             .into(),
                         span: span.clone(),
@@ -2255,7 +2066,6 @@ impl Checker {
                 })
             }
             _ => Err(TypeError {
-            labels: Vec::new(),
                 message: "`>=>` requires matching Result or List context on both sides".into(),
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
@@ -2280,7 +2090,6 @@ impl Checker {
         let variants = self
             .lookup_enum_variants_of("MatchResult")
             .ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: "MatchResult enum is not available in the current environment".into(),
                 span: span.clone(),
                 hint: None,
@@ -2299,7 +2108,6 @@ impl Checker {
         match (success_tag, no_match_tag, err_tag) {
             (Some(success), Some(no_match), Some(err)) => Ok((success, no_match, err)),
             _ => Err(TypeError {
-                labels: Vec::new(),
                 message: "MatchResult enum must define Success, NoMatch, and Err variants".into(),
                 span: span.clone(),
                 hint: None,
@@ -2317,7 +2125,6 @@ impl Checker {
             .lookup_var(extractor_id.unique_id)
             .cloned()
             .ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: format!("Undefined extractor: {}", extractor_id.name),
                 span: span.clone(),
                 hint: None,
@@ -2329,7 +2136,6 @@ impl Checker {
             | Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
             other => {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Extractor {} is not callable (got {})",
                         extractor_id.name,
@@ -2342,7 +2148,6 @@ impl Checker {
         };
         if params.len() != 1 {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "Extractor {} must accept exactly one input value, got {} parameter(s)",
                     extractor_id.name,
@@ -2369,7 +2174,6 @@ impl Checker {
             .lookup_var(extractor_id.unique_id)
             .cloned()
             .ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: format!("Undefined extractor: {}", extractor_id.name),
                 span: span.clone(),
                 hint: None,
@@ -2384,7 +2188,6 @@ impl Checker {
             .or_else(|| self.function_ids_by_name.get("uncons"))
             .cloned()
             .ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: "Missing helper function: Kernel::uncons".into(),
                 span: span.clone(),
                 hint: None,
@@ -2408,7 +2211,6 @@ impl Checker {
             }
             Ty::Str => Ok((Ty::Str, vec![Ty::Str, Ty::Str])),
             other => Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "Extractor uncons expects List<...> or String, got {}",
                     self.ty_name(&other)
@@ -2456,7 +2258,6 @@ impl Checker {
                 other => Ok(vec![other.clone()]),
             },
             other => Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "{} must return MatchResult<T> or MatchResult<(...)>, got {}",
                     context,
@@ -2484,7 +2285,6 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Positional(_)));
         if has_named && has_positional {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "Cannot mix positional and named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -2496,7 +2296,6 @@ impl Checker {
 
         if has_named {
             let names = param_names.as_ref().ok_or_else(|| TypeError {
-                labels: Vec::new(),
                 message: "This function value does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -2504,7 +2303,6 @@ impl Checker {
 
             if args.len() != params.len() {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "function expects {} argument(s), got {}",
                         params.len(),
@@ -2524,14 +2322,12 @@ impl Checker {
                     .iter()
                     .position(|n| n == name)
                     .ok_or_else(|| TypeError {
-                        labels: Vec::new(),
                         message: format!("Unknown argument name '{}' for function", name),
                         span: span.clone(),
                         hint: None,
                     })?;
                 if reordered[idx].is_some() {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!("Duplicate argument '{}'", name),
                         span: span.clone(),
                         hint: None,
@@ -2542,7 +2338,6 @@ impl Checker {
 
             for (idx, expected_ty) in params.iter().enumerate() {
                 let expr = reordered[idx].ok_or_else(|| TypeError {
-                    labels: Vec::new(),
                     message: format!("Missing argument '{}'", names[idx]),
                     span: span.clone(),
                     hint: None,
@@ -2557,7 +2352,6 @@ impl Checker {
                     && !self.types_compatible(expected_ty, &typed.ty)
                 {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "Argument type mismatch: expected {}, got {}",
                             self.ty_name(expected_ty),
@@ -2574,7 +2368,6 @@ impl Checker {
 
         if args.len() != params.len() {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "function expects {} argument(s), got {}",
                     params.len(),
@@ -2599,7 +2392,6 @@ impl Checker {
                 && !self.types_compatible(expected_ty, &typed.ty)
             {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",
                         self.ty_name(expected_ty),
@@ -2643,7 +2435,6 @@ impl Checker {
     ) -> Result<TypedLensPath, TypeError> {
         if !matches!(typed.ty, Ty::Lens(_, _)) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!("Expected Lens<...> value, got {}", self.ty_name(&typed.ty)),
                 span: typed.span.clone(),
                 hint: None,
@@ -2657,7 +2448,6 @@ impl Checker {
                 segments: path.segments,
             }),
             _ => Err(TypeError {
-            labels: Vec::new(),
                 message:
                     "Lens values are compile-time only in Stage1 and cannot be stored or passed around"
                         .into(),
@@ -2674,7 +2464,6 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 2 {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!("Lens::compose expects 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
@@ -2685,7 +2474,6 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "Lens::compose does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -2712,7 +2500,6 @@ impl Checker {
 
         if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "Lens::compose source/focus mismatch: left focus is {}, right source is {}",
                     self.ty_name(&left_path.focus_ty),
@@ -2748,7 +2535,6 @@ impl Checker {
         let typed_source = self.check_node(source_expr)?;
         if matches!(typed_source.ty, Ty::Lens(_, _)) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!("{} source value cannot be a Lens", op_name),
                 span: typed_source.span.clone(),
                 hint: None,
@@ -2781,7 +2567,6 @@ impl Checker {
 
         if !self.types_compatible(&path.source_ty, source_value_ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "{} source type mismatch: lens expects {}, got {}",
                     op_name,
@@ -2803,7 +2588,6 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 2 {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!("Lens::view expects 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
@@ -2814,7 +2598,6 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "Lens::view does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -2863,7 +2646,6 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 3 {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!("Lens::set expects 3 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
@@ -2874,7 +2656,6 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "Lens::set does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -2904,7 +2685,6 @@ impl Checker {
         let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
         if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "Lens::set value type mismatch: expected {}, got {}",
                     self.ty_name(&path.focus_ty),
@@ -2937,7 +2717,6 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 3 {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!("Lens::over expects 3 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
@@ -2948,7 +2727,6 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "Lens::over does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -2979,7 +2757,6 @@ impl Checker {
         let (in_ty, out_ty) = self.unary_function_parts(&typed_update.ty, "Lens::over", span)?;
         if !self.types_compatible(&path.focus_ty, &in_ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "Lens::over update function input mismatch: expected {}, got {}",
                     self.ty_name(&path.focus_ty),
@@ -2994,7 +2771,6 @@ impl Checker {
             Ty::Result(ok, err) => (ok.as_ref().clone(), err.as_ref().clone()),
             _ => {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Lens::over update function must return Result<...>, got {}",
                         self.ty_name(&out_ty)
@@ -3006,7 +2782,6 @@ impl Checker {
         };
         if !self.types_compatible(&path.focus_ty, &out_ok) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "Lens::over update function output mismatch: expected {}, got {}",
                     self.ty_name(&path.focus_ty),
@@ -3018,7 +2793,6 @@ impl Checker {
         }
         if !self.types_compatible(&Ty::Error, &out_err) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "Lens::over update function error type must be Error-compatible, got {}",
                     self.ty_name(&out_err)
@@ -3066,7 +2840,6 @@ impl Checker {
     ) -> Result<(), TypeError> {
         if args.iter().any(|arg| self.ty_contains_lens(&arg.ty)) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "{} cannot accept Lens values in Stage1 (Lens is compile-time only)",
                     callee
@@ -3085,7 +2858,6 @@ impl Checker {
     ) -> Result<(), TypeError> {
         if self.ty_contains_lens(&value.ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "{} cannot contain Lens values in Stage1 (Lens is compile-time only)",
                     context
@@ -3129,7 +2901,6 @@ impl Checker {
                     .any(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)))
                 {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!("{} does not accept named arguments", name),
                         span: span.clone(),
                         hint: None,
@@ -3138,7 +2909,6 @@ impl Checker {
 
                 if args.len() != params.len() {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "{} expects {} argument(s), got {}",
                             name,
@@ -3165,7 +2935,6 @@ impl Checker {
                         && !self.types_compatible(param, &arg.ty)
                     {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: format!(
                                 "Argument type mismatch: expected {}, got {}",
                                 self.ty_name(param),
@@ -3183,7 +2952,6 @@ impl Checker {
                         ExitCodePolicy::Anywhere => {}
                         ExitCodePolicy::Forbidden => {
                             return Err(TypeError {
-                            labels: Vec::new(),
                                 message: format!(
                                     "set_exit_code is forbidden by source policy ({})",
                                     self.runtime_policy.exit_code_policy.as_str()
@@ -3200,7 +2968,6 @@ impl Checker {
                                 self.runtime_policy.normalized_entrypoint.as_ref()
                             else {
                                 return Err(TypeError {
-                                labels: Vec::new(),
                                     message:
                                         "set_exit_code requires a normalized entrypoint but none was provided".into(),
                                     span: span.clone(),
@@ -3213,7 +2980,6 @@ impl Checker {
                             if self.current_function_symbol.as_deref() != Some(entrypoint.as_str())
                             {
                                 return Err(TypeError {
-                                labels: Vec::new(),
                                     message: format!(
                                         "set_exit_code is only allowed inside entrypoint `{}` (policy: {})",
                                         entrypoint,
@@ -3245,7 +3011,6 @@ impl Checker {
                     _ if !has_named => u32::MAX,
                     _ => {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: "This function value does not accept named arguments".into(),
                             span: span.clone(),
                             hint: None,
@@ -3277,7 +3042,6 @@ impl Checker {
                     .any(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)))
                 {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: "Function values do not accept named arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -3286,7 +3050,6 @@ impl Checker {
 
                 if args.len() != params.len() {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "function expects {} argument(s), got {}",
                             params.len(),
@@ -3312,7 +3075,6 @@ impl Checker {
                         && !self.types_compatible(param, &arg.ty)
                     {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: format!(
                                 "Argument type mismatch: expected {}, got {}",
                                 self.ty_name(param),
@@ -3332,7 +3094,6 @@ impl Checker {
                 })
             }
             _ => Err(TypeError {
-                labels: Vec::new(),
                 message: format!("Not a function: {}", self.ty_name(&typed_func.ty)),
                 span: span.clone(),
                 hint: None,
@@ -3355,7 +3116,6 @@ impl Checker {
             Some(Ty::Func(expected_params, _)) => {
                 if expected_params.len() != params.len() {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "closure expects {} parameter(s), got {}",
                             expected_params.len(),
@@ -3369,7 +3129,6 @@ impl Checker {
             }
             Some(other) => {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!("Expected function type, got {}", self.ty_name(other)),
                     span: span.clone(),
                     hint: None,
@@ -3393,7 +3152,6 @@ impl Checker {
                     .resolve_ast_ty_in_context(ast_ty, body_checker.local_type_syntax_context())?;
                 if !body_checker.types_compatible(param_ty, &annotated) {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "closure parameter `{}` expected {}, got {}",
                             param.id.name,
@@ -3421,7 +3179,6 @@ impl Checker {
             if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
                 if matches!(ty, Ty::Lens(_, _)) {
                     return Err(TypeError {
-                    labels: Vec::new(),
                         message: "Lens values are scope-local compile-time capabilities and cannot be captured by closures".into(),
                         span: capture.span.clone(),
                         hint: Some(
@@ -3442,7 +3199,6 @@ impl Checker {
         let typed_body = body_checker.check_node(body)?;
         if matches!(typed_body.ty, Ty::Lens(_, _)) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "Lens is compile-time only in Stage1 and cannot be returned from closures"
                     .into(),
                 span: typed_body.span.clone(),
@@ -3481,7 +3237,6 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if !args.is_empty() {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "capture calls with arguments must be lowered before type checking".into(),
                 span: span.clone(),
                 hint: None,
@@ -3496,7 +3251,6 @@ impl Checker {
             Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
             other => {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!("Not a function: {}", self.ty_name(other)),
                     span: typed_target.span.clone(),
                     hint: Some(
@@ -3595,18 +3349,12 @@ impl Checker {
                             self.ty_name(&lt),
                             self.ty_name(&rt)
                         )),
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
                 let operator_trait =
                     self.trait_key_by_short_name(trait_short_name)
                         .ok_or_else(|| TypeError {
-                            labels: Vec::new(),
                             message: format!("Unknown trait: {}", trait_short_name),
                             span: span.clone(),
                             hint: None,
@@ -3623,11 +3371,6 @@ impl Checker {
                             "Add a `{}` bound or use a type that implements `{}`.",
                             trait_short_name, trait_short_name
                         )),
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     })?;
                 Ok(make_trait_call(
                     operator_trait,
@@ -3650,11 +3393,6 @@ impl Checker {
                         ),
                         span: typed_right.span.clone(),
                         hint: None,
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
@@ -3666,7 +3404,6 @@ impl Checker {
                 let eq_trait = self
                     .trait_key_by_short_name(trait_short_name)
                     .ok_or_else(|| TypeError {
-                        labels: Vec::new(),
                         message: format!("Unknown trait: {}", trait_short_name),
                         span: span.clone(),
                         hint: None,
@@ -3680,11 +3417,6 @@ impl Checker {
                         ),
                         span: typed_right.span.clone(),
                         hint: None,
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     })?;
                 Ok(make_trait_call(
                     eq_trait,
@@ -3707,11 +3439,6 @@ impl Checker {
                         ),
                         span: typed_right.span.clone(),
                         hint: None,
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
@@ -3725,7 +3452,6 @@ impl Checker {
                 let ord_trait =
                     self.trait_key_by_short_name(trait_short_name)
                         .ok_or_else(|| TypeError {
-                            labels: Vec::new(),
                             message: format!("Unknown trait: {}", trait_short_name),
                             span: span.clone(),
                             hint: None,
@@ -3739,11 +3465,6 @@ impl Checker {
                         ),
                         span: typed_right.span.clone(),
                         hint: None,
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     })?;
                 Ok(make_trait_call(
                     ord_trait,
@@ -3766,18 +3487,12 @@ impl Checker {
                         ),
                         span: typed_right.span.clone(),
                         hint: None,
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
                 let concat_trait =
                     self.trait_key_by_short_name("Concat")
                         .ok_or_else(|| TypeError {
-                            labels: Vec::new(),
                             message: "Unknown trait: Concat".into(),
                             span: span.clone(),
                             hint: None,
@@ -3792,11 +3507,6 @@ impl Checker {
                         ),
                         span: typed_right.span.clone(),
                         hint: None,
-                        labels: self.lhs_op_rhs_labels(
-                            typed_left.span.clone(),
-                            span,
-                            typed_right.span.clone(),
-                        ),
                     })?;
                 Ok(make_trait_call(
                     concat_trait,
@@ -3834,7 +3544,6 @@ impl Checker {
             Ty::List(inner) => inner.as_ref().clone(),
             other => {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!("list tail must be List<...>, got {}", self.ty_name(other)),
                     span: typed_tail.span.clone(),
                     hint: Some("Use `[head, ..tail]` with a list tail value".into()),
@@ -3844,7 +3553,6 @@ impl Checker {
 
         if !self.types_compatible(&typed_head.ty, &tail_elem_ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "expected {}, got {}",
                     self.ty_name(&tail_elem_ty),
@@ -3884,7 +3592,6 @@ impl Checker {
         for te in typed_elems.iter().skip(1) {
             if !self.types_compatible(&elem_ty, &te.ty) {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "expected {}, got {}",
                         self.ty_name(&elem_ty),
@@ -3910,7 +3617,6 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if elems.len() < 2 {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "Tuple literals require at least 2 values".into(),
                 span: span.clone(),
                 hint: None,
@@ -3949,7 +3655,6 @@ impl Checker {
                     self.ensure_no_runtime_lens_value(&typed_expr, "String interpolation")?;
                     if matches!(typed_expr.ty, Ty::Result(_, _)) {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: "Interpolation does not allow Result type".into(),
                             span: typed_expr.span.clone(),
                             hint: Some(
@@ -3980,7 +3685,6 @@ impl Checker {
         let typed_cond = self.check_node(cond)?;
         if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "if condition must be Boolean, got {}",
                     self.ty_name(&typed_cond.ty)
@@ -3997,7 +3701,6 @@ impl Checker {
                 let typed_else = self.check_node(else_branch)?;
                 if !self.types_compatible(&typed_then.ty, &typed_else.ty) {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "if branches have different types: {} and {}",
                             self.ty_name(&typed_then.ty),
@@ -4035,7 +3738,6 @@ impl Checker {
         let typed_cond = self.check_node(cond)?;
         if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "assert condition must be Boolean, got {}",
                     self.ty_name(&typed_cond.ty)
@@ -4066,7 +3768,6 @@ impl Checker {
         let typed_value = self.check_node(value)?;
         if matches!(pred, Resolved::App(_, _, _)) {
             return Err(TypeError {
-            labels: Vec::new(),
                 message: "ensure requires a closure or capture predicate".into(),
                 span: self.resolved_span(pred).clone(),
                 hint: Some("Use `&predicate` or `{|value| predicate(value) }`; call expressions such as `predicate()` are not accepted here.".into()),
@@ -4077,7 +3778,6 @@ impl Checker {
             self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
         if !self.types_compatible(&pred_in, &typed_value.ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "ensure predicate type mismatch: expected {}, got {}",
                     self.ty_name(&typed_value.ty),
@@ -4089,7 +3789,6 @@ impl Checker {
         }
         if !self.types_compatible(&Ty::Bool, &pred_out) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "ensure predicate must return Boolean, got {}",
                     self.ty_name(&pred_out)
@@ -4126,7 +3825,6 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if !self.env.is_error_constructor(marker.unique_id) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: "recover_kind marker must be a concrete deferror name".into(),
                 span: marker.span.clone(),
                 hint: Some("Pass a deferror constructor name such as Timeout, not a value.".into()),
@@ -4137,7 +3835,6 @@ impl Checker {
         let value_ty = self.resolve_ty(&typed_value.ty);
         let Ty::Result(ok_ty, _) = &value_ty else {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "recover_kind value must be Result<...>, got {}",
                     self.ty_name(&value_ty)
@@ -4156,7 +3853,6 @@ impl Checker {
             self.unary_function_parts(&typed_handler.ty, "recover_kind", &typed_handler.span)?;
         if !self.types_compatible(&Ty::Error, &handler_in) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "recover_kind handler must accept Error, got {}",
                     self.ty_name(&handler_in)
@@ -4167,7 +3863,6 @@ impl Checker {
         }
         if !self.types_compatible(&expected_handler, &typed_handler.ty) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "recover_kind handler must return Result<{}>, got {}",
                     self.ty_name(&ok_ty),
@@ -4201,20 +3896,17 @@ impl Checker {
                 let index = field
                     .strip_prefix('_')
                     .ok_or_else(|| TypeError {
-                        labels: Vec::new(),
                         message: "Tuple elements are accessed with ._0, ._1, ...".into(),
                         span: span.clone(),
                         hint: None,
                     })?
                     .parse::<usize>()
                     .map_err(|_| TypeError {
-                        labels: Vec::new(),
                         message: "Tuple elements are accessed with ._0, ._1, ...".into(),
                         span: span.clone(),
                         hint: None,
                     })?;
                 let field_ty = items.get(index).cloned().ok_or_else(|| TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Tuple index ._{} is out of bounds for {}",
                         index,
@@ -4238,7 +3930,6 @@ impl Checker {
                         self.current_impl_struct_target.as_deref() != Some(name.as_str());
                     if for_capability && outside_impl {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: format!("Field '{}.{}' is private", name, field),
                             span: span.clone(),
                             hint: Some(format!(
@@ -4249,7 +3940,6 @@ impl Checker {
                     }
                     if !for_capability && outside_impl && self.closure_depth > 0 {
                         return Err(TypeError {
-                        labels: Vec::new(),
                             message: format!(
                                 "Field '{}.{}' is private and cannot be accessed from closures outside impl {}",
                                 name, field, name
@@ -4268,7 +3958,6 @@ impl Checker {
                     .find(|(_, (field_name, _))| field_name == field)
                     .map(|(i, (_, ty))| (i as u32, ty.clone()))
                     .ok_or_else(|| TypeError {
-                        labels: Vec::new(),
                         message: format!("No field '{}' on {}", field, self.ty_name(source_ty)),
                         span: span.clone(),
                         hint: None,
@@ -4286,7 +3975,6 @@ impl Checker {
             Ty::Enum(enum_name, _) => {
                 if self.lookup_enum_variants_of(&enum_name).is_none() {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!("No variants found for enum {}", enum_name),
                         span: span.clone(),
                         hint: None,
@@ -4295,7 +3983,6 @@ impl Checker {
                 let Some(variant) = self.lookup_enum_variant_by_short_name(&enum_name, field)
                 else {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "No variant selector '{}' on {} (use PascalCase constructor names)",
                             field, enum_name
@@ -4307,7 +3994,6 @@ impl Checker {
                 let variant = self.instantiate_enum_variant(&variant);
                 if !self.types_compatible(&variant.enum_ty, source_ty) {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "Variant selector {}.{} does not match {}",
                             enum_name,
@@ -4350,7 +4036,6 @@ impl Checker {
                     format!("Cannot access field on {}", self.ty_name(&other))
                 };
                 Err(TypeError {
-                    labels: Vec::new(),
                     message,
                     span: span.clone(),
                     hint: None,
@@ -4377,7 +4062,6 @@ impl Checker {
         };
 
         let expected_ty = expected.ok_or_else(|| TypeError {
-            labels: Vec::new(),
             message: format!(
                 "Tuple.{} requires Lens type context (e.g. Lens::view(Tuple.{}, source_tuple))",
                 field, field
@@ -4390,7 +4074,6 @@ impl Checker {
             Ty::Lens(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
             other => {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Tuple.{} requires expected Lens<..., ...> context, got {}",
                         field,
@@ -4408,7 +4091,6 @@ impl Checker {
             Ty::Tuple(items) => items,
             other => {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Tuple.{} requires tuple source context, got {}",
                         field,
@@ -4421,7 +4103,6 @@ impl Checker {
         };
 
         let focus_ty = tuple_items.get(index).cloned().ok_or_else(|| TypeError {
-            labels: Vec::new(),
             message: format!(
                 "Tuple index ._{} is out of bounds for ({})",
                 index,
@@ -4437,7 +4118,6 @@ impl Checker {
 
         if !self.types_compatible(&focus_ty, &expected_focus) {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "Tuple.{} focus type mismatch: expected {}, got {}",
                     field,

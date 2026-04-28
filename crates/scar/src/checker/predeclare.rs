@@ -45,7 +45,6 @@ impl Checker {
 
             if builtin_type_meta_by_name(name).is_some() {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Type name `{}` is reserved by a canonical builtin type declaration",
                         name
@@ -57,7 +56,6 @@ impl Checker {
 
             if let Some(first_span) = seen_type_spans.get(name) {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Duplicate visible type name `{}` in the flat type namespace",
                         name
@@ -98,7 +96,6 @@ impl Checker {
                     self.env
                         .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
                         .ok_or_else(|| TypeError {
-                            labels: Vec::new(),
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
                             hint: None,
@@ -125,7 +122,6 @@ impl Checker {
                     self.env
                         .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
                         .ok_or_else(|| TypeError {
-                            labels: Vec::new(),
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
                             hint: None,
@@ -152,7 +148,6 @@ impl Checker {
                     self.env
                         .resolve_type_def_signature(&id.name, ty_fields, private_fields)
                         .ok_or_else(|| TypeError {
-                            labels: Vec::new(),
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
                             hint: None,
@@ -163,7 +158,6 @@ impl Checker {
                         .env
                         .resolve_type_def_signature(&id.name, Vec::new(), HashSet::new())
                         .ok_or_else(|| TypeError {
-                            labels: Vec::new(),
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
                             hint: None,
@@ -195,7 +189,6 @@ impl Checker {
                         };
                         if seen_discriminants.contains(&discriminant) {
                             return Err(TypeError {
-                                labels: Vec::new(),
                                 message: format!(
                                     "Duplicate enum discriminant {} in {}",
                                     discriminant, id.name
@@ -239,7 +232,6 @@ impl Checker {
                         self.env
                             .register_enum_variant(variant.id.unique_id, info.clone())
                             .map_err(|message| TypeError {
-                                labels: Vec::new(),
                                 message,
                                 span: variant.span.clone(),
                                 hint: None,
@@ -356,7 +348,6 @@ impl Checker {
             if let Some(cycle) = dfs(name, &edges, &mut states, &mut stack) {
                 let head = cycle.first().cloned().unwrap_or_else(|| name.clone());
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!("Cyclic type definition detected: {}", cycle.join(" -> ")),
                     span: decl_spans
                         .get(&head)
@@ -432,7 +423,6 @@ impl Checker {
                 if id.name == "self" {
                     let Some(expected) = expected_self else {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: "`self` can only be rebound inside impl methods".to_string(),
                             span: span.clone(),
                             hint: None,
@@ -440,7 +430,6 @@ impl Checker {
                     };
                     if !self.types_compatible(expected, bind_ty) {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: format!(
                                 "`self` rebinding requires Self type ({}), got {}",
                                 self.ty_name(expected),
@@ -457,7 +446,6 @@ impl Checker {
                 if id.name == "self" {
                     let Some(expected) = expected_self else {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: "`self` can only be rebound inside impl methods".to_string(),
                             span: span.clone(),
                             hint: None,
@@ -465,7 +453,6 @@ impl Checker {
                     };
                     if !self.types_compatible(expected, alias_ty) {
                         return Err(TypeError {
-                            labels: Vec::new(),
                             message: format!(
                                 "`self` rebinding requires Self type ({}), got {}",
                                 self.ty_name(expected),
@@ -531,7 +518,6 @@ impl Checker {
         for (struct_name, span) in struct_decl_spans {
             if !structs_with_new.contains(&struct_name) {
                 return Err(TypeError {
-                labels: Vec::new(),
                     message: format!(
                         "Struct `{}` must define `new` in its impl block (e.g. `impl {} {{ def new(...) -> Self {{ ... }} }}`)",
                         struct_name, struct_name
@@ -985,7 +971,6 @@ impl Checker {
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
         if trait_info.type_params.len() != trait_args.len() {
             return Err(TypeError {
-                labels: Vec::new(),
                 message: format!(
                     "Trait {} requires {} type argument(s), got {}",
                     trait_info.id.name,
@@ -1114,14 +1099,12 @@ impl Checker {
                 .get(&trait_key)
                 .cloned()
                 .ok_or_else(|| TypeError {
-                    labels: Vec::new(),
                     message: format!("Unknown trait: {}", trait_id.name),
                     span: span.clone(),
                     hint: None,
                 })?;
             if trait_info.type_params.len() != trait_args.len() {
                 return Err(TypeError {
-                    labels: Vec::new(),
                     message: format!(
                         "Trait {} requires {} type argument(s), got {}",
                         trait_id.name,
@@ -1136,7 +1119,6 @@ impl Checker {
             let (trait_arg_tys, target_ty, type_param_vars) =
                 self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
-            labels: Vec::new(),
                 message: "trait impl target must be a concrete named type".into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: Some("Use `impl Trait for Int` / `impl Trait for Float` / `impl Trait for UserType`.".into()),
@@ -1168,7 +1150,6 @@ impl Checker {
             for required_method in trait_info.methods.keys() {
                 if !method_map.contains_key(required_method) {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "Trait impl {} for {} is missing method `{}`",
                             trait_id.name, target_name, required_method
@@ -1182,7 +1163,6 @@ impl Checker {
             for method_name in method_map.keys() {
                 if !trait_info.methods.contains_key(method_name) {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "Trait impl {} for {} defines unknown method `{}`",
                             trait_id.name, target_name, method_name
@@ -1200,7 +1180,6 @@ impl Checker {
                     .expect("validated above");
                 if trait_method.type_params.len() != impl_method.type_params.len() {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "Trait impl method {}::{} has incompatible type parameter arity",
                             trait_id.name, method_name
@@ -1222,7 +1201,6 @@ impl Checker {
 
                 if trait_params.len() != impl_params.len() {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "Trait impl method {}::{} has incompatible arity",
                             trait_id.name, method_name
@@ -1238,7 +1216,6 @@ impl Checker {
                     self.substitutions = before;
                     if !compatible {
                         return Err(TypeError {
-                        labels: Vec::new(),
                             message: format!(
                                 "Trait impl method {}::{} has incompatible parameter type: expected {}, got {}",
                                 trait_id.name,
@@ -1257,7 +1234,6 @@ impl Checker {
                 self.substitutions = before;
                 if !ret_compatible {
                     return Err(TypeError {
-                    labels: Vec::new(),
                         message: format!(
                             "Trait impl method {}::{} has incompatible return type: expected {}, got {}",
                             trait_id.name,
@@ -1297,7 +1273,6 @@ impl Checker {
                     .contains_key(&(peer_instance_key.clone(), target_name.clone()))
                 {
                     return Err(TypeError {
-                        labels: Vec::new(),
                         message: format!(
                             "{} and {} cannot both be implemented for {} -> {}",
                             trait_id.name,
@@ -1542,7 +1517,6 @@ impl Checker {
                 .get(&trait_key)
                 .cloned()
                 .ok_or_else(|| TypeError {
-                    labels: Vec::new(),
                     message: format!("Unknown trait: {}", trait_impl.trait_id.name),
                     span: trait_impl.trait_id.span.clone(),
                     hint: None,
@@ -1563,7 +1537,6 @@ impl Checker {
                         .methods
                         .get(method_name)
                         .ok_or_else(|| TypeError {
-                            labels: Vec::new(),
                             message: format!(
                                 "Unknown trait method: {}::{}",
                                 trait_impl.trait_id.name, method_name

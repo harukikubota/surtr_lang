@@ -12,7 +12,7 @@ use sindr::policy::{ExitCodePolicy, RuntimeSourcePolicy};
 use spire::ast::{AstTy, BinOp, Lit, Span};
 
 use crate::env::{TypeEnv, TypeKind};
-use crate::error::{TypeError, TypeErrorLabel};
+use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::Ty;
 
