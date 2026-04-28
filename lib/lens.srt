@@ -87,35 +87,35 @@ impl Lens {
   The declared contract is `Result`-shaped; the compiler refines this in
   Stage1 based on path context.
 
-How to read the return type:
+  How to read the return type:
 
-- plain field / tuple paths on plain values return plain `A`
-- if `source` is already `Result<S>`, the result stays `Result<A>`
-- if the path contains an enum variant selector such as `Expr.Add`, the result
-  is promoted to `Result<A>`
+  - plain field / tuple paths on plain values return plain `A`
+  - if `source` is already `Result<S>`, the result stays `Result<A>`
+  - if the path contains an enum variant selector such as `Expr.Add`, the result
+    is promoted to `Result<A>`
 
-`value.segment` is shorthand for the same read:
-`cfg.entrypoint`
-`pair._0`
+  `value.segment` is shorthand for the same read:
+  `cfg.entrypoint`
+  `pair._0`
 
-Variant paths are fallible because the runtime value may be a different
-variant:
+  Variant paths are fallible because the runtime value may be a different
+  variant:
 
-When the selector does not match, the result is `Err(VariantMismatch(...))`.
+  When the selector does not match, the result is `Err(VariantMismatch(...))`.
 
-## REPL
-xldr(1)> cfg = Config::new("demo")
-> cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
-xldr(2)> cfg.entrypoint
-"Main::main"
+  ## REPL
+  xldr(1)> cfg = Config::new("demo")
+  > cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+  xldr(2)> cfg.entrypoint
+  "Main::main"
 
-xldr(1)> pair = ("alice", 42)
-> pair: (String, Int) = ("alice", 42)
-xldr(2)> pair._0
-"alice"
+  xldr(1)> pair = ("alice", 42)
+  > pair: (String, Int) = ("alice", 42)
+  xldr(2)> pair._0
+  "alice"
 
-xldr(1)> Lens::view(BitWidth.Any, BitWidth::Any(5))
-Ok(5)
+  xldr(1)> Lens::view(BitWidth.Any, BitWidth::Any(5))
+  Ok(5)
   """
   @@builtin def view(lens: Lens<$S, $A>, source: $S) -> Result<$A>
 
@@ -123,26 +123,26 @@ Ok(5)
   Replace the focus at `lens` in `source` with `value`.
   Returns the updated source wrapped in `Result`.
 
-Use `set` when you already have the replacement value.
+  Use `set` when you already have the replacement value.
 
-For nested updates, compose the path first:
+  For nested updates, compose the path first:
 
-If the path contains a variant selector, `set` fails with
-`Err(VariantMismatch(...))` when the current value is not on that variant.
+  If the path contains a variant selector, `set` fails with
+  `Err(VariantMismatch(...))` when the current value is not on that variant.
 
-## REPL
-xldr(1)> cfg = Config::new("demo")
-> cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
-xldr(2)> cfg2 =? Lens::set(Config.entrypoint, cfg, "App::main")
-> cfg2: Config = Config { name: "demo", entrypoint: "App::main", paths: [] }
+  ## REPL
+  xldr(1)> cfg = Config::new("demo")
+  > cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+  xldr(2)> cfg2 =? Lens::set(Config.entrypoint, cfg, "App::main")
+  > cfg2: Config = Config { name: "demo", entrypoint: "App::main", paths: [] }
 
-xldr(1)> pair = ("alice", 42)
-> pair: (String, Int) = ("alice", 42)
-xldr(2)> pair2 =? Lens::set(Tuple._1, pair, 99)
-> pair2: (String, Int) = ("alice", 99)
+  xldr(1)> pair = ("alice", 42)
+  > pair: (String, Int) = ("alice", 42)
+  xldr(2)> pair2 =? Lens::set(Tuple._1, pair, 99)
+  > pair2: (String, Int) = ("alice", 99)
 
-xldr(1)> bw2 =? Lens::set(BitWidth.Any, BitWidth::Any(5), 7)
-> bw2: BitWidth = BitWidth::Any(7)
+  xldr(1)> bw2 =? Lens::set(BitWidth.Any, BitWidth::Any(5), 7)
+  > bw2: BitWidth = BitWidth::Any(7)
   """
   @@builtin def set(lens: Lens<$S, $A>, source: $S, value: $A) -> Result<$S>
 
@@ -150,24 +150,24 @@ xldr(1)> bw2 =? Lens::set(BitWidth.Any, BitWidth::Any(5), 7)
   Update the focus at `lens` in `source` with `update_fun`.
   `update_fun` receives the current focus and returns `Result<$A>`.
 
-Use `over` when the new value depends on the current focused value.
+  Use `over` when the new value depends on the current focused value.
 
-`update_fun` must return `Result`.
-If `update_fun` returns `Err(...)`, that error is propagated as-is.
+  `update_fun` must return `Result`.
+  If `update_fun` returns `Err(...)`, that error is propagated as-is.
 
-## REPL
-xldr(1)> cfg = Config::new("demo")
-> cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
-xldr(2)> cfg2 =? Lens::over(Config.entrypoint, cfg, {|entry| Ok(entry ++ "!")})
-> cfg2: Config = Config { name: "demo", entrypoint: "Main::main!", paths: [] }
+  ## REPL
+  xldr(1)> cfg = Config::new("demo")
+  > cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+  xldr(2)> cfg2 =? Lens::over(Config.entrypoint, cfg, {|entry| Ok(entry ++ "!")})
+  > cfg2: Config = Config { name: "demo", entrypoint: "Main::main!", paths: [] }
 
-xldr(1)> pair = ("alice", 42)
-> pair: (String, Int) = ("alice", 42)
-xldr(2)> pair2 =? Lens::over(Tuple._1, pair, {|n| Ok(n + 1)})
-> pair2: (String, Int) = ("alice", 43)
+  xldr(1)> pair = ("alice", 42)
+  > pair: (String, Int) = ("alice", 42)
+  xldr(2)> pair2 =? Lens::over(Tuple._1, pair, {|n| Ok(n + 1)})
+  > pair2: (String, Int) = ("alice", 43)
 
-xldr(1)> bw2 =? Lens::over(BitWidth.Any, BitWidth::Any(7), {|n| Ok(n + 1)})
-> bw2: BitWidth = BitWidth::Any(8)
+  xldr(1)> bw2 =? Lens::over(BitWidth.Any, BitWidth::Any(7), {|n| Ok(n + 1)})
+  > bw2: BitWidth = BitWidth::Any(8)
   """
   @@builtin def over(lens: Lens<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
 
@@ -175,26 +175,26 @@ xldr(1)> bw2 =? Lens::over(BitWidth.Any, BitWidth::Any(7), {|n| Ok(n + 1)})
   Compose two lens paths in sequence.
   `compose(outer, inner)` focuses from `S` to `B` via `A`.
 
-Use this for nested access and updates.
+  Use this for nested access and updates.
 
-The types must line up:
+  The types must line up:
 
-- `outer: Lens<S, A>`
-- `inner: Lens<A, B>`
-- result: `Lens<S, B>`
+  - `outer: Lens<S, A>`
+  - `inner: Lens<A, B>`
+  - result: `Lens<S, B>`
 
-This is the canonical path-composition API.
+  This is the canonical path-composition API.
 
-Private field segments keep their visibility rules after composition.
-If one segment is private and the current scope cannot see it, the composed
-path is rejected at compile time.
+  Private field segments keep their visibility rules after composition.
+  If one segment is private and the current scope cannot see it, the composed
+  path is rejected at compile time.
 
-## REPL
-Compose is easiest to try with a user-defined nested type in a source file.
-In the REPL, use the same shape as:
-outer = User.profile
-inner = Profile.name
-path = Lens::compose(outer, inner)
+  ## REPL
+  Compose is easiest to try with a user-defined nested type in a source file.
+  In the REPL, use the same shape as:
+  outer = User.profile
+  inner = Profile.name
+  path = Lens::compose(outer, inner)
   """
   @@builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
 }
