@@ -135,6 +135,9 @@ Eldr が扱う値の概念カテゴリ:
 - 先頭行は `Kind("message")`
 - cause がある場合、次行以降を `|_ ...` でネスト表示する
 - `inspect(Result::Err(...))` も同じ tree を使うが、先頭行だけ `Err(...)` で包む
+- `inspect(Struct)` / `to_string(Struct)` は `Type(field: value, ...)` を返し、内部専用の `Type { ... }` 構造体リテラルは表示しない
+- `inspect` は再帰的に string literal を quote し、`to_string` は素の string 値を使う
+- private field を含む named-field 値は公開 field のみを表示し、hidden 部分を `..private` として要約する
 - `inspect(HashMap)` / `to_string(HashMap)` は `HashMap("key" => value, ...)` 形式で、key は `String` literal と同じ escaping で表示する
 - `inspect(HashMap)` / `to_string(HashMap)` / `map_keys` / `map_values_list` はキー昇順の deterministic order を使う
 - `eprint(Error)` は先頭行を `Error: Kind: message`、以降を `Caused by: Kind: message` で出力する

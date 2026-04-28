@@ -1454,26 +1454,26 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
 
 fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
     if let Some(entry) = vm.type_registry().lookup(tag) {
-        return match entry.kind {
-            sindr::runtime::TypeKind::Struct => {
-                let pairs = entry
-                    .field_names
-                    .iter()
-                    .zip(fields.iter())
-                    .map(|(name, val)| format!("{name}: {}", inspect_non_callable_value(vm, val)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{} {{ {} }}", entry.name, pairs)
+        let render_named_value = || {
+            let hidden_field_count = entry.private_flags.iter().filter(|flag| **flag).count();
+            let mut parts = entry
+                .field_names
+                .iter()
+                .zip(entry.private_flags.iter().copied().chain(std::iter::repeat(false)))
+                .zip(fields.iter())
+                .filter_map(|((name, is_private), val)| {
+                    (!is_private).then(|| format!("{name}: {}", inspect_non_callable_value(vm, val)))
+                })
+                .collect::<Vec<_>>();
+            if hidden_field_count > 0 {
+                parts.push("..private".to_string());
             }
-            sindr::runtime::TypeKind::Record => {
-                let pairs = entry
-                    .field_names
-                    .iter()
-                    .zip(fields.iter())
-                    .map(|(name, val)| format!("{name}: {}", inspect_non_callable_value(vm, val)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{}({pairs})", entry.name)
+            format!("{}({})", entry.name, parts.join(", "))
+        };
+
+        return match entry.kind {
+            sindr::runtime::TypeKind::Struct | sindr::runtime::TypeKind::Record => {
+                render_named_value()
             }
             sindr::runtime::TypeKind::EnumVariant => {
                 let payload = fields
@@ -2419,6 +2419,7 @@ mod tests {
             name: "StringEncoding::Utf8".into(),
             kind: TypeKind::EnumVariant,
             field_names: vec![],
+            private_flags: vec![],
         }]);
         let value = call_builtin(
             &mut vm,
@@ -2457,6 +2458,7 @@ mod tests {
             name: "StringEncoding::Ascii".into(),
             kind: TypeKind::EnumVariant,
             field_names: vec![],
+            private_flags: vec![],
         }]);
         let value = call_builtin(
             &mut vm,

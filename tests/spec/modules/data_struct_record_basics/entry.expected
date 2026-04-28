@@ -1,4 +1,4 @@
-User { name: alice, age: 30 }
+User(name: alice, age: 30)
 alice
 30
 Point(x: 1.0, y: 2.0)

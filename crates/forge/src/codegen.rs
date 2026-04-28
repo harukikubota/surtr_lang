@@ -491,7 +491,7 @@ fn collect_stmt_meta(
         TypedInner::Bind(pat, _) | TypedInner::SafeBind(pat, _) => {
             collect_pattern_binding_infos(pat, slot_map, bindings);
         }
-        TypedInner::StructDef(_, name, field_names) => {
+        TypedInner::StructDef(_, name, field_names, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Struct,
@@ -501,7 +501,7 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::RecordDef(_, name, field_names) => {
+        TypedInner::RecordDef(_, name, field_names, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Record,
@@ -1842,23 +1842,25 @@ impl Codegen {
                 self.emit_callable_ref(target)?;
             }
 
-            TypedInner::StructDef(tag, name, field_names) => {
+            TypedInner::StructDef(tag, name, field_names, private_flags) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Struct,
                     field_names: field_names.clone(),
+                    private_flags: private_flags.clone(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::RecordDef(tag, name, field_names) => {
+            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Record,
                     field_names: field_names.clone(),
+                    private_flags: private_flags.clone(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -1871,6 +1873,7 @@ impl Codegen {
                         name: variant.constructor_name.clone(),
                         kind: TypeKind::EnumVariant,
                         field_names: variant.field_names.clone(),
+                        private_flags: vec![false; variant.field_names.len()],
                     });
                 }
                 let unit_idx = self.add_constant(Constant::Unit);

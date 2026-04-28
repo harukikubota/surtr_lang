@@ -742,11 +742,11 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
-            TypedInner::StructDef(tag, name, field_names) => {
-                TypedInner::StructDef(tag, name, field_names)
+            TypedInner::StructDef(tag, name, field_names, private_flags) => {
+                TypedInner::StructDef(tag, name, field_names, private_flags)
             }
-            TypedInner::RecordDef(tag, name, field_names) => {
-                TypedInner::RecordDef(tag, name, field_names)
+            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
+                TypedInner::RecordDef(tag, name, field_names, private_flags)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
@@ -1455,11 +1455,11 @@ impl Checker {
                     .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names) => {
-                TypedInner::StructDef(tag, name, field_names)
+            TypedInner::StructDef(tag, name, field_names, private_flags) => {
+                TypedInner::StructDef(tag, name, field_names, private_flags)
             }
-            TypedInner::RecordDef(tag, name, field_names) => {
-                TypedInner::RecordDef(tag, name, field_names)
+            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
+                TypedInner::RecordDef(tag, name, field_names, private_flags)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),

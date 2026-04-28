@@ -346,7 +346,7 @@ user = User("alice", 30)
 print(to_string(user))
 print(to_string(user.name))
 print(to_string(user.age))"#,
-        &["User { name: alice, age: 30 }", "alice", "30"],
+        &["User(name: alice, age: 30)", "alice", "30"],
     );
 }
 

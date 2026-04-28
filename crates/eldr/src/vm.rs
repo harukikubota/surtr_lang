@@ -2667,6 +2667,7 @@ mod tests {
             name: "Bad".into(),
             kind: TypeKind::Struct,
             field_names: vec![],
+            private_flags: vec![],
         });
 
         let err = VM::new(bytecode).run().expect_err("must fail");
@@ -2681,12 +2682,14 @@ mod tests {
             name: "A".into(),
             kind: TypeKind::Struct,
             field_names: vec![],
+            private_flags: vec![],
         });
         bytecode.type_registry.register(TypeEntry {
             tag: 10,
             name: "B".into(),
             kind: TypeKind::Record,
             field_names: vec![],
+            private_flags: vec![],
         });
 
         let err = VM::new(bytecode).run().expect_err("must fail");
@@ -2757,6 +2760,7 @@ mod tests {
                 name: "Bad".into(),
                 kind: TypeKind::Struct,
                 field_names: vec![],
+                private_flags: vec![],
             }],
             error_template_base: 0,
             error_templates: Vec::new(),
@@ -2776,6 +2780,7 @@ mod tests {
             name: "Existing".into(),
             kind: TypeKind::Struct,
             field_names: vec![],
+            private_flags: vec![],
         });
         let mut vm = VM::new(bytecode);
 
@@ -2790,6 +2795,7 @@ mod tests {
                 name: "Duplicate".into(),
                 kind: TypeKind::Record,
                 field_names: vec![],
+                private_flags: vec![],
             }],
             error_template_base: 0,
             error_templates: Vec::new(),

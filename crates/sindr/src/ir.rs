@@ -1278,6 +1278,7 @@ mod tests {
             name: "User".to_string(),
             kind: TypeKind::Struct,
             field_names: vec!["name".to_string(), "age".to_string()],
+            private_flags: vec![false, false],
         });
         registry
     }

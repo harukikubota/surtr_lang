@@ -2034,11 +2034,11 @@ impl Checker {
                     .map(|arg| self.resolve_typed_node(arg))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names) => {
-                TypedInner::StructDef(tag, name, field_names)
+            TypedInner::StructDef(tag, name, field_names, private_flags) => {
+                TypedInner::StructDef(tag, name, field_names, private_flags)
             }
-            TypedInner::RecordDef(tag, name, field_names) => {
-                TypedInner::RecordDef(tag, name, field_names)
+            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
+                TypedInner::RecordDef(tag, name, field_names, private_flags)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),

@@ -1219,7 +1219,7 @@ impl User {
         let typed = typecheck(resolved).expect("forward struct reference should typecheck");
         assert!(typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _))));
+            .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _))));
     }
 
     #[test]
@@ -1280,7 +1280,8 @@ deferror NotFound(code: String) {
             nodes
                 .iter()
                 .filter_map(|node| match &node.node {
-                    TypedInner::StructDef(tag, name, _) | TypedInner::RecordDef(tag, name, _) => {
+                    TypedInner::StructDef(tag, name, _, _)
+                    | TypedInner::RecordDef(tag, name, _, _) => {
                         Some((name.clone(), *tag))
                     }
                     TypedInner::DeferrorDef(tag, _, id, _, _) => Some((id.name.clone(), *tag)),

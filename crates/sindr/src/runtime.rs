@@ -19,6 +19,8 @@ pub struct TypeEntry {
     pub name: String,
     pub kind: TypeKind,
     pub field_names: Vec<String>,
+    #[serde(default)]
+    pub private_flags: Vec<bool>,
 }
 
 /// Registry of all user-defined types in a compiled program.
@@ -118,6 +120,30 @@ pub enum CallableTarget {
 }
 
 impl Value {
+    fn render_named_value(
+        type_name: &str,
+        field_names: &[String],
+        private_flags: &[bool],
+        fields: &[Value],
+        registry: &TypeRegistry,
+    ) -> String {
+        let hidden_field_count = private_flags.iter().filter(|flag| **flag).count();
+        let mut parts = field_names
+            .iter()
+            .zip(private_flags.iter().copied().chain(std::iter::repeat(false)))
+            .zip(fields.iter())
+            .filter_map(|((name, is_private), val)| {
+                (!is_private).then(|| format!("{}: {}", name, val.to_display_string(registry)))
+            })
+            .collect::<Vec<_>>();
+
+        if hidden_field_count > 0 {
+            parts.push("..private".to_string());
+        }
+
+        format!("{}({})", type_name, parts.join(", "))
+    }
+
     /// Display string for `to_string` built-in.
     pub fn to_display_string(&self, registry: &TypeRegistry) -> String {
         match self {
@@ -176,16 +202,14 @@ impl Value {
             }
             Value::Tagged { tag, fields } => {
                 if let Some(entry) = registry.lookup(*tag) {
-                    let pairs = entry
-                        .field_names
-                        .iter()
-                        .zip(fields.iter())
-                        .map(|(name, val)| format!("{}: {}", name, val.to_display_string(registry)))
-                        .collect::<Vec<_>>()
-                        .join(", ");
                     match entry.kind {
-                        TypeKind::Struct => format!("{} {{ {} }}", entry.name, pairs),
-                        TypeKind::Record => format!("{}({})", entry.name, pairs),
+                        TypeKind::Struct | TypeKind::Record => Self::render_named_value(
+                            &entry.name,
+                            &entry.field_names,
+                            &entry.private_flags,
+                            fields,
+                            registry,
+                        ),
                         TypeKind::EnumVariant => {
                             let payload = fields
                                 .iter()
@@ -568,12 +592,21 @@ mod tests {
             name: "User".into(),
             kind: TypeKind::Struct,
             field_names: vec!["name".into(), "age".into()],
+            private_flags: vec![false, false],
         });
         registry.register(TypeEntry {
             tag: 11,
             name: "Pair".into(),
             kind: TypeKind::Record,
             field_names: vec!["left".into(), "right".into()],
+            private_flags: vec![false, false],
+        });
+        registry.register(TypeEntry {
+            tag: 12,
+            name: "SecretUser".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["name".into(), "password".into()],
+            private_flags: vec![false, true],
         });
 
         let user = Value::Tagged {
@@ -584,12 +617,20 @@ mod tests {
             tag: 11,
             fields: vec![Value::Int(int(1)), Value::Int(int(2))],
         };
+        let secret_user = Value::Tagged {
+            tag: 12,
+            fields: vec![Value::Str("alice".into()), Value::Str("s3cr3t".into())],
+        };
 
         assert_eq!(
             user.to_display_string(&registry),
-            "User { name: alice, age: 20 }"
+            "User(name: alice, age: 20)"
         );
         assert_eq!(pair.to_display_string(&registry), "Pair(left: 1, right: 2)");
+        assert_eq!(
+            secret_user.to_display_string(&registry),
+            "SecretUser(name: alice, ..private)"
+        );
     }
 
     #[test]

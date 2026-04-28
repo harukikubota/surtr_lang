@@ -187,11 +187,11 @@ pub enum TypedInner {
     /// Captured function value
     Capture(Box<TypedNode>, Vec<TypedNode>),
 
-    /// Struct definition — tag + name + field names (for TypeRegistry)
-    StructDef(u32, String, Vec<String>),
+    /// Struct definition — tag + name + field names + private flags (for TypeRegistry)
+    StructDef(u32, String, Vec<String>, Vec<bool>),
 
-    /// Record definition — tag + name + field names (for TypeRegistry)
-    RecordDef(u32, String, Vec<String>),
+    /// Record definition — tag + name + field names + private flags (for TypeRegistry)
+    RecordDef(u32, String, Vec<String>, Vec<bool>),
 
     /// Semicolon — explicit Unit coercion
     Semi(Box<TypedNode>),

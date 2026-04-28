@@ -56,6 +56,15 @@ User { name: name, age: age }
 
 この制約により、構築の公開入口は `new` に固定されます。
 
+`inspect(...)` / `to_string(...)` もこの公開 surface に合わせます。
+
+- `to_string(User("alice", 30))` は `User(name: alice, age: 30)` と表示される
+- `inspect(User("alice", 30))` は nested string を quote して `User(name: "alice", age: 30)` と表示される
+- 内部専用の `User { ... }` 構造体リテラルは表示に使わない
+- private field を含むときは `User(name: "alice", ..private)` や `User(name: alice, ..private)` のように hidden 部分を要約する
+
+このため、private field を含む構造体の表示は人間向けの inspect であり、完全な round-trip code にはなりません。
+
 ## `new` と `deconstruct` の関係
 
 Surtr では、構造体の構築と分解は別の入口です。

@@ -1074,11 +1074,15 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
+        let private_flags: Vec<bool> = fields
+            .iter()
+            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::StructDef(tag, id.name.clone(), field_names),
+            node: TypedInner::StructDef(tag, id.name.clone(), field_names, private_flags),
         })
     }
 
@@ -1163,11 +1167,15 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Record(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
+        let private_flags: Vec<bool> = fields
+            .iter()
+            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::RecordDef(tag, id.name.clone(), field_names),
+            node: TypedInner::RecordDef(tag, id.name.clone(), field_names, private_flags),
         })
     }
 

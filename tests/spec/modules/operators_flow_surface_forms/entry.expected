@@ -1,4 +1,4 @@
 alice
 alice
-User { name: bob, age: 30 }
+User(name: bob, age: 30)
 alice
