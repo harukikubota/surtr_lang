@@ -310,11 +310,28 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
             if !line.trim().is_empty() {
                 spec.labels.push(DiagnosticLabel {
                     source_id: None,
-                    span,
+                    span: span.clone(),
                     message: token_hint.into(),
                     color: Some(Color::Red),
                 });
             }
+        }
+    }
+
+    if message == "anonymous capture is not supported; use `&id` instead" {
+        if let Some(rewrite) = rewrite_line_at_span(source, &span, "&id") {
+            spec.help = Some(format!("Replace this anonymous capture with:\n\n  {}", rewrite));
+        }
+    }
+
+    if message
+        == "anonymous capture is not supported; extract a named function and capture it like `&fun_name(&1, &2)`"
+    {
+        if let Some(rewrite) = rewrite_line_at_span(source, &span, "&fun_name(&1, &2)") {
+            spec.help = Some(format!(
+                "Extract the body into a named helper and replace this capture with:\n\n  {}",
+                rewrite
+            ));
         }
     }
 
@@ -448,6 +465,15 @@ pub fn resolve_error_spec(source: &str, message: impl Into<String>, span: Span) 
                 message: format!("import target `{}` is not available yet", target),
                 color: Some(Color::Red),
             });
+        }
+    }
+
+    if message == "pipe placeholder `_1` cannot be used as an expression" {
+        if let Some(rewrite) = suggested_pipe_slot_rewrite(source, span.start) {
+            spec.help = Some(format!(
+                "Move the `_1` transformation into the previous pipe step:\n\n  {}",
+                rewrite
+            ));
         }
     }
 
@@ -3928,6 +3954,228 @@ fn slice_chars(source: &str, start: usize, end: usize) -> String {
         .collect()
 }
 
+fn rewrite_line_at_span(source: &str, span: &Span, replacement: &str) -> Option<String> {
+    let line = line_span_containing(source, span.start)?;
+    let line_start = line.0;
+    let line_end = line.1;
+    if span.start < line_start || span.end > line_end || span.end < span.start {
+        return None;
+    }
+    let before = slice_chars(source, line_start, span.start);
+    let after = slice_chars(source, span.end, line_end);
+    Some(format!("{}{}{}", before, replacement, after).trim().to_string())
+}
+
+const MAX_PIPE_SLOT_REWRITE_DEPTH: usize = 3;
+
+#[derive(Debug, Clone)]
+struct PipeCallFrame {
+    callee: String,
+    args: Vec<String>,
+    slot_arg_index: usize,
+}
+
+fn split_top_level_call_args(call: &str) -> Option<(String, Vec<String>)> {
+    let call = call.trim();
+    if !call.ends_with(')') {
+        return None;
+    }
+    let open = call.find('(')?;
+    let close = call.rfind(')')?;
+    if close != call.len().saturating_sub(1) {
+        return None;
+    }
+    if close <= open {
+        return None;
+    }
+    let callee = call[..open].trim().to_string();
+    let body = &call[open + 1..close];
+    let mut args = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (idx, ch) in body.char_indices() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                args.push(body[start..idx].trim().to_string());
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    let tail = body[start..].trim();
+    if !tail.is_empty() {
+        args.push(tail.to_string());
+    }
+    Some((callee, args))
+}
+
+fn suggested_pipe_slot_rewrite(source: &str, pos: usize) -> Option<String> {
+    let line = line_span_containing(source, pos)?;
+    let line_text = slice_chars(source, line.0, line.1);
+    let (pipe_idx, operator) = last_pipe_operator_in_line(&line_text, pos.saturating_sub(line.0))?;
+    let lhs = slice_chars(&line_text, 0, pipe_idx);
+    let rhs = slice_chars(
+        &line_text,
+        pipe_idx + operator.chars().count(),
+        line_text.chars().count(),
+    );
+    let lhs = lhs.trim_end();
+    let rhs = rhs.trim_start();
+    match build_pipe_slot_rewrite_steps(rhs)? {
+        PipeSlotRewrite::Expanded(steps) => Some(format_pipe_rewrite(lhs.trim(), operator, &steps)),
+        PipeSlotRewrite::Closure(closure) => {
+            Some(format!("{}\n  {} {}", lhs.trim(), operator, closure))
+        }
+    }
+}
+
+fn last_pipe_operator_in_line(line: &str, max_index: usize) -> Option<(usize, &'static str)> {
+    let chars = line.chars().collect::<Vec<_>>();
+    let limit = max_index.min(chars.len());
+    let mut last = None;
+
+    for idx in 0..limit {
+        if chars[idx] != '|' {
+            continue;
+        }
+
+        let operator = if chars.get(idx + 1) == Some(&'*') && chars.get(idx + 2) == Some(&'>') {
+            Some("|*>")
+        } else if chars.get(idx + 1) == Some(&'>') && chars.get(idx + 2) == Some(&'=') {
+            Some("|>=")
+        } else if chars.get(idx + 1) == Some(&'>') {
+            Some("|>")
+        } else {
+            None
+        };
+
+        if let Some(operator) = operator {
+            last = Some((idx, operator));
+        }
+    }
+
+    last
+}
+
+#[derive(Debug, Clone)]
+enum PipeSlotRewrite {
+    Expanded(Vec<String>),
+    Closure(String),
+}
+
+fn build_pipe_slot_rewrite_steps(rhs: &str) -> Option<PipeSlotRewrite> {
+    let frames = collect_pipe_slot_frames(rhs)?;
+    if frames.len() > MAX_PIPE_SLOT_REWRITE_DEPTH {
+        let closure_body = replace_first_standalone_pipe_slot(rhs, "term")?;
+        return Some(PipeSlotRewrite::Closure(format!(
+            "{{|term| {}}}",
+            closure_body.trim()
+        )));
+    }
+
+    let mut steps = Vec::with_capacity(frames.len());
+    let leaf = frames.last()?;
+    steps.push(render_call(&leaf.callee, &leaf.args));
+
+    for frame in frames.iter().rev().skip(1) {
+        let step = if frame.slot_arg_index == 0 {
+            let remaining_args = frame.args[1..].to_vec();
+            render_call(&frame.callee, &remaining_args)
+        } else {
+            let mut args = frame.args.clone();
+            args[frame.slot_arg_index] = "_1".into();
+            render_call(&frame.callee, &args)
+        };
+        steps.push(step);
+    }
+
+    Some(PipeSlotRewrite::Expanded(steps))
+}
+
+fn collect_pipe_slot_frames(rhs: &str) -> Option<Vec<PipeCallFrame>> {
+    let mut frames = Vec::new();
+    let mut current = rhs.trim().to_string();
+
+    loop {
+        let (callee, args) = split_top_level_call_args(&current)?;
+        let slot_indices = args
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, arg)| arg.contains("_1").then_some(idx))
+            .collect::<Vec<_>>();
+        if slot_indices.len() != 1 {
+            return None;
+        }
+
+        let slot_arg_index = slot_indices[0];
+        let nested = args.get(slot_arg_index)?.trim().to_string();
+        frames.push(PipeCallFrame {
+            callee,
+            args,
+            slot_arg_index,
+        });
+
+        if nested == "_1" {
+            return Some(frames);
+        }
+
+        if frames.len() > MAX_PIPE_SLOT_REWRITE_DEPTH {
+            return Some(frames);
+        }
+
+        current = nested;
+    }
+}
+
+fn render_call(callee: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        format!("{}()", callee)
+    } else {
+        format!("{}({})", callee, args.join(", "))
+    }
+}
+
+fn format_pipe_rewrite(lhs: &str, operator: &str, steps: &[String]) -> String {
+    let mut rendered = lhs.to_string();
+    for step in steps {
+        rendered.push_str("\n  ");
+        rendered.push_str(operator);
+        rendered.push(' ');
+        rendered.push_str(step);
+    }
+    rendered
+}
+
+fn replace_first_standalone_pipe_slot(expr: &str, replacement: &str) -> Option<String> {
+    let chars = expr.chars().collect::<Vec<_>>();
+    for idx in 0..chars.len().saturating_sub(1) {
+        if chars[idx] != '_' || chars[idx + 1] != '1' {
+            continue;
+        }
+
+        let prev = idx.checked_sub(1).and_then(|prev_idx| chars.get(prev_idx)).copied();
+        let next = chars.get(idx + 2).copied();
+        if prev == Some('.')
+            || prev.is_some_and(is_identifier_char)
+            || next.is_some_and(is_identifier_char)
+        {
+            continue;
+        }
+
+        let before = chars[..idx].iter().collect::<String>();
+        let after = chars[idx + 2..].iter().collect::<String>();
+        return Some(format!("{}{}{}", before, replacement, after));
+    }
+
+    None
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
+}
+
 fn trimmed_span_from_line(line_start: usize, chars: &[char], start: usize, end: usize) -> Span {
     let mut s = start.min(chars.len());
     let mut e = end.min(chars.len());
@@ -5490,11 +5738,11 @@ impl Summable for Int {
         let source = r#"def add(x: Int, y: Int) -> Int {
   x + y
 }
-bad = &add("oops")"#;
+bad = &add(&1, "oops")"#;
         let err = TypeError {
         labels: Vec::new(),
             message: "Argument type mismatch: expected Int, got String".into(),
-            span: Span { start: 56, end: 62 },
+            span: Span { start: 60, end: 66 },
             hint: Some(
                 "Callable definition signature: __Script::fixture::add(x: Int, y: Int) -> Int\nCallable definition span: 0..32"
                     .into(),
@@ -5615,6 +5863,38 @@ bad = add("oops", 1)"#;
             .help
             .as_deref()
             .is_some_and(|help| help.contains("parser stopped")));
+    }
+
+    #[test]
+    fn parse_error_spec_rewrites_identity_anonymous_capture() {
+        let source = "f = &(&1)";
+        let spec = parse_error_spec(
+            source,
+            "anonymous capture is not supported; use `&id` instead",
+            Span { start: 4, end: 9 },
+        );
+
+        assert_eq!(
+            spec.help.as_deref(),
+            Some("Replace this anonymous capture with:\n\n  f = &id")
+        );
+    }
+
+    #[test]
+    fn parse_error_spec_rewrites_anonymous_capture_to_named_helper_shape() {
+        let source = "f = &(&1 + &2)";
+        let spec = parse_error_spec(
+            source,
+            "anonymous capture is not supported; extract a named function and capture it like `&fun_name(&1, &2)`",
+            Span { start: 4, end: 14 },
+        );
+
+        assert_eq!(
+            spec.help.as_deref(),
+            Some(
+                "Extract the body into a named helper and replace this capture with:\n\n  f = &fun_name(&1, &2)"
+            )
+        );
     }
 
     #[test]
@@ -5839,6 +6119,125 @@ bad = add("oops", 1)"#;
             .help
             .as_deref()
             .is_some_and(|help| help.contains("cannot be imported directly")));
+    }
+
+    #[test]
+    fn resolve_error_spec_rewrites_nested_pipe_slot_into_previous_pipe_step() {
+        let source = "value |> f(add(10, _1))";
+        let spec = resolve_error_spec(
+            source,
+            "pipe placeholder `_1` cannot be used as an expression",
+            Span { start: 20, end: 22 },
+        );
+
+        assert_eq!(
+            spec.help.as_deref(),
+            Some(
+                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |> add(10, _1)\n  |> f()"
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_error_spec_recursively_rewrites_nested_pipe_slot_up_to_depth_three() {
+        let source = "value |> f(g(add(10, _1)))";
+        let spec = resolve_error_spec(
+            source,
+            "pipe placeholder `_1` cannot be used as an expression",
+            Span { start: 22, end: 24 },
+        );
+
+        assert_eq!(
+            spec.help.as_deref(),
+            Some(
+                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |> add(10, _1)\n  |> g()\n  |> f()"
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_error_spec_falls_back_to_closure_for_deeper_nested_pipe_slot() {
+        let source = "value |> f(g(h(add(10, _1))))";
+        let spec = resolve_error_spec(
+            source,
+            "pipe placeholder `_1` cannot be used as an expression",
+            Span { start: 24, end: 26 },
+        );
+
+        assert_eq!(
+            spec.help.as_deref(),
+            Some(
+                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |> {|term| f(g(h(add(10, term))))}"
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_error_spec_rewrites_nested_context_map_slot_into_previous_pipe_step() {
+        let source = "value |*> f(add(10, _1))";
+        let spec = resolve_error_spec(
+            source,
+            "pipe placeholder `_1` cannot be used as an expression",
+            Span { start: 21, end: 23 },
+        );
+
+        assert_eq!(
+            spec.help.as_deref(),
+            Some(
+                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |*> add(10, _1)\n  |*> f()"
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_error_spec_preserves_pipe_slot_position_when_rewriting_nested_calls() {
+        let source = "value |> f(1, g(2, add(10, _1)))";
+        let spec = resolve_error_spec(
+            source,
+            "pipe placeholder `_1` cannot be used as an expression",
+            Span { start: 28, end: 30 },
+        );
+
+        assert_eq!(
+            spec.help.as_deref(),
+            Some(
+                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |> add(10, _1)\n  |> g(2, _1)\n  |> f(1, _1)"
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_error_spec_rewrites_nested_context_bind_slot_into_previous_pipe_step() {
+        let source = "value |>= f(add(10, _1))";
+        let spec = resolve_error_spec(
+            source,
+            "pipe placeholder `_1` cannot be used as an expression",
+            Span { start: 21, end: 23 },
+        );
+
+        assert_eq!(
+            spec.help.as_deref(),
+            Some(
+                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |>= add(10, _1)\n  |>= f()"
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_error_spec_uses_closure_fallback_for_deep_context_bind_rewrite() {
+        let source = "value |>= f(g(h(add(10, _1))))";
+        let spec = resolve_error_spec(
+            source,
+            "pipe placeholder `_1` cannot be used as an expression",
+            Span { start: 25, end: 27 },
+        );
+
+        assert_eq!(
+            spec.help.as_deref(),
+            Some(
+                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |>= {|term| f(g(h(add(10, term))))}"
+            )
+        );
     }
 
     #[test]

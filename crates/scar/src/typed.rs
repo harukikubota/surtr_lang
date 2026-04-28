@@ -184,7 +184,7 @@ pub enum TypedInner {
     /// Closure literal — params + captures + body
     Closure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
 
-    /// Captured function / partial application
+    /// Captured function value
     Capture(Box<TypedNode>, Vec<TypedNode>),
 
     /// Struct definition — tag + name + field names (for TypeRegistry)

@@ -7,7 +7,7 @@ fn pipe_accepts_capture_and_injected_call() {
 }
 
 print(to_string(4 |> add(1)))
-print(to_string(4 |> &add(1)))"#,
+print(to_string(4 |> &add(&1, 1)))"#,
         &["5", "5"],
     );
 }

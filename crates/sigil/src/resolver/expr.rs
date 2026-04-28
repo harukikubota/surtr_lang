@@ -6,6 +6,7 @@ use super::scope_init::{
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
+use spire::ast::InterpolatedPart;
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 
@@ -58,6 +59,794 @@ impl Resolver {
             }],
             Box::new(call),
         )
+    }
+
+    fn capture_placeholder_param_name(span: &Span, index: usize) -> String {
+        format!("__cap_{}_{}_{}", span.start, span.end, index)
+    }
+
+    fn pipe_slot_param_name(span: &Span) -> String {
+        format!("__pipe_slot_{}_{}", span.start, span.end)
+    }
+
+    fn make_closure_from_call(
+        &self,
+        span: &Span,
+        params: Vec<ClosureParam>,
+        func: Ast,
+        args: Vec<Ast>,
+    ) -> Ast {
+        Ast::Closure(
+            span.clone(),
+            params,
+            Box::new(Ast::App(
+                span.clone(),
+                Box::new(func),
+                args.into_iter().map(RecordLitArg::Positional).collect(),
+            )),
+        )
+    }
+
+    fn collect_capture_placeholders(
+        &self,
+        expr: &Ast,
+        allow_placeholders: bool,
+        inside_placeholder_capture: bool,
+        used: &mut HashSet<usize>,
+    ) -> Result<(), ResolveError> {
+        match expr {
+            Ast::CapturePlaceholder(span, index) => {
+                if !allow_placeholders {
+                    return Err(ResolveError {
+                        message:
+                            "capture placeholders are only valid in the outer capture body".into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+                used.insert(*index);
+                Ok(())
+            }
+            Ast::App(_, func, args) => {
+                self.collect_capture_placeholders(
+                    func,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )?;
+                for arg in args {
+                    match arg {
+                        RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => {
+                            self.collect_capture_placeholders(
+                                expr,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                                used,
+                            )?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
+                for stmt in stmts {
+                    self.collect_capture_placeholders(
+                        stmt,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
+            Ast::Bind(_, _, rhs)
+            | Ast::SafeBind(_, _, rhs)
+            | Ast::Grouped(_, rhs)
+            | Ast::Semi(_, rhs)
+            | Ast::FieldAccess(_, rhs, _) => self.collect_capture_placeholders(
+                rhs,
+                allow_placeholders,
+                inside_placeholder_capture,
+                used,
+            ),
+            Ast::BinOp(_, _, left, right)
+            | Ast::Pipe(_, left, right)
+            | Ast::ContextMap(_, left, right)
+            | Ast::ContextBind(_, left, right)
+            | Ast::Compose(_, left, right)
+            | Ast::LiftedCompose(_, left, right)
+            | Ast::KleisliCompose(_, left, right)
+            | Ast::ListCons(_, left, right) => {
+                self.collect_capture_placeholders(
+                    left,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )?;
+                self.collect_capture_placeholders(
+                    right,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )
+            }
+            Ast::InterpolatedStr(_, parts) => {
+                for part in parts {
+                    if let InterpolatedPart::Expr(expr) = part {
+                        self.collect_capture_placeholders(
+                            expr,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                            used,
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+            Ast::Match(_, scrutinee, arms) => {
+                self.collect_capture_placeholders(
+                    scrutinee,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )?;
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_capture_placeholders(
+                            guard,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                            used,
+                        )?;
+                    }
+                    self.collect_capture_placeholders(
+                        &arm.body,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
+            Ast::StructLit(_, _, fields) => {
+                for (_, expr) in fields {
+                    self.collect_capture_placeholders(
+                        expr,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
+            Ast::ConstructorCall(_, _, args) => {
+                for arg in args {
+                    match arg {
+                        RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => {
+                            self.collect_capture_placeholders(
+                                expr,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                                used,
+                            )?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Ast::Closure(_, _, body) => self.collect_capture_placeholders(body, false, true, used),
+            Ast::Capture(span, target, args) => {
+                if inside_placeholder_capture && !args.is_empty() {
+                    return Err(ResolveError {
+                        message: "outer capture placeholders are only valid in the outer capture body; nested capture argument blocks are not allowed".into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+                self.collect_capture_placeholders(
+                    target,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )?;
+                for arg in args {
+                    self.collect_capture_placeholders(
+                        arg,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
+            Ast::Lit(_, _)
+            | Ast::Var(_, _)
+            | Ast::Path(_, _)
+            | Ast::ListNil(_)
+            | Ast::StructDef(_, _, _)
+            | Ast::RecordDef(_, _, _)
+            | Ast::DeferrorDef(_, _, _, _, _)
+            | Ast::EnumDef(_, _, _, _, _)
+            | Ast::Def(_, _, _, _, _, _, _)
+            | Ast::ExtractorDef(_, _, _, _, _, _, _)
+            | Ast::BuiltinDecl(_, _, _, _, _)
+            | Ast::BuiltinExtractorDecl(_, _, _, _, _)
+            | Ast::BuiltinTypeDecl(_, _, _)
+            | Ast::ResultCtorDecl(_, _, _, _, _)
+            | Ast::Defmod(_, _, _, _)
+            | Ast::ImplDef(_, _, _, _)
+            | Ast::TraitDef(_, _, _, _, _)
+            | Ast::TraitImplDef(_, _, _, _, _, _)
+            | Ast::Import(_, _, _)
+            | Ast::Include(_, _) => Ok(()),
+        }
+    }
+
+    fn rewrite_capture_placeholders(
+        &self,
+        expr: Ast,
+        capture_span: &Span,
+        allow_placeholders: bool,
+        inside_placeholder_capture: bool,
+    ) -> Result<Ast, ResolveError> {
+        match expr {
+            Ast::CapturePlaceholder(span, index) => {
+                if !allow_placeholders {
+                    return Err(ResolveError {
+                        message:
+                            "capture placeholders are only valid in the outer capture body".into(),
+                        span,
+                        related_labels: Vec::new(),
+                    });
+                }
+                Ok(Ast::Var(
+                    span.clone(),
+                    Self::capture_placeholder_param_name(capture_span, index),
+                ))
+            }
+            Ast::App(span, func, args) => Ok(Ast::App(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *func,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                args.into_iter()
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(expr) => Ok(RecordLitArg::Positional(
+                            self.rewrite_capture_placeholders(
+                                expr,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        )),
+                        RecordLitArg::Named(name, expr) => Ok(RecordLitArg::Named(
+                            name,
+                            self.rewrite_capture_placeholders(
+                                expr,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        )),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Ast::Block(span, stmts) => Ok(Ast::Block(
+                span,
+                stmts.into_iter()
+                    .map(|stmt| {
+                        self.rewrite_capture_placeholders(
+                            stmt,
+                            capture_span,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Ast::Bind(span, pat, rhs) => Ok(Ast::Bind(
+                span,
+                pat,
+                Box::new(self.rewrite_capture_placeholders(
+                    *rhs,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::SafeBind(span, pat, rhs) => Ok(Ast::SafeBind(
+                span,
+                pat,
+                Box::new(self.rewrite_capture_placeholders(
+                    *rhs,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::BinOp(span, op, left, right) => Ok(Ast::BinOp(
+                span,
+                op,
+                Box::new(self.rewrite_capture_placeholders(
+                    *left,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                Box::new(self.rewrite_capture_placeholders(
+                    *right,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::Pipe(span, left, right) => Ok(Ast::Pipe(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *left,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                Box::new(self.rewrite_capture_placeholders(
+                    *right,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::ContextMap(span, left, right) => Ok(Ast::ContextMap(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *left,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                Box::new(self.rewrite_capture_placeholders(
+                    *right,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::ContextBind(span, left, right) => Ok(Ast::ContextBind(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *left,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                Box::new(self.rewrite_capture_placeholders(
+                    *right,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::Compose(span, left, right) => Ok(Ast::Compose(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *left,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                Box::new(self.rewrite_capture_placeholders(
+                    *right,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::LiftedCompose(span, left, right) => Ok(Ast::LiftedCompose(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *left,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                Box::new(self.rewrite_capture_placeholders(
+                    *right,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::KleisliCompose(span, left, right) => Ok(Ast::KleisliCompose(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *left,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                Box::new(self.rewrite_capture_placeholders(
+                    *right,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::ListCons(span, left, right) => Ok(Ast::ListCons(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *left,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                Box::new(self.rewrite_capture_placeholders(
+                    *right,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::ListLiteral(span, elems) => Ok(Ast::ListLiteral(
+                span,
+                elems.into_iter()
+                    .map(|elem| {
+                        self.rewrite_capture_placeholders(
+                            elem,
+                            capture_span,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Ast::TupleLiteral(span, elems) => Ok(Ast::TupleLiteral(
+                span,
+                elems.into_iter()
+                    .map(|elem| {
+                        self.rewrite_capture_placeholders(
+                            elem,
+                            capture_span,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Ast::Grouped(span, inner) => Ok(Ast::Grouped(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *inner,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
+            Ast::InterpolatedStr(span, parts) => Ok(Ast::InterpolatedStr(
+                span,
+                parts.into_iter()
+                    .map(|part| match part {
+                        InterpolatedPart::Text(text) => Ok(InterpolatedPart::Text(text)),
+                        InterpolatedPart::Expr(expr) => Ok(InterpolatedPart::Expr(Box::new(
+                            self.rewrite_capture_placeholders(
+                                *expr,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        ))),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Ast::Match(span, scrutinee, arms) => Ok(Ast::Match(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *scrutinee,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                arms.into_iter()
+                    .map(|arm| {
+                        Ok(AstMatchArm {
+                            pattern: arm.pattern,
+                            guard: arm
+                                .guard
+                                .map(|guard| {
+                                    self.rewrite_capture_placeholders(
+                                        guard,
+                                        capture_span,
+                                        allow_placeholders,
+                                        inside_placeholder_capture,
+                                    )
+                                })
+                                .transpose()?,
+                            body: self.rewrite_capture_placeholders(
+                                arm.body,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
+            Ast::FieldAccess(span, expr, field) => Ok(Ast::FieldAccess(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *expr,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                field,
+            )),
+            Ast::StructLit(span, name, fields) => Ok(Ast::StructLit(
+                span,
+                name,
+                fields
+                    .into_iter()
+                    .map(|(name, expr)| {
+                        Ok((
+                            name,
+                            self.rewrite_capture_placeholders(
+                                expr,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
+            Ast::ConstructorCall(span, name, args) => Ok(Ast::ConstructorCall(
+                span,
+                name,
+                args.into_iter()
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(expr) => Ok(RecordLitArg::Positional(
+                            self.rewrite_capture_placeholders(
+                                expr,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        )),
+                        RecordLitArg::Named(name, expr) => Ok(RecordLitArg::Named(
+                            name,
+                            self.rewrite_capture_placeholders(
+                                expr,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        )),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Ast::Closure(span, params, body) => Ok(Ast::Closure(
+                span,
+                params,
+                Box::new(self.rewrite_capture_placeholders(*body, capture_span, false, true)?),
+            )),
+            Ast::Capture(span, target, args) => {
+                if inside_placeholder_capture && !args.is_empty() {
+                    return Err(ResolveError {
+                        message: "outer capture placeholders are only valid in the outer capture body; nested capture argument blocks are not allowed".into(),
+                        span,
+                        related_labels: Vec::new(),
+                    });
+                }
+                Ok(Ast::Capture(
+                    span,
+                    Box::new(self.rewrite_capture_placeholders(
+                        *target,
+                        capture_span,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                    )?),
+                    args.into_iter()
+                        .map(|arg| {
+                            self.rewrite_capture_placeholders(
+                                arg,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                ))
+            }
+            other => Ok(other),
+        }
+    }
+
+    fn lower_capture_expr(
+        &self,
+        span: Span,
+        target: Ast,
+        args: Vec<Ast>,
+    ) -> Result<Ast, ResolveError> {
+        if args.is_empty() {
+            return Ok(Ast::Capture(span, Box::new(target), args));
+        }
+
+        let mut used = HashSet::new();
+        for arg in &args {
+            self.collect_capture_placeholders(arg, true, true, &mut used)?;
+        }
+        if used.is_empty() {
+            return Err(ResolveError {
+                message: "capture call is missing placeholder arguments".into(),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            });
+        }
+
+        let max_index = *used.iter().max().expect("used is not empty");
+        for index in 1..=max_index {
+            if !used.contains(&index) {
+                return Err(ResolveError {
+                    message: format!("capture placeholder &{} is missing", index),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                });
+            }
+        }
+
+        let rewritten_args = args
+            .into_iter()
+            .map(|arg| self.rewrite_capture_placeholders(arg, &span, true, true))
+            .collect::<Result<Vec<_>, _>>()?;
+        let params = (1..=max_index)
+            .map(|index| ClosureParam {
+                name: Self::capture_placeholder_param_name(&span, index),
+                ty: None,
+                span: span.clone(),
+            })
+            .collect();
+        Ok(self.make_closure_from_call(&span, params, target, rewritten_args))
+    }
+
+    fn pipe_slot_span(expr: &Ast) -> Option<Span> {
+        match expr {
+            Ast::Var(span, name) if name == "_1" => Some(span.clone()),
+            Ast::App(_, func, args) => Self::pipe_slot_span(func).or_else(|| {
+                args.iter().find_map(|arg| match arg {
+                    RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => {
+                        Self::pipe_slot_span(expr)
+                    }
+                })
+            }),
+            Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
+                stmts.iter().find_map(Self::pipe_slot_span)
+            }
+            Ast::Bind(_, _, rhs)
+            | Ast::SafeBind(_, _, rhs)
+            | Ast::Grouped(_, rhs)
+            | Ast::Semi(_, rhs)
+            | Ast::FieldAccess(_, rhs, _) => Self::pipe_slot_span(rhs),
+            Ast::BinOp(_, _, left, right)
+            | Ast::Pipe(_, left, right)
+            | Ast::ContextMap(_, left, right)
+            | Ast::ContextBind(_, left, right)
+            | Ast::Compose(_, left, right)
+            | Ast::LiftedCompose(_, left, right)
+            | Ast::KleisliCompose(_, left, right)
+            | Ast::ListCons(_, left, right) => {
+                Self::pipe_slot_span(left).or_else(|| Self::pipe_slot_span(right))
+            }
+            Ast::InterpolatedStr(_, parts) => parts.iter().find_map(|part| match part {
+                InterpolatedPart::Text(_) => None,
+                InterpolatedPart::Expr(expr) => Self::pipe_slot_span(expr),
+            }),
+            Ast::Match(_, scrutinee, arms) => Self::pipe_slot_span(scrutinee).or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .and_then(Self::pipe_slot_span)
+                        .or_else(|| Self::pipe_slot_span(&arm.body))
+                })
+            }),
+            Ast::StructLit(_, _, fields) => fields
+                .iter()
+                .find_map(|(_, expr)| Self::pipe_slot_span(expr)),
+            Ast::ConstructorCall(_, _, args) => args.iter().find_map(|arg| match arg {
+                RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => {
+                    Self::pipe_slot_span(expr)
+                }
+            }),
+            Ast::Closure(_, _, body) => Self::pipe_slot_span(body),
+            Ast::Capture(_, target, args) => Self::pipe_slot_span(target)
+                .or_else(|| args.iter().find_map(Self::pipe_slot_span)),
+            _ => None,
+        }
+    }
+
+    fn lower_pipe_rhs_slots(&self, rhs: Ast) -> Result<Ast, ResolveError> {
+        let Ast::App(span, func, args) = rhs else {
+            if let Some(slot_span) = Self::pipe_slot_span(&rhs) {
+                return Err(ResolveError {
+                    message: "pipe placeholder `_1` is only allowed as a direct argument of the outermost call on the right-hand side".into(),
+                    span: slot_span,
+                    related_labels: Vec::new(),
+                });
+            }
+            return Ok(rhs);
+        };
+
+        let mut slot_count = 0usize;
+        let mut lowered_args = Vec::with_capacity(args.len());
+        let mut positional_only = Vec::with_capacity(args.len());
+        for arg in args {
+            match arg {
+                RecordLitArg::Positional(Ast::Var(arg_span, name)) if name == "_1" => {
+                    slot_count += 1;
+                    let lowered = Ast::Var(
+                        arg_span.clone(),
+                        Self::pipe_slot_param_name(&span),
+                    );
+                    lowered_args.push(lowered.clone());
+                    positional_only.push(RecordLitArg::Positional(lowered));
+                }
+                RecordLitArg::Positional(expr) => {
+                    if let Some(slot_span) = Self::pipe_slot_span(&expr) {
+                        return Err(ResolveError {
+                            message: "pipe placeholder `_1` cannot be used as an expression".into(),
+                            span: slot_span,
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    lowered_args.push(expr.clone());
+                    positional_only.push(RecordLitArg::Positional(expr));
+                }
+                RecordLitArg::Named(name, expr) => {
+                    if let Some(slot_span) = Self::pipe_slot_span(&expr) {
+                        return Err(ResolveError {
+                            message: "pipe placeholder `_1` cannot be used as an expression".into(),
+                            span: slot_span,
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    if slot_count > 0 {
+                        return Err(ResolveError {
+                            message: "pipe placeholder `_1` does not support named arguments".into(),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    positional_only.push(RecordLitArg::Named(name, expr));
+                }
+            }
+        }
+
+        if slot_count == 0 {
+            return Ok(Ast::App(span, func, positional_only));
+        }
+        if slot_count > 1 {
+            return Err(ResolveError {
+                message: "pipe placeholder `_1` can only be used once".into(),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+
+        Ok(self.make_closure_from_call(
+            &span,
+            vec![ClosureParam {
+                name: Self::pipe_slot_param_name(&span),
+                ty: None,
+                span: span.clone(),
+            }],
+            *func,
+            lowered_args,
+        ))
+    }
+
+    fn prepare_pipe_rhs(&self, rhs: Ast) -> Result<Ast, ResolveError> {
+        let rhs = self.lower_pipe_rhs_slots(rhs)?;
+        Ok(self.desugar_pipeline_rhs_special_form_partial(rhs))
     }
 
     fn conversion_call_head(func: &Ast) -> Option<&'static str> {
@@ -498,21 +1287,21 @@ impl Resolver {
 
             Ast::Pipe(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let rhs = self.desugar_pipeline_rhs_special_form_partial(*right);
+                let rhs = self.prepare_pipe_rhs(*right)?;
                 let r = self.resolve_node(rhs)?;
                 Ok(Resolved::Pipe(span, Box::new(l), Box::new(r)))
             }
 
             Ast::ContextMap(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let rhs = self.desugar_pipeline_rhs_special_form_partial(*right);
+                let rhs = self.prepare_pipe_rhs(*right)?;
                 let r = self.resolve_node(rhs)?;
                 Ok(Resolved::ContextMap(span, Box::new(l), Box::new(r)))
             }
 
             Ast::ContextBind(span, left, right) => {
                 let l = self.resolve_node(*left)?;
-                let rhs = self.desugar_pipeline_rhs_special_form_partial(*right);
+                let rhs = self.prepare_pipe_rhs(*right)?;
                 let r = self.resolve_node(rhs)?;
                 Ok(Resolved::ContextBind(span, Box::new(l), Box::new(r)))
             }
@@ -1174,17 +1963,31 @@ impl Resolver {
             }
 
             Ast::Capture(span, target, args) => {
-                let resolved_target = self.resolve_node(*target)?;
-                let resolved_args = args
-                    .into_iter()
-                    .map(|arg| self.resolve_node(arg))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Resolved::Capture(
-                    span,
-                    Box::new(resolved_target),
-                    resolved_args,
-                ))
+                match self.lower_capture_expr(span.clone(), *target, args)? {
+                    Ast::Capture(_, target, args) => {
+                        let resolved_target = self.resolve_node(*target)?;
+                        let resolved_args = args
+                            .into_iter()
+                            .map(|arg| self.resolve_node(arg))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(Resolved::Capture(
+                            span,
+                            Box::new(resolved_target),
+                            resolved_args,
+                        ))
+                    }
+                    lowered => self.resolve_node(lowered),
+                }
             }
+
+            Ast::CapturePlaceholder(span, index) => Err(ResolveError {
+                message: format!(
+                    "capture placeholder &{} must appear inside a capture call",
+                    index
+                ),
+                span,
+                related_labels: Vec::new(),
+            }),
 
             Ast::StructLit(span, type_name, field_vals) => {
                 let uid = self.scope.lookup(&type_name).ok_or_else(|| ResolveError {

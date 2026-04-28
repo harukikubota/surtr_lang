@@ -1,0 +1,2 @@
+phase: resolve
+contains: nested capture argument blocks are not allowed

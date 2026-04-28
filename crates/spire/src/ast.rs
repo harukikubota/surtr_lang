@@ -363,8 +363,11 @@ pub enum Ast {
     /// Closure literal: `{|x, y| expr}` / `{|| expr}`
     Closure(Span, Vec<ClosureParam>, Box<Ast>),
 
-    /// Captured function / partial application: `&print` / `&print(x)`
+    /// Captured function / placeholder capture head: `&print` / `&print(&1)`
     Capture(Span, Box<Ast>, Vec<Ast>),
+
+    /// Placeholder inside a capture expression: `&1`, `&2`, ...
+    CapturePlaceholder(Span, usize),
 
     /// Semicolon — explicit Unit coercion marker (wraps the discarded expr)
     Semi(Span, Box<Ast>),

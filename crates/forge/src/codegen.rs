@@ -1832,13 +1832,14 @@ impl Codegen {
             }
 
             TypedInner::Capture(target, args) => {
-                self.emit_callable_ref(target)?;
-                for arg in args {
-                    self.emit_node(arg)?;
-                }
                 if !args.is_empty() {
-                    self.emit(Opcode::CapturePartial(args.len() as u8));
+                    return Err(CodegenError {
+                        message:
+                            "capture calls with arguments should be lowered before codegen".into(),
+                        span: node.span.clone(),
+                    });
                 }
+                self.emit_callable_ref(target)?;
             }
 
             TypedInner::StructDef(tag, name, field_names) => {

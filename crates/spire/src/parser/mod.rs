@@ -872,6 +872,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*target, delta)),
             args.into_iter().map(|a| shift_ast_span(a, delta)).collect(),
         ),
+        Ast::CapturePlaceholder(span, index) => {
+            Ast::CapturePlaceholder(shift_span(span, delta), index)
+        }
         Ast::Semi(span, inner) => Ast::Semi(
             shift_span(span, delta),
             Box::new(shift_ast_span(*inner, delta)),
@@ -926,6 +929,7 @@ impl Ast {
             | Ast::Include(s, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
+            | Ast::CapturePlaceholder(s, _)
             | Ast::Semi(s, _) => s,
         }
     }

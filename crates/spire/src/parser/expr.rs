@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::token::Token;
+use sindr::primitives::ToPrimitive;
 
 use super::Parser;
 
@@ -446,7 +447,7 @@ impl Parser<'_> {
             // Block expression: { stmt; stmt; expr }
             Token::LBrace => self.parse_trailing_block_expr_from_lbrace(sp),
 
-            // Capture / partial application: &foo, &foo(1)
+            // Capture / placeholder capture: &foo, &foo(&1), &1
             Token::Amp => self.parse_capture_expr(sp),
 
             Token::FuncLiteral(_) => Err(ParseError::syntax(
@@ -1039,6 +1040,48 @@ impl Parser<'_> {
 
     pub(super) fn parse_capture_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
         self.expect(&Token::Amp)?;
+        if let Token::Int(n) = self.peek().clone() {
+            let span = self.advance().span.clone();
+            let Some(index) = n.to_usize() else {
+                return Err(ParseError::syntax(
+                    "capture placeholder index must be a positive integer",
+                    span,
+                ));
+            };
+            if index == 0 {
+                return Err(ParseError::syntax(
+                    "capture placeholder index starts at &1",
+                    span,
+                ));
+            }
+            return Ok(Ast::CapturePlaceholder(
+                Span {
+                    start: sp.start,
+                    end: span.end,
+                },
+                index,
+            ));
+        }
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+            self.skip_newlines();
+            let inner = self.parse_expr()?;
+            self.skip_newlines();
+            let end_span = self.expect(&Token::RParen)?;
+            let message = match inner {
+                Ast::CapturePlaceholder(_, 1) => {
+                    "anonymous capture is not supported; use `&id` instead".to_string()
+                }
+                _ => "anonymous capture is not supported; extract a named function and capture it like `&fun_name(&1, &2)`".to_string(),
+            };
+            return Err(ParseError::syntax(
+                message,
+                Span {
+                    start: sp.start,
+                    end: end_span.end,
+                },
+            ));
+        }
         let (name, name_span) = self.expect_ident()?;
         let mut path_segments = vec![name.clone()];
         let mut path_end = name_span.end;

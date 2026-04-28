@@ -170,9 +170,6 @@ pub enum OpcodeView {
     CaptureClosure {
         capture_count: u8,
     },
-    CapturePartial {
-        arg_count: u8,
-    },
     MakeError {
         template_id: u32,
     },
@@ -486,7 +483,6 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         Opcode::CaptureClosure(count) => OpcodeView::CaptureClosure {
             capture_count: *count,
         },
-        Opcode::CapturePartial(count) => OpcodeView::CapturePartial { arg_count: *count },
         Opcode::MakeError { template_id } => OpcodeView::MakeError {
             template_id: *template_id,
         },

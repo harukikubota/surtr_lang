@@ -1286,7 +1286,7 @@ fn quote_surtr_string_literal(input: &str) -> String {
 }
 
 fn inspect_callable(vm: &VM, callable: &Callable) -> Option<String> {
-    if !callable.lexical_captures.is_empty() || !callable.partial_args.is_empty() {
+    if !callable.lexical_captures.is_empty() {
         return None;
     }
 
@@ -2630,7 +2630,6 @@ mod tests {
         let value = Value::Callable(Callable {
             target: CallableTarget::Builtin(8),
             lexical_captures: Vec::new(),
-            partial_args: Vec::new(),
         });
 
         assert_eq!(
@@ -2659,7 +2658,6 @@ mod tests {
         let value = Value::Callable(Callable {
             target: CallableTarget::Function(0),
             lexical_captures: Vec::new(),
-            partial_args: Vec::new(),
         });
 
         assert_eq!(
@@ -2688,7 +2686,6 @@ mod tests {
         let value = Value::Callable(Callable {
             target: CallableTarget::Function(0),
             lexical_captures: Vec::new(),
-            partial_args: Vec::new(),
         });
 
         assert_eq!(
@@ -2698,12 +2695,11 @@ mod tests {
     }
 
     #[test]
-    fn inspect_keeps_legacy_callable_display_for_partial_application() {
+    fn inspect_keeps_fallback_callable_display_for_lexical_captures() {
         let vm = VM::new(Bytecode::default());
         let value = Value::Callable(Callable {
             target: CallableTarget::Builtin(8),
-            lexical_captures: Vec::new(),
-            partial_args: vec![Value::Int(int(1))],
+            lexical_captures: vec![Value::Int(int(1))],
         });
 
         assert_eq!(inspect_value(&vm, &value), "<builtin:8>");

@@ -3475,6 +3475,16 @@ impl Checker {
         target: &Resolved,
         args: &[Resolved],
     ) -> Result<TypedNode, TypeError> {
+        if !args.is_empty() {
+            return Err(TypeError {
+                labels: Vec::new(),
+                message:
+                    "capture calls with arguments must be lowered before type checking".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
         let typed_target = self.check_node(target)?;
         let target_ty = self.resolve_ty(&typed_target.ty);
         let (params, ret) = match &target_ty {
@@ -3493,68 +3503,16 @@ impl Checker {
                 });
             }
         };
-        let callable_hint = self
-            .callable_definition_signature_hint(&typed_target, &params, &ret)
-            .or_else(|| {
-                Some(format!(
-                    "Callable type signature: {}",
-                    self.callable_signature_from_parts(&params, &ret)
-                ))
-            });
-
-        if args.len() > params.len() {
-            return Err(TypeError {
-                labels: Vec::new(),
-                message: format!(
-                    "partial application expects at most {} argument(s), got {}",
-                    params.len(),
-                    args.len()
-                ),
-                span: span.clone(),
-                hint: callable_hint.clone(),
-            });
-        }
-
-        let typed_args: Vec<TypedNode> = args
-            .iter()
-            .zip(params.iter())
-            .map(|(arg, expected)| {
-                if matches!(self.resolve_ty(expected), Ty::Hole) {
-                    self.check_node(arg)
-                } else {
-                    self.check_node_with_expected(arg, Some(expected))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        for (param, arg) in params.iter().zip(&typed_args) {
-            if !matches!(self.resolve_ty(param), Ty::Hole) && !self.types_compatible(param, &arg.ty)
-            {
-                return Err(TypeError {
-                    labels: Vec::new(),
-                    message: format!(
-                        "Argument type mismatch: expected {}, got {}",
-                        self.ty_name(param),
-                        self.ty_name(&arg.ty)
-                    ),
-                    span: arg.span.clone(),
-                    hint: callable_hint.clone(),
-                });
-            }
-        }
-        self.ensure_no_runtime_lens_args(&typed_args, span, "Partial application")?;
-
-        let remaining = params[typed_args.len()..].to_vec();
         Ok(TypedNode {
             ty: Ty::Func(
-                remaining
+                params
                     .into_iter()
                     .map(|ty| self.resolve_ty(&ty))
                     .collect(),
                 Box::new(self.resolve_ty(&ret)),
             ),
             span: span.clone(),
-            node: TypedInner::Capture(Box::new(typed_target), typed_args),
+            node: TypedInner::Capture(Box::new(typed_target), Vec::new()),
         })
     }
 

@@ -2,7 +2,7 @@
 
 Surtr には、値の流し込み、文脈付き計算、関数合成を短く書くための関数演算子があります。
 このページでは `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` をまとめて引けるようにします。
-関数コール、capture、closure、FuncLiteral 自体の説明は `./callables.md` に分けています。
+apply 系の詳説は `./pipe-operators.md`、capture 自体の詳説は `./capture-operator.md`、関数コールや closure の総論は `./callables.md` に分けています。
 
 ## 先に覚えるルール
 
@@ -61,7 +61,7 @@ def add(x: Int, y: Int) -> Int {
 }
 
 print("name" |> wrap("[", "]"))
-print(to_string(4 |> &add(1)))
+print(to_string(4 |> &add(&1, 1)))
 print(to_string(4 |> {|x| x * 10}))
 ```
 
@@ -258,6 +258,12 @@ f = &`+`                    # 未実装
 
 - 値から始めるなら apply 系: `|>`, `|*>`, `|>=`
 - 関数どうしを先に組み立てるなら compose 系: `>>`, `>*`, `>=>`
+
+## 関連ページ
+
+- パイプ apply / map / bind の詳細: `./pipe-operators.md`
+- キャプチャ演算子 `&` の詳細: `./capture-operator.md`
+- 関数コールと関数値の総論: `./callables.md`
 - 右辺をその場で少し変えたいなら closure
 - 既存関数をそのまま渡したいなら capture
 - call と capture の違いで迷ったら `./callables.md`

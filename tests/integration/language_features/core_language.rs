@@ -302,7 +302,7 @@ def compose(f: (Int -> Int), g: (Int -> Int), x: Int) -> Int {
   g(f(x))
 }
 
-apply_inc = &compose(&inc)
+apply_inc = &compose(&inc, &1, &2)
 print(to_string(apply_inc(&times2, 10)))"#,
         &["22"],
     );
@@ -316,7 +316,7 @@ def compose(f: (Int -> Int), g: (Int -> Int), x: Int) -> Int {
 }
 
 bad = &compose(inc(1))"#,
-        "expected (Int -> Int), got Int",
+        "capture call is missing placeholder arguments",
     );
 }
 

@@ -1,0 +1,9 @@
+def add(x: Int, y: Int) -> Int {
+  x + y
+}
+
+def wrap(x: Int, y: Int) -> Int {
+  x + y
+}
+
+bad = 1 |> wrap(add(10, _1), 2)

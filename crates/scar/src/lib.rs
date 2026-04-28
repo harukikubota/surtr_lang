@@ -1806,7 +1806,7 @@ answer = inc("oops")"#,
             r#"def add(x: Int, y: Int) -> Int {
   x + y
 }
-bad = &add("oops")"#,
+bad = &add(&1, "oops")"#,
         )
         .expect("source should resolve");
         let err = typecheck(resolved).expect_err("capture application should fail");

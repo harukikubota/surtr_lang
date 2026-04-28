@@ -1588,7 +1588,7 @@ fn test_closure_and_capture_resolution() {
     let resolved = parse_and_resolve(
         r#"x = 1
 f = {|y| x + y}
-g = &print(1)"#,
+g = &print"#,
     )
     .unwrap();
     match &resolved[1] {
@@ -1608,13 +1608,67 @@ g = &print(1)"#,
     match &resolved[2] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Capture(_, target, args) => {
-                assert_eq!(args.len(), 1);
+                assert!(args.is_empty());
                 assert!(matches!(target.as_ref(), Resolved::Var(_, id) if id.name == "print"));
             }
             _ => panic!("Expected Capture"),
         },
         _ => panic!("Expected Bind"),
     }
+}
+
+#[test]
+fn test_capture_placeholder_lowers_to_closure() {
+    let resolved = parse_and_resolve(
+        "def add(x: Int, y: Int) -> Int { x + y }\ninc = &add(&1, 1)",
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Closure(_, params, _, body) => {
+                assert_eq!(params.len(), 1);
+                assert!(matches!(body.as_ref(), Resolved::App(_, _, _)));
+            }
+            other => panic!("Expected lowered closure, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_pipe_slot_lowers_to_closure() {
+    let resolved = parse_and_resolve(
+        "def add(x: Int, y: Int) -> Int { x + y }\nout = 1 |> add(10, _1)",
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Pipe(_, _, right) => {
+                assert!(matches!(right.as_ref(), Resolved::Closure(_, params, _, _)
+                    if params.len() == 1));
+            }
+            other => panic!("Expected pipe, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_nested_capture_argument_block_is_rejected_inside_placeholder_capture() {
+    let err = parse_and_resolve("bad = &outer(&1, &inner(1))")
+        .expect_err("nested capture argument block must fail");
+    assert!(err
+        .message
+        .contains("nested capture argument blocks are not allowed"));
+}
+
+#[test]
+fn test_pipe_slot_cannot_be_used_more_than_once() {
+    let err = parse_and_resolve(
+        "def add(x: Int, y: Int) -> Int { x + y }\nbad = 1 |> add(_1, _1)",
+    )
+        .expect_err("duplicate pipe slot must fail");
+    assert!(err.message.contains("can only be used once"));
 }
 
 #[test]

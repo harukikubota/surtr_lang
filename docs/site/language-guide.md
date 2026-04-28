@@ -231,7 +231,7 @@ always: (_ -> Int) = const(1)
 Surtr では、次の見た目がそれぞれ別物です。
 
 - call 式: `add(1, 2)`
-- capture: `&add`, `&User::get_name`, `&add(10)`
+- capture: `&add`, `&User::get_name`, `&add(&1, 10)`
 - closure: `{|x| x + 1}`
 - backtick FuncLiteral: ``1 `add` 2``
 
@@ -247,7 +247,7 @@ sum = add(1, 2)
 そのため、関数値が欲しいときは capture か closure を使います。
 
 ```surtr
-inc = &add(1)
+inc = &add(&1, 1)
 show_name = &User::get_name
 render = {|name| "[" ++ name ++ "]"}
 pipeline = &String::trim >> render
@@ -545,7 +545,7 @@ Surtr では call 式の第一引数へ左辺値を注入するので、Elixir �
 capture や closure も使えます。
 
 ```surtr
-print(to_string(4 |> &add(1)))
+print(to_string(4 |> &add(&1, 1)))
 print(to_string(4 |> {|x| x + 1}))
 print(" alice " |> String::trim() |> String::surround("[", "]"))
 ```

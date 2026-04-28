@@ -1401,6 +1401,41 @@ fn test_capture_and_zero_arg_closure() {
 }
 
 #[test]
+fn test_capture_placeholder_and_tuple_field_access_parse() {
+    let ast = parse("inc = &add(&1, 1)\nsecond = pair._1").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Ast::Capture(_, target, args)
+                if matches!(target.as_ref(), Ast::Var(_, name) if name == "add")
+                && matches!(args.as_slice(), [Ast::CapturePlaceholder(_, 1), Ast::Lit(_, Lit::Int(_))])));
+        }
+        other => panic!("Expected capture placeholder bind, got {:?}", other),
+    }
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Ast::FieldAccess(_, _, field) if field == "_1"));
+        }
+        other => panic!("Expected tuple field access bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_identity_anonymous_capture_reports_id_hint() {
+    let err = parse("f = &(&1)").expect_err("identity anonymous capture must fail");
+    assert!(err.message().contains("use `&id` instead"));
+}
+
+#[test]
+fn test_anonymous_capture_reports_named_function_hint() {
+    let err = parse(r#"f = &(&1 + &2)
+g = &(print("Hello"))"#)
+    .expect_err("anonymous capture forms must fail");
+    assert!(err
+        .message()
+        .contains("capture it like `&fun_name(&1, &2)`"));
+}
+
+#[test]
 fn test_qualified_capture_and_flow_parse() {
     let ast = parse("reader = &User::get_name\nout = value |> trim() |*> normalize()").unwrap();
     match &ast[0] {
@@ -1491,15 +1526,15 @@ fn test_nested_generic_type_closes_without_confusing_compose() {
 }
 
 #[test]
-fn test_qualified_partial_capture_parses() {
-    let ast = parse(r#"rename = &User::with_name("bob")"#)
-        .expect("qualified partial capture should parse");
+fn test_qualified_placeholder_capture_parses() {
+    let ast = parse(r#"rename = &User::with_name("bob", &1)"#)
+        .expect("qualified placeholder capture should parse");
     match &ast[0] {
         Ast::Bind(_, _, rhs) => {
             assert!(matches!(
                 rhs.as_ref(),
                 Ast::Capture(_, target, args)
-                    if args.len() == 1
+                    if args.len() == 2
                         && matches!(target.as_ref(), Ast::Path(_, path)
                             if path.segments == vec!["User".to_string(), "with_name".to_string()])
             ));

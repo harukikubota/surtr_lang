@@ -111,7 +111,6 @@ pub enum Opcode {
         span_end: u32,
     },
     CaptureClosure(u8),
-    CapturePartial(u8),
     MakeError {
         template_id: u32,
     },
@@ -198,7 +197,6 @@ impl Opcode {
             Self::CallBuiltin { .. } => "CallBuiltin",
             Self::Call { .. } => "Call",
             Self::CaptureClosure(..) => "CaptureClosure",
-            Self::CapturePartial(..) => "CapturePartial",
             Self::MakeError { .. } => "MakeError",
             Self::MakeErrorLiteral { .. } => "MakeErrorLiteral",
             Self::CallClosure { .. } => "CallClosure",

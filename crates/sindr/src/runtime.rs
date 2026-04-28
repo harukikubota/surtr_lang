@@ -108,7 +108,6 @@ pub enum ListNode {
 pub struct Callable {
     pub target: CallableTarget,
     pub lexical_captures: Vec<Value>,
-    pub partial_args: Vec<Value>,
 }
 
 /// Callable target reference.
@@ -228,12 +227,7 @@ impl Value {
             Value::Callable(callable) => match callable.target {
                 CallableTarget::Builtin(id) => format!("<builtin:{}>", id),
                 CallableTarget::Function(fun_idx) => {
-                    format!(
-                        "<function:{}; lexical_captures={}; partial_args={}>",
-                        fun_idx,
-                        callable.lexical_captures.len(),
-                        callable.partial_args.len()
-                    )
+                    format!("<function:{}; lexical_captures={}>", fun_idx, callable.lexical_captures.len())
                 }
             },
             Value::Error(rich) => rich.to_display_string(),
@@ -730,17 +724,15 @@ mod tests {
         let builtin = Value::Callable(Callable {
             target: CallableTarget::Builtin(3),
             lexical_captures: Vec::new(),
-            partial_args: Vec::new(),
         });
         let function = Value::Callable(Callable {
             target: CallableTarget::Function(7),
             lexical_captures: vec![Value::Unit],
-            partial_args: vec![Value::Bool(true), Value::Bool(false)],
         });
         assert_eq!(builtin.to_display_string(&registry), "<builtin:3>");
         assert_eq!(
             function.to_display_string(&registry),
-            "<function:7; lexical_captures=1; partial_args=2>"
+            "<function:7; lexical_captures=1>"
         );
     }
 

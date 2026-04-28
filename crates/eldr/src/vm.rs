@@ -1304,7 +1304,6 @@ impl VM {
                 self.stack.push(Value::Callable(Callable {
                     target: CallableTarget::Builtin(builtin_id),
                     lexical_captures: Vec::new(),
-                    partial_args: Vec::new(),
                 }));
             }
 
@@ -1312,7 +1311,6 @@ impl VM {
                 self.stack.push(Value::Callable(Callable {
                     target: CallableTarget::Function(fun_idx),
                     lexical_captures: Vec::new(),
-                    partial_args: Vec::new(),
                 }));
             }
 
@@ -1818,27 +1816,6 @@ impl VM {
                 self.stack.push(Value::Callable(callable));
             }
 
-            Opcode::CapturePartial(num_args) => {
-                let mut partial_args = Vec::with_capacity(num_args as usize);
-                for _ in 0..num_args {
-                    partial_args.push(self.pop_stack()?);
-                }
-                partial_args.reverse();
-                let target = self.pop_stack()?;
-                let callable = match target {
-                    Value::Callable(mut callable) => {
-                        callable.partial_args.extend(partial_args);
-                        callable
-                    }
-                    _ => {
-                        return Err(RuntimeError::new(
-                            "CapturePartial expects a callable target",
-                        ));
-                    }
-                };
-                self.stack.push(Value::Callable(callable));
-            }
-
             Opcode::CallClosure {
                 arity,
                 span_start,
@@ -1858,7 +1835,6 @@ impl VM {
                 };
 
                 let mut full_args = callable.lexical_captures;
-                full_args.extend(callable.partial_args);
                 full_args.extend(args);
 
                 match callable.target {
@@ -2926,20 +2902,6 @@ mod tests {
         bytecode.constants = vec![Constant::Bool(true)];
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("GetTag on non-tagged value"));
-    }
-
-    #[test]
-    fn capture_partial_requires_callable_target() {
-        let mut bytecode = base_bytecode(vec![
-            Opcode::LoadConst(0),
-            Opcode::CapturePartial(0),
-            Opcode::Halt,
-        ]);
-        bytecode.constants = vec![Constant::Int(int(1))];
-        let err = VM::new(bytecode).run().expect_err("must fail");
-        assert!(err
-            .message
-            .contains("CapturePartial expects a callable target"));
     }
 
     #[test]

@@ -196,7 +196,7 @@ pub enum Resolved {
         Box<Resolved>,
     ),
 
-    /// Captured function / partial application
+    /// Captured function value
     Capture(Span, Box<Resolved>, Vec<Resolved>),
 
     /// Semicolon — explicit Unit coercion

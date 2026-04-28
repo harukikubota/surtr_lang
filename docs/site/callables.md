@@ -3,7 +3,7 @@
 Surtr では、見た目が似ていても次の 4 つは役割が違います。
 
 - call 式: `add(1, 2)`
-- capture: `&add`, `&User::get_name`, `&add(10)`
+- capture: `&add`, `&User::get_name`, `&add(&1, 10)`
 - closure: `{|x| x + 1}`
 - backtick FuncLiteral: ``1 `add` 2``, ``1 `+` 2``
 
@@ -72,7 +72,7 @@ value |> (make_normalizer(10))
 `&` は関数や method を「あとで呼べる関数値」にします。
 
 ```surtr
-inc = &add(1)
+inc = &add(&1, 1)
 show_name = &User::get_name
 trim = &String::trim
 ```
@@ -80,7 +80,7 @@ trim = &String::trim
 読み方は次です。
 
 - `&add` は既存関数そのものを捕まえる
-- `&add(1)` は残り 1 引数を待つ unary callable を作る
+- `&add(&1, 1)` は placeholder を使って unary callable を作る
 - `&User::get_name` は qualified method capture
 
 例:
@@ -88,7 +88,7 @@ trim = &String::trim
 ```surtr
 def add(x: Int, y: Int) -> Int { x + y }
 
-inc = &add(1)
+inc = &add(&1, 1)
 print(to_string(inc(41)))
 
 names = users |*> &User::get_name
@@ -147,7 +147,7 @@ pipeline = {|x| parse(x)} >=> {|y| validate(y)}
 capture が向く場面:
 
 - 既存関数をそのまま渡したい
-- 部分適用で引数を固定したい
+- placeholder capture で引数位置を明示したい
 - module / type method を短く渡したい
 
 closure が向く場面:
@@ -191,7 +191,7 @@ items |*> `+` # NG
 これが必要なら capture や closure を使います。
 
 ```surtr
-eq7 = &eq(7)
+eq7 = &eq(&1, 7)
 plus = {|x| x + 1}
 ```
 
@@ -236,6 +236,8 @@ f = `+`                      # NG
 
 ## 関連ページ
 
+- キャプチャ演算子の詳細: `./capture-operator.md`
+- パイプ apply / map / bind: `./pipe-operators.md`
 - 関数演算子のまとまった一覧: `./function-operators.md`
 - 全体の読み物: `./language-guide.md`
 - 制約を短く引く: `./language-reference.md`

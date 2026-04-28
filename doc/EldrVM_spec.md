@@ -55,8 +55,8 @@ Eldr は次を担わない。
 ### 3.2 呼び出し規約
 
 - 呼び出し時、実引数は stack から取り出し `locals[0..arity)` に配置する
-- `Callable` は `lexical_captures` と `partial_args` を別々に保持する
-- 関数呼び出し時、`locals` には `lexical_captures` → `partial_args` → 実引数 の順で先頭から配置する
+- `Callable` は `lexical_captures` を保持する
+- 関数呼び出し時、`locals` には `lexical_captures` → 実引数 の順で先頭から配置する
 - `Call` 実行後は、呼び出し先がフレーム完成状態で開始する
 - user function への tail-position call は、次 opcode が `Return` の場合に限り current `CallFrame` を再利用してよい
 - frame 再利用時も外部意味は変わらず、返り値 1 個・呼び出し元への復帰位置・operand stack 契約は維持する
@@ -108,7 +108,7 @@ Eldr が扱う値の概念カテゴリ:
 - 言語エラー値: `Error(RichError)`
 
 `inspect` / `to_string` における `Callable` 表示は、bare callable
-（`lexical_captures == 0 && partial_args == 0`）かつ runtime metadata から
+（`lexical_captures == 0`）かつ runtime metadata から
 `module` / `name` / `signature` を復元できる場合、
 `FnCapture(module: M, name: f, signature: sig)` を返す。
 それ以外の callable は実装定義の fallback 表示を使う。
