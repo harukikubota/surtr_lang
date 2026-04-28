@@ -12,6 +12,7 @@ use rustyline::{Context, Editor, Helper};
 
 use crate::repl::logic::core::{xldr_version, ReplEngine};
 use crate::repl::logic::output::ReplOutput;
+use crate::repl::logic::styled;
 use crate::repl::logic::ReplResult;
 
 // ── Options ───────────────────────────────────────────────────────────────────
@@ -153,7 +154,7 @@ pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
                         let _ = editor.add_history_entry(line.as_str());
                     }
                     let result = engine.handle_line(&line);
-                    print_result(&result);
+                    print_result(&result, styled::color_enabled_from_env());
                     if result.should_exit {
                         break;
                     }
@@ -191,7 +192,7 @@ pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
             }
             let line = line.trim_end_matches(&['\r', '\n'][..]);
             let result = engine.handle_line(line);
-            print_result(&result);
+            print_result(&result, styled::color_enabled_from_env());
             if result.should_exit {
                 break;
             }
@@ -223,11 +224,16 @@ fn print_banner(mode: BannerMode) {
     }
 }
 
-fn print_result(result: &ReplResult) {
+fn print_result(result: &ReplResult, color: bool) {
     match &result.output {
         ReplOutput::EvalSuccess { rendered, .. } => {
             for line in rendered {
-                println!("> {}", line);
+                let rendered = if color {
+                    styled::repl_result_line(line)
+                } else {
+                    line.clone()
+                };
+                println!("> {}", rendered);
             }
         }
         ReplOutput::CommandOutput { rendered } => {
@@ -241,15 +247,32 @@ fn print_result(result: &ReplResult) {
             summary,
             source_snippet,
         } => {
-            println!("> {}", symbol);
             if let Some(sig) = signature {
-                println!("> sig: {}", sig);
+                let banner = if color {
+                    styled::doc_signature_banner(symbol, sig)
+                } else {
+                    styled::plain_doc_signature_banner(symbol, sig)
+                };
+                println!("> {}", banner);
+            } else {
+                let symbol = if color {
+                    styled::doc_symbol(symbol)
+                } else {
+                    symbol.clone()
+                };
+                println!("> {}", symbol);
             }
             if let Some(text) = source_snippet.as_ref().or(summary.as_ref()) {
-                for line in text.lines() {
-                    if !line.trim().is_empty() {
-                        println!("> {}", line);
-                    }
+                let lines: Vec<String> = if color {
+                    styled::doc_body_lines(text)
+                } else {
+                    text.lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .map(ToString::to_string)
+                        .collect()
+                };
+                for line in lines {
+                    println!("> {}", line);
                 }
             }
         }

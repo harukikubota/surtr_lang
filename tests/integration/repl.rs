@@ -36,6 +36,27 @@ fn run_repl_session(input: &str) -> Output {
     run_repl_session_with_args(&[], input)
 }
 
+fn run_repl_session_with_color(input: &str) -> Output {
+    let bin = PathBuf::from(surtr_bin());
+    let mut command = Command::new(bin);
+    command
+        .arg("repl")
+        .env("SURTR_REPL_COLOR", "always")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("failed to spawn surtr repl");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe is unavailable")
+        .write_all(input.as_bytes())
+        .expect("failed to write repl input");
+
+    child.wait_with_output().expect("failed to wait on repl")
+}
+
 fn strip_ansi(input: &str) -> String {
     let mut out = String::new();
     let mut chars = input.chars().peekable();
@@ -378,13 +399,71 @@ fn repl_doc_command_shows_builtin_docs() {
         stdout
     );
     assert!(
-        stdout.contains("sig: print(a: String) -> Unit"),
-        "expected :doc to print the builtin signature, got:\n{}",
+        stdout.contains("Kernel::print(a: String) -> Unit"),
+        "expected :doc to print the builtin signature banner, got:\n{}",
         stdout
     );
     assert!(
         stdout.contains("Print a string to stdout."),
         "expected :doc to print the builtin summary, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_colorizes_doc_for_qualified_kernel_if() {
+    let output = run_repl_session(":doc Kernel::if\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Kernel::if"),
+        "expected :doc to resolve Kernel::if, got:\n{}",
+        stdout
+    );
+
+    let output = run_repl_session_with_color(":doc Kernel::if\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\u{1b}["),
+        "expected ANSI styling for :doc Kernel::if, got:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("\u{1b}[43m") && !stdout.contains(";43m"),
+        "expected no background styling for :doc signature banner, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\u{1b}[36mflag\u{1b}[0m"),
+        "expected parameter name styling inside signature banner, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\u{1b}[1;96mBoolean\u{1b}[0m"),
+        "expected type styling inside signature banner, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\u{1b}[1;33m$A\u{1b}[0m"),
+        "expected generic type styling inside signature banner, got:\n{}",
+        stdout
+    );
+    assert!(
+        strip_ansi(&stdout).contains("xldr(1)> if(True, \"ok\", \"ng\")"),
+        "expected styled doc examples to preserve plain text, got:\n{}",
         stdout
     );
 }
@@ -729,6 +808,59 @@ fn repl_safebind_list_pattern_accepts_plain_list_rhs() {
     assert!(
         stdout.contains("t: List<Int> = [2, 3]"),
         "expected list-pattern safebind on plain list rhs to echo t binding, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_colorizes_plain_list_safebind_bindings() {
+    let output = run_repl_session_with_color("[h, ..t] =? [1, 2, 3]\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\u{1b}["),
+        "expected ANSI styling for safebind result, got:\n{}",
+        stdout
+    );
+
+    let plain = strip_ansi(&stdout);
+    assert!(
+        plain.contains("h: Int = 1"),
+        "expected h binding to be preserved, got:\n{}",
+        stdout
+    );
+    assert!(
+        plain.contains("t: List<Int> = [2, 3]"),
+        "expected t binding to be preserved, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_colorizes_constructor_return_without_type_style_bleed() {
+    let output = run_repl_session_with_color("Ok(1)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\u{1b}[1;35mOk\u{1b}[0m"),
+        "expected constructor token styling for Ok(1), got:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("\u{1b}[96mOk(1)\u{1b}[0m"),
+        "expected Ok(1) not to be styled as a type definition line, got:\n{}",
         stdout
     );
 }
