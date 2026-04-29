@@ -11,6 +11,7 @@
 - [../../doc/float.md](../../doc/float.md)
 - [../../doc/example_project_mahjong.md](../../doc/example_project_mahjong.md)
 - [../../doc/optimize/001_tail_call_optimization.md](../../doc/optimize/001_tail_call_optimization.md)
+- [./tail-call-optimization.md](./tail-call-optimization.md)
 - [../../doc/stdmod/](../../doc/stdmod/)
 - [../../doc/surtr_ansi_doc_spec.md](../../doc/surtr_ansi_doc_spec.md)
 - [../../doc/surtr_rust_viewer_model_design_v2.md](../../doc/surtr_rust_viewer_model_design_v2.md)
