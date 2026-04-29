@@ -38,6 +38,10 @@ enum ProfileEvent {
     OperatorTraitCandidateScan,
     ChildCheckerSpawn,
     ChildCheckerAbsorb,
+    ResolveTypedNode,
+    CheckBodyIsolated,
+    MatchArm,
+    ClosureBody,
 }
 
 #[derive(Default)]
@@ -81,6 +85,10 @@ struct ProfileData {
     operator_trait_candidate_scan: ProfileCounter,
     child_checker_spawn: ProfileCounter,
     child_checker_absorb: ProfileCounter,
+    resolve_typed_node: ProfileCounter,
+    check_body_isolated: ProfileCounter,
+    match_arm: ProfileCounter,
+    closure_body: ProfileCounter,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,6 +119,14 @@ struct ProfileSnapshot {
     child_checker_spawn_nanos: u64,
     child_checker_absorb_calls: u64,
     child_checker_absorb_nanos: u64,
+    resolve_typed_node_calls: u64,
+    resolve_typed_node_nanos: u64,
+    check_body_isolated_calls: u64,
+    check_body_isolated_nanos: u64,
+    match_arm_calls: u64,
+    match_arm_nanos: u64,
+    closure_body_calls: u64,
+    closure_body_nanos: u64,
 }
 
 #[derive(Clone)]
@@ -169,6 +185,10 @@ impl TypecheckProfiler {
             }
             ProfileEvent::ChildCheckerSpawn => self.data.child_checker_spawn.add(elapsed),
             ProfileEvent::ChildCheckerAbsorb => self.data.child_checker_absorb.add(elapsed),
+            ProfileEvent::ResolveTypedNode => self.data.resolve_typed_node.add(elapsed),
+            ProfileEvent::CheckBodyIsolated => self.data.check_body_isolated.add(elapsed),
+            ProfileEvent::MatchArm => self.data.match_arm.add(elapsed),
+            ProfileEvent::ClosureBody => self.data.closure_body.add(elapsed),
         }
     }
 
@@ -189,6 +209,10 @@ impl TypecheckProfiler {
         self.data.operator_trait_candidate_scan.reset();
         self.data.child_checker_spawn.reset();
         self.data.child_checker_absorb.reset();
+        self.data.resolve_typed_node.reset();
+        self.data.check_body_isolated.reset();
+        self.data.match_arm.reset();
+        self.data.closure_body.reset();
     }
 
     fn snapshot(&self) -> ProfileSnapshot {
@@ -217,6 +241,12 @@ impl TypecheckProfiler {
             self.data.child_checker_spawn.snapshot();
         let (child_checker_absorb_calls, child_checker_absorb_nanos) =
             self.data.child_checker_absorb.snapshot();
+        let (resolve_typed_node_calls, resolve_typed_node_nanos) =
+            self.data.resolve_typed_node.snapshot();
+        let (check_body_isolated_calls, check_body_isolated_nanos) =
+            self.data.check_body_isolated.snapshot();
+        let (match_arm_calls, match_arm_nanos) = self.data.match_arm.snapshot();
+        let (closure_body_calls, closure_body_nanos) = self.data.closure_body.snapshot();
         ProfileSnapshot {
             types_compatible_calls,
             types_compatible_nanos,
@@ -244,6 +274,14 @@ impl TypecheckProfiler {
             child_checker_spawn_nanos,
             child_checker_absorb_calls,
             child_checker_absorb_nanos,
+            resolve_typed_node_calls,
+            resolve_typed_node_nanos,
+            check_body_isolated_calls,
+            check_body_isolated_nanos,
+            match_arm_calls,
+            match_arm_nanos,
+            closure_body_calls,
+            closure_body_nanos,
         }
     }
 
@@ -290,6 +328,17 @@ impl TypecheckProfiler {
             snap.child_checker_spawn_nanos as f64 / 1_000_000.0,
             snap.child_checker_absorb_calls,
             snap.child_checker_absorb_nanos as f64 / 1_000_000.0,
+        );
+        eprintln!(
+            "scar-profile normalize resolve_typed_node={} ({:.3}ms) | isolated_body={} ({:.3}ms) | match_arm={} ({:.3}ms) | closure_body={} ({:.3}ms)",
+            snap.resolve_typed_node_calls,
+            snap.resolve_typed_node_nanos as f64 / 1_000_000.0,
+            snap.check_body_isolated_calls,
+            snap.check_body_isolated_nanos as f64 / 1_000_000.0,
+            snap.match_arm_calls,
+            snap.match_arm_nanos as f64 / 1_000_000.0,
+            snap.closure_body_calls,
+            snap.closure_body_nanos as f64 / 1_000_000.0,
         );
     }
 }
@@ -1090,7 +1139,13 @@ impl Checker {
                 {
                     let nodes = self
                         .check_trait_impl_items(span, trait_id, trait_args, target_ty, methods)?;
-                    typed.extend(nodes.into_iter().map(|node| self.resolve_typed_node(node)));
+                    typed.extend(nodes.into_iter().map(|node| {
+                        let profile = self.profiler.start();
+                        let node = self.resolve_typed_node(node);
+                        self.profiler
+                            .finish(ProfileEvent::ResolveTypedNode, profile);
+                        node
+                    }));
                     if let (Some(start), Some(label)) = (stmt_start, stmt_label.as_ref()) {
                         let elapsed = start.elapsed();
                         slow_stmts.push((elapsed, label.clone()));
@@ -1102,7 +1157,11 @@ impl Checker {
                     continue;
                 }
                 let node = self.check_node(&stmt)?;
-                typed.push(self.resolve_typed_node(node));
+                let profile = self.profiler.start();
+                let node = self.resolve_typed_node(node);
+                self.profiler
+                    .finish(ProfileEvent::ResolveTypedNode, profile);
+                typed.push(node);
                 if let (Some(start), Some(label)) = (stmt_start, stmt_label.as_ref()) {
                     let elapsed = start.elapsed();
                     slow_stmts.push((elapsed, label.clone()));

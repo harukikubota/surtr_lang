@@ -3319,7 +3319,9 @@ impl Checker {
             if let Some(Ty::Func(_, expected_ret)) = expected {
                 self.function_return_ty = Some(expected_ret.as_ref().clone());
             }
+            let profile = self.profiler.start();
             let typed_body = self.check_node(body)?;
+            self.profiler.finish(ProfileEvent::ClosureBody, profile);
             if matches!(typed_body.ty, Ty::Lens(_, _)) {
                 return Err(TypeError {
                     message:
@@ -3329,14 +3331,14 @@ impl Checker {
                     hint: Some("Use Lens::view(...) inside the closure instead.".into()),
                 });
             }
-            let typed_body = self.resolve_typed_node(typed_body);
+            let body_ty = self.resolve_ty(&typed_body.ty);
 
             let param_tys = typed_params
                 .iter()
                 .map(|p| self.resolve_ty(&p.ty))
                 .collect::<Vec<_>>();
             Ok(TypedNode {
-                ty: Ty::Func(param_tys, Box::new(self.resolve_ty(&typed_body.ty))),
+                ty: Ty::Func(param_tys, Box::new(body_ty)),
                 span: span.clone(),
                 node: TypedInner::Closure(
                     typed_params

@@ -518,9 +518,10 @@ impl Checker {
             self.env.bind_var(*unique_id, ty.clone());
         }
 
-        let result = self
-            .check_node(body)
-            .map(|typed| self.resolve_typed_node(typed));
+        let profile = self.profiler.start();
+        let result = self.check_node(body);
+        self.profiler
+            .finish(ProfileEvent::CheckBodyIsolated, profile);
 
         self.env.pop_var_scope();
         self.function_return_ty = saved_function_return_ty;
@@ -654,7 +655,8 @@ impl Checker {
         )?;
 
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
-            let hint = if matches!(typed_body.ty, Ty::Unit) {
+            let actual_ret = self.resolve_ty(&typed_body.ty);
+            let hint = if matches!(actual_ret, Ty::Unit) {
                 self.describe_unit_return_hint(&typed_body)
             } else {
                 None
@@ -664,13 +666,13 @@ impl Checker {
                     format!(
                         "expected {}, got {}",
                         self.ty_name(&expected_ret),
-                        self.ty_name(&typed_body.ty)
+                        self.ty_name(&actual_ret)
                     )
                 } else {
                     format!(
                         "def {} without an explicit return type must return Unit, got {}",
                         id.name,
-                        self.ty_name(&typed_body.ty)
+                        self.ty_name(&actual_ret)
                     )
                 },
                 span: self.return_mismatch_span(&typed_body),
@@ -781,7 +783,8 @@ impl Checker {
         )?;
 
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
-            let hint = if matches!(typed_body.ty, Ty::Unit) {
+            let actual_ret = self.resolve_ty(&typed_body.ty);
+            let hint = if matches!(actual_ret, Ty::Unit) {
                 self.describe_unit_return_hint(&typed_body)
             } else {
                 None
@@ -790,7 +793,7 @@ impl Checker {
                 message: format!(
                     "expected {}, got {}",
                     self.ty_name(&expected_ret),
-                    self.ty_name(&typed_body.ty)
+                    self.ty_name(&actual_ret)
                 ),
                 span: self.return_mismatch_span(&typed_body),
                 hint,
@@ -934,7 +937,8 @@ impl Checker {
             )?;
 
             if !self.types_compatible(&expected_ret, &typed_body.ty) {
-                let hint = if matches!(typed_body.ty, Ty::Unit) {
+                let actual_ret = self.resolve_ty(&typed_body.ty);
+                let hint = if matches!(actual_ret, Ty::Unit) {
                     self.describe_unit_return_hint(&typed_body)
                 } else {
                     None
@@ -943,7 +947,7 @@ impl Checker {
                     message: format!(
                         "expected {}, got {}",
                         self.ty_name(&expected_ret),
-                        self.ty_name(&typed_body.ty)
+                        self.ty_name(&actual_ret)
                     ),
                     span: self.return_mismatch_span(&typed_body),
                     hint,

@@ -30,7 +30,6 @@ impl Checker {
                 result_ty = Some(body_node.ty.clone());
             }
             typed_arms.push(typed_arm);
-            self.normalize_env_bindings();
         }
 
         self.check_match_exhaustive(span, &typed_scrut.ty, &typed_arms)?;
@@ -213,6 +212,7 @@ impl Checker {
         scrut_ty: &Ty,
         _span: &Span,
     ) -> Result<TypedMatchArm, TypeError> {
+        let profile = self.profiler.start();
         self.env.push_var_scope();
         let result = (|| {
             let typed_pat = self.check_match_subpattern(&arm.pattern, scrut_ty)?;
@@ -228,13 +228,11 @@ impl Checker {
                         hint: None,
                     });
                 }
-                Some(self.resolve_typed_node(typed_guard))
+                Some(typed_guard)
             } else {
                 None
             };
             let typed_body = self.check_node(&arm.body)?;
-            self.normalize_env_bindings();
-            let typed_body = self.resolve_typed_node(typed_body);
             Ok(TypedMatchArm {
                 pattern: typed_pat,
                 guard: typed_guard,
@@ -242,6 +240,7 @@ impl Checker {
             })
         })();
         self.env.pop_var_scope();
+        self.profiler.finish(ProfileEvent::MatchArm, profile);
         result
     }
 
