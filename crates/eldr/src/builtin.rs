@@ -1459,10 +1459,17 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
             let mut parts = entry
                 .field_names
                 .iter()
-                .zip(entry.private_flags.iter().copied().chain(std::iter::repeat(false)))
+                .zip(
+                    entry
+                        .private_flags
+                        .iter()
+                        .copied()
+                        .chain(std::iter::repeat(false)),
+                )
                 .zip(fields.iter())
                 .filter_map(|((name, is_private), val)| {
-                    (!is_private).then(|| format!("{name}: {}", inspect_non_callable_value(vm, val)))
+                    (!is_private)
+                        .then(|| format!("{name}: {}", inspect_non_callable_value(vm, val)))
                 })
                 .collect::<Vec<_>>();
             if hidden_field_count > 0 {

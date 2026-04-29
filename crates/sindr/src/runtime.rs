@@ -130,7 +130,12 @@ impl Value {
         let hidden_field_count = private_flags.iter().filter(|flag| **flag).count();
         let mut parts = field_names
             .iter()
-            .zip(private_flags.iter().copied().chain(std::iter::repeat(false)))
+            .zip(
+                private_flags
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat(false)),
+            )
             .zip(fields.iter())
             .filter_map(|((name, is_private), val)| {
                 (!is_private).then(|| format!("{}: {}", name, val.to_display_string(registry)))
