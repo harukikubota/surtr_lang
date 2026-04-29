@@ -1,3 +1,5 @@
+import String::repeat;
+
 @@doc """
 Colors supported by the StyledDoc helper.
 """
@@ -76,7 +78,10 @@ defmod StyledDoc {
   }
 
   defp _spaces(width: Int) -> String {
-    if(width <= 0, "", " " ++ _spaces(width - 1))
+    match repeat(" ", width) {
+      Ok(value) => value,
+      Err(_) => "",
+    }
   }
 
   defp _indent_line(line: StyledDocLine, prefix: String) -> StyledDocLine {

@@ -196,7 +196,7 @@ fn import_module_into_scope(
         if entry.visibility != Visibility::Public {
             continue;
         }
-        if entry.stage_index >= import_context.current_stage_index {
+        if entry.stage_index > import_context.current_stage_index {
             blocked_by_stage = true;
             continue;
         }
@@ -270,7 +270,7 @@ fn import_trait_into_scope(
         });
     }
 
-    if entry.stage_index >= import_context.current_stage_index {
+    if entry.stage_index > import_context.current_stage_index {
         if auto_import {
             return Ok(());
         }
@@ -307,7 +307,7 @@ fn import_trait_into_scope(
         {
             continue;
         }
-        if method_entry.stage_index >= import_context.current_stage_index {
+        if method_entry.stage_index > import_context.current_stage_index {
             if auto_import {
                 continue;
             }
@@ -389,7 +389,7 @@ fn import_single_into_scope(
         });
     }
 
-    if entry.stage_index >= import_context.current_stage_index {
+    if entry.stage_index > import_context.current_stage_index {
         return Err(ResolveError {
             message: format!(
                 "Import target `{}` is not available in the current stage",
@@ -431,7 +431,7 @@ fn import_single_into_scope(
             {
                 continue;
             }
-            if method_entry.stage_index >= import_context.current_stage_index {
+            if method_entry.stage_index > import_context.current_stage_index {
                 return Err(ResolveError {
                     message: format!(
                         "Import target `{}` is not available in the current stage",

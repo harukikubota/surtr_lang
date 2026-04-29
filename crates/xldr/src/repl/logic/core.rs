@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
+use std::panic;
 
 use diagnostics::{SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
@@ -1658,23 +1659,9 @@ pub(crate) fn parse_module_stages_from_sources(
 
     for stage in module_stages {
         let mut stage_ast = Vec::new();
-        for module in stage {
-            let raw_module_source = sources.source(module.source_id).unwrap_or("");
-            let module_source = crate::strip_test_annotations(raw_module_source);
-            let parsed = spire::parse_with_context(
-                &module_source,
-                spire::ParserContext::module(module.source_id.0, None)
-                    .with_rules(derive_parse_rules(module.source_kind)),
-            )
-            .map_err(|e| ModuleStageParseError {
-                source_id: module.source_id,
-                kind: ModuleStageParseErrorKind::Parse {
-                    message: e.message().to_string(),
-                    span: e.span().clone(),
-                },
-            })?;
-
-            for lowered in crate::lower_module_source_ast(parsed, None) {
+        let parsed_stage = parse_stage_modules_parallel(sources, stage);
+        for (module, lowered_modules) in stage.iter().zip(parsed_stage) {
+            for lowered in lowered_modules? {
                 if !lowered.module_path.is_empty() {
                     let is_impl_owner = crate::lowered_module_is_impl_owner(&lowered);
                     let second_file_name = sources
@@ -1716,6 +1703,42 @@ pub(crate) fn parse_module_stages_from_sources(
     }
 
     Ok(staged_module_asts)
+}
+
+fn parse_stage_modules_parallel(
+    sources: &SourceRegistry,
+    stage: &[StagedModule],
+) -> Vec<Result<Vec<crate::LoweredModuleAst>, ModuleStageParseError>> {
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(stage.len());
+        for module in stage {
+            handles.push(scope.spawn(move || {
+                let raw_module_source = sources.source(module.source_id).unwrap_or("");
+                let module_source = crate::strip_test_annotations(raw_module_source);
+                let parsed = spire::parse_with_context(
+                    &module_source,
+                    spire::ParserContext::module(module.source_id.0, None)
+                        .with_rules(derive_parse_rules(module.source_kind)),
+                )
+                .map_err(|e| ModuleStageParseError {
+                    source_id: module.source_id,
+                    kind: ModuleStageParseErrorKind::Parse {
+                        message: e.message().to_string(),
+                        span: e.span().clone(),
+                    },
+                })?;
+                Ok(crate::lower_module_source_ast(parsed, None))
+            }));
+        }
+
+        handles
+            .into_iter()
+            .map(|handle| match handle.join() {
+                Ok(result) => result,
+                Err(payload) => panic::resume_unwind(payload),
+            })
+            .collect()
+    })
 }
 
 pub(crate) fn xldr_version() -> &'static str {

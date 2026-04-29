@@ -1,0 +1,7 @@
+import Provider::value;
+
+defmod Consumer {
+  def use_value() -> Int {
+    value()
+  }
+}

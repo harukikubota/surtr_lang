@@ -341,6 +341,147 @@ fn test_resolve_allows_impl_target_defined_in_another_file_same_stage() {
 }
 
 #[test]
+fn test_resolve_allows_same_stage_import_independent_of_module_order() {
+    let consumer = staged_module(
+        "Consumer",
+        parse_module_ast(
+            r#"import Provider::value;
+
+def use_value() -> Int {
+  value()
+}"#,
+            "Consumer",
+        ),
+    );
+    let provider = staged_module(
+        "Provider",
+        parse_module_ast(
+            r#"def value() -> Int {
+  41
+}"#,
+            "Provider",
+        ),
+    );
+
+    resolve_user_with_modules(
+        "print(to_string(Consumer::use_value()))",
+        &[vec![consumer.clone(), provider.clone()]],
+    )
+    .expect("same-stage forward import should resolve");
+    resolve_user_with_modules(
+        "print(to_string(Consumer::use_value()))",
+        &[vec![provider, consumer]],
+    )
+    .expect("same-stage backward import should resolve");
+}
+
+#[test]
+fn test_resolve_allows_same_stage_auto_import() {
+    let helper = staged_auto_import_module(
+        "Helper",
+        parse_module_ast(
+            r#"def helper() -> Int {
+  7
+}"#,
+            "Helper",
+        ),
+    );
+    let consumer = staged_module(
+        "Consumer",
+        parse_module_ast(
+            r#"def use_helper() -> Int {
+  helper()
+}"#,
+            "Consumer",
+        ),
+    );
+
+    resolve_user_with_modules(
+        "print(to_string(Consumer::use_helper()))",
+        &[vec![consumer, helper]],
+    )
+    .expect("same-stage auto import should resolve");
+}
+
+#[test]
+fn test_resolve_rejects_future_stage_import() {
+    let consumer = staged_module(
+        "Consumer",
+        parse_module_ast(
+            r#"import Provider::value;
+
+def use_value() -> Int {
+  value()
+}"#,
+            "Consumer",
+        ),
+    );
+    let provider = staged_module(
+        "Provider",
+        parse_module_ast(
+            r#"def value() -> Int {
+  41
+}"#,
+            "Provider",
+        ),
+    );
+
+    let err = resolve_user_with_modules(
+        "print(to_string(Consumer::use_value()))",
+        &[vec![consumer], vec![provider]],
+    )
+    .expect_err("future-stage import should still be rejected");
+    assert!(err.message.contains("Provider::value"));
+}
+
+#[test]
+fn test_parallel_stage_resolve_rebases_local_ids() {
+    let left = staged_module(
+        "Left",
+        parse_module_ast(
+            r#"def value() -> Int {
+  x = 1
+  x
+}"#,
+            "Left",
+        ),
+    );
+    let right = staged_module(
+        "Right",
+        parse_module_ast(
+            r#"def value() -> Int {
+  x = 2
+  x
+}"#,
+            "Right",
+        ),
+    );
+
+    let resolved = resolve_user_with_modules(
+        "print(to_string(Left::value() + Right::value()))",
+        &[vec![left, right]],
+    )
+    .expect("same-stage modules should resolve");
+    let local_ids = resolved
+        .iter()
+        .filter_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, body, _) if id.name == "value" => first_bind_id(body),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(local_ids.len(), 2);
+    assert_ne!(local_ids[0], local_ids[1]);
+}
+
+fn first_bind_id(node: &Resolved) -> Option<u32> {
+    match node {
+        Resolved::Bind(_, ResolvedPattern::Var(id), _) => Some(id.unique_id),
+        Resolved::Block(_, nodes) => nodes.iter().find_map(first_bind_id),
+        _ => None,
+    }
+}
+
+#[test]
 fn test_precollect_allows_impl_for_builtin_type_owner() {
     let module_stages = vec![vec![staged_module(
         "",
