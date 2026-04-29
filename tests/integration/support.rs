@@ -100,6 +100,28 @@ pub fn parse_module_stages(
     )
 }
 
+fn parse_module_stage_suffix(
+    compile_sources: &CompileSources,
+    compile_unit_kind: CompileUnitKind,
+    start_stage_index: usize,
+) -> Result<Vec<Vec<sigil::StagedModuleAst>>, String> {
+    let sources = &compile_sources.sources;
+    xldr::parse_module_stages_from_compile_sources_suffix(
+        compile_sources,
+        compile_unit_kind,
+        start_stage_index,
+    )
+    .map_err(|e| {
+        let file_name = sources.file_name(e.source_id).unwrap_or("<unknown>");
+        format!("phase=parse; file={}; message={}", file_name, e.message())
+    })
+}
+
+fn default_stdlib_snapshot() -> Result<Arc<xldr::DefaultStdlibSnapshot>, String> {
+    xldr::default_stdlib_semantic_snapshot()
+        .map_err(|e| format!("phase=load; message=failed to load stdlib snapshot: {}", e))
+}
+
 fn default_module_sources() -> Result<ModuleSources, String> {
     static DEFAULT_MODULE_SOURCES: OnceLock<Result<ModuleSources, String>> = OnceLock::new();
 
@@ -394,7 +416,19 @@ fn cached_module_pipeline(
         return cached.clone();
     }
 
-    let module_asts = parse_module_stages(compile_sources, compile_unit_kind_for_mode(mode))?;
+    let module_asts = if matches!(mode, TestCompileMode::Script) {
+        let std_snapshot = default_stdlib_snapshot()?;
+        let mut module_asts = std_snapshot.module_stages.clone();
+        let mut suffix_asts = parse_module_stage_suffix(
+            compile_sources,
+            compile_unit_kind_for_mode(mode),
+            std_snapshot.default_stage_count,
+        )?;
+        module_asts.append(&mut suffix_asts);
+        module_asts
+    } else {
+        parse_module_stages(compile_sources, compile_unit_kind_for_mode(mode))?
+    };
     let declaration_index = sigil::precollect_declaration_index(&module_asts)
         .map_err(|e| format!("phase=resolve; message={}", e))?;
     let pipeline = CachedModulePipeline {
@@ -408,6 +442,72 @@ fn cached_module_pipeline(
         .insert(cache_key, Ok(pipeline.clone()));
 
     Ok(pipeline)
+}
+
+fn next_fun_idx(bytecode: &Bytecode) -> u32 {
+    bytecode
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx.saturating_add(1))
+        .max()
+        .unwrap_or(0)
+}
+
+fn cached_script_compile_prefix(
+    compile_sources: &CompileSources,
+) -> Result<Arc<CachedCompilePrefix>, String> {
+    let std_snapshot = default_stdlib_snapshot()?;
+    let cached_modules = cached_module_pipeline(compile_sources, TestCompileMode::Script)?;
+
+    if cached_modules.module_asts.len() == std_snapshot.default_stage_count {
+        return Ok(Arc::new(CachedCompilePrefix {
+            module_asts: cached_modules.module_asts,
+            declaration_index: cached_modules.declaration_index,
+            resolve_state: std_snapshot.resolve_state,
+            scar_checkpoint: std_snapshot.scar_checkpoint.clone(),
+            bytecode: std_snapshot.bytecode.clone(),
+        }));
+    }
+
+    let resolved = sigil::resolve_staged_program_from_state(
+        &cached_modules.module_asts,
+        Vec::new(),
+        &cached_modules.declaration_index,
+        None,
+        std_snapshot.default_stage_count,
+        std_snapshot.resolve_state,
+    )
+    .map_err(|e| format!("phase=resolve; message={}", e))?;
+
+    let mut scar_session = scar::ScarSession::new();
+    scar_session.rollback(std_snapshot.scar_checkpoint.clone());
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&std_snapshot.bytecode));
+    let typed = scar_session
+        .typecheck_with_context(
+            resolved.resolved,
+            compile_chunk_typecheck_context_for_mode(TestCompileMode::Script),
+        )
+        .map_err(|e| format!("phase=typecheck; message={}", e))?;
+
+    let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
+    let (chunk, _) = forge_session
+        .codegen_chunk(typed)
+        .map_err(|e| format!("phase=codegen; message={}", e))?;
+    let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
+        .map_err(|e| format!("phase=codegen; message={}", e))?;
+
+    Ok(Arc::new(CachedCompilePrefix {
+        module_asts: cached_modules.module_asts,
+        declaration_index: cached_modules.declaration_index,
+        resolve_state: sigil::ResolveResumeState {
+            next_local_id: resolved
+                .resume_state
+                .next_local_id
+                .max(next_fun_idx(&bytecode)),
+        },
+        scar_checkpoint: scar_session.checkpoint(),
+        bytecode,
+    }))
 }
 
 fn cached_compile_prefix(
@@ -429,34 +529,36 @@ fn cached_compile_prefix(
         return cached.clone();
     }
 
-    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
-    let resolved = sigil::resolve_staged_program_with_state(
-        &cached_modules.module_asts,
-        Vec::new(),
-        &cached_modules.declaration_index,
-        None,
-    )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
-    let mut scar_session = scar::ScarSession::new();
-    let typed = scar_session
-        .typecheck_with_context(resolved.resolved, std_typecheck_context_for_mode(mode))
-        .map_err(|e| format!("phase=typecheck; message={}", e))?;
-    let bytecode = forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
-    let next_fun_idx = bytecode
-        .functions
-        .iter()
-        .map(|entry| entry.fun_idx.saturating_add(1))
-        .max()
-        .unwrap_or(0);
-    let prefix = Arc::new(CachedCompilePrefix {
-        module_asts: cached_modules.module_asts,
-        declaration_index: cached_modules.declaration_index,
-        resolve_state: sigil::ResolveResumeState {
-            next_local_id: resolved.resume_state.next_local_id.max(next_fun_idx),
-        },
-        scar_checkpoint: scar_session.checkpoint(),
-        bytecode,
-    });
+    let prefix = if matches!(mode, TestCompileMode::Script) {
+        cached_script_compile_prefix(compile_sources)?
+    } else {
+        let cached_modules = cached_module_pipeline(compile_sources, mode)?;
+        let resolved = sigil::resolve_staged_program_with_state(
+            &cached_modules.module_asts,
+            Vec::new(),
+            &cached_modules.declaration_index,
+            None,
+        )
+        .map_err(|e| format!("phase=resolve; message={}", e))?;
+        let mut scar_session = scar::ScarSession::new();
+        let typed = scar_session
+            .typecheck_with_context(resolved.resolved, std_typecheck_context_for_mode(mode))
+            .map_err(|e| format!("phase=typecheck; message={}", e))?;
+        let bytecode =
+            forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
+        Arc::new(CachedCompilePrefix {
+            module_asts: cached_modules.module_asts,
+            declaration_index: cached_modules.declaration_index,
+            resolve_state: sigil::ResolveResumeState {
+                next_local_id: resolved
+                    .resume_state
+                    .next_local_id
+                    .max(next_fun_idx(&bytecode)),
+            },
+            scar_checkpoint: scar_session.checkpoint(),
+            bytecode,
+        })
+    };
 
     cache
         .lock()
@@ -580,21 +682,27 @@ fn resolve_sources_in_compile_order(
     mode: TestCompileMode,
 ) -> Result<(), String> {
     let cached_modules = cached_module_pipeline(compile_sources, mode)?;
-    let std_resolved = sigil::resolve_staged_program_with_state(
-        &cached_modules.module_asts,
-        Vec::new(),
-        &cached_modules.declaration_index,
-        None,
-    )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    let (start_stage_index, resume_state) = if matches!(mode, TestCompileMode::Script) {
+        let std_snapshot = default_stdlib_snapshot()?;
+        (std_snapshot.default_stage_count, std_snapshot.resolve_state)
+    } else {
+        let std_resolved = sigil::resolve_staged_program_with_state(
+            &cached_modules.module_asts,
+            Vec::new(),
+            &cached_modules.declaration_index,
+            None,
+        )
+        .map_err(|e| format!("phase=resolve; message={}", e))?;
+        (cached_modules.module_asts.len(), std_resolved.resume_state)
+    };
     let user_ast = parse_user_program(compile_sources, mode)?;
     sigil::resolve_staged_program_from_state(
         &cached_modules.module_asts,
         user_ast,
         &cached_modules.declaration_index,
         Some(compile_sources.user_module_path.clone()),
-        cached_modules.module_asts.len(),
-        std_resolved.resume_state,
+        start_stage_index,
+        resume_state,
     )
     .map_err(|e| format!("phase=resolve; message={}", e))?;
     Ok(())
@@ -604,30 +712,20 @@ fn typecheck_sources_in_compile_order(
     compile_sources: &CompileSources,
     mode: TestCompileMode,
 ) -> Result<(), String> {
-    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
-    let std_resolved = sigil::resolve_staged_program_with_state(
-        &cached_modules.module_asts,
-        Vec::new(),
-        &cached_modules.declaration_index,
-        None,
-    )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
-
-    let mut scar_session = scar::ScarSession::new();
-    scar_session
-        .typecheck_with_context(std_resolved.resolved, std_typecheck_context_for_mode(mode))
-        .map_err(|e| format!("phase=typecheck; message={}", e))?;
+    let compile_prefix = cached_compile_prefix(compile_sources, mode)?;
 
     let user_ast = parse_user_program(compile_sources, mode)?;
     let resolved = sigil::resolve_staged_program_from_state(
-        &cached_modules.module_asts,
+        &compile_prefix.module_asts,
         user_ast,
-        &cached_modules.declaration_index,
+        &compile_prefix.declaration_index,
         Some(compile_sources.user_module_path.clone()),
-        cached_modules.module_asts.len(),
-        std_resolved.resume_state,
+        compile_prefix.module_asts.len(),
+        compile_prefix.resolve_state,
     )
     .map_err(|e| format!("phase=resolve; message={}", e))?;
+    let mut scar_session = scar::ScarSession::new();
+    scar_session.rollback(compile_prefix.scar_checkpoint.clone());
     scar_session
         .typecheck_with_context(
             resolved.resolved,
@@ -690,7 +788,16 @@ fn check_sources_phase(
     let phase = CompileFailurePhase::from_str(phase)?;
     match phase {
         CompileFailurePhase::Parse => {
-            parse_module_stages(compile_sources, compile_unit_kind_for_mode(mode))?;
+            if matches!(mode, TestCompileMode::Script) {
+                let std_snapshot = default_stdlib_snapshot()?;
+                parse_module_stage_suffix(
+                    compile_sources,
+                    compile_unit_kind_for_mode(mode),
+                    std_snapshot.default_stage_count,
+                )?;
+            } else {
+                parse_module_stages(compile_sources, compile_unit_kind_for_mode(mode))?;
+            }
             parse_user_program(compile_sources, mode)?;
             Ok(())
         }
