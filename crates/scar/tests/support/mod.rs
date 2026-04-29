@@ -3,7 +3,7 @@ use std::thread;
 
 use scar::typed::TypedNode;
 use scar::{
-    typecheck as scar_typecheck, typecheck_with_context as scar_typecheck_with_context,
+    typecheck_with_context as scar_typecheck_with_context, ScarCheckpoint, ScarSession,
     TypecheckContext,
 };
 use sindr::policy::RuntimeSourcePolicy;
@@ -61,7 +61,7 @@ where
 pub(crate) fn typecheck(
     resolved: Vec<sigil::resolved::Resolved>,
 ) -> Result<Vec<TypedNode>, scar::error::TypeError> {
-    run_with_large_stack("typecheck", move || scar_typecheck(resolved))
+    typecheck_with_context(resolved, TypecheckContext::default())
 }
 
 pub(crate) fn typecheck_with_context(
@@ -69,7 +69,8 @@ pub(crate) fn typecheck_with_context(
     context: TypecheckContext,
 ) -> Result<Vec<TypedNode>, scar::error::TypeError> {
     run_with_large_stack("typecheck_with_context", move || {
-        scar_typecheck_with_context(resolved, context)
+        let mut session = session_from_cached_std_prelude();
+        session.typecheck_with_context(resolved, context)
     })
 }
 
@@ -172,17 +173,50 @@ pub(crate) fn std_module_stages() -> Vec<Vec<sigil::StagedModuleAst>> {
     std_module_stages_with_overrides(&[])
 }
 
-fn cached_std_modules_and_declarations(
-) -> &'static (Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex) {
-    static CACHE: OnceLock<(Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex)> =
-        OnceLock::new();
+struct CachedStdPrelude {
+    module_stages: Vec<Vec<sigil::StagedModuleAst>>,
+    declaration_index: sigil::DeclarationIndex,
+    resolved_len: usize,
+    checkpoint: ScarCheckpoint,
+}
+
+fn cached_std_prelude() -> &'static CachedStdPrelude {
+    static CACHE: OnceLock<CachedStdPrelude> = OnceLock::new();
 
     CACHE.get_or_init(|| {
         let module_stages = std_module_stages();
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");
-        (module_stages, declaration_index)
+        let std_resolved =
+            sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+                .expect("std modules should resolve");
+        let resolved_len = std_resolved.len();
+        let mut session = ScarSession::new();
+        session
+            .typecheck_with_context(
+                std_resolved,
+                TypecheckContext {
+                    runtime_policy: RuntimeSourcePolicy::std_module(),
+                    enforce_builtin_type_contracts: true,
+                },
+            )
+            .expect("std modules should typecheck");
+        let checkpoint = session.checkpoint();
+
+        CachedStdPrelude {
+            module_stages,
+            declaration_index,
+            resolved_len,
+            checkpoint,
+        }
     })
+}
+
+pub(crate) fn session_from_cached_std_prelude() -> ScarSession {
+    let prelude = cached_std_prelude();
+    let mut session = ScarSession::new();
+    session.rollback(prelude.checkpoint.clone());
+    session
 }
 
 fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
@@ -337,10 +371,32 @@ pub(crate) fn resolve_with_builtin_prelude_result(
 ) -> Result<Vec<sigil::resolved::Resolved>, sigil::error::ResolveError> {
     let source = source.to_owned();
     run_with_large_stack("resolve_with_builtin_prelude_result", move || {
-        let (module_stages, declaration_index) = cached_std_modules_and_declarations();
+        let prelude = cached_std_prelude();
         let user_ast = spire::parse_with_context(&source, spire::ParserContext::project(0))
             .expect("source should parse");
-        sigil::resolve_staged_program(module_stages, user_ast, declaration_index, None)
+        sigil::resolve_staged_program(
+            &prelude.module_stages,
+            user_ast,
+            &prelude.declaration_index,
+            None,
+        )
+        .map(|resolved| resolved.into_iter().skip(prelude.resolved_len).collect())
+    })
+}
+
+pub(crate) fn resolve_program_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
+    let source = source.to_owned();
+    run_with_large_stack("resolve_program_with_builtin_prelude", move || {
+        let prelude = cached_std_prelude();
+        let user_ast = spire::parse_with_context(&source, spire::ParserContext::project(0))
+            .expect("source should parse");
+        sigil::resolve_staged_program(
+            &prelude.module_stages,
+            user_ast,
+            &prelude.declaration_index,
+            None,
+        )
+        .expect("source should resolve")
     })
 }
 
@@ -357,15 +413,16 @@ pub(crate) fn resolve_with_builtin_prelude_in_module(
     let source = source.to_owned();
     let module_path = module_path.to_owned();
     run_with_large_stack("resolve_with_builtin_prelude_in_module", move || {
-        let (module_stages, declaration_index) = cached_std_modules_and_declarations();
+        let prelude = cached_std_prelude();
         let user_ast = spire::parse_with_context(&source, spire::ParserContext::project(0))
             .expect("source should parse");
         sigil::resolve_staged_program(
-            module_stages,
+            &prelude.module_stages,
             user_ast,
-            declaration_index,
+            &prelude.declaration_index,
             Some(module_path),
         )
+        .map(|resolved| resolved.into_iter().skip(prelude.resolved_len).collect())
     })
 }
 
@@ -401,14 +458,16 @@ pub(crate) fn typecheck_with_rules(
 pub(crate) fn typecheck_module_source_result(source: &str) -> Result<Vec<TypedNode>, String> {
     let source = source.to_owned();
     run_with_large_stack("typecheck_module_source_result", move || {
-        let mut module_stages = std_module_stages();
+        let prelude = cached_std_prelude();
+        let mut module_stages = prelude.module_stages.clone();
         module_stages.push(parse_user_module_stage(&source));
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .map_err(|err| format!("resolve precollect failed: {}", err.message))?;
         let resolved =
             sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
                 .map_err(|err| format!("resolve failed: {}", err.message))?;
-        typecheck(resolved).map_err(|err| err.message)
+        let user_resolved = resolved.into_iter().skip(prelude.resolved_len).collect();
+        typecheck(user_resolved).map_err(|err| err.message)
     })
 }
 
