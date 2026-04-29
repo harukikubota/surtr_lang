@@ -131,10 +131,10 @@ test("Math") {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\x1b[32m[PASS] Math > add > adds two numbers\x1b[0m"));
-    assert!(stdout.contains("\x1b[36mtest result: passed=1, failed=0, total=1\x1b[0m"));
-    assert!(stdout.contains("[PASS] Math > add > adds two numbers"));
-    assert!(stdout.contains("test result: passed=1, failed=0, total=1"));
+    assert!(stdout.contains("\x1b[32m[PASS]\x1b[0m Math > add > adds two numbers"));
+    assert!(stdout.contains(
+        "test result: \x1b[32mpassed=1\x1b[0m, \x1b[32mfailed=0\x1b[0m, \x1b[36mtotal=1\x1b[0m"
+    ));
 
     let _ = fs::remove_dir_all(temp);
 }

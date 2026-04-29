@@ -100,14 +100,14 @@ fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunS
         .with_error_capture();
 
     if let Err(err) = vm.run() {
-        print_color_line(
-            &format!("[FAIL] {} ({})", script.selector, script.file_path),
+        print_test_event_line(
+            "[FAIL]",
+            &format!("{} ({})", script.selector, script.file_path),
             TestOutputColor::Red,
             color,
         );
-        print_color_line(
-            &format!("  note: runtime error while running test script: {}", err),
-            TestOutputColor::Yellow,
+        print_note_line(
+            &format!("runtime error while running test script: {}", err),
             color,
         );
         print_summary(TestRunSummary {
@@ -123,25 +123,23 @@ fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunS
         match event.kind {
             VmTestEventKind::Passed => {
                 summary.passed += 1;
-                print_color_line(
-                    &format!("[PASS] {}", format_event_path(event)),
+                print_test_event_line(
+                    "[PASS]",
+                    &format_event_path(event),
                     TestOutputColor::Green,
                     color,
                 );
             }
             VmTestEventKind::Failed => {
                 summary.failed += 1;
-                print_color_line(
-                    &format!("[FAIL] {} ({})", format_event_path(event), script.file_path),
+                print_test_event_line(
+                    "[FAIL]",
+                    &format!("{} ({})", format_event_path(event), script.file_path),
                     TestOutputColor::Red,
                     color,
                 );
                 if let Some(detail) = &event.detail {
-                    print_color_line(
-                        &format!("  note: {}", detail),
-                        TestOutputColor::Yellow,
-                        color,
-                    );
+                    print_note_line(detail, color);
                 }
             }
         }
@@ -479,25 +477,61 @@ fn color_code(color: TestOutputColor) -> u8 {
     }
 }
 
-fn colorize_line(line: &str, color: TestOutputColor, enabled: bool) -> String {
+fn colorize_text(text: &str, color: TestOutputColor, enabled: bool) -> String {
     if enabled {
-        format!("\x1b[{}m{}\x1b[0m", color_code(color), line)
+        format!("\x1b[{}m{}\x1b[0m", color_code(color), text)
     } else {
-        line.to_string()
+        text.to_string()
     }
 }
 
 fn print_color_line(line: &str, color: TestOutputColor, enabled: bool) {
-    println!("{}", colorize_line(line, color, enabled));
+    println!("{}", colorize_text(line, color, enabled));
 }
 
-fn summary_line(summary: TestRunSummary) -> String {
+fn test_event_line(label: &str, detail: &str, color: TestOutputColor, enabled: bool) -> String {
+    format!("{} {}", colorize_text(label, color, enabled), detail)
+}
+
+fn print_test_event_line(label: &str, detail: &str, color: TestOutputColor, enabled: bool) {
+    println!("{}", test_event_line(label, detail, color, enabled));
+}
+
+fn note_line(detail: &str, enabled: bool) -> String {
     format!(
-        "test result: passed={}, failed={}, total={}",
-        summary.passed, summary.failed, summary.total
+        "  {} {}",
+        colorize_text("note:", TestOutputColor::Yellow, enabled),
+        detail
     )
 }
 
+fn print_note_line(detail: &str, enabled: bool) {
+    println!("{}", note_line(detail, enabled));
+}
+
+fn summary_line(summary: TestRunSummary, enabled: bool) -> String {
+    let failed_color = if summary.failed == 0 {
+        TestOutputColor::Green
+    } else {
+        TestOutputColor::Red
+    };
+    format!(
+        "test result: {}, {}, {}",
+        colorize_text(
+            &format!("passed={}", summary.passed),
+            TestOutputColor::Green,
+            enabled
+        ),
+        colorize_text(&format!("failed={}", summary.failed), failed_color, enabled),
+        colorize_text(
+            &format!("total={}", summary.total),
+            TestOutputColor::Cyan,
+            enabled
+        )
+    )
+}
+
+#[cfg(test)]
 fn summary_color(summary: TestRunSummary) -> TestOutputColor {
     if summary.failed == 0 {
         TestOutputColor::Cyan
@@ -507,11 +541,7 @@ fn summary_color(summary: TestRunSummary) -> TestOutputColor {
 }
 
 fn print_summary(summary: TestRunSummary) {
-    print_color_line(
-        &summary_line(summary),
-        summary_color(summary),
-        test_color_enabled(),
-    );
+    println!("{}", summary_line(summary, test_color_enabled()));
 }
 
 fn display_path(path: &Path) -> String {
@@ -521,8 +551,8 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        colorize_line, parse_test_options, resolve_test_script_path, summary_color, summary_line,
-        TestMode, TestOutputColor, TestRunSummary,
+        colorize_text, note_line, parse_test_options, resolve_test_script_path, summary_color,
+        summary_line, test_event_line, TestMode, TestOutputColor, TestRunSummary,
     };
     use std::path::Path;
 
@@ -553,12 +583,11 @@ mod tests {
     }
 
     #[test]
-    fn colorize_line_preserves_plain_substring() {
-        let rendered = colorize_line("[PASS] Suite > case", TestOutputColor::Green, true);
-        assert!(rendered.contains("[PASS] Suite > case"));
-        assert_eq!(rendered, "\x1b[32m[PASS] Suite > case\x1b[0m".to_string());
+    fn test_event_line_colors_only_status_label() {
+        let rendered = test_event_line("[PASS]", "Suite > case", TestOutputColor::Green, true);
+        assert_eq!(rendered, "\x1b[32m[PASS]\x1b[0m Suite > case".to_string());
         assert_eq!(
-            colorize_line("[PASS] Suite > case", TestOutputColor::Green, false),
+            test_event_line("[PASS]", "Suite > case", TestOutputColor::Green, false),
             "[PASS] Suite > case".to_string()
         );
     }
@@ -576,10 +605,23 @@ mod tests {
             total: 2,
         };
         assert_eq!(
-            summary_line(passed),
+            summary_line(passed, false),
             "test result: passed=2, failed=0, total=2"
+        );
+        assert_eq!(
+            summary_line(passed, true),
+            "test result: \x1b[32mpassed=2\x1b[0m, \x1b[32mfailed=0\x1b[0m, \x1b[36mtotal=2\x1b[0m"
         );
         assert_eq!(summary_color(passed), TestOutputColor::Cyan);
         assert_eq!(summary_color(failed), TestOutputColor::Red);
+    }
+
+    #[test]
+    fn note_line_colors_only_note_label() {
+        assert_eq!(
+            note_line("expected 1, got 2", true),
+            "  \x1b[33mnote:\x1b[0m expected 1, got 2"
+        );
+        assert_eq!(colorize_text("x", TestOutputColor::Red, false), "x");
     }
 }
