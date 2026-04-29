@@ -1,0 +1,41 @@
+@@doc """
+Concrete IO error for standard-input operations.
+The detail string describes host read failures or end-of-input conditions.
+"""
+deferror InputError(detail: String) {
+  detail
+}
+
+@@doc """
+Standard input helpers.
+
+`IO` is intentionally not auto-imported; call helpers with qualified names such
+as `IO::get_line("name> ")`.
+For v1, input is fixed to the host process standard input.
+"""
+defmod IO {
+  @@doc """
+  Prompt and read one character from standard input.
+
+  On an interactive terminal this returns after a single key/character without
+  waiting for Enter. End of input or host read failure returns `Err(InputError)`.
+
+  ## REPL
+  xldr(1)> IO::get("key> ")
+  Ok("a")
+  """
+  @@builtin def get(prompt: String) -> Result<String, InputError>
+
+  @@doc """
+  Prompt and read one line from standard input.
+
+  The returned string excludes the trailing newline, and also excludes a
+  preceding carriage return for CRLF input. End of input or host read failure
+  returns `Err(InputError)`.
+
+  ## REPL
+  xldr(1)> IO::get_line("name> ")
+  Ok("surtr")
+  """
+  @@builtin def get_line(prompt: String) -> Result<String, InputError>
+}

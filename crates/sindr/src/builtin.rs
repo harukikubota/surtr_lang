@@ -358,6 +358,16 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "() -> List<String>",
     },
     BuiltinMeta {
+        name: "io_get",
+        arity: 1,
+        sig_str: "(String) -> Result<String, InputError>",
+    },
+    BuiltinMeta {
+        name: "io_get_line",
+        arity: 1,
+        sig_str: "(String) -> Result<String, InputError>",
+    },
+    BuiltinMeta {
         name: "kind",
         arity: 1,
         sig_str: "(Error) -> String",
@@ -562,6 +572,21 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
 
 pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
     BUILTIN_METAS.iter().find(|meta| meta.name == name)
+}
+
+pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&str>) -> &'a str {
+    match qualified_name {
+        Some("IO::get") => "io_get",
+        Some("IO::get_line") => "io_get_line",
+        _ => declared_name,
+    }
+}
+
+pub fn builtin_meta_for_decl(
+    declared_name: &str,
+    qualified_name: Option<&str>,
+) -> Option<&'static BuiltinMeta> {
+    builtin_meta_by_name(builtin_runtime_name(declared_name, qualified_name))
 }
 
 pub fn builtin_id_by_name(name: &str) -> Option<u16> {

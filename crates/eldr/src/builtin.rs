@@ -10,6 +10,7 @@ use sindr::runtime::{
     RegexHandle, RegexMatchHandle, RichError,
 };
 use std::collections::HashMap;
+use std::io::{self, IsTerminal, Read};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -288,6 +289,14 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "project_args",
         func: builtin_project_args,
+    },
+    BuiltinImpl {
+        name: "io_get",
+        func: builtin_io_get,
+    },
+    BuiltinImpl {
+        name: "io_get_line",
+        func: builtin_io_get_line,
     },
     BuiltinImpl {
         name: "kind",
@@ -1416,6 +1425,126 @@ fn builtin_project_args(vm: &mut VM, _args: Vec<Value>) -> Result<Value, Runtime
         .map(Value::Str)
         .collect::<Vec<_>>();
     Ok(Value::List(ListHandle::from_items(args)))
+}
+
+fn builtin_io_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let prompt = decode_string_arg(&args[0], "io_get", "prompt")?;
+    if let Err(message) = emit_io_prompt(vm, prompt) {
+        return Ok(input_error(vm, &message));
+    }
+
+    if vm.has_injected_stdin() {
+        return Ok(match vm.read_injected_char() {
+            Some(ch) => ok_result(Value::Str(ch)),
+            None => input_error(vm, "end of input"),
+        });
+    }
+
+    let read = if io::stdin().is_terminal() {
+        read_terminal_char()
+    } else {
+        read_stdin_char()
+    };
+    Ok(match read {
+        Ok(Some(ch)) => ok_result(Value::Str(ch)),
+        Ok(None) => input_error(vm, "end of input"),
+        Err(message) => input_error(vm, &message),
+    })
+}
+
+fn builtin_io_get_line(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let prompt = decode_string_arg(&args[0], "io_get_line", "prompt")?;
+    if let Err(message) = emit_io_prompt(vm, prompt) {
+        return Ok(input_error(vm, &message));
+    }
+
+    let read = if vm.has_injected_stdin() {
+        Ok(vm.read_injected_line())
+    } else {
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .map(|count| (count > 0).then_some(line))
+            .map_err(|err| err.to_string())
+    };
+    Ok(match read {
+        Ok(Some(line)) => ok_result(Value::Str(strip_line_ending(line))),
+        Ok(None) => input_error(vm, "end of input"),
+        Err(message) => input_error(vm, &message),
+    })
+}
+
+fn emit_io_prompt(vm: &mut VM, prompt: &str) -> Result<(), String> {
+    vm.emit_stdout_text(prompt.to_string())
+        .map_err(|err| format!("prompt write failed: {}", err))
+}
+
+fn strip_line_ending(mut line: String) -> String {
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+    line
+}
+
+fn read_terminal_char() -> Result<Option<String>, String> {
+    crossterm::terminal::enable_raw_mode().map_err(|err| err.to_string())?;
+    let result = (|| loop {
+        match crossterm::event::read().map_err(|err| err.to_string())? {
+            crossterm::event::Event::Key(event) => break key_event_to_string(event),
+            _ => continue,
+        }
+    })();
+    let disable_result = crossterm::terminal::disable_raw_mode().map_err(|err| err.to_string());
+    match (result, disable_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(err), _) => Err(err),
+        (_, Err(err)) => Err(err),
+    }
+}
+
+fn key_event_to_string(event: crossterm::event::KeyEvent) -> Result<Option<String>, String> {
+    use crossterm::event::KeyCode;
+
+    let text = match event.code {
+        KeyCode::Char(ch) => ch.to_string(),
+        KeyCode::Enter => "\n".to_string(),
+        KeyCode::Tab => "\t".to_string(),
+        KeyCode::Backspace => "\u{8}".to_string(),
+        KeyCode::Esc => "\u{1b}".to_string(),
+        other => return Err(format!("unsupported key input: {:?}", other)),
+    };
+    Ok(Some(text))
+}
+
+fn read_stdin_char() -> Result<Option<String>, String> {
+    let mut stdin = io::stdin().lock();
+    let mut buf = [0u8; 4];
+    let mut len = 0usize;
+    loop {
+        let read = stdin
+            .read(&mut buf[len..len + 1])
+            .map_err(|err| err.to_string())?;
+        if read == 0 {
+            return if len == 0 {
+                Ok(None)
+            } else {
+                Err("incomplete UTF-8 input before EOF".into())
+            };
+        }
+        len += read;
+        match std::str::from_utf8(&buf[..len]) {
+            Ok(text) => return Ok(text.chars().next().map(|ch| ch.to_string())),
+            Err(err) if err.error_len().is_none() && len < buf.len() => continue,
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+}
+
+fn input_error(vm: &VM, detail: &str) -> Value {
+    err_result(vm, "InputError", detail)
 }
 
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
@@ -2704,6 +2833,70 @@ mod tests {
             inspect_value(&vm, &value),
             "(\"hello\", [\"line\\nfeed\"], Ok(\"world\"))"
         );
+    }
+
+    #[test]
+    fn io_get_line_reads_injected_input_and_strips_newline() {
+        let mut vm = test_vm()
+            .with_output_capture()
+            .with_stdin_input("surtr\r\nnext\n");
+        let value = call_builtin(
+            &mut vm,
+            builtin_id("io_get_line"),
+            vec![Value::Str("name> ".into())],
+        )
+        .expect("io_get_line should run");
+
+        assert_eq!(vm.captured_stdout(), Some(&["name> ".to_string()][..]));
+        assert!(
+            matches!(value, Value::Tagged { tag: 0, fields } if matches!(fields.as_slice(), [Value::Str(text)] if text == "surtr"))
+        );
+    }
+
+    #[test]
+    fn io_get_reads_one_injected_character() {
+        let mut vm = test_vm().with_stdin_input("あb");
+        let first = call_builtin(
+            &mut vm,
+            builtin_id("io_get"),
+            vec![Value::Str(String::new())],
+        )
+        .expect("first io_get should run");
+        let second = call_builtin(
+            &mut vm,
+            builtin_id("io_get"),
+            vec![Value::Str(String::new())],
+        )
+        .expect("second io_get should run");
+
+        assert!(
+            matches!(first, Value::Tagged { tag: 0, fields } if matches!(fields.as_slice(), [Value::Str(text)] if text == "あ"))
+        );
+        assert!(
+            matches!(second, Value::Tagged { tag: 0, fields } if matches!(fields.as_slice(), [Value::Str(text)] if text == "b"))
+        );
+    }
+
+    #[test]
+    fn io_get_reports_eof_as_input_error_result() {
+        let mut vm = test_vm().with_stdin_input("");
+        let value = call_builtin(
+            &mut vm,
+            builtin_id("io_get"),
+            vec![Value::Str(String::new())],
+        )
+        .expect("io_get should convert eof into Err");
+
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+                [Value::Error(rich)] => {
+                    assert_eq!(rich.kind, "InputError");
+                    assert_eq!(rich.message, "end of input");
+                }
+                other => panic!("expected Err(InputError), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
     }
 
     #[test]

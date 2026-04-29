@@ -1,4 +1,5 @@
 use super::harness::{assert_compile_error, assert_output};
+use crate::support;
 
 fn bindings_basic_print() {
     assert_output("num = 10\nnum2 = 5\nprint(to_string(num))", &["10"]);
@@ -77,6 +78,38 @@ print(to_string(Regex::is_match(rx, "bob-7")))
 print(Regex::replace_all(rx, "alice-42 bob-7", "X"))"#,
         &["alice", "42", "alice-42", "3", "alice-42", "True", "X X"],
     );
+}
+
+fn io_get_and_get_line_read_injected_stdin() {
+    let (stdout, stderr) = support::run_project_script_with_input(
+        "language_features.srt",
+        r#"line =? IO::get_line("line> ")
+ch =? IO::get("char> ")
+print(line)
+print(ch)"#,
+        "surtr\nあtail",
+    )
+    .expect("io script should run");
+
+    assert_eq!(stdout, ["line> ", "char> ", "surtr", "あ"]);
+    assert!(stderr.is_empty());
+}
+
+fn io_get_does_not_conflict_with_regex_captures_get() {
+    let (stdout, stderr) = support::run_project_script_with_input(
+        "language_features.srt",
+        r#"rx =? Regex::compile("a(b)")
+caps =? Regex::captures(rx, "ab")
+cap =? RegexCaptures::get(caps, 1)
+ch =? IO::get("")
+print(cap)
+print(ch)"#,
+        "z",
+    )
+    .expect("io and regex get should run");
+
+    assert_eq!(stdout, ["b", "z"]);
+    assert!(stderr.is_empty());
 }
 
 fn int_negative_literal() {
@@ -879,6 +912,14 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
         (
             "regex_generated_literal_and_builtin_wrappers_work_end_to_end",
             regex_generated_literal_and_builtin_wrappers_work_end_to_end as fn(),
+        ),
+        (
+            "io_get_and_get_line_read_injected_stdin",
+            io_get_and_get_line_read_injected_stdin as fn(),
+        ),
+        (
+            "io_get_does_not_conflict_with_regex_captures_get",
+            io_get_does_not_conflict_with_regex_captures_get as fn(),
         ),
         ("int_negative_literal", int_negative_literal as fn()),
         ("arithmetic_int_ops", arithmetic_int_ops as fn()),

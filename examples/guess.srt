@@ -1,0 +1,61 @@
+include './guess_types.srt'
+
+def correct() -> Result<()> {
+  print("Correct. Surtr keeps the flame.")
+  Ok(())
+}
+
+def out_of_turns(secret: Int) -> Result<()> {
+  print("No more guesses. The answer was " ++ to_string(secret) ++ ".")
+  Ok(())
+}
+
+def keep_guessing(remaining: Int) -> Result<()> {
+  print("Nope. Try again.")
+  guess_loop(remaining - 1)
+}
+
+def in_range(value: Int) -> Boolean {
+  and(value >= 1, value <= 9)
+}
+
+def parse_number(input: String) -> Result<Int> {
+  match try_from(input, Int) {
+    Ok(value) => Ok(value),
+    Err(_) => Err(NotNumberGuessError(input)),
+  }
+}
+
+def parse_guess(input: String) -> Result<Int> {
+  assert(String::non_empty(input), EmptyGuessError)
+  |> then({parse_number(input)})
+  |>= ensure(&in_range, OutOfRangeGuessError(input))
+}
+
+def compare_guess(secret: Int, remaining: Int, guess: Int) -> Result<()> {
+  if(
+    eq(guess, secret),
+    correct(),
+    if(remaining <= 1, out_of_turns(secret), keep_guessing(remaining)),
+  )
+}
+
+def handle_input_error(err: Error, remaining: Int) -> Result<()> {
+  print(Error::message(err))
+  guess_loop(remaining)
+}
+
+def handle_guess(secret: Int, remaining: Int, input: String) -> Result<()> {
+  match parse_guess(input) {
+    Ok(guess) => compare_guess(secret, remaining, guess),
+    Err(err) => handle_input_error(err, remaining),
+  }
+}
+
+def guess_loop(remaining: Int) -> Result<()> {
+  IO::get_line("guess 1..9> ")
+  |>= handle_guess(7, remaining, _1)
+}
+
+print("Guess the fixed Surtr number.")
+guess_loop(3)

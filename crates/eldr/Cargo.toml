@@ -7,3 +7,4 @@ description = "Old Norse for fire — the Surtr virtual machine"
 [dependencies]
 sindr = { path = "../sindr" }
 regex = { version = "1.11.1", default-features = false, features = ["std", "unicode"] }
+crossterm = { version = "0.28", default-features = false, features = ["events"] }

@@ -1,0 +1,11 @@
+deferror EmptyGuessError {
+  "Empty input. Enter one digit from 1 to 9."
+}
+
+deferror NotNumberGuessError(input: String) {
+  "Not a number: #{inspect(input)}. Enter one digit from 1 to 9."
+}
+
+deferror OutOfRangeGuessError(input: String) {
+  "Out of range: #{input}. Enter a number from 1 to 9."
+}

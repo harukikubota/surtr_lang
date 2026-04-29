@@ -1960,7 +1960,13 @@ impl Resolver {
             }
 
             Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => {
-                if !is_runtime_builtin_decl(&name) && !is_special_form_builtin_decl(&name) {
+                let qualified_name = self.qualify_current_declaration_name(&name);
+                let is_io_builtin =
+                    sindr::builtin::builtin_meta_for_decl(&name, Some(&qualified_name)).is_some();
+                if !is_runtime_builtin_decl(&name)
+                    && !is_special_form_builtin_decl(&name)
+                    && !is_io_builtin
+                {
                     return Err(ResolveError {
                         message: format!("Unknown builtin declaration: {}", name),
                         span,
@@ -1979,7 +1985,6 @@ impl Resolver {
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 self.scope.advance_next_id_to(decl_resolver.scope.next_id());
                 self.scope.define_with_id(&name, builtin_uid);
-                let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),

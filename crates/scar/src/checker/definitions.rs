@@ -19,7 +19,9 @@ impl Checker {
             return self.check_special_form_builtin_decl(span, id, params, ret_ty);
         }
 
-        let meta = builtin_meta_by_name(&id.name).ok_or_else(|| TypeError {
+        let builtin_name =
+            sindr::builtin::builtin_runtime_name(&id.name, id.qualified_name.as_deref());
+        let meta = sindr::builtin::builtin_meta_by_name(builtin_name).ok_or_else(|| TypeError {
             message: format!("Unknown builtin declaration: {}", id.name),
             span: span.clone(),
             hint: None,
@@ -54,7 +56,7 @@ impl Checker {
         self.env.bind_var(
             id.unique_id,
             Ty::BuiltinFunc {
-                name: id.name.clone(),
+                name: meta.name.into(),
                 params: param_tys,
                 ret: Box::new(ret),
             },

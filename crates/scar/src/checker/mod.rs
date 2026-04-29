@@ -5,8 +5,7 @@ use std::time::{Duration, Instant};
 
 use sigil::resolved::*;
 use sindr::builtin::{
-    builtin_meta_by_name, builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS,
-    BUILTIN_TYPE_METAS,
+    builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS, BUILTIN_TYPE_METAS,
 };
 use sindr::policy::{ExitCodePolicy, RuntimeSourcePolicy};
 use spire::ast::{AstTy, BinOp, Lit, Span};

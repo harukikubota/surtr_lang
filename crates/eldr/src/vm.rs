@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::builtin::call_builtin;
 use crate::error::{RuntimeError, RuntimeErrorContext};
+use std::io::{self, Write};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmTestEventKind {
@@ -93,6 +94,7 @@ struct VmCheckpoint {
     test_event_len: usize,
     test_stdout_cursor: usize,
     test_stderr_cursor: usize,
+    stdin_input_cursor: usize,
     opcode_len: usize,
     constant_len: usize,
     type_entry_len: usize,
@@ -229,6 +231,9 @@ pub struct VM {
     pub error_output: Option<Vec<String>>,
     /// Runtime I/O policy for stdout/stderr.
     io_policy: VmIoPolicy,
+    /// Optional stdin fixture used by Rust tests and non-interactive harnesses.
+    stdin_input: Option<String>,
+    stdin_input_cursor: usize,
     /// Process exit code requested by the running program.
     exit_code: i32,
     /// Last value produced by full-program or chunk execution.
@@ -263,6 +268,8 @@ impl VM {
             output: None,
             error_output: None,
             io_policy: VmIoPolicy::default(),
+            stdin_input: None,
+            stdin_input_cursor: 0,
             exit_code: 0,
             last_result: None,
             observer: None,
@@ -305,6 +312,16 @@ impl VM {
 
     pub fn cli_args(&self) -> &[String] {
         &self.cli_args
+    }
+
+    pub fn with_stdin_input(mut self, input: impl Into<String>) -> Self {
+        self.set_stdin_input(input);
+        self
+    }
+
+    pub fn set_stdin_input(&mut self, input: impl Into<String>) {
+        self.stdin_input = Some(input.into());
+        self.stdin_input_cursor = 0;
     }
 
     /// Access source text if attached.
@@ -505,6 +522,36 @@ impl VM {
         }
     }
 
+    pub(crate) fn emit_stdout_text(&mut self, text: String) -> io::Result<()> {
+        match self.io_policy.stdout {
+            IoMode::Passthrough => {
+                print!("{}", text);
+                io::stdout().flush()
+            }
+            IoMode::Capture => {
+                if let Some(buffer) = self.output.as_mut() {
+                    if !text.is_empty() {
+                        buffer.push(text);
+                    }
+                    Ok(())
+                } else {
+                    print!("{}", text);
+                    io::stdout().flush()
+                }
+            }
+            IoMode::Tee => {
+                print!("{}", text);
+                io::stdout().flush()?;
+                if let Some(buffer) = self.output.as_mut() {
+                    if !text.is_empty() {
+                        buffer.push(text);
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub(crate) fn emit_stderr_line(&mut self, line: String) {
         match self.io_policy.stderr {
             IoMode::Passthrough => eprintln!("{}", line),
@@ -522,6 +569,36 @@ impl VM {
                 }
             }
         }
+    }
+
+    pub(crate) fn has_injected_stdin(&self) -> bool {
+        self.stdin_input.is_some()
+    }
+
+    pub(crate) fn read_injected_line(&mut self) -> Option<String> {
+        let input = self.stdin_input.as_ref()?;
+        if self.stdin_input_cursor >= input.len() {
+            return None;
+        }
+        let remaining = &input[self.stdin_input_cursor..];
+        let read_len = remaining
+            .find('\n')
+            .map(|idx| idx + '\n'.len_utf8())
+            .unwrap_or(remaining.len());
+        let line = remaining[..read_len].to_string();
+        self.stdin_input_cursor += read_len;
+        Some(line)
+    }
+
+    pub(crate) fn read_injected_char(&mut self) -> Option<String> {
+        let input = self.stdin_input.as_ref()?;
+        if self.stdin_input_cursor >= input.len() {
+            return None;
+        }
+        let mut chars = input[self.stdin_input_cursor..].chars();
+        let ch = chars.next()?;
+        self.stdin_input_cursor += ch.len_utf8();
+        Some(ch.to_string())
     }
 
     fn configure_io_buffers(&mut self) {
@@ -879,6 +956,7 @@ impl VM {
             test_event_len: self.test_events.len(),
             test_stdout_cursor: self.test_stdout_cursor,
             test_stderr_cursor: self.test_stderr_cursor,
+            stdin_input_cursor: self.stdin_input_cursor,
             opcode_len: self.bytecode.opcodes.len(),
             constant_len: self.bytecode.constants.len(),
             type_entry_len: self.bytecode.type_registry.entries.len(),
@@ -911,6 +989,7 @@ impl VM {
         self.test_events.truncate(checkpoint.test_event_len);
         self.test_stdout_cursor = checkpoint.test_stdout_cursor;
         self.test_stderr_cursor = checkpoint.test_stderr_cursor;
+        self.stdin_input_cursor = checkpoint.stdin_input_cursor;
 
         self.bytecode.opcodes.truncate(checkpoint.opcode_len);
         self.bytecode.constants.truncate(checkpoint.constant_len);

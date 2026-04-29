@@ -1354,7 +1354,11 @@ impl Checker {
                     self.env.bind_var(
                         id.unique_id,
                         Ty::BuiltinFunc {
-                            name: id.name.clone(),
+                            name: sindr::builtin::builtin_runtime_name(
+                                &id.name,
+                                id.qualified_name.as_deref(),
+                            )
+                            .into(),
                             params: param_tys,
                             ret: Box::new(ret),
                         },
