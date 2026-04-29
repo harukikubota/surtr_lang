@@ -10,41 +10,43 @@ use sindr::policy::RuntimeSourcePolicy;
 use spire::ast::Ast;
 
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../../lib/bootstrap.srt");
-const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../../lib/special_types.srt");
+const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../../lib/types/special_types.srt");
 const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../../lib/kernel.srt");
-const ADD_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/add.srt");
-const SUB_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/sub.srt");
-const MUL_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/mul.srt");
-const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/numeric.srt");
-const SHOW_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/show.srt");
-const EQ_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/eq.srt");
-const NEQ_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/neq.srt");
-const COMPARE_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/compare.srt");
-const LT_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/lt.srt");
-const LTE_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/lte.srt");
-const GT_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/gt.srt");
-const GTE_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/gte.srt");
-const ORD_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/ord.srt");
-const CONCAT_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/concat.srt");
-const FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/from.srt");
-const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/try_from.srt");
-const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/functor.srt");
-const CHAINABLE_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/chainable.srt");
-const INT_MODULE_SOURCE: &str = include_str!("../../../../lib/int.srt");
-const STRING_MODULE_SOURCE: &str = include_str!("../../../../lib/string.srt");
-const REGEX_MODULE_SOURCE: &str = include_str!("../../../../lib/regex.srt");
-const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../../lib/boolean.srt");
-const ORDERING_MODULE_SOURCE: &str = include_str!("../../../../lib/ordering.srt");
-const ERROR_MODULE_SOURCE: &str = include_str!("../../../../lib/error.srt");
-const LIST_MODULE_SOURCE: &str = include_str!("../../../../lib/list.srt");
+const ADD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/add.srt");
+const SUB_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/sub.srt");
+const MUL_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/mul.srt");
+const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/numeric.srt");
+const SHOW_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/show.srt");
+const EQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/eq.srt");
+const NEQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/neq.srt");
+const COMPARE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compare.srt");
+const LT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/lt.srt");
+const LTE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/lte.srt");
+const GT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/gt.srt");
+const GTE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/gte.srt");
+const ORD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/ord.srt");
+const CONCAT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/concat.srt");
+const FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/from.srt");
+const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_from.srt");
+const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/functor.srt");
+const CHAINABLE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/chainable.srt");
+const INT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/int.srt");
+const STRING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/string.srt");
+const REGEX_MODULE_SOURCE: &str = include_str!("../../../../lib/types/regex.srt");
+const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../../lib/types/boolean.srt");
+const ORDERING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/ordering.srt");
+const ERROR_MODULE_SOURCE: &str = include_str!("../../../../lib/types/error.srt");
+const LIST_MODULE_SOURCE: &str = include_str!("../../../../lib/types/list.srt");
 const GENERATOR_MODULE_SOURCE: &str = r#"@@builtin type Generator<$State, $Item>
 
 impl Generator {}"#;
-const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../../lib/hash_map.srt");
-const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/result.srt");
-const OPTION_MODULE_SOURCE: &str = include_str!("../../../../lib/option.srt");
+const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../../lib/types/hash_map.srt");
+const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
+const OPTION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/option.srt");
 const LENS_MODULE_SOURCE: &str = include_str!("../../../../lib/lens.srt");
-const FLOAT_MODULE_SOURCE: &str = include_str!("../../../../lib/float.srt");
+const FLOAT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/float.srt");
+const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../../lib/styled_doc.srt");
+const TEST_MODULE_SOURCE: &str = include_str!("../../../../lib/test.srt");
 const TEST_STACK_SIZE: usize = 32 * 1024 * 1024;
 
 pub(crate) fn run_with_large_stack<T>(label: &str, f: impl FnOnce() -> T + Send + 'static) -> T
@@ -369,10 +371,18 @@ pub(crate) fn std_module_stages_with_overrides(
                 "Float",
                 pick_override("Float", FLOAT_MODULE_SOURCE, overrides),
             ),
+            (
+                "StyledDoc",
+                pick_override("StyledDoc", STYLED_DOC_MODULE_SOURCE, overrides),
+            ),
         ]
         .into_iter()
         .flat_map(|(name, source)| parse_std_module_stage(source, name))
         .collect(),
+        [("Test", pick_override("Test", TEST_MODULE_SOURCE, overrides))]
+            .into_iter()
+            .flat_map(|(name, source)| parse_std_module_stage(source, name))
+            .collect(),
     ]
 }
 

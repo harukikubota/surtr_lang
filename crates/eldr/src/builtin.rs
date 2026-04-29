@@ -2015,14 +2015,14 @@ mod tests {
         let sources = [
             include_str!("../../../lib/bootstrap.srt"),
             include_str!("../../../lib/kernel.srt"),
-            include_str!("../../../lib/int.srt"),
-            include_str!("../../../lib/list.srt"),
-            include_str!("../../../lib/generator.srt"),
-            include_str!("../../../lib/hash_map.srt"),
-            include_str!("../../../lib/result.srt"),
+            include_str!("../../../lib/types/int.srt"),
+            include_str!("../../../lib/types/list.srt"),
+            include_str!("../../../lib/types/generator.srt"),
+            include_str!("../../../lib/types/hash_map.srt"),
+            include_str!("../../../lib/types/result.srt"),
             include_str!("../../../lib/lens.srt"),
-            include_str!("../../../lib/string.srt"),
-            include_str!("../../../lib/regex.srt"),
+            include_str!("../../../lib/types/string.srt"),
+            include_str!("../../../lib/types/regex.srt"),
         ];
 
         // Collect all lines across the std-module files that currently declare

@@ -7,144 +7,164 @@ use diagnostics::{SourceId, SourceRegistry};
 const BUILTIN_PRELUDE_FILE: &str = "bootstrap.srt";
 const BUILTIN_PRELUDE_MODULE_PATH: &str = "Bootstrap";
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
-const SPECIAL_TYPES_FILE: &str = "special_types.srt";
+const SPECIAL_TYPES_FILE: &str = "types/special_types.srt";
 const SPECIAL_TYPES_MODULE_PATH: &str = "SpecialTypes";
-const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/special_types.srt");
+const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/types/special_types.srt");
 const KERNEL_PRELUDE_FILE: &str = "kernel.srt";
 const KERNEL_PRELUDE_MODULE_PATH: &str = "Kernel";
 const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
 const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
     (
-        "trait/add.srt",
-        include_str!("../../../lib/trait/add.srt"),
+        "traits/operator/add.srt",
+        include_str!("../../../lib/traits/operator/add.srt"),
         "Add",
     ),
     (
-        "trait/sub.srt",
-        include_str!("../../../lib/trait/sub.srt"),
+        "traits/operator/sub.srt",
+        include_str!("../../../lib/traits/operator/sub.srt"),
         "Sub",
     ),
     (
-        "trait/mul.srt",
-        include_str!("../../../lib/trait/mul.srt"),
+        "traits/operator/mul.srt",
+        include_str!("../../../lib/traits/operator/mul.srt"),
         "Mul",
     ),
     (
-        "trait/eq.srt",
-        include_str!("../../../lib/trait/eq.srt"),
+        "traits/operator/eq.srt",
+        include_str!("../../../lib/traits/operator/eq.srt"),
         "Eq",
     ),
     (
-        "trait/neq.srt",
-        include_str!("../../../lib/trait/neq.srt"),
+        "traits/operator/neq.srt",
+        include_str!("../../../lib/traits/operator/neq.srt"),
         "Neq",
     ),
     (
-        "trait/compare.srt",
-        include_str!("../../../lib/trait/compare.srt"),
+        "traits/operator/compare.srt",
+        include_str!("../../../lib/traits/operator/compare.srt"),
         "Compare",
     ),
     (
-        "trait/lt.srt",
-        include_str!("../../../lib/trait/lt.srt"),
+        "traits/operator/lt.srt",
+        include_str!("../../../lib/traits/operator/lt.srt"),
         "Lt",
     ),
     (
-        "trait/lte.srt",
-        include_str!("../../../lib/trait/lte.srt"),
+        "traits/operator/lte.srt",
+        include_str!("../../../lib/traits/operator/lte.srt"),
         "Lte",
     ),
     (
-        "trait/gt.srt",
-        include_str!("../../../lib/trait/gt.srt"),
+        "traits/operator/gt.srt",
+        include_str!("../../../lib/traits/operator/gt.srt"),
         "Gt",
     ),
     (
-        "trait/gte.srt",
-        include_str!("../../../lib/trait/gte.srt"),
+        "traits/operator/gte.srt",
+        include_str!("../../../lib/traits/operator/gte.srt"),
         "Gte",
     ),
     (
-        "trait/concat.srt",
-        include_str!("../../../lib/trait/concat.srt"),
+        "traits/operator/concat.srt",
+        include_str!("../../../lib/traits/operator/concat.srt"),
         "Concat",
     ),
     (
-        "trait/numeric.srt",
-        include_str!("../../../lib/trait/numeric.srt"),
+        "traits/numeric.srt",
+        include_str!("../../../lib/traits/numeric.srt"),
         "Numeric",
     ),
     (
-        "trait/show.srt",
-        include_str!("../../../lib/trait/show.srt"),
+        "traits/show.srt",
+        include_str!("../../../lib/traits/show.srt"),
         "Show",
     ),
     (
-        "ordering.srt",
-        include_str!("../../../lib/ordering.srt"),
+        "types/ordering.srt",
+        include_str!("../../../lib/types/ordering.srt"),
         "Ordering",
     ),
     (
-        "trait/ord.srt",
-        include_str!("../../../lib/trait/ord.srt"),
+        "traits/operator/ord.srt",
+        include_str!("../../../lib/traits/operator/ord.srt"),
         "Ord",
     ),
     (
-        "trait/from.srt",
-        include_str!("../../../lib/trait/from.srt"),
+        "traits/from.srt",
+        include_str!("../../../lib/traits/from.srt"),
         "From",
     ),
     (
-        "trait/try_from.srt",
-        include_str!("../../../lib/trait/try_from.srt"),
+        "traits/try_from.srt",
+        include_str!("../../../lib/traits/try_from.srt"),
         "TryFrom",
     ),
     (
-        "trait/functor.srt",
-        include_str!("../../../lib/trait/functor.srt"),
+        "traits/operator/functor.srt",
+        include_str!("../../../lib/traits/operator/functor.srt"),
         "Functor",
     ),
     (
-        "trait/chainable.srt",
-        include_str!("../../../lib/trait/chainable.srt"),
+        "traits/operator/chainable.srt",
+        include_str!("../../../lib/traits/operator/chainable.srt"),
         "Chainable",
     ),
-    ("int.srt", include_str!("../../../lib/int.srt"), "Int"),
     (
-        "string.srt",
-        include_str!("../../../lib/string.srt"),
+        "types/int.srt",
+        include_str!("../../../lib/types/int.srt"),
+        "Int",
+    ),
+    (
+        "types/string.srt",
+        include_str!("../../../lib/types/string.srt"),
         "String",
     ),
-    ("regex.srt", include_str!("../../../lib/regex.srt"), "Regex"),
     (
-        "boolean.srt",
-        include_str!("../../../lib/boolean.srt"),
+        "types/regex.srt",
+        include_str!("../../../lib/types/regex.srt"),
+        "Regex",
+    ),
+    (
+        "types/boolean.srt",
+        include_str!("../../../lib/types/boolean.srt"),
         "Boolean",
     ),
-    ("error.srt", include_str!("../../../lib/error.srt"), "Error"),
-    ("list.srt", include_str!("../../../lib/list.srt"), "List"),
     (
-        "generator.srt",
-        include_str!("../../../lib/generator.srt"),
+        "types/error.srt",
+        include_str!("../../../lib/types/error.srt"),
+        "Error",
+    ),
+    (
+        "types/list.srt",
+        include_str!("../../../lib/types/list.srt"),
+        "List",
+    ),
+    (
+        "types/generator.srt",
+        include_str!("../../../lib/types/generator.srt"),
         "Generator",
     ),
     (
-        "hash_map.srt",
-        include_str!("../../../lib/hash_map.srt"),
+        "types/hash_map.srt",
+        include_str!("../../../lib/types/hash_map.srt"),
         "HashMap",
     ),
     (
-        "result.srt",
-        include_str!("../../../lib/result.srt"),
+        "types/result.srt",
+        include_str!("../../../lib/types/result.srt"),
         "Result",
     ),
     (
-        "option.srt",
-        include_str!("../../../lib/option.srt"),
+        "types/option.srt",
+        include_str!("../../../lib/types/option.srt"),
         "Option",
     ),
     ("lens.srt", include_str!("../../../lib/lens.srt"), "Lens"),
-    ("float.srt", include_str!("../../../lib/float.srt"), "Float"),
+    (
+        "types/float.srt",
+        include_str!("../../../lib/types/float.srt"),
+        "Float",
+    ),
     (
         "Config.srt",
         include_str!("../../../lib/Config.srt"),
@@ -156,6 +176,11 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         "Project",
     ),
 ];
+const DEFAULT_STD_POST_MODULES: &[(&str, &str, &str)] =
+    &[("test.srt", include_str!("../../../lib/test.srt"), "Test")];
+const STYLED_DOC_FILE: &str = "styled_doc.srt";
+const STYLED_DOC_MODULE_PATH: &str = "StyledDoc";
+const STYLED_DOC_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
 const REPL_MODULE_NAME: &str = "REPL";
 const SCRIPT_PSEUDO_MODULE_PREFIX: &str = "__Script";
 const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
@@ -392,6 +417,12 @@ fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+fn lib_relative_path(path: &Path) -> String {
+    path.strip_prefix("lib")
+        .map(display_path)
+        .unwrap_or_else(|_| display_path(path))
+}
+
 fn lib_module_path_from_path(path: &Path) -> String {
     path.file_stem()
         .and_then(|stem| stem.to_str())
@@ -424,23 +455,8 @@ pub fn collect_lib_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
         return Ok(Vec::new());
     }
 
-    let entries = fs::read_dir(lib_dir).map_err(|e| LoadError::SourceReadFailed {
-        file_name: display_path(lib_dir),
-        message: e.to_string(),
-    })?;
-
     let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file()
-            && path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext == "srt")
-        {
-            files.push(path);
-        }
-    }
+    collect_lib_module_files(lib_dir, &mut files)?;
     files.sort();
 
     let mut module_inputs = Vec::with_capacity(files.len());
@@ -463,15 +479,45 @@ pub fn collect_lib_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
     Ok(module_inputs)
 }
 
+fn collect_lib_module_files(
+    dir: &Path,
+    files: &mut Vec<std::path::PathBuf>,
+) -> Result<(), LoadError> {
+    if lib_relative_path(dir) == "tests" {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(dir).map_err(|e| LoadError::SourceReadFailed {
+        file_name: display_path(dir),
+        message: e.to_string(),
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| LoadError::SourceReadFailed {
+            file_name: display_path(dir),
+            message: e.to_string(),
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_lib_module_files(&path, files)?;
+        } else if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == "srt")
+        {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
 pub fn collect_additional_default_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
     Ok(collect_lib_module_inputs()?
         .into_iter()
         .filter(|module| {
-            let file_name = Path::new(&module.file_name)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("");
-            !is_default_std_module_file_name(file_name)
+            let file_name = lib_relative_path(Path::new(&module.file_name));
+            !is_default_std_module_file_name(&file_name)
                 && !is_default_std_module_path(&module.module_path)
         })
         .collect())
@@ -565,7 +611,11 @@ pub fn is_default_std_module_path(module_path: &str) -> bool {
     module_path == BUILTIN_PRELUDE_MODULE_PATH
         || module_path == SPECIAL_TYPES_MODULE_PATH
         || module_path == KERNEL_PRELUDE_MODULE_PATH
+        || module_path == STYLED_DOC_MODULE_PATH
         || DEFAULT_STD_MODULES
+            .iter()
+            .any(|(_, _, builtin_module_path)| *builtin_module_path == module_path)
+        || DEFAULT_STD_POST_MODULES
             .iter()
             .any(|(_, _, builtin_module_path)| *builtin_module_path == module_path)
 }
@@ -574,7 +624,11 @@ pub fn is_default_std_module_file_name(file_name: &str) -> bool {
     file_name == BUILTIN_PRELUDE_FILE
         || file_name == SPECIAL_TYPES_FILE
         || file_name == KERNEL_PRELUDE_FILE
+        || file_name == STYLED_DOC_FILE
         || DEFAULT_STD_MODULES
+            .iter()
+            .any(|(builtin_file_name, _, _)| *builtin_file_name == file_name)
+        || DEFAULT_STD_POST_MODULES
             .iter()
             .any(|(builtin_file_name, _, _)| *builtin_file_name == file_name)
 }
@@ -609,8 +663,22 @@ pub fn collect_module_sources_with_extra_std_sources(
                     SourceDescriptor::std_module(*file_name, *source, *module_path)
                 }),
         )
+        .chain(std::iter::once(SourceDescriptor::std_module(
+            STYLED_DOC_FILE,
+            STYLED_DOC_SOURCE,
+            STYLED_DOC_MODULE_PATH,
+        )))
         .collect(),
     ];
+
+    stage_specs.push(
+        DEFAULT_STD_POST_MODULES
+            .iter()
+            .map(|(file_name, source, module_path)| {
+                SourceDescriptor::std_module(*file_name, *source, *module_path)
+            })
+            .collect(),
+    );
 
     if !extra_std_sources.is_empty() {
         stage_specs.push(extra_std_sources.to_vec());
@@ -781,12 +849,16 @@ mod tests {
         );
         assert_eq!(
             loaded.module_source_ids.len(),
-            3 + DEFAULT_STD_MODULES.len()
+            4 + DEFAULT_STD_MODULES.len() + DEFAULT_STD_POST_MODULES.len()
         );
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
-        assert_eq!(loaded.module_stages.len(), 2);
+        assert_eq!(loaded.module_stages.len(), 3);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
-        assert_eq!(loaded.module_stages[1].len(), 2 + DEFAULT_STD_MODULES.len());
+        assert_eq!(loaded.module_stages[1].len(), 3 + DEFAULT_STD_MODULES.len());
+        assert_eq!(
+            loaded.module_stages[2].len(),
+            DEFAULT_STD_POST_MODULES.len()
+        );
         let std_paths = loaded.module_stages[1]
             .iter()
             .map(|module| module.module_path.as_str())
@@ -829,8 +901,10 @@ mod tests {
                 "Float",
                 "Config",
                 "Project",
+                "StyledDoc",
             ]
         );
+        assert_eq!(loaded.module_stages[2][0].module_path, "Test");
     }
 
     #[test]
@@ -888,11 +962,15 @@ mod tests {
         .expect("staged module collection should succeed");
         let loaded = compose_script_compile_sources("main.srt", "print(\"hi\")", module_sources);
 
-        assert_eq!(loaded.module_stages.len(), 4);
+        assert_eq!(loaded.module_stages.len(), 5);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap
-        assert_eq!(loaded.module_stages[1].len(), 2 + DEFAULT_STD_MODULES.len()); // special types + kernel + other std modules
-        assert_eq!(loaded.module_stages[2].len(), 1);
-        assert_eq!(loaded.module_stages[3].len(), 2);
+        assert_eq!(loaded.module_stages[1].len(), 3 + DEFAULT_STD_MODULES.len()); // special types + kernel + other std modules + StyledDoc
+        assert_eq!(
+            loaded.module_stages[2].len(),
+            DEFAULT_STD_POST_MODULES.len()
+        );
+        assert_eq!(loaded.module_stages[3].len(), 1);
+        assert_eq!(loaded.module_stages[4].len(), 2);
         assert_eq!(
             loaded.module_stages[0][0].source_id,
             loaded.builtin_source_id
@@ -909,9 +987,13 @@ mod tests {
             loaded.module_stages[1][1].source_kind,
             SourceKind::StdModule
         );
-        assert_eq!(loaded.module_stages[2][0].source_kind, SourceKind::Module);
+        assert_eq!(
+            loaded.module_stages[2][0].source_kind,
+            SourceKind::StdModule
+        );
         assert_eq!(loaded.module_stages[3][0].source_kind, SourceKind::Module);
-        assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
+        assert_eq!(loaded.module_stages[4][0].source_kind, SourceKind::Module);
+        assert_eq!(loaded.module_stages[4][1].source_kind, SourceKind::Module);
         let std_paths = loaded.module_stages[1]
             .iter()
             .map(|module| module.module_path.as_str())
@@ -954,11 +1036,13 @@ mod tests {
                 "Float",
                 "Config",
                 "Project",
+                "StyledDoc",
             ]
         );
-        assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
-        assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
-        assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");
+        assert_eq!(loaded.module_stages[2][0].module_path, "Test");
+        assert_eq!(loaded.module_stages[3][0].module_path, "Std::Math");
+        assert_eq!(loaded.module_stages[4][0].module_path, "Std::String");
+        assert_eq!(loaded.module_stages[4][1].module_path, "Std::List");
     }
 
     #[test]

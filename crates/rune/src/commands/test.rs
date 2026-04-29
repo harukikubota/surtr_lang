@@ -10,9 +10,6 @@ use spire::ast::Span;
 use crate::compile::{compile_source, ScriptCompilePlan};
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
-const TEST_PRELUDE_FILE: &str = "lib/tests/prelude.srt";
-const TEST_PRELUDE_MODULE_PATH: &str = "Test";
-const TEST_PRELUDE_SOURCE: &str = include_str!("../../../../lib/tests/prelude.srt");
 const TEST_CACHE_VERSION: &str = "surtr-test-dsl-v2";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,14 +329,8 @@ fn collect_test_compile_sources(
             ),
         )
     })?;
-    let extra_std_sources = vec![xldr::SourceDescriptor::std_module(
-        TEST_PRELUDE_FILE,
-        TEST_PRELUDE_SOURCE,
-        TEST_PRELUDE_MODULE_PATH,
-    )];
-    let module_sources =
-        xldr::collect_module_sources_with_extra_std_sources(&extra_std_sources, &[module_inputs])
-            .map_err(|e| {
+    let module_sources = xldr::collect_module_sources_with_module_stages(&[module_inputs])
+        .map_err(|e| {
             RuneError::message(
                 1,
                 format!(

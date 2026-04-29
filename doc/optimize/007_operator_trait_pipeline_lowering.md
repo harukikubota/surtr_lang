@@ -3,7 +3,7 @@
 ## 目的
 
 - `|*>` / `|>=` を標準 trait dispatch に寄せ、`Result` / `List` 固定の compiler 分岐を surface 意味論から外す
-- `Result` の map / chain 意味論を標準 Surtr コードへ移し、正本を `lib/result.srt` に置く
+- `Result` の map / chain 意味論を標準 Surtr コードへ移し、正本を `lib/types/result.srt` に置く
 - 演算子由来 callsite には最適化候補 metadata を残し、将来 optimizer が安全に現行 `ResultMap` / `ResultBind` 相当の bytecode へ戻せるようにする
 
 ## Public Surface
@@ -68,10 +68,10 @@ impl Chainable<$A, List<$B>> for List<$A> {
 
 ## 実装方針
 
-- `lib/trait/functor.srt` と `lib/trait/chainable.srt` を追加する
+- `lib/traits/operator/functor.srt` と `lib/traits/operator/chainable.srt` を追加する
 - 標準 module load order は `List` / `Result` より前に `Functor` / `Chainable` を読む
-- `lib/result.srt` に `Functor` / `Chainable` impl を追加し、`Result` map / bind の意味論を Surtr source へ移す
-- `lib/list.srt` に `Functor` / `Chainable` impl を追加し、既存 `List::map` / `List::flat_map` へ委譲する
+- `lib/types/result.srt` に `Functor` / `Chainable` impl を追加し、`Result` map / bind の意味論を Surtr source へ移す
+- `lib/types/list.srt` に `Functor` / `Chainable` impl を追加し、既存 `List::map` / `List::flat_map` へ委譲する
 - Scar の trait target 解決で `Ty::List(_) -> "List"` を許可し、generic builtin container を trait impl target として扱えるようにする
 - `check_context_map` / `check_context_bind` は hardcoded `Result` / `List` 分岐ではなく、operator origin 付きの trait method call を構築する
 - Forge の通常経路では `TypedInner::ResultMap` / `TypedInner::ResultBind` を emit せず、選択された Surtr impl への user function call として扱う
@@ -179,7 +179,7 @@ cargo nextest run --workspace
 
 ## 完了条件
 
-- `Result` map / chain の意味論が `lib/result.srt` の Surtr code で説明できる
+- `Result` map / chain の意味論が `lib/types/result.srt` の Surtr code で説明できる
 - `|*>` / `|>=` は標準 trait impl を通って実行される
 - 既存の `Result` / `List` pipeline usecase が同じ値を返す
 - operator 由来 callsite が将来 optimizer 用 metadata を保持する

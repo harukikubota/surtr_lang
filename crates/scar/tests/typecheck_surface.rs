@@ -2251,9 +2251,10 @@ fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
 
 #[test]
 fn from_and_try_from_impls_are_mutually_exclusive() {
-    let overrides = [(
-        "String",
-        r#"@@builtin type String
+    let overrides = [
+        (
+            "String",
+            r#"@@builtin type String
 
 impl String {}
 
@@ -2290,7 +2291,10 @@ self == rhs
 self != rhs
   }
 }"#,
-    )];
+        ),
+        ("StyledDoc", "defmod StyledDoc {}"),
+        ("Test", "defmod Test {}"),
+    ];
 
     let err = typecheck_std_modules_with_overrides(&overrides)
         .expect_err("conflicting From/TryFrom impls must fail");

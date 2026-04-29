@@ -366,7 +366,7 @@
   - `HashMap` key 表示の escaping 実装を `String` 表示 helper とどこまで共通化するか
 - 受け入れ条件:
   - 採用方針が `doc/要件定義v9.md` / `doc/EldrVM_spec.md` / `doc/テスト方針.md` の3点で矛盾なく記述される。
-  - surface を増やす場合、`lib/hash_map.srt` と `BUILTIN_METAS` の整合が維持される。
+  - surface を増やす場合、`lib/types/hash_map.srt` と `BUILTIN_METAS` の整合が維持される。
 - テスト方針:
   - literal 導入時は `unit/spire`（構文）+ `unit/forge`（lowering）+ `spec`（実行結果）を同時に固定する。
   - API 追加時は `spec/stdmod` と `compile_errors/type_mismatch` を追加して key/value 契約を固定する。
