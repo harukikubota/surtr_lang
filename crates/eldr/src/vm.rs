@@ -30,6 +30,32 @@ pub struct VmTestEvent {
     pub detail: Option<String>,
     pub kind: VmTestEventKind,
     pub io: Option<VmCapturedIo>,
+    pub diagnostic: Option<VmTestDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmTestDiagnostic {
+    pub kind: String,
+    pub message: String,
+    pub file: String,
+    pub line: u32,
+    pub column: u32,
+    pub span_start: u32,
+    pub span_end: u32,
+}
+
+impl VmTestDiagnostic {
+    fn from_rich_error(error: &RichError) -> Self {
+        Self {
+            kind: error.kind.clone(),
+            message: error.visible_message().to_string(),
+            file: error.location.file.clone(),
+            line: error.location.line,
+            column: error.location.column,
+            span_start: error.location.span_start,
+            span_end: error.location.span_end,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -630,6 +656,7 @@ impl VM {
             detail: None,
             kind: VmTestEventKind::Passed,
             io,
+            diagnostic: None,
         });
     }
 
@@ -642,6 +669,20 @@ impl VM {
             detail: Some(detail),
             kind: VmTestEventKind::Failed,
             io,
+            diagnostic: None,
+        });
+    }
+
+    pub(crate) fn record_test_fail_error(&mut self, name: String, error: &RichError) {
+        let mut path = self.test_scope.clone();
+        path.push(name);
+        let io = self.next_test_event_io();
+        self.test_events.push(VmTestEvent {
+            path,
+            detail: Some(error.to_display_string()),
+            kind: VmTestEventKind::Failed,
+            io,
+            diagnostic: Some(VmTestDiagnostic::from_rich_error(error)),
         });
     }
 
@@ -652,6 +693,7 @@ impl VM {
             detail: Some(detail),
             kind: VmTestEventKind::Failed,
             io,
+            diagnostic: None,
         });
     }
 

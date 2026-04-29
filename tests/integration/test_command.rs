@@ -21,6 +21,24 @@ fn run_surtr_with_env(temp: &Path, args: &[&str], envs: &[(&str, &str)]) -> Outp
     command.output().expect("failed to run surtr command")
 }
 
+fn strip_ansi(input: &str) -> String {
+    let mut output = String::new();
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
 fn write_math_module(temp: &Path) {
     write_source(
         &temp.join("lib/math.srt"),
@@ -99,6 +117,110 @@ test("Math") {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[FAIL] Math > add > rejects wrong sum (lib/tests/math.srt)"));
+    assert!(stdout.contains("expected 6, got 14"));
+    assert!(stdout.contains("test result: passed=0, failed=1, total=1"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_reports_assertion_failure_source_diagnostic() {
+    let temp = unique_temp_dir("surtr_test_command_assertion_source_diagnostic");
+    write_math_test(
+        &temp,
+        r#"import Test;
+
+test("String") {
+  describe("repeat") {
+    it("bad") { assert_eq("tes", "bad") }
+  }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "math"]);
+    assert!(
+        !output.status.success(),
+        "test command should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("[FAIL] String > repeat > bad (lib/tests/math.srt)"));
+    assert!(stdout.contains("TestAssertionFailed: expected \"tes\", got \"bad\""));
+    assert!(stdout.contains("assert_eq(\"tes\", \"bad\")"));
+    assert!(stdout.contains("LHS term: \"tes\""));
+    assert!(stdout.contains("RHS term: \"bad\""));
+    assert!(stdout.contains("assert_eq failed: expected \"tes\", got \"bad\""));
+    assert!(stdout.contains("lib/tests/math.srt"));
+    assert!(!stdout.contains("note:"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_quiet_suppresses_success_output() {
+    let temp = unique_temp_dir("surtr_test_command_quiet_success");
+    write_math_module(&temp);
+    write_math_test(
+        &temp,
+        r#"import Math;
+import Test;
+
+test("Math") {
+  it("adds two numbers") { assert_eq(3, add(1, 2)) }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "--quiet", "math"]);
+    assert!(
+        output.status.success(),
+        "quiet test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+
+    let output = run_surtr(&temp, &["test", "math", "-q"]);
+    assert!(
+        output.status.success(),
+        "quiet test command should accept trailing flag\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_quiet_keeps_failure_output() {
+    let temp = unique_temp_dir("surtr_test_command_quiet_failure");
+    write_math_module(&temp);
+    write_math_test(
+        &temp,
+        r#"import Math;
+import Test;
+
+test("Math") {
+  it("rejects wrong sum") { assert_eq(6, add(10, 4)) }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "-q", "math"]);
+    assert!(
+        !output.status.success(),
+        "quiet failing test command should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[FAIL] Math > rejects wrong sum (lib/tests/math.srt)"));
     assert!(stdout.contains("expected 6, got 14"));
     assert!(stdout.contains("test result: passed=0, failed=1, total=1"));
 

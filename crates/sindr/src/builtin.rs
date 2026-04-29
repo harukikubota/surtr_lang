@@ -173,6 +173,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(String, String) -> Unit",
     },
     BuiltinMeta {
+        name: "__test_fail_error",
+        arity: 2,
+        sig_str: "(String, Error) -> Unit",
+    },
+    BuiltinMeta {
         name: "__test_fail_current",
         arity: 1,
         sig_str: "(String) -> Unit",

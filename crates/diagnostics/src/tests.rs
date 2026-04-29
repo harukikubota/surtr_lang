@@ -171,6 +171,39 @@ fn char_span_to_byte_range_converts_only_at_render_boundary() {
 }
 
 #[test]
+fn surtr_assert_eq_template_renders_terms_through_ariadne() {
+    let source =
+        "print(\"あい\")\n\ntest(\"String\") {\n  it(\"bad\") { assert_eq(\"tes\", \"bad\") }\n}\n";
+    let call_start = source.find("assert_eq").expect("assert_eq exists");
+    let call_end = call_start + "assert_eq(\"tes\", \"bad\")".len();
+    let lhs_start = source.find("\"tes\"").expect("lhs exists");
+    let lhs_end = lhs_start + "\"tes\"".len();
+    let rhs_start = source.find("\"bad\"").expect("rhs exists");
+    let rhs_end = rhs_start + "\"bad\"".len();
+    let span = |start: usize, end: usize| Span {
+        start: source[..start].chars().count(),
+        end: source[..end].chars().count(),
+    };
+    let spec = surtr_assert_eq_error_spec(
+        "TestAssertionFailed",
+        "expected \"tes\", got \"bad\"",
+        span(call_start, call_end),
+        span(lhs_start, lhs_end),
+        span(rhs_start, rhs_end),
+        "\"tes\"",
+        "\"bad\"",
+    );
+
+    let rendered = strip_ansi(&render_surtr_code_error("main.srt", source, &spec));
+    assert!(rendered.contains("TestAssertionFailed: expected \"tes\", got \"bad\""));
+    assert!(rendered.contains("main.srt:4:15"));
+    assert!(rendered.contains("assert_eq(\"tes\", \"bad\")"));
+    assert!(rendered.contains("LHS term: \"tes\""));
+    assert!(rendered.contains("RHS term: \"bad\""));
+    assert!(rendered.contains("assert_eq failed: expected \"tes\", got \"bad\""));
+}
+
+#[test]
 fn type_error_spec_labels_backtick_operator_operands() {
     let source = "bad = 1 `+` \"oops\"";
     let err = TypeError {

@@ -142,6 +142,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_test_fail,
     },
     BuiltinImpl {
+        name: "__test_fail_error",
+        func: builtin_test_fail_error,
+    },
+    BuiltinImpl {
         name: "__test_fail_current",
         func: builtin_test_fail_current,
     },
@@ -1000,6 +1004,21 @@ fn builtin_test_fail(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
         return Err(RuntimeError::new("__test_fail expects String as detail"));
     };
     vm.record_test_fail(name.clone(), detail.clone());
+    Ok(Value::Unit)
+}
+
+fn builtin_test_fail_error(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(name) = &args[0] else {
+        return Err(RuntimeError::new(
+            "__test_fail_error expects String as name",
+        ));
+    };
+    let Value::Error(error) = &args[1] else {
+        return Err(RuntimeError::new(
+            "__test_fail_error expects Error as error",
+        ));
+    };
+    vm.record_test_fail_error(name.clone(), error);
     Ok(Value::Unit)
 }
 

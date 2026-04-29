@@ -298,6 +298,7 @@ defmod Test {
   @@builtin def __test_pop() -> Unit
   @@builtin def __test_pass(name: String) -> Unit
   @@builtin def __test_fail(name: String, detail: String) -> Unit
+  @@builtin def __test_fail_error(name: String, err: Error) -> Unit
   @@builtin def __test_fail_current(detail: String) -> Unit
   @@builtin def __test_capture_stdout() -> List<String>
   @@builtin def __test_capture_stderr() -> List<String>
@@ -329,7 +330,7 @@ defmod Test {
   }
 
   defp _finish_it_err(name: String, err: Error) -> Result<()> {
-    __test_fail(name, inspect(err))
+    __test_fail_error(name, err)
     Ok(())
   }
 
@@ -381,7 +382,7 @@ defmod Test {
     if(
       rendered_expected == rendered_actual,
       Ok(()),
-      _fail("expected #{rendered_expected}, got #{rendered_actual}"),
+      Err(TestAssertionFailed("expected #{rendered_expected}, got #{rendered_actual}")),
     )
   }
 

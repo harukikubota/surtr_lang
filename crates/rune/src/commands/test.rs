@@ -3,8 +3,9 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use eldr::vm::{VmTestEvent, VmTestEventKind};
+use eldr::vm::{VmTestDiagnostic, VmTestEvent, VmTestEventKind};
 use forge::bytecode::{stable_hash_hex, Bytecode};
+use spire::ast::Span;
 
 use crate::compile::{compile_source, ScriptCompilePlan};
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
@@ -17,6 +18,7 @@ const TEST_CACHE_VERSION: &str = "surtr-test-dsl-v2";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestOptions {
     pub(crate) mode: TestMode,
+    pub(crate) quiet: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,13 +55,30 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
 }
 
 pub(crate) fn parse_test_options(args: &[String]) -> RuneResult<TestOptions> {
-    if args.len() != 1 {
+    let mut quiet = false;
+    let mut selector = None;
+
+    for arg in args {
+        match arg.as_str() {
+            "--quiet" | "-q" => quiet = true,
+            value if value.starts_with('-') && value != "--all" => {
+                return Err(RuneError::usage(format!("test: unknown option `{value}`")));
+            }
+            value => {
+                if selector.replace(value.trim().to_string()).is_some() {
+                    return Err(RuneError::usage(
+                        "test: expected exactly one lib-relative test name",
+                    ));
+                }
+            }
+        }
+    }
+
+    let Some(selector) = selector else {
         return Err(RuneError::usage(
             "test: expected exactly one lib-relative test name",
         ));
-    }
-
-    let selector = args[0].trim().to_string();
+    };
     if selector.is_empty() {
         return Err(RuneError::usage("test: selector must not be empty"));
     }
@@ -70,18 +89,18 @@ pub(crate) fn parse_test_options(args: &[String]) -> RuneResult<TestOptions> {
         TestMode::One(selector)
     };
 
-    Ok(TestOptions { mode })
+    Ok(TestOptions { mode, quiet })
 }
 
 fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
     match options.mode {
-        TestMode::One(selector) => run_one_test(&selector, env).map(|_| ()),
-        TestMode::All => run_all_tests(env),
+        TestMode::One(selector) => run_one_test(&selector, env, options.quiet).map(|_| ()),
+        TestMode::All => run_all_tests(env, options.quiet),
     }
 }
 
-fn run_one_test(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunSummary> {
-    let summary = execute_test_script(selector, env)?;
+fn run_one_test(selector: &str, env: ExecutionEnv, quiet: bool) -> RuneResult<TestRunSummary> {
+    let summary = execute_test_script(selector, env, quiet)?;
     if summary.failed == 0 {
         Ok(summary)
     } else {
@@ -89,7 +108,11 @@ fn run_one_test(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunSummary>
     }
 }
 
-fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunSummary> {
+fn execute_test_script(
+    selector: &str,
+    env: ExecutionEnv,
+    quiet: bool,
+) -> RuneResult<TestRunSummary> {
     let script = load_test_script(selector)?;
     let bytecode = compile_test_script(&script, env)?;
     let color = test_color_enabled();
@@ -123,23 +146,34 @@ fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunS
         match event.kind {
             VmTestEventKind::Passed => {
                 summary.passed += 1;
-                print_test_event_line(
-                    "[PASS]",
-                    &format_event_path(event),
-                    TestOutputColor::Green,
-                    color,
-                );
+                if !quiet {
+                    print_test_event_line(
+                        "[PASS]",
+                        &format_event_path(event),
+                        TestOutputColor::Green,
+                        color,
+                    );
+                }
             }
             VmTestEventKind::Failed => {
                 summary.failed += 1;
+                let rendered_diagnostic = render_test_event_diagnostic(event, &script);
                 print_test_event_line(
                     "[FAIL]",
                     &format!("{} ({})", format_event_path(event), script.file_path),
                     TestOutputColor::Red,
                     color,
                 );
-                if let Some(detail) = &event.detail {
-                    print_note_line(detail, color);
+                if rendered_diagnostic.is_none() {
+                    if let Some(detail) = &event.detail {
+                        print_note_line(detail, color);
+                    }
+                }
+                if let Some(diagnostic) = rendered_diagnostic {
+                    print!("{diagnostic}");
+                    if !diagnostic.ends_with('\n') {
+                        println!();
+                    }
                 }
             }
         }
@@ -147,29 +181,35 @@ fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunS
 
     summary.total = summary.passed + summary.failed;
     if summary.total == 0 {
-        print_color_line(
-            &format!("No tests found in {}.", script.file_path),
-            TestOutputColor::Yellow,
-            color,
-        );
+        if !quiet {
+            print_color_line(
+                &format!("No tests found in {}.", script.file_path),
+                TestOutputColor::Yellow,
+                color,
+            );
+        }
         return Ok(summary);
     }
 
-    print_summary(summary);
+    if !quiet || summary.failed > 0 {
+        print_summary(summary);
+    }
 
     Ok(summary)
 }
 
-fn run_all_tests(env: ExecutionEnv) -> RuneResult<()> {
+fn run_all_tests(env: ExecutionEnv, quiet: bool) -> RuneResult<()> {
     let selectors = collect_all_test_selectors()?;
     if selectors.is_empty() {
-        println!("No test scripts found in lib/tests.");
+        if !quiet {
+            println!("No test scripts found in lib/tests.");
+        }
         return Ok(());
     }
 
     let mut aggregate = TestRunSummary::default();
     for selector in selectors {
-        match execute_test_script(&selector, env) {
+        match execute_test_script(&selector, env, quiet) {
             Ok(summary) => {
                 aggregate.passed += summary.passed;
                 aggregate.failed += summary.failed;
@@ -183,7 +223,9 @@ fn run_all_tests(env: ExecutionEnv) -> RuneResult<()> {
         }
     }
 
-    print_summary(aggregate);
+    if !quiet || aggregate.failed > 0 {
+        print_summary(aggregate);
+    }
 
     if aggregate.failed == 0 {
         Ok(())
@@ -459,6 +501,170 @@ fn format_event_path(event: &VmTestEvent) -> String {
     event.path.join(" > ")
 }
 
+fn render_test_event_diagnostic(event: &VmTestEvent, script: &TestScript) -> Option<String> {
+    let diagnostic = event.diagnostic.as_ref()?;
+    let assert_eq = find_test_assert_eq_spans(&script.source, event);
+    let span = match assert_eq.as_ref() {
+        Some(spans) => {
+            return Some(render_assert_eq_failure_diagnostic(
+                test_diagnostic_file_name(diagnostic, script),
+                &script.source,
+                diagnostic,
+                spans,
+            ));
+        }
+        None if test_diagnostic_points_into_script(diagnostic, &script.source) => Span {
+            start: diagnostic.span_start as usize,
+            end: diagnostic.span_end as usize,
+        },
+        None => return None,
+    };
+
+    let spec = diagnostics::simple_error(
+        diagnostic.kind.clone(),
+        diagnostic.message.clone(),
+        span,
+        Some(format!("assert_eq failed: {}", diagnostic.message)),
+    );
+    Some(diagnostics::render_error(
+        test_diagnostic_file_name(diagnostic, script),
+        &script.source,
+        &spec,
+    ))
+}
+
+fn test_diagnostic_file_name<'a>(
+    diagnostic: &'a VmTestDiagnostic,
+    script: &'a TestScript,
+) -> &'a str {
+    if diagnostic.file.is_empty() {
+        &script.file_path
+    } else {
+        &diagnostic.file
+    }
+}
+
+fn test_diagnostic_points_into_script(diagnostic: &VmTestDiagnostic, source: &str) -> bool {
+    let span = Span {
+        start: diagnostic.span_start as usize,
+        end: diagnostic.span_end as usize,
+    };
+    let len = source.chars().count();
+    span.start < len && span.end <= len && span.end > span.start
+}
+
+#[derive(Debug, Clone)]
+struct AssertEqSpans {
+    call: Span,
+    lhs: Span,
+    rhs: Span,
+    lhs_term: String,
+    rhs_term: String,
+}
+
+fn find_test_assert_eq_spans(source: &str, event: &VmTestEvent) -> Option<AssertEqSpans> {
+    let test_name = event.path.last()?;
+    let pattern = format!("it(\"{}\")", test_name.replace('"', "\\\""));
+    let it_byte = source.find(&pattern)?;
+    let block_byte = it_byte + source[it_byte..].find('{')? + 1;
+    let next_item_byte = source[block_byte..]
+        .find("\n  it(")
+        .or_else(|| source[block_byte..].find("\n  describe("))
+        .map(|offset| block_byte + offset)
+        .unwrap_or(source.len());
+    let window = &source[block_byte..next_item_byte];
+    let assertion_rel = window.find("assert_eq")?;
+    let assert_byte = block_byte + assertion_rel;
+    let open_rel = source[assert_byte..].find('(')?;
+    let open_byte = assert_byte + open_rel;
+    let (comma_byte, close_byte) = split_assert_eq_args(source, open_byte)?;
+    let lhs_start = next_non_ws_byte(source, open_byte + 1, comma_byte)?;
+    let lhs_end = prev_non_ws_byte(source, lhs_start, comma_byte)?;
+    let rhs_start = next_non_ws_byte(source, comma_byte + 1, close_byte)?;
+    let rhs_end = prev_non_ws_byte(source, rhs_start, close_byte)?;
+    Some(AssertEqSpans {
+        call: byte_span(source, assert_byte, close_byte + 1),
+        lhs: byte_span(source, lhs_start, lhs_end),
+        rhs: byte_span(source, rhs_start, rhs_end),
+        lhs_term: source[lhs_start..lhs_end].to_string(),
+        rhs_term: source[rhs_start..rhs_end].to_string(),
+    })
+}
+
+fn split_assert_eq_args(source: &str, open_byte: usize) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+    let mut comma = None;
+    let mut in_string = false;
+    let mut escape = false;
+    for (offset, ch) in source[open_byte..].char_indices() {
+        let byte = open_byte + offset;
+        if in_string {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 && ch == ')' {
+                    return comma.map(|comma| (comma, byte));
+                }
+            }
+            ',' if depth == 1 && comma.is_none() => comma = Some(byte),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn next_non_ws_byte(source: &str, start: usize, end: usize) -> Option<usize> {
+    source[start..end]
+        .char_indices()
+        .find(|(_, ch)| !ch.is_whitespace())
+        .map(|(offset, _)| start + offset)
+}
+
+fn prev_non_ws_byte(source: &str, start: usize, end: usize) -> Option<usize> {
+    for (offset, ch) in source[start..end].char_indices().rev() {
+        if !ch.is_whitespace() {
+            return Some(start + offset + ch.len_utf8());
+        }
+    }
+    None
+}
+
+fn render_assert_eq_failure_diagnostic(
+    file_name: &str,
+    source: &str,
+    diagnostic: &VmTestDiagnostic,
+    spans: &AssertEqSpans,
+) -> String {
+    let spec = diagnostics::surtr_assert_eq_error_spec(
+        diagnostic.kind.clone(),
+        diagnostic.message.clone(),
+        spans.call.clone(),
+        spans.lhs.clone(),
+        spans.rhs.clone(),
+        spans.lhs_term.clone(),
+        spans.rhs_term.clone(),
+    );
+    diagnostics::render_surtr_code_error(file_name, source, &spec)
+}
+
+fn byte_span(source: &str, start_byte: usize, end_byte: usize) -> Span {
+    Span {
+        start: source[..start_byte].chars().count(),
+        end: source[..end_byte].chars().count(),
+    }
+}
+
 fn test_color_enabled() -> bool {
     match env::var("SURTR_TEST_COLOR") {
         Ok(value) if value.eq_ignore_ascii_case("always") => true,
@@ -560,6 +766,7 @@ mod tests {
     fn test_options_require_single_selector() {
         let opts = parse_test_options(&["string".to_string()]).expect("selector should parse");
         assert_eq!(opts.mode, TestMode::One("string".to_string()));
+        assert!(!opts.quiet);
         assert!(parse_test_options(&[]).is_err());
         assert!(parse_test_options(&["a".to_string(), "b".to_string()]).is_err());
     }
@@ -568,6 +775,19 @@ mod tests {
     fn test_options_accept_all_flag() {
         let opts = parse_test_options(&["--all".to_string()]).expect("--all should parse");
         assert_eq!(opts.mode, TestMode::All);
+        assert!(!opts.quiet);
+    }
+
+    #[test]
+    fn test_options_accept_quiet_flag() {
+        let opts =
+            parse_test_options(&["--quiet".to_string(), "string".to_string()]).expect("quiet");
+        assert_eq!(opts.mode, TestMode::One("string".to_string()));
+        assert!(opts.quiet);
+
+        let opts = parse_test_options(&["--all".to_string(), "-q".to_string()]).expect("quiet all");
+        assert_eq!(opts.mode, TestMode::All);
+        assert!(opts.quiet);
     }
 
     #[test]
