@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use eldr::vm::{VmTestEvent, VmTestEventKind};
@@ -11,7 +12,7 @@ use crate::error::{ExecutionEnv, RuneError, RuneResult};
 const TEST_PRELUDE_FILE: &str = "lib/tests/prelude.srt";
 const TEST_PRELUDE_MODULE_PATH: &str = "Test";
 const TEST_PRELUDE_SOURCE: &str = include_str!("../../../../lib/tests/prelude.srt");
-const TEST_CACHE_VERSION: &str = "surtr-test-dsl-v1";
+const TEST_CACHE_VERSION: &str = "surtr-test-dsl-v2";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestOptions {
@@ -36,6 +37,14 @@ struct TestScript {
     selector: String,
     file_path: String,
     source: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TestOutputColor {
+    Green,
+    Red,
+    Yellow,
+    Cyan,
 }
 
 pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
@@ -83,6 +92,7 @@ fn run_one_test(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunSummary>
 fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunSummary> {
     let script = load_test_script(selector)?;
     let bytecode = compile_test_script(&script, env)?;
+    let color = test_color_enabled();
 
     let mut vm = eldr::VM::new(bytecode)
         .with_source(script.source.clone(), script.file_path.clone())
@@ -90,9 +100,21 @@ fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunS
         .with_error_capture();
 
     if let Err(err) = vm.run() {
-        println!("[FAIL] {} ({})", script.selector, script.file_path);
-        println!("  note: runtime error while running test script: {}", err);
-        println!("test result: passed=0, failed=1, total=1");
+        print_color_line(
+            &format!("[FAIL] {} ({})", script.selector, script.file_path),
+            TestOutputColor::Red,
+            color,
+        );
+        print_color_line(
+            &format!("  note: runtime error while running test script: {}", err),
+            TestOutputColor::Yellow,
+            color,
+        );
+        print_summary(TestRunSummary {
+            passed: 0,
+            failed: 1,
+            total: 1,
+        });
         return Err(RuneError::silent(1));
     }
 
@@ -101,13 +123,25 @@ fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunS
         match event.kind {
             VmTestEventKind::Passed => {
                 summary.passed += 1;
-                println!("[PASS] {}", format_event_path(event));
+                print_color_line(
+                    &format!("[PASS] {}", format_event_path(event)),
+                    TestOutputColor::Green,
+                    color,
+                );
             }
             VmTestEventKind::Failed => {
                 summary.failed += 1;
-                println!("[FAIL] {} ({})", format_event_path(event), script.file_path);
+                print_color_line(
+                    &format!("[FAIL] {} ({})", format_event_path(event), script.file_path),
+                    TestOutputColor::Red,
+                    color,
+                );
                 if let Some(detail) = &event.detail {
-                    println!("  note: {}", detail);
+                    print_color_line(
+                        &format!("  note: {}", detail),
+                        TestOutputColor::Yellow,
+                        color,
+                    );
                 }
             }
         }
@@ -115,14 +149,15 @@ fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunS
 
     summary.total = summary.passed + summary.failed;
     if summary.total == 0 {
-        println!("No tests found in {}.", script.file_path);
+        print_color_line(
+            &format!("No tests found in {}.", script.file_path),
+            TestOutputColor::Yellow,
+            color,
+        );
         return Ok(summary);
     }
 
-    println!(
-        "test result: passed={}, failed={}, total={}",
-        summary.passed, summary.failed, summary.total
-    );
+    print_summary(summary);
 
     Ok(summary)
 }
@@ -150,10 +185,7 @@ fn run_all_tests(env: ExecutionEnv) -> RuneResult<()> {
         }
     }
 
-    println!(
-        "test result: passed={}, failed={}, total={}",
-        aggregate.passed, aggregate.failed, aggregate.total
-    );
+    print_summary(aggregate);
 
     if aggregate.failed == 0 {
         Ok(())
@@ -429,13 +461,69 @@ fn format_event_path(event: &VmTestEvent) -> String {
     event.path.join(" > ")
 }
 
+fn test_color_enabled() -> bool {
+    match env::var("SURTR_TEST_COLOR") {
+        Ok(value) if value.eq_ignore_ascii_case("always") => true,
+        Ok(value) if value.eq_ignore_ascii_case("never") => false,
+        _ if env::var_os("NO_COLOR").is_some() => false,
+        _ => std::io::stdout().is_terminal(),
+    }
+}
+
+fn color_code(color: TestOutputColor) -> u8 {
+    match color {
+        TestOutputColor::Green => 32,
+        TestOutputColor::Red => 31,
+        TestOutputColor::Yellow => 33,
+        TestOutputColor::Cyan => 36,
+    }
+}
+
+fn colorize_line(line: &str, color: TestOutputColor, enabled: bool) -> String {
+    if enabled {
+        format!("\x1b[{}m{}\x1b[0m", color_code(color), line)
+    } else {
+        line.to_string()
+    }
+}
+
+fn print_color_line(line: &str, color: TestOutputColor, enabled: bool) {
+    println!("{}", colorize_line(line, color, enabled));
+}
+
+fn summary_line(summary: TestRunSummary) -> String {
+    format!(
+        "test result: passed={}, failed={}, total={}",
+        summary.passed, summary.failed, summary.total
+    )
+}
+
+fn summary_color(summary: TestRunSummary) -> TestOutputColor {
+    if summary.failed == 0 {
+        TestOutputColor::Cyan
+    } else {
+        TestOutputColor::Red
+    }
+}
+
+fn print_summary(summary: TestRunSummary) {
+    print_color_line(
+        &summary_line(summary),
+        summary_color(summary),
+        test_color_enabled(),
+    );
+}
+
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_test_options, resolve_test_script_path, TestMode};
+    use super::{
+        colorize_line, parse_test_options, resolve_test_script_path, summary_color, summary_line,
+        TestMode, TestOutputColor, TestRunSummary,
+    };
     use std::path::Path;
 
     #[test]
@@ -462,5 +550,36 @@ mod tests {
             resolve_test_script_path("string.srt"),
             Path::new("lib").join("tests").join("string.srt")
         );
+    }
+
+    #[test]
+    fn colorize_line_preserves_plain_substring() {
+        let rendered = colorize_line("[PASS] Suite > case", TestOutputColor::Green, true);
+        assert!(rendered.contains("[PASS] Suite > case"));
+        assert_eq!(rendered, "\x1b[32m[PASS] Suite > case\x1b[0m".to_string());
+        assert_eq!(
+            colorize_line("[PASS] Suite > case", TestOutputColor::Green, false),
+            "[PASS] Suite > case".to_string()
+        );
+    }
+
+    #[test]
+    fn summary_uses_success_or_failure_color() {
+        let passed = TestRunSummary {
+            passed: 2,
+            failed: 0,
+            total: 2,
+        };
+        let failed = TestRunSummary {
+            passed: 1,
+            failed: 1,
+            total: 2,
+        };
+        assert_eq!(
+            summary_line(passed),
+            "test result: passed=2, failed=0, total=2"
+        );
+        assert_eq!(summary_color(passed), TestOutputColor::Cyan);
+        assert_eq!(summary_color(failed), TestOutputColor::Red);
     }
 }

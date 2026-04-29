@@ -1,0 +1,68 @@
+import Test;
+import StyledDoc;
+
+def esc() -> String {
+  match String::from_codepoints([27], StringEncoding::Utf8) {
+    Ok(value) => value,
+    Err(_) => "",
+  }
+}
+
+test("StyledDoc") {
+  describe("plain") {
+    it("renders text and appended lines") {
+      doc = StyledDoc::append(
+        StyledDoc::line("hello"),
+        StyledDoc::line("world"),
+      )
+      assert_doc_plain_eq("hello\nworld", doc)
+    }
+
+    it("renders inline concatenation on one line") {
+      doc = StyledDoc::inline_concat([
+        StyledDoc::text("sur"),
+        StyledDoc::text("tr"),
+        StyledDoc::text(" code"),
+      ])
+      assert_doc_plain_eq("surtr code", doc)
+    }
+
+    it("indents each line") {
+      doc = StyledDoc::indent(
+        StyledDoc::append(StyledDoc::line("one"), StyledDoc::line("two")),
+        2,
+      )
+      assert_doc_plain_eq("  one\n  two", doc)
+    }
+  }
+
+  describe("ansi") {
+    it("renders foreground colors and emphasis") {
+      doc = StyledDoc::bold(StyledDoc::green(StyledDoc::text("ok")))
+      assert_doc_ansi_eq(esc() ++ "[1;32mok" ++ esc() ++ "[0m", doc)
+    }
+
+    it("renders dim underline italic and background color") {
+      doc = StyledDoc::bg_blue(
+        StyledDoc::italic(
+          StyledDoc::underline(
+            StyledDoc::dim(StyledDoc::yellow(StyledDoc::text("note"))),
+          ),
+        ),
+      )
+      assert_doc_ansi_eq(esc() ++ "[2;4;3;33;44mnote" ++ esc() ++ "[0m", doc)
+    }
+
+    it("does not add escape codes to plain text") {
+      assert_doc_ansi_eq("plain", StyledDoc::text("plain"))
+    }
+  }
+
+  describe("user code") {
+    it("prints explicit ansi output and captures it") {
+      capture_stdout()
+      print(StyledDoc::to_ansi(StyledDoc::red(StyledDoc::text("failed"))))
+      assert_stdout_eq([esc() ++ "[31mfailed" ++ esc() ++ "[0m"])
+    }
+  }
+}

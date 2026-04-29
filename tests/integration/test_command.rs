@@ -12,6 +12,15 @@ fn run_surtr(temp: &Path, args: &[&str]) -> Output {
         .expect("failed to run surtr command")
 }
 
+fn run_surtr_with_env(temp: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(surtr_bin());
+    command.args(args).current_dir(temp);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command.output().expect("failed to run surtr command")
+}
+
 fn write_math_module(temp: &Path) {
     write_source(
         &temp.join("lib/math.srt"),
@@ -92,6 +101,40 @@ test("Math") {
     assert!(stdout.contains("[FAIL] Math > add > rejects wrong sum (lib/tests/math.srt)"));
     assert!(stdout.contains("expected 6, got 14"));
     assert!(stdout.contains("test result: passed=0, failed=1, total=1"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_colors_suite_lines_and_summary_when_requested() {
+    let temp = unique_temp_dir("surtr_test_command_color");
+    write_math_module(&temp);
+    write_math_test(
+        &temp,
+        r#"import Math;
+import Test;
+
+test("Math") {
+  describe("add") {
+    it("adds two numbers") { assert_eq(3, add(1, 2)) }
+  }
+}
+"#,
+    );
+
+    let output = run_surtr_with_env(&temp, &["test", "math"], &[("SURTR_TEST_COLOR", "always")]);
+    assert!(
+        output.status.success(),
+        "test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\x1b[32m[PASS] Math > add > adds two numbers\x1b[0m"));
+    assert!(stdout.contains("\x1b[36mtest result: passed=1, failed=0, total=1\x1b[0m"));
+    assert!(stdout.contains("[PASS] Math > add > adds two numbers"));
+    assert!(stdout.contains("test result: passed=1, failed=0, total=1"));
 
     let _ = fs::remove_dir_all(temp);
 }

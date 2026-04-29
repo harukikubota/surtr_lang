@@ -6,6 +6,289 @@ deferror TestAssertionFailed(detail: String) {
 }
 
 @@doc """
+Colors supported by the test-only StyledDoc helper.
+"""
+defenum StyledDocColor {
+  Black,
+  Red,
+  Green,
+  Yellow,
+  Blue,
+  Magenta,
+  Cyan,
+  White,
+  Default,
+}
+
+defrecord StyledDocStyle(
+  fg: Option<StyledDocColor>,
+  bg: Option<StyledDocColor>,
+  bold: Boolean,
+  dim: Boolean,
+  underline: Boolean,
+  italic: Boolean,
+)
+
+defrecord StyledDocSegment(text: String, style: StyledDocStyle)
+
+defrecord StyledDocLine(segments: List<StyledDocSegment>)
+
+defrecord StyledDocDoc(lines: List<StyledDocLine>)
+
+@@doc """
+Test-only StyledDoc helpers.
+This module is loaded only by `surtr test` through `lib/tests/prelude.srt`.
+"""
+defmod StyledDoc {
+  def default_style() -> StyledDocStyle {
+    StyledDocStyle(Option::None, Option::None, False, False, False, False)
+  }
+
+  def empty() -> StyledDocDoc {
+    StyledDocDoc([])
+  }
+
+  def segment(value: String, style: StyledDocStyle) -> StyledDocDoc {
+    StyledDocDoc([StyledDocLine([StyledDocSegment(value, style)])])
+  }
+
+  def text(value: String) -> StyledDocDoc {
+    segment(value, default_style())
+  }
+
+  def line(value: String) -> StyledDocDoc {
+    text(value)
+  }
+
+  def newline() -> StyledDocDoc {
+    StyledDocDoc([StyledDocLine([])])
+  }
+
+  def append(left: StyledDocDoc, right: StyledDocDoc) -> StyledDocDoc {
+    StyledDocDoc(List::append(left.lines, right.lines))
+  }
+
+  def concat(docs: List<StyledDocDoc>) -> StyledDocDoc {
+    List::reduce(docs, empty(), {|acc, doc| append(acc, doc)})
+  }
+
+  defp _inline_segments(lines: List<StyledDocLine>) -> List<StyledDocSegment> {
+    match lines {
+      [] => [],
+      [head, ..tail] => List::append(head.segments, _inline_segments(tail)),
+    }
+  }
+
+  def inline_concat(docs: List<StyledDocDoc>) -> StyledDocDoc {
+    StyledDocDoc([StyledDocLine(_inline_segments(concat(docs).lines))])
+  }
+
+  defp _spaces(width: Int) -> String {
+    match String::repeat(" ", width) {
+      Ok(value) => value,
+      Err(_) => "",
+    }
+  }
+
+  defp _indent_line(line: StyledDocLine, prefix: String) -> StyledDocLine {
+    StyledDocLine([StyledDocSegment(prefix, default_style()), ..line.segments])
+  }
+
+  defp _indent_lines(lines: List<StyledDocLine>, prefix: String) -> List<StyledDocLine> {
+    match lines {
+      [] => [],
+      [head, ..tail] => [_indent_line(head, prefix), .._indent_lines(tail, prefix)],
+    }
+  }
+
+  def indent(doc: StyledDocDoc, width: Int) -> StyledDocDoc {
+    StyledDocDoc(_indent_lines(doc.lines, _spaces(width)))
+  }
+
+  defp _merge_option_color(base: Option<StyledDocColor>, next: Option<StyledDocColor>) -> Option<StyledDocColor> {
+    match next {
+      Option::Some(_) => next,
+      Option::None => base,
+    }
+  }
+
+  defp _merge_style(base: StyledDocStyle, next: StyledDocStyle) -> StyledDocStyle {
+    StyledDocStyle(
+      _merge_option_color(base.fg, next.fg),
+      _merge_option_color(base.bg, next.bg),
+      or(base.bold, next.bold),
+      or(base.dim, next.dim),
+      or(base.underline, next.underline),
+      or(base.italic, next.italic),
+    )
+  }
+
+  defp _style_segment(seg: StyledDocSegment, next: StyledDocStyle) -> StyledDocSegment {
+    StyledDocSegment(seg.text, _merge_style(seg.style, next))
+  }
+
+  defp _style_line(line: StyledDocLine, next: StyledDocStyle) -> StyledDocLine {
+    StyledDocLine(List::map(line.segments, {|seg| _style_segment(seg, next)}))
+  }
+
+  def style(doc: StyledDocDoc, next: StyledDocStyle) -> StyledDocDoc {
+    StyledDocDoc(List::map(doc.lines, {|line| _style_line(line, next)}))
+  }
+
+  defp _style_with_fg(doc: StyledDocDoc, color: StyledDocColor) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::Some(color), Option::None, False, False, False, False))
+  }
+
+  defp _style_with_bg(doc: StyledDocDoc, color: StyledDocColor) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::None, Option::Some(color), False, False, False, False))
+  }
+
+  def bold(doc: StyledDocDoc) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::None, Option::None, True, False, False, False))
+  }
+
+  def dim(doc: StyledDocDoc) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::None, Option::None, False, True, False, False))
+  }
+
+  def underline(doc: StyledDocDoc) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::None, Option::None, False, False, True, False))
+  }
+
+  def italic(doc: StyledDocDoc) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::None, Option::None, False, False, False, True))
+  }
+
+  def black(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Black) }
+  def red(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Red) }
+  def green(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Green) }
+  def yellow(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Yellow) }
+  def blue(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Blue) }
+  def magenta(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Magenta) }
+  def cyan(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Cyan) }
+  def white(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::White) }
+  def default_color(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Default) }
+
+  def bg_black(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Black) }
+  def bg_red(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Red) }
+  def bg_green(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Green) }
+  def bg_yellow(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Yellow) }
+  def bg_blue(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Blue) }
+  def bg_magenta(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Magenta) }
+  def bg_cyan(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Cyan) }
+  def bg_white(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::White) }
+  def bg_default(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Default) }
+
+  defp _plain_segments(segments: List<StyledDocSegment>) -> String {
+    match segments {
+      [] => "",
+      [head, ..tail] => head.text ++ _plain_segments(tail),
+    }
+  }
+
+  defp _plain_lines(lines: List<StyledDocLine>) -> String {
+    match lines {
+      [] => "",
+      [head] => _plain_segments(head.segments),
+      [head, ..tail] => _plain_segments(head.segments) ++ "\n" ++ _plain_lines(tail),
+    }
+  }
+
+  def plain(doc: StyledDocDoc) -> String {
+    _plain_lines(doc.lines)
+  }
+
+  defp _esc() -> String {
+    match String::from_codepoints([27], StringEncoding::Utf8) {
+      Ok(value) => value,
+      Err(_) => "",
+    }
+  }
+
+  defp _fg_code(color: StyledDocColor) -> String {
+    match color {
+      StyledDocColor::Black => "30",
+      StyledDocColor::Red => "31",
+      StyledDocColor::Green => "32",
+      StyledDocColor::Yellow => "33",
+      StyledDocColor::Blue => "34",
+      StyledDocColor::Magenta => "35",
+      StyledDocColor::Cyan => "36",
+      StyledDocColor::White => "37",
+      StyledDocColor::Default => "39",
+    }
+  }
+
+  defp _bg_code(color: StyledDocColor) -> String {
+    match color {
+      StyledDocColor::Black => "40",
+      StyledDocColor::Red => "41",
+      StyledDocColor::Green => "42",
+      StyledDocColor::Yellow => "43",
+      StyledDocColor::Blue => "44",
+      StyledDocColor::Magenta => "45",
+      StyledDocColor::Cyan => "46",
+      StyledDocColor::White => "47",
+      StyledDocColor::Default => "49",
+    }
+  }
+
+  defp _style_codes(style: StyledDocStyle) -> List<String> {
+    attrs = List::concat([
+      if(style.bold, ["1"], []),
+      if(style.dim, ["2"], []),
+      if(style.underline, ["4"], []),
+      if(style.italic, ["3"], []),
+    ])
+    with_fg = match style.fg {
+      Option::Some(color) => List::append(attrs, [_fg_code(color)]),
+      Option::None => attrs,
+    }
+    match style.bg {
+      Option::Some(color) => List::append(with_fg, [_bg_code(color)]),
+      Option::None => with_fg,
+    }
+  }
+
+  defp _has_style(style: StyledDocStyle) -> Boolean {
+    or(
+      or(style.bold, style.dim),
+      or(or(style.underline, style.italic), or(Option::is_some(style.fg), Option::is_some(style.bg))),
+    )
+  }
+
+  defp _ansi_segment(segment: StyledDocSegment) -> String {
+    if(
+      or(segment.text == "", Boolean::not(_has_style(segment.style))),
+      segment.text,
+      {
+        codes = _style_codes(segment.style)
+        _esc() ++ "[" ++ String::join(codes, ";") ++ "m" ++ segment.text ++ _esc() ++ "[0m"
+      },
+    )
+  }
+
+  defp _ansi_segments(segments: List<StyledDocSegment>) -> String {
+    match segments {
+      [] => "",
+      [head, ..tail] => _ansi_segment(head) ++ _ansi_segments(tail),
+    }
+  }
+
+  defp _ansi_lines(lines: List<StyledDocLine>) -> String {
+    match lines {
+      [] => "",
+      [head] => _ansi_segments(head.segments),
+      [head, ..tail] => _ansi_segments(head.segments) ++ "\n" ++ _ansi_lines(tail),
+    }
+  }
+
+  def to_ansi(doc: StyledDocDoc) -> String {
+    _ansi_lines(doc.lines)
+  }
+}
+
+@@doc """
 Test DSL helpers loaded only by `surtr test`.
 """
 defmod Test {
@@ -103,6 +386,14 @@ defmod Test {
         )
       },
     }
+  }
+
+  def assert_doc_plain_eq(expected: String, doc: StyledDocDoc) -> Result<()> {
+    assert_eq(expected, StyledDoc::plain(doc))
+  }
+
+  def assert_doc_ansi_eq(expected: String, doc: StyledDocDoc) -> Result<()> {
+    assert_eq(expected, StyledDoc::to_ansi(doc))
   }
 
   @@doc """
