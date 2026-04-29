@@ -526,6 +526,33 @@ fn localize_chunk_indices(
                 }
                 *template_id = (id_usize - error_template_base) as u32;
             }
+            Opcode::MakeErrorLiteral {
+                kind_const_idx,
+                message_const_idx,
+            } => {
+                let kind_idx = *kind_const_idx as usize;
+                if kind_idx < const_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk error literal kind index {} is below base {}",
+                            kind_idx, const_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                let message_idx = *message_const_idx as usize;
+                if message_idx < const_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk error literal message index {} is below base {}",
+                            message_idx, const_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                *kind_const_idx = (kind_idx - const_base) as u32;
+                *message_const_idx = (message_idx - const_base) as u32;
+            }
             _ => {}
         }
     }

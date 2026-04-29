@@ -1,11 +1,9 @@
-use std::fs;
-use std::process::Command;
-
 use serde_json::Value;
+use std::fs;
 
 use crate::common::{
     extract_phase_tag, module_compile_error_fixtures, module_spec_fixtures, normalize_text,
-    parse_compile_error_expectation, repo_root, surtr_bin, unique_temp_dir, ModuleFixtureCase,
+    parse_compile_error_expectation, repo_root, surtr_command, unique_temp_dir, ModuleFixtureCase,
 };
 use crate::support;
 
@@ -152,7 +150,7 @@ fn module_compile_error_fixtures_bucket_3() {
 fn direct_module_file_compiles_without_module_resolution_stub_error() {
     let module_path =
         repo_root().join("tests/compile_errors/modules/duplicate_import_all_all/Kernel.srt");
-    let output = Command::new(surtr_bin())
+    let output = surtr_command()
         .args([
             "check",
             module_path.to_str().expect("module path must be utf-8"),
@@ -195,7 +193,7 @@ fn dump_includes_qualified_function_names_for_module_defined_functions() {
     let bytes = bytecode.encode().expect("encode should succeed");
     fs::write(&eldr_path, bytes).expect("failed to write eldr file");
 
-    let dump = Command::new(surtr_bin())
+    let dump = surtr_command()
         .args([
             "dump",
             eldr_path.to_str().expect("eldr path must be utf-8"),

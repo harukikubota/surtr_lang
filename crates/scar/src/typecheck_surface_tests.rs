@@ -1,10 +1,8 @@
-mod support;
-
 use scar::typed::{OperatorTraitOp, TraitCallOrigin, TypedInner, TypedLensSegment, TypedNode};
 use scar::types::Ty;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
-use support::*;
+use crate::test_support::*;
 
 #[test]
 fn field_access_is_resolved_to_numeric_index() {

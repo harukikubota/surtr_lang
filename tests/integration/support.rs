@@ -43,6 +43,15 @@ struct CachedModulePipeline {
     declaration_index: sigil::DeclarationIndex,
 }
 
+#[derive(Clone)]
+struct CachedCompilePrefix {
+    module_asts: Vec<Vec<sigil::StagedModuleAst>>,
+    declaration_index: sigil::DeclarationIndex,
+    resolve_state: sigil::ResolveResumeState,
+    scar_checkpoint: scar::ScarCheckpoint,
+    bytecode: Bytecode,
+}
+
 struct CachedPhaseSessions {
     sigil_session: sigil::SigilSession,
     scar_session: scar::ScarSession,
@@ -121,6 +130,13 @@ fn typecheck_context_for_mode(mode: TestCompileMode) -> scar::TypecheckContext {
         },
         enforce_builtin_type_contracts: true,
         allow_error_function_params: false,
+    }
+}
+
+fn compile_chunk_typecheck_context_for_mode(mode: TestCompileMode) -> scar::TypecheckContext {
+    scar::TypecheckContext {
+        enforce_builtin_type_contracts: false,
+        ..typecheck_context_for_mode(mode)
     }
 }
 
@@ -394,6 +410,61 @@ fn cached_module_pipeline(
     Ok(pipeline)
 }
 
+fn cached_compile_prefix(
+    compile_sources: &CompileSources,
+    mode: TestCompileMode,
+) -> Result<Arc<CachedCompilePrefix>, String> {
+    static COMPILE_PREFIX_CACHE: OnceLock<
+        Mutex<HashMap<String, Result<Arc<CachedCompilePrefix>, String>>>,
+    > = OnceLock::new();
+
+    let cache = COMPILE_PREFIX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache_key = module_pipeline_cache_key(compile_sources, mode);
+
+    if let Some(cached) = cache
+        .lock()
+        .expect("compile prefix cache poisoned")
+        .get(&cache_key)
+    {
+        return cached.clone();
+    }
+
+    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
+    let resolved = sigil::resolve_staged_program_with_state(
+        &cached_modules.module_asts,
+        Vec::new(),
+        &cached_modules.declaration_index,
+        None,
+    )
+    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    let mut scar_session = scar::ScarSession::new();
+    let typed = scar_session
+        .typecheck_with_context(resolved.resolved, std_typecheck_context_for_mode(mode))
+        .map_err(|e| format!("phase=typecheck; message={}", e))?;
+    let bytecode = forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
+    let next_fun_idx = bytecode
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    let prefix = Arc::new(CachedCompilePrefix {
+        module_asts: cached_modules.module_asts,
+        declaration_index: cached_modules.declaration_index,
+        resolve_state: sigil::ResolveResumeState {
+            next_local_id: resolved.resume_state.next_local_id.max(next_fun_idx),
+        },
+        scar_checkpoint: scar_session.checkpoint(),
+        bytecode,
+    });
+
+    cache
+        .lock()
+        .expect("compile prefix cache poisoned")
+        .insert(cache_key, Ok(Arc::clone(&prefix)));
+    Ok(prefix)
+}
+
 fn phase_session_cache_key(compile_sources: &CompileSources, mode: TestCompileMode) -> String {
     let mut key = module_pipeline_cache_key(compile_sources, mode);
     key.push('\x1f');
@@ -571,24 +642,44 @@ fn compile_sources_with_mode(
         return Ok(bytecode);
     }
 
-    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
+    let compile_prefix = cached_compile_prefix(compile_sources, mode)?;
     let user_ast = parse_user_program(compile_sources, mode)?;
     let docs = xldr::collect_doc_entries(
-        &cached_modules.module_asts,
+        &compile_prefix.module_asts,
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
-    let resolved = sigil::resolve_staged_program(
-        &cached_modules.module_asts,
+    let resolved = sigil::resolve_staged_program_from_state(
+        &compile_prefix.module_asts,
         user_ast,
-        &cached_modules.declaration_index,
+        &compile_prefix.declaration_index,
         Some(compile_sources.user_module_path.clone()),
+        compile_prefix.module_asts.len(),
+        compile_prefix.resolve_state,
     )
     .map_err(|e| format!("phase=resolve; message={}", e))?;
-    let typed = scar::typecheck_with_context(resolved, typecheck_context_for_mode(mode))
+    let mut scar_session = scar::ScarSession::new();
+    scar_session.rollback(compile_prefix.scar_checkpoint.clone());
+    let next_fun_idx = compile_prefix
+        .bytecode
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+    let typed = scar_session
+        .typecheck_with_context(
+            resolved.resolved,
+            compile_chunk_typecheck_context_for_mode(mode),
+        )
         .map_err(|e| format!("phase=typecheck; message={}", e))?;
-    let mut bytecode =
-        forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
+    let mut forge_session = forge::ForgeSession::from_bytecode(&compile_prefix.bytecode);
+    let (chunk, _) = forge_session
+        .codegen_chunk(typed)
+        .map_err(|e| format!("phase=codegen; message={}", e))?;
+    let mut bytecode = forge::compose_bytecode_with_chunk(compile_prefix.bytecode.clone(), chunk)
+        .map_err(|e| format!("phase=codegen; message={}", e))?;
     let user_source = compile_sources
         .sources
         .source(compile_sources.user_source_id)

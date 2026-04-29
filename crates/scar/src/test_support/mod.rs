@@ -39,7 +39,13 @@ const KLEISLI_COMPOSABLE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/kleisli_composable.srt");
 const INT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/int.srt");
 const STRING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/string.srt");
-const REGEX_MODULE_SOURCE: &str = include_str!("../../../../lib/types/regex.srt");
+const REGEX_MODULE_SOURCE: &str = r#"@@builtin type Regex
+@@builtin type RegexCaptures
+@@builtin type RegexMatch
+
+impl Regex {}
+impl RegexCaptures {}
+impl RegexMatch {}"#;
 const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../../lib/types/boolean.srt");
 const ORDERING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/ordering.srt");
 const ERROR_MODULE_SOURCE: &str = include_str!("../../../../lib/types/error.srt");
@@ -47,13 +53,12 @@ const LIST_MODULE_SOURCE: &str = include_str!("../../../../lib/types/list.srt");
 const GENERATOR_MODULE_SOURCE: &str = r#"@@builtin type Generator<$State, $Item>
 
 impl Generator {}"#;
-const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../../lib/types/hash_map.srt");
+const HASH_MAP_MODULE_SOURCE: &str = r#"@@builtin type HashMap<$V>
+
+impl HashMap {}"#;
 const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
-const OPTION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/option.srt");
 const LENS_MODULE_SOURCE: &str = include_str!("../../../../lib/lens.srt");
 const FLOAT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/float.srt");
-const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../../lib/styled_doc.srt");
-const TEST_MODULE_SOURCE: &str = include_str!("../../../../lib/test.srt");
 
 pub(crate) fn typecheck(
     resolved: Vec<sigil::resolved::Resolved>,
@@ -374,27 +379,15 @@ pub(crate) fn std_module_stages_with_overrides(
                 "Result",
                 pick_override("Result", RESULT_MODULE_SOURCE, overrides),
             ),
-            (
-                "Option",
-                pick_override("Option", OPTION_MODULE_SOURCE, overrides),
-            ),
             ("Lens", pick_override("Lens", LENS_MODULE_SOURCE, overrides)),
             (
                 "Float",
                 pick_override("Float", FLOAT_MODULE_SOURCE, overrides),
             ),
-            (
-                "StyledDoc",
-                pick_override("StyledDoc", STYLED_DOC_MODULE_SOURCE, overrides),
-            ),
         ]
         .into_iter()
         .flat_map(|(name, source)| parse_std_module_stage(source, name))
         .collect(),
-        [("Test", pick_override("Test", TEST_MODULE_SOURCE, overrides))]
-            .into_iter()
-            .flat_map(|(name, source)| parse_std_module_stage(source, name))
-            .collect(),
     ]
 }
 

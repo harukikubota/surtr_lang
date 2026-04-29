@@ -655,7 +655,7 @@ print(msg)"#,
     );
 }
 
-pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
+pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
     let cases: &[(&str, fn())] = &[
         (
             "pipe_accepts_capture_and_injected_call",
@@ -731,5 +731,5 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
         ),
         ("language_goal_combined", language_goal_combined as fn()),
     ];
-    super::run_bucket_cases("pipelines_and_usecases", cases, bucket, bucket_count);
+    super::run_bucket_cases("pipelines_and_usecases", cases, bucket, bucket_count)
 }
