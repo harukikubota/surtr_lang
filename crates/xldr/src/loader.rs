@@ -539,14 +539,42 @@ fn collect_lib_module_files(
 }
 
 pub fn collect_additional_default_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
-    Ok(collect_lib_module_inputs()?
-        .into_iter()
-        .filter(|module| {
-            let file_name = lib_relative_path(Path::new(&module.file_name));
-            !is_default_std_module_file_name(&file_name)
-                && !is_default_std_module_path(&module.module_path)
-        })
-        .collect())
+    let lib_dir = Path::new("lib");
+    if !lib_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+    collect_lib_module_files(lib_dir, &mut files)?;
+    files.sort();
+
+    let mut module_inputs = Vec::new();
+    for path in files {
+        let relative_file_name = lib_relative_path(&path);
+        if is_default_std_module_file_name(&relative_file_name) {
+            continue;
+        }
+
+        let file_name = display_path(&path);
+        let source = fs::read_to_string(&path).map_err(|e| LoadError::SourceReadFailed {
+            file_name: file_name.clone(),
+            message: e.to_string(),
+        })?;
+        let module_path = derive_primary_module_path(&source)
+            .filter(|module_path| !module_path.is_empty())
+            .unwrap_or_else(|| lib_module_path_from_path(&path));
+        if is_default_std_module_path(&module_path) {
+            continue;
+        }
+
+        module_inputs.push(ModuleInput {
+            file_name,
+            source,
+            module_path,
+        });
+    }
+
+    Ok(module_inputs)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

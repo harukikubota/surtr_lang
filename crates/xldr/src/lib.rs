@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 pub use error_display::ErrorDisplayMode;
 pub use loader::{
@@ -788,9 +788,11 @@ struct CachedStdlibSemanticPayload {
     default_stage_count: usize,
 }
 
-pub fn default_stdlib_semantic_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
-    static SNAPSHOT: OnceLock<Result<DefaultStdlibSnapshot, LoadError>> = OnceLock::new();
-    SNAPSHOT.get_or_init(build_default_stdlib_snapshot).clone()
+pub fn default_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, LoadError> {
+    static SNAPSHOT: OnceLock<Result<Arc<DefaultStdlibSnapshot>, LoadError>> = OnceLock::new();
+    SNAPSHOT
+        .get_or_init(|| build_default_stdlib_snapshot().map(Arc::new))
+        .clone()
 }
 
 fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {

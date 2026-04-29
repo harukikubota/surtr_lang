@@ -368,26 +368,40 @@ fn include_runtime_error(file_path: &str, source: &str, span: Span, message: Str
     )
 }
 
-fn parse_program_with_module_sources(
+fn load_default_stdlib_snapshot(
     env: ExecutionEnv,
-    compile_sources: &xldr::CompileSources,
-) -> RuneResult<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>)> {
-    let compile_unit_kind = env.compile_unit_kind();
-    let source_kind = env.source_kind();
-    let sources = &compile_sources.sources;
-    let user_source_id = compile_sources.user_source_id;
-    let std_snapshot = xldr::default_stdlib_semantic_snapshot().map_err(|e| {
+    sources: &xldr::CompileSources,
+) -> RuneResult<std::sync::Arc<xldr::DefaultStdlibSnapshot>> {
+    let user_source_id = sources.user_source_id;
+    xldr::default_stdlib_semantic_snapshot().map_err(|e| {
         module_source_collection_error_as_rune_error(
-            sources.file_name(user_source_id).unwrap_or("<script>"),
-            sources.source(user_source_id).unwrap_or(""),
+            sources
+                .sources
+                .file_name(user_source_id)
+                .unwrap_or("<script>"),
+            sources.sources.source(user_source_id).unwrap_or(""),
             format!(
                 "{}: failed to load stdlib snapshot: {}",
                 env.command_name(),
                 e
             ),
         )
-    })?;
-    let mut staged_module_asts = std_snapshot.module_stages.clone();
+    })
+}
+
+fn parse_program_with_module_sources<'a>(
+    env: ExecutionEnv,
+    compile_sources: &xldr::CompileSources,
+    std_snapshot: &'a xldr::DefaultStdlibSnapshot,
+) -> RuneResult<(
+    std::borrow::Cow<'a, [Vec<sigil::StagedModuleAst>]>,
+    Vec<spire::ast::Ast>,
+)> {
+    let compile_unit_kind = env.compile_unit_kind();
+    let source_kind = env.source_kind();
+    let sources = &compile_sources.sources;
+    let user_source_id = compile_sources.user_source_id;
+    let mut staged_module_asts = std::borrow::Cow::Borrowed(std_snapshot.module_stages.as_slice());
     let mut suffix_module_asts = xldr::parse_module_stages_from_compile_sources_suffix(
         compile_sources,
         compile_unit_kind,
@@ -406,7 +420,9 @@ fn parse_program_with_module_sources(
             ),
         )
     })?;
-    staged_module_asts.append(&mut suffix_module_asts);
+    if !suffix_module_asts.is_empty() {
+        staged_module_asts.to_mut().append(&mut suffix_module_asts);
+    }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = match spire::parse_with_context(
@@ -452,8 +468,7 @@ fn parse_program_with_module_sources(
             user_ast,
             Some(compile_sources.user_module_path.as_str()),
         );
-        let mut combined_stages = staged_module_asts;
-        combined_stages.push(
+        staged_module_asts.to_mut().push(
             lowered
                 .into_iter()
                 .map(|module| sigil::StagedModuleAst {
@@ -464,7 +479,7 @@ fn parse_program_with_module_sources(
                 })
                 .collect(),
         );
-        Ok((combined_stages, Vec::new()))
+        Ok((staged_module_asts, Vec::new()))
     } else {
         Ok((staged_module_asts, user_ast))
     }
@@ -505,7 +520,9 @@ pub(crate) fn compile_source(
     let user_source_id = compile_sources.user_source_id;
     let user_source = sources.source(user_source_id).unwrap_or("");
 
-    let (module_stages, mut user_ast) = parse_program_with_module_sources(env, compile_sources)?;
+    let std_snapshot = load_default_stdlib_snapshot(env, compile_sources)?;
+    let (module_stages, mut user_ast) =
+        parse_program_with_module_sources(env, compile_sources, &std_snapshot)?;
     if let Some(entry_name) = compile_plan.selected_entry_name.as_deref() {
         user_ast = rewrite_script_ast_for_entry(user_ast, entry_name);
     }
@@ -515,30 +532,22 @@ pub(crate) fn compile_source(
         Some(compile_sources.user_module_path.as_str()),
     );
 
-    let std_snapshot = xldr::default_stdlib_semantic_snapshot().map_err(|e| {
-        module_source_collection_error_as_rune_error(
-            sources.file_name(user_source_id).unwrap_or("<script>"),
-            user_source,
-            format!(
-                "{}: failed to load stdlib snapshot: {}",
-                env.command_name(),
-                e
-            ),
-        )
-    })?;
+    let rebuilt_declaration_index;
     let declaration_index = if module_stages.len() == std_snapshot.default_stage_count {
-        std_snapshot.declaration_index.clone()
+        &std_snapshot.declaration_index
     } else {
-        sigil::precollect_declaration_index(&module_stages).map_err(|e| {
-            let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
-            RuneError::diagnostic(1, sources, source_id, "resolve", spec)
-        })?
+        rebuilt_declaration_index =
+            sigil::precollect_declaration_index(&module_stages).map_err(|e| {
+                let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
+                RuneError::diagnostic(1, sources, source_id, "resolve", spec)
+            })?;
+        &rebuilt_declaration_index
     };
 
     let resolved = sigil::resolve_staged_program_from_state(
         &module_stages,
         user_ast,
-        &declaration_index,
+        declaration_index,
         Some(compile_sources.user_module_path.clone()),
         std_snapshot.default_stage_count,
         std_snapshot.resolve_state,
