@@ -899,6 +899,7 @@ dependencies = [
 name = "scar"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "sigil",
  "sindr",
  "spire",
@@ -992,6 +993,7 @@ dependencies = [
 name = "sigil"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "sindr",
  "spire",
 ]
@@ -1050,6 +1052,7 @@ name = "spire"
 version = "0.1.0"
 dependencies = [
  "chumsky",
+ "serde",
  "sindr",
 ]
 
@@ -1343,6 +1346,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 name = "xldr"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "criterion",
  "crossterm",
  "diagnostics",
@@ -1351,6 +1355,7 @@ dependencies = [
  "ratatui",
  "rustyline",
  "scar",
+ "serde",
  "sigil",
  "sindr",
  "spire",

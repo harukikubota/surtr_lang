@@ -1,14 +1,15 @@
+use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
 use spire::ast::{AstTy, BinOp, Lit, Span, Symbol, Visibility};
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub visibility: Visibility,
 }
 
 /// A resolved identifier — name + unique id + source location.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedId {
     pub name: Symbol,
     pub qualified_name: Option<Symbol>,
@@ -17,7 +18,7 @@ pub struct ResolvedId {
 }
 
 /// Resolved AST — every identifier carries a unique_id.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Resolved {
     /// Literal value
     Lit(Span, Lit),
@@ -203,7 +204,7 @@ pub enum Resolved {
     Semi(Span, Box<Resolved>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedMatchArm {
     pub pattern: ResolvedPattern,
     pub guard: Option<Resolved>,
@@ -211,14 +212,14 @@ pub struct ResolvedMatchArm {
 }
 
 /// Interpolated string fragment (resolved).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedInterpolatedPart {
     Text(String),
     Expr(Box<Resolved>),
 }
 
 /// Pattern in a binding (resolved).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedPattern {
     Var(ResolvedId),
     Annotated(ResolvedId, AstTy),
@@ -236,14 +237,14 @@ pub enum ResolvedPattern {
 }
 
 /// Record literal argument (resolved).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedRecordLitArg {
     Positional(Resolved),
     Named(Symbol, Resolved),
 }
 
 /// Field definition (resolved) — used in StructDef / RecordDef / DeferrorDef.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedField {
     pub id: Option<ResolvedId>,
     pub name: Symbol,
@@ -253,26 +254,26 @@ pub struct ResolvedField {
 }
 
 /// Function parameter (resolved).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedFunParam {
     pub id: ResolvedId,
     pub ty: AstTy,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedExtractorParam {
     pub id: ResolvedId,
     pub ty: Option<AstTy>,
 }
 
 /// Closure parameter.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedClosureParam {
     pub id: ResolvedId,
     pub ty: Option<AstTy>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedEnumVariant {
     pub id: ResolvedId,
     pub payload: Vec<AstTy>,
@@ -280,7 +281,7 @@ pub struct ResolvedEnumVariant {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedTraitMethodSig {
     pub id: ResolvedId,
     pub type_params: Vec<ResolvedTypeParam>,
@@ -289,7 +290,7 @@ pub struct ResolvedTraitMethodSig {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedTraitImplMethod {
     pub method_name: Symbol,
     pub function_id: ResolvedId,
@@ -302,7 +303,7 @@ pub struct ResolvedTraitImplMethod {
     pub is_builtin: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedTypeParam {
     pub name: Symbol,
     pub bound: Option<Symbol>,

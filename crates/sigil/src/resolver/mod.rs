@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
+use serde::{Deserialize, Serialize};
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{
     Ast, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit,
@@ -69,7 +70,7 @@ pub fn resolve_staged_program(
     .map(|resolved| resolved.resolved)
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolveResumeState {
     pub next_local_id: u32,
 }

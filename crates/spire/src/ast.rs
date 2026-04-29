@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
 
 /// Source location — attached to every AST node for downstream error reporting.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -10,7 +11,7 @@ pub struct Span {
 /// A plain identifier string. Kept as its own type for readability.
 pub type Symbol = String;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Visibility {
     #[default]
     Public,
@@ -35,7 +36,7 @@ pub struct BuiltinTypeHead {
 
 // ── Literals ──
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Lit {
     Int(SurtrInt),
     Float(f64),
@@ -46,7 +47,7 @@ pub enum Lit {
 
 // ── Binary operators ──
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum BinOp {
     Add,
     Sub,
@@ -62,7 +63,7 @@ pub enum BinOp {
 
 // ── Type annotations (surface syntax) ──
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AstTy {
     /// `Int`, `String`, `Boolean`, `Unit`, `User`, ...
     Named(Span, Symbol),

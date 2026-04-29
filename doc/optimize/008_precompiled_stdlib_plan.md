@@ -203,3 +203,49 @@ SURTR_SCAR_PROFILE=1 /usr/bin/time -p ./target/debug/surtr build tests/profile/h
 - 単発 CLI process では snapshot 初期化が cold cost として一度発生する。
 - 同一 process 内の warm compile では default stdlib の Scar 処理は省かれ、後段 user/include 分だけが対象になる。
 - この測定では post-stdlib の Scar 対象は 405 stmt 相当から 39 stmt へ縮小した。
+
+## v1.5 / v2 semantic cache 実装後メモ
+
+- 実装日: 2026-04-29
+- 実装範囲: `xldr` の default stdlib semantic snapshot を disk cache 化した。
+- cache file は `target/surtr-stdlib-cache/std.semantic`。`SURTR_STDLIB_CACHE_DIR` 指定時はその directory 配下へ保存する。
+- cache payload は `DeclarationIndex` / `ResolveResumeState` / `ScarCheckpoint` / precompiled stdlib `Bytecode` / doc metadata / auto-import metadata を保持する。
+- `spire::Ast` 全体の永続化は避け、cache hit 時も stdlib parse と doc collection は実行する。resolve / typecheck / codegen は cache から復元する。
+- cache key は schema version、compiler version、`BUILTIN_METAS`、`BUILTIN_TYPE_METAS`、default stdlib source hash から作る。
+- cache miss / corrupt / schema mismatch / key mismatch は silent rebuild とする。
+- test build cost を抑えるため、serde derive は cache payload が実際に参照する型に限定する。`spire::Ast` 全体や `scar::TypedNode` 全体は永続化しない。
+
+計測:
+
+```bash
+SURTR_RUN_CACHE=0 SURTR_STDLIB_CACHE_DIR=/tmp/surtr-stdlib-cache-measure /usr/bin/time -p ./target/debug/surtr run tests/profile/heavy_compile.srt
+SURTR_RUN_CACHE=0 SURTR_STDLIB_CACHE_DIR=/tmp/surtr-stdlib-cache-profile SURTR_SCAR_PROFILE=1 /usr/bin/time -p ./target/debug/surtr run tests/profile/heavy_compile.srt
+```
+
+| case | real | 読み取り |
+|---|---:|---|
+| cold semantic cache miss | 1.11s | stdlib semantic rebuild + 620KB cache write が発生 |
+| warm semantic cache hit | 0.19s | stdlib Scar profile が消え、user/include 側のみ typecheck |
+| minimized clean test build | 16.70s | 広すぎた serde derive を削減後。実装直後の 19.89s から改善 |
+| empty semantic cache `cargo nextest run -p rune` | 15.03s | cache file は 1 個だけ作成され、初回 cost は共有される |
+
+warm cache hit の Scar profile:
+
+| item | value |
+|---|---:|
+| post-stdlib Scar total | 14.885ms |
+| post-stdlib stmt count | 39 |
+
+確認:
+
+```bash
+cargo test -p xldr
+cargo nextest run -p rune --test integration run_srt::spec_fixtures_bucket_0
+cargo nextest run --workspace
+```
+
+結果:
+
+- `cargo test -p xldr`: 47 passed
+- `cargo nextest run -p rune --test integration run_srt::spec_fixtures_bucket_0`: 1 passed
+- `cargo nextest run --workspace`: 830 passed

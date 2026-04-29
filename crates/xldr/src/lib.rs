@@ -4,6 +4,9 @@ pub mod repl;
 pub mod tui;
 
 use std::collections::BTreeSet;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub use error_display::ErrorDisplayMode;
@@ -19,7 +22,9 @@ pub use loader::{
 use diagnostics::SourceId;
 pub use repl::logic::core::{EldrLoadError, ReplEngine};
 pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
-use sindr::ir::{DocEntry, DocKind};
+use serde::{Deserialize, Serialize};
+use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
+use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind};
 use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
@@ -763,6 +768,26 @@ pub struct DefaultStdlibSnapshot {
     pub default_stage_count: usize,
 }
 
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedStdlibSemanticEnvelope {
+    schema: u32,
+    key: String,
+    payload: CachedStdlibSemanticPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedStdlibSemanticPayload {
+    declaration_index: sigil::DeclarationIndex,
+    resolve_state: sigil::ResolveResumeState,
+    scar_checkpoint: scar::ScarCheckpoint,
+    bytecode: Bytecode,
+    docs: Vec<DocEntry>,
+    auto_import_modules: BTreeSet<String>,
+    default_stage_count: usize,
+}
+
 pub fn default_stdlib_semantic_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
     static SNAPSHOT: OnceLock<Result<DefaultStdlibSnapshot, LoadError>> = OnceLock::new();
     SNAPSHOT.get_or_init(build_default_stdlib_snapshot).clone()
@@ -770,6 +795,7 @@ pub fn default_stdlib_semantic_snapshot() -> Result<DefaultStdlibSnapshot, LoadE
 
 fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
     let module_sources = collect_module_sources_with_module_stages(&[])?;
+    let cache_key = stdlib_semantic_cache_key(&module_sources);
     let module_stages = repl::logic::core::parse_module_stages_from_sources(
         &module_sources.sources,
         &module_sources.module_stages,
@@ -791,6 +817,25 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         .filter(|module| module.auto_import)
         .map(|module| module.module_path.clone())
         .collect::<BTreeSet<_>>();
+    let default_stage_count = module_stages.len();
+
+    if let Some(payload) =
+        load_cached_stdlib_semantic_snapshot(&stdlib_semantic_cache_path(), &cache_key)
+    {
+        if payload.default_stage_count == default_stage_count {
+            return Ok(DefaultStdlibSnapshot {
+                module_stages,
+                declaration_index: payload.declaration_index,
+                resolve_state: payload.resolve_state,
+                scar_checkpoint: payload.scar_checkpoint,
+                bytecode: payload.bytecode,
+                docs: payload.docs,
+                auto_import_modules: payload.auto_import_modules,
+                default_stage_count: payload.default_stage_count,
+            });
+        }
+    }
+
     let declaration_index = sigil::precollect_declaration_index(&module_stages).map_err(|e| {
         LoadError::BootstrapFailed {
             phase: "resolve".into(),
@@ -840,16 +885,156 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         next_local_id: resolved.resume_state.next_local_id.max(next_fun_idx),
     };
 
-    Ok(DefaultStdlibSnapshot {
-        default_stage_count: module_stages.len(),
-        module_stages,
+    let snapshot = DefaultStdlibSnapshot {
+        default_stage_count,
         declaration_index,
         resolve_state,
         scar_checkpoint: scar_session.checkpoint(),
         bytecode,
         docs,
         auto_import_modules,
-    })
+        module_stages,
+    };
+    store_cached_stdlib_semantic_snapshot(
+        &stdlib_semantic_cache_path(),
+        &cache_key,
+        CachedStdlibSemanticPayload {
+            declaration_index: snapshot.declaration_index.clone(),
+            resolve_state: snapshot.resolve_state,
+            scar_checkpoint: snapshot.scar_checkpoint.clone(),
+            bytecode: snapshot.bytecode.clone(),
+            docs: snapshot.docs.clone(),
+            auto_import_modules: snapshot.auto_import_modules.clone(),
+            default_stage_count: snapshot.default_stage_count,
+        },
+    );
+    Ok(snapshot)
+}
+
+fn load_cached_stdlib_semantic_snapshot(
+    cache_path: &Path,
+    expected_key: &str,
+) -> Option<CachedStdlibSemanticPayload> {
+    let bytes = fs::read(cache_path).ok()?;
+    let envelope: CachedStdlibSemanticEnvelope = bincode::deserialize(&bytes).ok()?;
+    if envelope.schema != STDLIB_SEMANTIC_CACHE_SCHEMA || envelope.key != expected_key {
+        return None;
+    }
+    Some(envelope.payload)
+}
+
+fn store_cached_stdlib_semantic_snapshot(
+    cache_path: &Path,
+    key: &str,
+    payload: CachedStdlibSemanticPayload,
+) {
+    let Some(parent) = cache_path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let envelope = CachedStdlibSemanticEnvelope {
+        schema: STDLIB_SEMANTIC_CACHE_SCHEMA,
+        key: key.to_string(),
+        payload,
+    };
+    let Ok(bytes) = bincode::serialize(&envelope) else {
+        return;
+    };
+    let temp_path = cache_path.with_extension(format!("{}.tmp", std::process::id()));
+    if fs::write(&temp_path, bytes).is_err() {
+        let _ = fs::remove_file(&temp_path);
+        return;
+    }
+    if fs::rename(&temp_path, cache_path).is_err() {
+        if fs::copy(&temp_path, cache_path).is_err() {
+            let _ = fs::remove_file(&temp_path);
+            return;
+        }
+        let _ = fs::remove_file(&temp_path);
+    }
+}
+
+fn stdlib_semantic_cache_path() -> PathBuf {
+    if let Some(path) = env::var_os("SURTR_STDLIB_CACHE_DIR") {
+        return PathBuf::from(path).join("std.semantic");
+    }
+    target_root_from_current_exe()
+        .map(|root| root.join("surtr-stdlib-cache").join("std.semantic"))
+        .unwrap_or_else(|| {
+            env::temp_dir()
+                .join("surtr-stdlib-cache")
+                .join("std.semantic")
+        })
+}
+
+fn target_root_from_current_exe() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let mut current = exe.parent()?;
+    while let Some(name) = current.file_name().and_then(|name| name.to_str()) {
+        if name == "debug" || name == "release" {
+            return current.parent().map(Path::to_path_buf);
+        }
+        current = current.parent()?;
+    }
+    None
+}
+
+fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
+    let mut key = String::new();
+    key.push_str("surtr-stdlib-semantic-cache-v");
+    key.push_str(&STDLIB_SEMANTIC_CACHE_SCHEMA.to_string());
+    key.push('\x1f');
+    key.push_str(env!("CARGO_PKG_VERSION"));
+    key.push('\x1f');
+    for meta in BUILTIN_METAS {
+        key.push_str(meta.name);
+        key.push('\x1e');
+        key.push_str(meta.sig_str);
+        key.push('\x1e');
+        key.push_str(&meta.arity.to_string());
+        key.push('\x1f');
+    }
+    key.push('\x1d');
+    for meta in BUILTIN_TYPE_METAS {
+        key.push_str(meta.name);
+        key.push('\x1e');
+        key.push_str(&meta.params.join(","));
+        key.push('\x1f');
+    }
+    key.push('\x1d');
+    for stage in &module_sources.module_stages {
+        key.push('|');
+        for module in stage {
+            let file_name = module_sources
+                .sources
+                .file_name(module.source_id)
+                .unwrap_or("<unknown>");
+            let source = module_sources
+                .sources
+                .source(module.source_id)
+                .unwrap_or("");
+            key.push_str(file_name);
+            key.push('\x1e');
+            key.push_str(&module.module_path);
+            key.push('\x1e');
+            key.push_str(source_kind_key(module.source_kind));
+            key.push('\x1e');
+            key.push_str(&stable_hash_hex(source));
+            key.push('\x1f');
+        }
+    }
+    stable_hash_hex(&key)
+}
+
+fn source_kind_key(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Script => "script",
+        SourceKind::Module => "module",
+        SourceKind::StdModule => "std",
+        SourceKind::ReplChunk => "repl",
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -905,6 +1090,20 @@ defmod B {
             .declaration_index
             .values()
             .any(|entry| entry.module_path == "TestOnly"));
+    }
+
+    #[test]
+    fn stdlib_semantic_cache_rejects_corrupt_file() {
+        let cache_path = std::env::temp_dir().join(format!(
+            "surtr-corrupt-stdlib-cache-{}.semantic",
+            std::process::id()
+        ));
+        std::fs::write(&cache_path, b"not a semantic cache").expect("write corrupt cache");
+
+        let loaded = load_cached_stdlib_semantic_snapshot(&cache_path, "expected-key");
+
+        assert!(loaded.is_none());
+        let _ = std::fs::remove_file(cache_path);
     }
 
     #[test]

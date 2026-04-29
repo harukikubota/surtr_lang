@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
 use spire::ast::Symbol;
 
 use crate::types::Ty;
 
 /// Kind of user-defined type.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeKind {
     Struct,
     Record,
@@ -15,7 +16,7 @@ pub enum TypeKind {
 }
 
 /// Metadata for a user-defined type (struct, record, error).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeDefInfo {
     pub tag: u32,
     pub kind: TypeKind,
@@ -27,7 +28,7 @@ pub struct TypeDefInfo {
 }
 
 /// Resolution state for user-defined type signatures.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeDefState {
     /// Name/kind/tag are known, but field signature is not finalized yet.
     Declared,
@@ -35,7 +36,7 @@ pub enum TypeDefState {
     SignatureResolved,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnumVariantInfo {
     pub constructor_name: Symbol,
     pub short_name: Symbol,
@@ -46,14 +47,14 @@ pub struct EnumVariantInfo {
     pub discriminant: SurtrInt,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct VarScopeFrame {
     touched: HashSet<u32>,
     undo: Vec<(u32, Option<Ty>)>,
 }
 
 /// Type environment — tracks variable types and type definitions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeEnv {
     /// unique_id → type
     pub vars: HashMap<u32, Ty>,

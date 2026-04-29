@@ -3,6 +3,8 @@ use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
 use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
     pub module_path: String,
@@ -11,7 +13,7 @@ pub struct StagedModuleAst {
     pub auto_import: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeclarationKind {
     Def,
     Extractor,
@@ -28,7 +30,7 @@ pub enum DeclarationKind {
     BuiltinType,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeclarationEntry {
     pub module_path: String,
     pub name: String,

@@ -6,4 +6,5 @@ description = "Surtr's Parser Ingesting Raw Expressions"
 
 [dependencies]
 chumsky = { version = "0.12.0", default-features = false, features = ["std"] }
+serde = { version = "1.0", features = ["derive"] }
 sindr = { path = "../sindr" }

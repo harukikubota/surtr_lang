@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use sigil::resolved::*;
 use sindr::builtin::{
     builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS, BUILTIN_TYPE_METAS,
@@ -367,7 +368,7 @@ enum TypeSyntaxContext {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitMethodInfo {
     id: ResolvedId,
     type_params: Vec<ResolvedTypeParam>,
@@ -377,7 +378,7 @@ struct TraitMethodInfo {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitInfo {
     id: ResolvedId,
     type_params: Vec<ResolvedTypeParam>,
@@ -385,7 +386,7 @@ struct TraitInfo {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitImplMethodInfo {
     method_name: String,
     function_id: ResolvedId,
@@ -400,7 +401,7 @@ struct TraitImplMethodInfo {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitImplInfo {
     trait_id: ResolvedId,
     trait_args: Vec<AstTy>,
@@ -726,7 +727,7 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
 type TraitImplKey = (String, String);
 type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScarCheckpoint {
     env: TypeEnv,
     user_func_params: HashMap<u32, Vec<String>>,

@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use sigil::resolved::ResolvedId;
 use sindr::primitives::SurtrInt;
 use spire::ast::{BinOp, Lit, Span, Visibility};
@@ -40,7 +41,7 @@ pub enum TraitDispatch {
     Static(TraitDispatchTarget),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TraitDispatchTarget {
     BinOp(BinOp),
     Builtin(String),

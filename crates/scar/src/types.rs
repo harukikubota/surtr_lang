@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use spire::ast::Symbol;
 
 /// Surtr type — every typed node carries one of these.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Ty {
     Int,
     Float,
