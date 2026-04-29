@@ -10,6 +10,7 @@ pub use checker::{
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
     use std::thread;
 
     use super::{
@@ -185,6 +186,19 @@ impl Generator {}"#;
         std_module_stages_with_overrides(&[])
     }
 
+    fn cached_std_modules_and_declarations(
+    ) -> &'static (Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex) {
+        static CACHE: OnceLock<(Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex)> =
+            OnceLock::new();
+
+        CACHE.get_or_init(|| {
+            let module_stages = std_module_stages();
+            let declaration_index = sigil::precollect_declaration_index(&module_stages)
+                .expect("std modules should precollect");
+            (module_stages, declaration_index)
+        })
+    }
+
     fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(source, spire::ParserContext::module(0, None))
             .expect("module source should parse");
@@ -337,12 +351,10 @@ impl Generator {}"#;
     ) -> Result<Vec<sigil::resolved::Resolved>, sigil::error::ResolveError> {
         let source = source.to_owned();
         run_with_large_stack("resolve_with_builtin_prelude_result", move || {
-            let module_stages = std_module_stages();
+            let (module_stages, declaration_index) = cached_std_modules_and_declarations();
             let user_ast = spire::parse_with_context(&source, spire::ParserContext::project(0))
                 .expect("source should parse");
-            let declaration_index = sigil::precollect_declaration_index(&module_stages)
-                .expect("std modules should precollect");
-            sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
+            sigil::resolve_staged_program(module_stages, user_ast, declaration_index, None)
         })
     }
 
@@ -359,15 +371,13 @@ impl Generator {}"#;
         let source = source.to_owned();
         let module_path = module_path.to_owned();
         run_with_large_stack("resolve_with_builtin_prelude_in_module", move || {
-            let module_stages = std_module_stages();
+            let (module_stages, declaration_index) = cached_std_modules_and_declarations();
             let user_ast = spire::parse_with_context(&source, spire::ParserContext::project(0))
                 .expect("source should parse");
-            let declaration_index = sigil::precollect_declaration_index(&module_stages)
-                .expect("std modules should precollect");
             sigil::resolve_staged_program(
-                &module_stages,
+                module_stages,
                 user_ast,
-                &declaration_index,
+                declaration_index,
                 Some(module_path),
             )
         })
