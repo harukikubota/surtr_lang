@@ -575,9 +575,79 @@ fn typecheck_sources_with_mode(
     Ok(())
 }
 
+fn resolve_sources_in_compile_order(
+    compile_sources: &CompileSources,
+    mode: TestCompileMode,
+) -> Result<(), String> {
+    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
+    let std_resolved = sigil::resolve_staged_program_with_state(
+        &cached_modules.module_asts,
+        Vec::new(),
+        &cached_modules.declaration_index,
+        None,
+    )
+    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    let user_ast = parse_user_program(compile_sources, mode)?;
+    sigil::resolve_staged_program_from_state(
+        &cached_modules.module_asts,
+        user_ast,
+        &cached_modules.declaration_index,
+        Some(compile_sources.user_module_path.clone()),
+        cached_modules.module_asts.len(),
+        std_resolved.resume_state,
+    )
+    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    Ok(())
+}
+
+fn typecheck_sources_in_compile_order(
+    compile_sources: &CompileSources,
+    mode: TestCompileMode,
+) -> Result<(), String> {
+    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
+    let std_resolved = sigil::resolve_staged_program_with_state(
+        &cached_modules.module_asts,
+        Vec::new(),
+        &cached_modules.declaration_index,
+        None,
+    )
+    .map_err(|e| format!("phase=resolve; message={}", e))?;
+
+    let mut scar_session = scar::ScarSession::new();
+    scar_session
+        .typecheck_with_context(std_resolved.resolved, std_typecheck_context_for_mode(mode))
+        .map_err(|e| format!("phase=typecheck; message={}", e))?;
+
+    let user_ast = parse_user_program(compile_sources, mode)?;
+    let resolved = sigil::resolve_staged_program_from_state(
+        &cached_modules.module_asts,
+        user_ast,
+        &cached_modules.declaration_index,
+        Some(compile_sources.user_module_path.clone()),
+        cached_modules.module_asts.len(),
+        std_resolved.resume_state,
+    )
+    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    scar_session
+        .typecheck_with_context(
+            resolved.resolved,
+            compile_chunk_typecheck_context_for_mode(mode),
+        )
+        .map_err(|e| format!("phase=typecheck; message={}", e))?;
+    Ok(())
+}
+
 #[allow(dead_code)]
 pub fn check_script_phase(source_name: &str, source: &str, phase: &str) -> Result<(), String> {
     check_source_phase(source_name, source, TestCompileMode::Script, phase)
+}
+
+#[allow(dead_code)]
+pub fn check_script_sources_phase(
+    compile_sources: &CompileSources,
+    phase: &str,
+) -> Result<(), String> {
+    check_sources_phase(compile_sources, TestCompileMode::Script, phase)
 }
 
 #[allow(dead_code)]
@@ -608,6 +678,26 @@ fn check_source_phase(
         CompileFailurePhase::Codegen => {
             let compile_sources = collect_script_compile_sources(source_name, source)?;
             compile_sources_with_mode(&compile_sources, mode).map(|_| ())
+        }
+    }
+}
+
+fn check_sources_phase(
+    compile_sources: &CompileSources,
+    mode: TestCompileMode,
+    phase: &str,
+) -> Result<(), String> {
+    let phase = CompileFailurePhase::from_str(phase)?;
+    match phase {
+        CompileFailurePhase::Parse => {
+            parse_module_stages(compile_sources, compile_unit_kind_for_mode(mode))?;
+            parse_user_program(compile_sources, mode)?;
+            Ok(())
+        }
+        CompileFailurePhase::Resolve => resolve_sources_in_compile_order(compile_sources, mode),
+        CompileFailurePhase::Typecheck => typecheck_sources_in_compile_order(compile_sources, mode),
+        CompileFailurePhase::Codegen => {
+            compile_sources_with_mode(compile_sources, mode).map(|_| ())
         }
     }
 }

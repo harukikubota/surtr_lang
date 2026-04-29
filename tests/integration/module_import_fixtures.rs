@@ -10,14 +10,22 @@ use crate::support;
 fn compile_multi_source_case(
     case: &ModuleFixtureCase,
 ) -> Result<forge::bytecode::Bytecode, String> {
+    let compile_sources = compile_sources_for_case(case)?;
+    support::compile_script_sources(&compile_sources)
+}
+
+fn compile_sources_for_case(case: &ModuleFixtureCase) -> Result<xldr::CompileSources, String> {
     let module_sources = support::collect_module_sources(&case.module_stages)?;
-    let compile_sources = support::compose_script_sources(
+    Ok(support::compose_script_sources(
         &case.entry_path.to_string_lossy(),
         case.entry_source,
         module_sources,
-    );
+    ))
+}
 
-    support::compile_script_sources(&compile_sources)
+fn check_multi_source_case_phase(case: &ModuleFixtureCase, phase: &str) -> Result<(), String> {
+    let compile_sources = compile_sources_for_case(case)?;
+    support::check_script_sources_phase(&compile_sources, phase)
 }
 
 fn run_multi_source_case(case: &ModuleFixtureCase) -> Result<Vec<String>, String> {
@@ -76,7 +84,13 @@ fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
 
     for fixture in cases {
         let expected = parse_compile_error_expectation(&fixture.error_path);
-        let result = compile_multi_source_case(&fixture.case);
+        let result = match expected.phase.as_deref() {
+            Some(phase @ ("parse" | "resolve" | "typecheck")) => {
+                check_multi_source_case_phase(&fixture.case, phase)
+            }
+            None => compile_multi_source_case(&fixture.case).map(|_| ()),
+            Some(_) => compile_multi_source_case(&fixture.case).map(|_| ()),
+        };
         match result {
             Ok(_) => panic!(
                 "expected compile failure but succeeded: {}",
