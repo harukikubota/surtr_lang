@@ -9,6 +9,7 @@ use crate::compile::{
     script_plan_error_as_rune_error,
 };
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
+use crate::run_cache;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VmDumpMode {
@@ -166,18 +167,34 @@ fn run_source_file(
         &compile_plan.source_for_parse,
         &compile_plan.include_directives,
     )?;
-    let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
+    let bytecode = match run_cache::load(env, &compile_sources, &compile_plan) {
+        Some(bytecode) => bytecode,
+        None => {
+            let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
+            run_cache::store(env, &compile_sources, &compile_plan, &bytecode);
+            bytecode
+        }
+    };
+    let runtime_sources = source_registry_from_bytecode(&bytecode);
+    let source_context = runtime_sources
+        .as_ref()
+        .and_then(|(sources, source_id)| sources.owned_context(*source_id))
+        .or_else(|| {
+            compile_sources
+                .sources
+                .owned_context(compile_sources.user_source_id)
+        });
     execute_bytecode(
         env,
         bytecode,
         cli_args,
-        compile_sources
-            .sources
-            .owned_context(compile_sources.user_source_id),
-        Some((
-            compile_sources.sources.clone(),
-            compile_sources.user_source_id,
-        )),
+        source_context,
+        runtime_sources.or_else(|| {
+            Some((
+                compile_sources.sources.clone(),
+                compile_sources.user_source_id,
+            ))
+        }),
         vm_dump,
     )
 }

@@ -1,9 +1,33 @@
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
 
 use crate::common::{surtr_bin, unique_temp_dir, write_source};
+
+fn run_cache_files(cache_dir: &Path) -> Vec<PathBuf> {
+    let mut files = fs::read_dir(cache_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("eldr"))
+        .collect::<Vec<_>>();
+    files.sort();
+    files
+}
+
+fn run_source_with_cache(bin: &str, source_path: &Path, cache_dir: &Path) -> std::process::Output {
+    Command::new(bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .env("SURTR_RUN_CACHE_DIR", cache_dir)
+        .output()
+        .expect("failed to run source command")
+}
 
 #[test]
 fn run_eldr_matches_run_srt_output() {
@@ -67,6 +91,248 @@ fn run_eldr_matches_run_srt_output() {
         String::from_utf8_lossy(&run_srt.stdout),
         String::from_utf8_lossy(&run_eldr.stdout),
         "stdout mismatch between run <.srt> and run <.eldr>"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_uses_run_cache_on_repeated_invocation() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_cache_hit");
+    let source_path = temp.join("sample.srt");
+    let alternate_source_path = temp.join("alternate.srt");
+    let alternate_eldr_path = temp.join("alternate.eldr");
+    let cache_dir = temp.join("cache");
+
+    write_source(&source_path, "print(\"from source\")\n");
+    write_source(&alternate_source_path, "print(\"from cache\")\n");
+
+    let first = run_source_with_cache(&bin, &source_path, &cache_dir);
+    assert!(
+        first.status.success(),
+        "first run should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&first.stdout),
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&first.stdout), "from source\n");
+    let cache_files = run_cache_files(&cache_dir);
+    assert_eq!(cache_files.len(), 1, "expected one cache file");
+
+    let build_alternate = Command::new(&bin)
+        .args([
+            "build",
+            alternate_source_path
+                .to_str()
+                .expect("source path must be utf-8"),
+            alternate_eldr_path
+                .to_str()
+                .expect("eldr path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run build command");
+    assert!(
+        build_alternate.status.success(),
+        "alternate build should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_alternate.stdout),
+        String::from_utf8_lossy(&build_alternate.stderr)
+    );
+    fs::copy(&alternate_eldr_path, &cache_files[0]).expect("failed to replace cache file");
+
+    let second = run_source_with_cache(&bin, &source_path, &cache_dir);
+    assert!(
+        second.status.success(),
+        "second run should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&second.stdout),
+        "from cache\n",
+        "second run should execute cached bytecode"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_cache_misses_when_source_changes() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_cache_source_change");
+    let source_path = temp.join("sample.srt");
+    let cache_dir = temp.join("cache");
+
+    write_source(&source_path, "print(\"one\")\n");
+    let first = run_source_with_cache(&bin, &source_path, &cache_dir);
+    assert!(first.status.success(), "first run should succeed");
+    assert_eq!(String::from_utf8_lossy(&first.stdout), "one\n");
+
+    write_source(&source_path, "print(\"two\")\n");
+    let second = run_source_with_cache(&bin, &source_path, &cache_dir);
+    assert!(
+        second.status.success(),
+        "second run should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&second.stdout), "two\n");
+    assert_eq!(
+        run_cache_files(&cache_dir).len(),
+        2,
+        "source changes should create a distinct cache entry"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_cache_misses_when_include_changes() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_cache_include_change");
+    let source_path = temp.join("sample.srt");
+    let helper_path = temp.join("Helper.srt");
+    let cache_dir = temp.join("cache");
+
+    write_source(
+        &source_path,
+        r#"include 'Helper.srt'
+import Helper::message
+print(message())"#,
+    );
+    write_source(
+        &helper_path,
+        r#"defmod Helper {
+  def message() -> String { "one" }
+}"#,
+    );
+    let first = run_source_with_cache(&bin, &source_path, &cache_dir);
+    assert!(first.status.success(), "first run should succeed");
+    assert_eq!(String::from_utf8_lossy(&first.stdout), "one\n");
+
+    write_source(
+        &helper_path,
+        r#"defmod Helper {
+  def message() -> String { "two" }
+}"#,
+    );
+    let second = run_source_with_cache(&bin, &source_path, &cache_dir);
+    assert!(
+        second.status.success(),
+        "second run should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&second.stdout), "two\n");
+    assert_eq!(
+        run_cache_files(&cache_dir).len(),
+        2,
+        "include changes should create a distinct cache entry"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_cache_keys_selected_entrypoint() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_cache_entry");
+    let source_path = temp.join("sample.srt");
+    let cache_dir = temp.join("cache");
+
+    write_source(
+        &source_path,
+        r#"print("top")
+
+def start() -> Result<()> {
+  print("entry")
+  Ok(())
+}
+"#,
+    );
+
+    let top = run_source_with_cache(&bin, &source_path, &cache_dir);
+    assert!(top.status.success(), "top-level run should succeed");
+    assert_eq!(String::from_utf8_lossy(&top.stdout), "top\n");
+
+    let entry = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--entry",
+            "start",
+        ])
+        .env("SURTR_RUN_CACHE_DIR", &cache_dir)
+        .output()
+        .expect("failed to run source command");
+    assert!(
+        entry.status.success(),
+        "entry run should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&entry.stdout),
+        String::from_utf8_lossy(&entry.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&entry.stdout), "entry\n");
+    assert_eq!(
+        run_cache_files(&cache_dir).len(),
+        2,
+        "entry selection should create a distinct cache entry"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_cache_corrupt_entry_falls_back_to_compile() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_cache_corrupt");
+    let source_path = temp.join("sample.srt");
+    let cache_dir = temp.join("cache");
+
+    write_source(&source_path, "print(\"ok\")\n");
+    let first = run_source_with_cache(&bin, &source_path, &cache_dir);
+    assert!(first.status.success(), "first run should succeed");
+    let cache_files = run_cache_files(&cache_dir);
+    assert_eq!(cache_files.len(), 1, "expected one cache file");
+    fs::write(&cache_files[0], b"not bytecode").expect("failed to corrupt cache file");
+
+    let second = run_source_with_cache(&bin, &source_path, &cache_dir);
+    assert!(
+        second.status.success(),
+        "corrupt cache should fall back to compile\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&second.stdout),
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&second.stdout), "ok\n");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_source_cache_can_be_disabled() {
+    let bin = surtr_bin();
+    let temp = unique_temp_dir("surtr_run_cache_disabled");
+    let source_path = temp.join("sample.srt");
+    let cache_dir = temp.join("cache");
+
+    write_source(&source_path, "print(\"ok\")\n");
+    let output = Command::new(&bin)
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .env("SURTR_RUN_CACHE_DIR", &cache_dir)
+        .env("SURTR_RUN_CACHE", "0")
+        .output()
+        .expect("failed to run source command");
+    assert!(
+        output.status.success(),
+        "run should succeed with cache disabled\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+    assert!(
+        run_cache_files(&cache_dir).is_empty(),
+        "disabled cache should not write entries"
     );
 
     let _ = fs::remove_dir_all(temp);
