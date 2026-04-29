@@ -1,0 +1,17 @@
+include './task_state_types.srt'
+
+def describe(result: Result<Task>) -> String {
+  match result {
+    Ok(task) => Task::render(task),
+    Err(err) => Error::message(err),
+  }
+}
+
+draft = Task::start("write task-state sample")
+open = Task::open(draft)
+doing = open |>= Task::assign("haruca")
+done = doing |>= Task::complete()
+archived = done |>= Task::archive()
+
+print(describe(archived))
+print(describe(Task::complete(Task::start("skip required states"))))
