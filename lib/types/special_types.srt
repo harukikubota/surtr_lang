@@ -9,6 +9,43 @@ return a meaningful value.
 """
 @@builtin type Unit
 
+impl Show for Unit {
+  @@doc """
+  Return the standard string rendering for `Unit`.
+  ## REPL
+  xldr(1)> to_string(())
+  "()"
+  """
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<Unit> for Unit {
+  @@doc """
+  Return the value unchanged when converting `Unit` to `Unit`.
+  ## REPL
+  xldr(1)> from((), Unit)
+  ()
+  """
+  def from(self: Self, to: TypeRef<Unit>) -> Unit {
+    self
+  }
+}
+
+impl From<String> for Unit {
+  @@doc """
+  Convert `Unit` into its standard string representation.
+  ## REPL
+  xldr(1)> from((), String)
+  "()"
+  """
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}
+
+
 @@doc """
 Compiler-reserved target-type witness.
 Use level: signature-only marker for target-oriented trait methods.
