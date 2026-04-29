@@ -39,6 +39,259 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     })
 }
 
+/// Compose a complete executable bytecode artifact from a precompiled prefix
+/// and a chunk produced by `ForgeSession::codegen_chunk`.
+///
+/// REPL chunks are normally appended and executed from their appended base PC.
+/// A `.eldr` artifact, however, starts at PC 0, so the chunk top-level opcodes
+/// must be inserted before the prefix `Halt` while function bodies remain after
+/// the single top-level halt.
+pub fn compose_bytecode_with_chunk(
+    mut base: Bytecode,
+    chunk: BytecodeChunk,
+) -> Result<Bytecode, CodegenError> {
+    let base_halt = base
+        .opcodes
+        .iter()
+        .position(|op| matches!(op, Opcode::Halt))
+        .ok_or_else(|| CodegenError {
+            message: "precompiled bytecode has no top-level Halt".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
+    let chunk_halt = chunk
+        .opcodes
+        .iter()
+        .position(|op| matches!(op, Opcode::Halt))
+        .ok_or_else(|| CodegenError {
+            message: "compiled chunk has no top-level Halt".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
+
+    let const_base = base.constants.len();
+    let error_template_base = base.error_templates.len();
+    if chunk.const_base as usize != const_base {
+        return Err(CodegenError {
+            message: format!(
+                "chunk constant base mismatch: chunk={}, base={}",
+                chunk.const_base, const_base
+            ),
+            span: Span { start: 0, end: 0 },
+        });
+    }
+    if chunk.error_template_base as usize != error_template_base {
+        return Err(CodegenError {
+            message: format!(
+                "chunk error template base mismatch: chunk={}, base={}",
+                chunk.error_template_base, error_template_base
+            ),
+            span: Span { start: 0, end: 0 },
+        });
+    }
+
+    let base_top_len = base_halt;
+    let chunk_top_len = chunk_halt;
+    let base_func_len = base.opcodes.len().saturating_sub(base_halt + 1);
+    let final_halt = base_top_len + chunk_top_len;
+    let base_func_base = final_halt + 1;
+    let chunk_func_base = base_func_base + base_func_len;
+
+    let mut base_ops = base.opcodes;
+    relocate_base_ops_for_insert(&mut base_ops, base_halt, chunk_top_len)?;
+
+    let mut chunk_ops = chunk.opcodes;
+    relocate_chunk_ops_for_artifact(
+        &mut chunk_ops,
+        chunk_halt,
+        base_top_len,
+        chunk_func_base,
+        const_base,
+        error_template_base,
+    )?;
+
+    let mut opcodes = Vec::with_capacity(base_ops.len() + chunk_ops.len().saturating_sub(1));
+    opcodes.extend_from_slice(&base_ops[..base_halt]);
+    opcodes.extend_from_slice(&chunk_ops[..chunk_halt]);
+    opcodes.push(Opcode::Halt);
+    opcodes.extend_from_slice(&base_ops[base_halt + 1..]);
+    opcodes.extend_from_slice(&chunk_ops[chunk_halt + 1..]);
+
+    for entry in &mut base.functions {
+        relocate_function_entry(entry, base_halt, chunk_top_len)?;
+    }
+
+    let mut functions = base.functions;
+    for mut entry in chunk.functions {
+        let mapped_entry = map_chunk_pc(entry.entry_pc, chunk_halt, base_top_len, chunk_func_base)?;
+        entry.entry_pc = mapped_entry;
+        if entry.end_pc != 0 {
+            entry.end_pc = map_chunk_pc(entry.end_pc, chunk_halt, base_top_len, chunk_func_base)?;
+        }
+        let idx = entry.fun_idx as usize;
+        if idx == functions.len() {
+            functions.push(entry);
+        } else if idx < functions.len() {
+            functions[idx] = entry;
+        } else {
+            return Err(CodegenError {
+                message: format!(
+                    "function table invariant violated in chunk: fun_idx {} > len {}",
+                    idx,
+                    functions.len()
+                ),
+                span: Span { start: 0, end: 0 },
+            });
+        }
+    }
+
+    base.opcodes = opcodes;
+    base.constants.extend(chunk.constants);
+    base.type_registry.entries.extend(chunk.type_entries);
+    base.error_templates.extend(chunk.error_templates);
+    base.num_locals = base.num_locals.saturating_add(chunk.new_locals);
+    base.functions = functions;
+    base.source_map = None;
+    extend_docs_unique(&mut base.docs, chunk.docs);
+    Ok(base)
+}
+
+fn relocate_base_ops_for_insert(
+    opcodes: &mut [Opcode],
+    insertion_pc: usize,
+    inserted_len: usize,
+) -> Result<(), CodegenError> {
+    for op in opcodes {
+        match op {
+            Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr)
+                if *addr as usize >= insertion_pc =>
+            {
+                *addr = add_u32(*addr, inserted_len, "base jump relocation")?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn relocate_function_entry(
+    entry: &mut FunctionEntry,
+    insertion_pc: usize,
+    inserted_len: usize,
+) -> Result<(), CodegenError> {
+    if entry.entry_pc as usize > insertion_pc {
+        entry.entry_pc = add_u32(
+            entry.entry_pc,
+            inserted_len,
+            "base function entry relocation",
+        )?;
+    }
+    if entry.end_pc as usize > insertion_pc {
+        entry.end_pc = add_u32(entry.end_pc, inserted_len, "base function end relocation")?;
+    }
+    Ok(())
+}
+
+fn relocate_chunk_ops_for_artifact(
+    opcodes: &mut [Opcode],
+    chunk_halt: usize,
+    base_top_len: usize,
+    chunk_func_base: usize,
+    const_base: usize,
+    error_template_base: usize,
+) -> Result<(), CodegenError> {
+    let const_base = u32::try_from(const_base).map_err(|_| CodegenError {
+        message: "constant base exceeds u32".into(),
+        span: Span { start: 0, end: 0 },
+    })?;
+    let error_template_base = u32::try_from(error_template_base).map_err(|_| CodegenError {
+        message: "error template base exceeds u32".into(),
+        span: Span { start: 0, end: 0 },
+    })?;
+    for op in opcodes {
+        match op {
+            Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
+                *addr = map_chunk_pc(*addr, chunk_halt, base_top_len, chunk_func_base)?;
+            }
+            Opcode::LoadConst(idx) => {
+                *idx = idx.checked_add(const_base).ok_or_else(|| CodegenError {
+                    message: "chunk const relocation overflow".into(),
+                    span: Span { start: 0, end: 0 },
+                })?;
+            }
+            Opcode::MakeError { template_id } => {
+                *template_id = template_id
+                    .checked_add(error_template_base)
+                    .ok_or_else(|| CodegenError {
+                        message: "chunk error template relocation overflow".into(),
+                        span: Span { start: 0, end: 0 },
+                    })?;
+            }
+            Opcode::MakeErrorLiteral {
+                kind_const_idx,
+                message_const_idx,
+            } => {
+                *kind_const_idx =
+                    kind_const_idx
+                        .checked_add(const_base)
+                        .ok_or_else(|| CodegenError {
+                            message: "chunk error literal kind relocation overflow".into(),
+                            span: Span { start: 0, end: 0 },
+                        })?;
+                *message_const_idx =
+                    message_const_idx
+                        .checked_add(const_base)
+                        .ok_or_else(|| CodegenError {
+                            message: "chunk error literal message relocation overflow".into(),
+                            span: Span { start: 0, end: 0 },
+                        })?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn map_chunk_pc(
+    pc: u32,
+    chunk_halt: usize,
+    base_top_len: usize,
+    chunk_func_base: usize,
+) -> Result<u32, CodegenError> {
+    let pc = pc as usize;
+    let mapped = if pc <= chunk_halt {
+        base_top_len + pc
+    } else {
+        chunk_func_base + pc.saturating_sub(chunk_halt + 1)
+    };
+    u32::try_from(mapped).map_err(|_| CodegenError {
+        message: "chunk pc relocation exceeds u32".into(),
+        span: Span { start: 0, end: 0 },
+    })
+}
+
+fn add_u32(value: u32, add: usize, label: &str) -> Result<u32, CodegenError> {
+    let add = u32::try_from(add).map_err(|_| CodegenError {
+        message: format!("{label} offset exceeds u32"),
+        span: Span { start: 0, end: 0 },
+    })?;
+    value.checked_add(add).ok_or_else(|| CodegenError {
+        message: format!("{label} overflow"),
+        span: Span { start: 0, end: 0 },
+    })
+}
+
+fn extend_docs_unique(docs: &mut Vec<DocEntry>, new_docs: Vec<DocEntry>) {
+    for doc in new_docs {
+        let exists = docs.iter().any(|existing| {
+            existing.qualified_name == doc.qualified_name
+                && existing.kind == doc.kind
+                && existing.signature == doc.signature
+        });
+        if !exists {
+            docs.push(doc);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplTypeKind {
     Struct,

@@ -376,21 +376,37 @@ fn parse_program_with_module_sources(
     let source_kind = env.source_kind();
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
-    let staged_module_asts =
-        xldr::parse_module_stages_from_compile_sources(compile_sources, compile_unit_kind)
-            .map_err(|e| {
-                RuneError::diagnostic(
-                    1,
-                    sources,
-                    e.source_id,
-                    "parse",
-                    diagnostics::parse_error_spec(
-                        sources.source(e.source_id).unwrap_or(""),
-                        e.message(),
-                        e.span(),
-                    ),
-                )
-            })?;
+    let std_snapshot = xldr::default_stdlib_semantic_snapshot().map_err(|e| {
+        module_source_collection_error_as_rune_error(
+            sources.file_name(user_source_id).unwrap_or("<script>"),
+            sources.source(user_source_id).unwrap_or(""),
+            format!(
+                "{}: failed to load stdlib snapshot: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })?;
+    let mut staged_module_asts = std_snapshot.module_stages.clone();
+    let mut suffix_module_asts = xldr::parse_module_stages_from_compile_sources_suffix(
+        compile_sources,
+        compile_unit_kind,
+        std_snapshot.default_stage_count,
+    )
+    .map_err(|e| {
+        RuneError::diagnostic(
+            1,
+            sources,
+            e.source_id,
+            "parse",
+            diagnostics::parse_error_spec(
+                sources.source(e.source_id).unwrap_or(""),
+                e.message(),
+                e.span(),
+            ),
+        )
+    })?;
+    staged_module_asts.append(&mut suffix_module_asts);
 
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = match spire::parse_with_context(
@@ -499,46 +515,75 @@ pub(crate) fn compile_source(
         Some(compile_sources.user_module_path.as_str()),
     );
 
-    let declaration_index = sigil::precollect_declaration_index(&module_stages).map_err(|e| {
-        let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
-        RuneError::diagnostic(1, sources, source_id, "resolve", spec)
+    let std_snapshot = xldr::default_stdlib_semantic_snapshot().map_err(|e| {
+        module_source_collection_error_as_rune_error(
+            sources.file_name(user_source_id).unwrap_or("<script>"),
+            user_source,
+            format!(
+                "{}: failed to load stdlib snapshot: {}",
+                env.command_name(),
+                e
+            ),
+        )
     })?;
+    let declaration_index = if module_stages.len() == std_snapshot.default_stage_count {
+        std_snapshot.declaration_index.clone()
+    } else {
+        sigil::precollect_declaration_index(&module_stages).map_err(|e| {
+            let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
+            RuneError::diagnostic(1, sources, source_id, "resolve", spec)
+        })?
+    };
 
-    let resolved = sigil::resolve_staged_program(
+    let resolved = sigil::resolve_staged_program_from_state(
         &module_stages,
         user_ast,
         &declaration_index,
         Some(compile_sources.user_module_path.clone()),
+        std_snapshot.default_stage_count,
+        std_snapshot.resolve_state,
     )
     .map_err(|e| {
         let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
         RuneError::diagnostic(1, sources, source_id, "resolve", spec)
     })?;
 
-    let typed = scar::typecheck_with_context(
-        resolved,
-        scar::TypecheckContext {
-            runtime_policy: xldr::derive_runtime_policy(
-                compile_unit_kind,
-                source_kind,
-                compile_plan.normalized_entrypoint.as_ref(),
-            ),
-            enforce_builtin_type_contracts: true,
-        },
-    )
-    .map_err(|e| {
-        let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-        let local_error = diagnostics::TypeErrorDiagnostic::new(e.message, span, e.hint);
-        RuneError::diagnostic(
-            1,
-            sources,
-            source_id,
-            "typecheck",
-            diagnostics::type_error_spec_by_id(sources, source_id, &local_error),
+    let mut scar_session = scar::ScarSession::new();
+    scar_session.rollback(std_snapshot.scar_checkpoint.clone());
+    let next_fun_idx = std_snapshot
+        .bytecode
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+    let typed = scar_session
+        .typecheck_with_context(
+            resolved.resolved,
+            scar::TypecheckContext {
+                runtime_policy: xldr::derive_runtime_policy(
+                    compile_unit_kind,
+                    source_kind,
+                    compile_plan.normalized_entrypoint.as_ref(),
+                ),
+                enforce_builtin_type_contracts: false,
+            },
         )
-    })?;
+        .map_err(|e| {
+            let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
+            let local_error = diagnostics::TypeErrorDiagnostic::new(e.message, span, e.hint);
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                "typecheck",
+                diagnostics::type_error_spec_by_id(sources, source_id, &local_error),
+            )
+        })?;
 
-    let mut bytecode = forge::codegen(typed).map_err(|e| {
+    let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
+    let (chunk, _) = forge_session.codegen_chunk(typed).map_err(|e| {
         let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
         RuneError::diagnostic(
             1,
@@ -548,6 +593,17 @@ pub(crate) fn compile_source(
             diagnostics::simple_error("CodegenError", &e.message, span, None),
         )
     })?;
+    let mut bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
+        .map_err(|e| {
+            let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                "codegen",
+                diagnostics::simple_error("CodegenError", &e.message, span, None),
+            )
+        })?;
 
     populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;

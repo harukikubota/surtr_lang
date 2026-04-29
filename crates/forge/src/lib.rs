@@ -5,7 +5,8 @@ pub mod opcode;
 pub mod registry;
 
 pub use codegen::{
-    codegen, BindingInfo, ChunkMeta, ForgeCheckpoint, ForgeSession, ReplTypeKind, TypeDefDisplay,
+    codegen, compose_bytecode_with_chunk, BindingInfo, ChunkMeta, ForgeCheckpoint, ForgeSession,
+    ReplTypeKind, TypeDefDisplay,
 };
 
 #[cfg(test)]

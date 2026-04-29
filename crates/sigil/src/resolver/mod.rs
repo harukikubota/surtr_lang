@@ -58,6 +58,52 @@ pub fn resolve_staged_program(
     declaration_index: &DeclarationIndex,
     user_module_path: Option<String>,
 ) -> Result<Vec<Resolved>, ResolveError> {
+    resolve_staged_program_from_state(
+        module_stages,
+        user_ast,
+        declaration_index,
+        user_module_path,
+        0,
+        ResolveResumeState::default(),
+    )
+    .map(|resolved| resolved.resolved)
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResolveResumeState {
+    pub next_local_id: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedStagedProgram {
+    pub resolved: Vec<Resolved>,
+    pub resume_state: ResolveResumeState,
+}
+
+pub fn resolve_staged_program_with_state(
+    module_stages: &[Vec<StagedModuleAst>],
+    user_ast: Vec<Ast>,
+    declaration_index: &DeclarationIndex,
+    user_module_path: Option<String>,
+) -> Result<ResolvedStagedProgram, ResolveError> {
+    resolve_staged_program_from_state(
+        module_stages,
+        user_ast,
+        declaration_index,
+        user_module_path,
+        0,
+        ResolveResumeState::default(),
+    )
+}
+
+pub fn resolve_staged_program_from_state(
+    module_stages: &[Vec<StagedModuleAst>],
+    user_ast: Vec<Ast>,
+    declaration_index: &DeclarationIndex,
+    user_module_path: Option<String>,
+    start_stage_index: usize,
+    resume_state: ResolveResumeState,
+) -> Result<ResolvedStagedProgram, ResolveError> {
     let declaration_uids = assign_declaration_uids(declaration_index);
     let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
     let global_scope = build_global_scope(declaration_index, &declaration_uids);
@@ -70,8 +116,9 @@ pub fn resolve_staged_program(
         .map(|uid| uid + 1)
         .unwrap_or_else(|| global_scope.next_id());
     next_local_id = next_local_id.max(global_scope.next_id());
+    next_local_id = next_local_id.max(resume_state.next_local_id);
 
-    for (stage_index, stage) in module_stages.iter().enumerate() {
+    for (stage_index, stage) in module_stages.iter().enumerate().skip(start_stage_index) {
         let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
             let mut scope = build_module_scope(
@@ -96,24 +143,31 @@ pub fn resolve_staged_program(
         }
     }
 
-    let mut user_scope = build_module_scope(
-        &global_scope,
-        &auto_import_modules,
-        declaration_index,
-        &declaration_uids,
-        &declaration_uid_kinds,
-        &user_ast,
-        user_module_path.as_deref(),
-        module_stages.len(),
-    )?;
-    user_scope.advance_next_id_to(next_local_id);
-    let mut user_resolver = Resolver::with_scope(user_scope);
-    user_resolver.declaration_uids = declaration_uids;
-    user_resolver.declaration_uid_kinds = declaration_uid_kinds;
-    user_resolver.current_module_path = user_module_path;
-    user_resolver.allow_top_level_shadowing = true;
-    resolved.extend(user_resolver.resolve_program(user_ast)?);
-    Ok(resolved)
+    if !user_ast.is_empty() {
+        let mut user_scope = build_module_scope(
+            &global_scope,
+            &auto_import_modules,
+            declaration_index,
+            &declaration_uids,
+            &declaration_uid_kinds,
+            &user_ast,
+            user_module_path.as_deref(),
+            module_stages.len(),
+        )?;
+        user_scope.advance_next_id_to(next_local_id);
+        let mut user_resolver = Resolver::with_scope(user_scope);
+        user_resolver.declaration_uids = declaration_uids;
+        user_resolver.declaration_uid_kinds = declaration_uid_kinds;
+        user_resolver.current_module_path = user_module_path;
+        user_resolver.allow_top_level_shadowing = true;
+        resolved.extend(user_resolver.resolve_program(user_ast)?);
+        next_local_id = user_resolver.scope.next_id();
+    }
+
+    Ok(ResolvedStagedProgram {
+        resolved,
+        resume_state: ResolveResumeState { next_local_id },
+    })
 }
 
 pub fn build_scope_for_module(
