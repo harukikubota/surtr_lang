@@ -3,6 +3,8 @@ Standard `From` trait declaration.
 `From<$To>` models infallible conversion from `Self` into `$To`.
 The `to: TypeRef<$To>` parameter is a signature-level witness slot and is not
 meant to be observed at runtime.
+Because `from(...)` is part of the shared conversion surface, this trait is
+auto-imported when the standard prelude is loaded.
 
 ## REPL
 xldr(1)> from(42, String)

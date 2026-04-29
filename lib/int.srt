@@ -487,7 +487,7 @@ impl Add for Int {
   @@doc """
   Return the sum of the two integer values.
   ## REPL
-  xldr(1)> add(1, 2)
+  xldr(1)> Add::add(1, 2)
   3
   """
   @@builtin def add(self: Self, rhs: Self) -> Self
@@ -497,7 +497,7 @@ impl Sub for Int {
   @@doc """
   Return the difference of the two integer values.
   ## REPL
-  xldr(1)> sub(5, 2)
+  xldr(1)> Sub::sub(5, 2)
   3
   """
   @@builtin def sub(self: Self, rhs: Self) -> Self
@@ -507,7 +507,7 @@ impl Mul for Int {
   @@doc """
   Return the product of the two integer values.
   ## REPL
-  xldr(1)> mul(3, 4)
+  xldr(1)> Mul::mul(3, 4)
   12
   """
   @@builtin def mul(self: Self, rhs: Self) -> Self

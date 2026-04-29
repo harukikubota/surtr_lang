@@ -43,9 +43,40 @@ include "./src/helper.srt"
 標準ライブラリでは次が代表です。
 
 - `../../lib/kernel.srt` の `defmod Kernel`
-- `../../lib/trait/numeric.srt` などの trait 宣言
+- `../../lib/trait/eq.srt`, `concat.srt`, `from.srt`, `try_from.srt` などの trait 宣言
 
-ただし、利用者が最初から unqualified に触れる前提として固定しているのは `Bootstrap` と `Kernel` です。
+module と trait では意味合いが少し違います。
+
+- `@@autoimport defmod`
+  - module member を最初から見える standard surface に入れる
+- `@@autoimport deftrait`
+  - trait method helper alias を unqualified で使えるようにする
+
+trait 側で重要なのは、autoimport される helper が「別の関数定義」ではないことです。  
+たとえば `concat(left, right)` は `Concat::concat(left, right)` への alias として解決されます。  
+そのため、実装の有無・型検査・diagnostic の canonical な基準は常に trait 側にあります。
+
+```surtr
+print(concat("a", "b"))
+print(from(42, String))
+print(inspect(try_from("42", Int)))
+```
+
+一方で、すべての trait helper が autoimport されるわけではありません。  
+`Add`, `Sub`, `Mul` のように「演算子の別表記」が主目的のものは、qualified call か明示 import を使います。
+
+```surtr
+print(to_string(Add::add(1, 2)))
+
+import Add::add
+print(to_string(add(3, 4)))
+```
+
+利用者目線では、次の覚え方で十分です。
+
+- `print`, `if`, `inspect` のような cross-cutting API は `Kernel` 由来
+- `eq`, `concat`, `from`, `try_from`, `to_string` のような頻出 helper は autoimport trait alias
+- `Add::add`, `Sub::sub`, `Mul::mul` のような helper は qualified/import 前提
 
 ## どこで確認するか
 
@@ -58,8 +89,17 @@ include "./src/helper.srt"
 - ソース
   - `../../lib/bootstrap.srt`
   - `../../lib/kernel.srt`
+  - `../../lib/trait/eq.srt`
+  - `../../lib/trait/concat.srt`
+  - `../../lib/trait/from.srt`
+  - `../../lib/trait/try_from.srt`
+  - `../../lib/trait/add.srt`
+  - `../../lib/trait/sub.srt`
+  - `../../lib/trait/mul.srt`
 
 ## 躓きやすいポイント
 
 - `Kernel` は auto import 済みなので、明示 `import Kernel` はむしろ compile error です。
+- `concat(...)` や `from(...)` が裸で呼べても、実体は `Trait::method` 側です。
+- `add(...)`, `sub(...)`, `mul(...)` は最初からは見えません。必要なら `Add::add(...)` のように呼びます。
 - `include` は file composition 用で、名前空間 import の代わりではありません。

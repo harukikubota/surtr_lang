@@ -1,3 +1,5 @@
+import Add::add
+
 def double<$N: Add>(x: $N) -> $N {
   x + x
 }

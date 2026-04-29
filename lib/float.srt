@@ -50,7 +50,7 @@ impl Add for Float {
   @@doc """
   Return the sum of the two float values.
   ## REPL
-  xldr(1)> add(1.5, 2.0)
+  xldr(1)> Add::add(1.5, 2.0)
   3.5
   """
   @@builtin def add(self: Self, rhs: Self) -> Self
@@ -60,7 +60,7 @@ impl Sub for Float {
   @@doc """
   Return the difference of the two float values.
   ## REPL
-  xldr(1)> sub(3.5, 1.0)
+  xldr(1)> Sub::sub(3.5, 1.0)
   2.5
   """
   @@builtin def sub(self: Self, rhs: Self) -> Self
@@ -70,7 +70,7 @@ impl Mul for Float {
   @@doc """
   Return the product of the two float values.
   ## REPL
-  xldr(1)> mul(1.5, 2.0)
+  xldr(1)> Mul::mul(1.5, 2.0)
   3.0
   """
   @@builtin def mul(self: Self, rhs: Self) -> Self
