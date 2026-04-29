@@ -69,6 +69,7 @@ mod tests {
     const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/types/option.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/types/float.srt");
+    const RANDOM_MODULE_SOURCE: &str = include_str!("../../../lib/Random.srt");
     const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
     const TEST_MODULE_SOURCE: &str = include_str!("../../../lib/test.srt");
 
@@ -208,6 +209,7 @@ mod tests {
                 ("Option", OPTION_MODULE_SOURCE),
                 ("Lens", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),
+                ("Random", RANDOM_MODULE_SOURCE),
                 ("StyledDoc", STYLED_DOC_MODULE_SOURCE),
             ]
             .into_iter()

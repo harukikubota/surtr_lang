@@ -102,6 +102,7 @@ Eldr が扱う値の概念カテゴリ:
 
 - プリミティブ: `Int`, `Float`, `String`, `Boolean`, `Unit`
 - コンテナ: `List`, `HashMap`
+- opaque runtime 値: `Regex`, `RegexCaptures`, `RegexMatch`, `RandomGenerator`
 - タグ付き値: `Tagged { tag, fields }`
 - runtime 内部 tag 値: `Tag(u32)`（user-visible `Int` と分離）
 - 呼び出し可能値: `Callable`
@@ -206,9 +207,10 @@ Opcode は以下のカテゴリを持つ。
 - `HashMap` の runtime 表現は immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
 - `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>`, `input: String` を保持する
+- random 系は `CallBuiltin` で実装し、Opcode は追加しない。`RandomGenerator` は opaque な seedable state として保持し、半開区間が空の場合は `InvalidRandomRange` を `Result` の `Err` として返す
 - `Float` の厳密契約は `doc/float.md` を参照する
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float, Config, Project, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float, Config, Project, Random, IO, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.1 TypeRegistry
 

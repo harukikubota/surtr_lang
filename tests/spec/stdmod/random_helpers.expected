@@ -1,0 +1,8 @@
+True
+True
+True
+True
+True
+True
+True
+Err(InvalidRandomRange("random range must be non-empty: 4..4"))

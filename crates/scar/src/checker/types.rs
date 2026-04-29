@@ -271,6 +271,7 @@ impl Checker {
                 "Regex" => Ok(Ty::Enum("Regex".into(), Vec::new())),
                 "RegexCaptures" => Ok(Ty::Enum("RegexCaptures".into(), Vec::new())),
                 "RegexMatch" => Ok(Ty::Enum("RegexMatch".into(), Vec::new())),
+                "RandomGenerator" => Ok(Ty::Enum("RandomGenerator".into(), Vec::new())),
                 other => {
                     if let Some(def) = self.env.lookup_type_def(other) {
                         match &def.kind {

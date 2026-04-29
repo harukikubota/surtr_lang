@@ -59,6 +59,7 @@ impl HashMap {}"#;
 const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
 const LENS_MODULE_SOURCE: &str = include_str!("../../../../lib/lens.srt");
 const FLOAT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/float.srt");
+const RANDOM_MODULE_SOURCE: &str = include_str!("../../../../lib/Random.srt");
 
 pub(crate) fn typecheck(
     resolved: Vec<sigil::resolved::Resolved>,
@@ -383,6 +384,10 @@ pub(crate) fn std_module_stages_with_overrides(
             (
                 "Float",
                 pick_override("Float", FLOAT_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Random",
+                pick_override("Random", RANDOM_MODULE_SOURCE, overrides),
             ),
         ]
         .into_iter()

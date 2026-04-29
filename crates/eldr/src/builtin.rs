@@ -1,16 +1,19 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
 use crate::vm::VM;
+use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
 use sindr::ir::DocKind;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
-    Callable, CallableTarget, HashMapHandle, ListHandle, Location, RegexCapturesHandle,
-    RegexHandle, RegexMatchHandle, RichError,
+    Callable, CallableTarget, HashMapHandle, ListHandle, Location, RandomGeneratorHandle,
+    RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
 };
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Read};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -297,6 +300,26 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "io_get_line",
         func: builtin_io_get_line,
+    },
+    BuiltinImpl {
+        name: "seed",
+        func: builtin_random_seed,
+    },
+    BuiltinImpl {
+        name: "int_until",
+        func: builtin_random_int_until,
+    },
+    BuiltinImpl {
+        name: "int_range",
+        func: builtin_random_int_range,
+    },
+    BuiltinImpl {
+        name: "next_int_until",
+        func: builtin_random_next_int_until,
+    },
+    BuiltinImpl {
+        name: "next_int_range",
+        func: builtin_random_next_int_range,
     },
     BuiltinImpl {
         name: "kind",
@@ -1474,6 +1497,47 @@ fn builtin_io_get_line(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
     })
 }
 
+fn builtin_random_seed(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Int(seed) = &args[0] else {
+        return Err(RuntimeError::new("seed expects Int as seed"));
+    };
+    Ok(Value::RandomGenerator(RandomGeneratorHandle {
+        state: seed_to_state(seed),
+    }))
+}
+
+fn builtin_random_int_until(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Int(end) = &args[0] else {
+        return Err(RuntimeError::new("int_until expects Int as end"));
+    };
+    random_int_range_result(vm, &int(0), end, host_random_generator())
+        .map(|(value, _)| value.map(ok_result).unwrap_or_else(|err| err))
+}
+
+fn builtin_random_int_range(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(start), Value::Int(end)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("int_range expects Int as start/end"));
+    };
+    random_int_range_result(vm, start, end, host_random_generator())
+        .map(|(value, _)| value.map(ok_result).unwrap_or_else(|err| err))
+}
+
+fn builtin_random_next_int_until(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rng = decode_random_generator_arg(&args[0], "next_int_until", "rng")?;
+    let Value::Int(end) = &args[1] else {
+        return Err(RuntimeError::new("next_int_until expects Int as end"));
+    };
+    seeded_random_int_range_result(vm, rng, &int(0), end)
+}
+
+fn builtin_random_next_int_range(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rng = decode_random_generator_arg(&args[0], "next_int_range", "rng")?;
+    let (Value::Int(start), Value::Int(end)) = (&args[1], &args[2]) else {
+        return Err(RuntimeError::new("next_int_range expects Int as start/end"));
+    };
+    seeded_random_int_range_result(vm, rng, start, end)
+}
+
 fn emit_io_prompt(vm: &mut VM, prompt: &str) -> Result<(), String> {
     vm.emit_stdout_text(prompt.to_string())
         .map_err(|err| format!("prompt write failed: {}", err))
@@ -1823,6 +1887,136 @@ fn decode_generator_arg<'a>(
     Ok((idx, tail))
 }
 
+fn decode_random_generator_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<RandomGeneratorHandle, RuntimeError> {
+    match value {
+        Value::RandomGenerator(handle) => Ok(*handle),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects RandomGenerator as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn seeded_random_int_range_result(
+    vm: &VM,
+    rng: RandomGeneratorHandle,
+    start: &SurtrInt,
+    end: &SurtrInt,
+) -> Result<Value, RuntimeError> {
+    let (sample, next_rng) = random_int_range_result(vm, start, end, rng)?;
+    Ok(match sample {
+        Ok(value) => ok_result(Value::Tuple(vec![value, Value::RandomGenerator(next_rng)])),
+        Err(err) => err,
+    })
+}
+
+fn random_int_range_result(
+    vm: &VM,
+    start: &SurtrInt,
+    end: &SurtrInt,
+    rng: RandomGeneratorHandle,
+) -> Result<(Result<Value, Value>, RandomGeneratorHandle), RuntimeError> {
+    let range = end - start;
+    if range <= int(0) {
+        return Ok((Err(invalid_random_range(vm, start, end)), rng));
+    }
+
+    let upper = range.to_biguint().ok_or_else(|| {
+        RuntimeError::new(format!(
+            "random range should be positive after validation, got {}",
+            range
+        ))
+    })?;
+    let (offset, next_rng) = sample_biguint_below(&upper, rng);
+    let value = start + BigInt::from_biguint(Sign::Plus, offset);
+    Ok((Ok(Value::Int(value)), next_rng))
+}
+
+fn invalid_random_range(vm: &VM, start: &SurtrInt, end: &SurtrInt) -> Value {
+    err_result(
+        vm,
+        "InvalidRandomRange",
+        &format!("random range must be non-empty: {}..{}", start, end),
+    )
+}
+
+fn sample_biguint_below(
+    upper: &BigUint,
+    mut rng: RandomGeneratorHandle,
+) -> (BigUint, RandomGeneratorHandle) {
+    debug_assert!(!upper.is_zero());
+    let bit_len = upper.bits();
+    let byte_len = ((bit_len + 7) / 8) as usize;
+
+    loop {
+        let mut bytes = vec![0_u8; byte_len];
+        for chunk in bytes.chunks_mut(8) {
+            let (raw, next_rng) = random_next_u64(rng);
+            rng = next_rng;
+            let raw_bytes = raw.to_le_bytes();
+            chunk.copy_from_slice(&raw_bytes[..chunk.len()]);
+        }
+
+        let excess_bits = (8 - (bit_len % 8)) % 8;
+        if excess_bits != 0 {
+            let mask = 0xff_u8 >> excess_bits;
+            if let Some(last) = bytes.last_mut() {
+                *last &= mask;
+            }
+        }
+
+        let candidate = BigUint::from_bytes_le(&bytes);
+        if &candidate < upper {
+            return (candidate, rng);
+        }
+    }
+}
+
+fn host_random_generator() -> RandomGeneratorHandle {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| {
+            duration.as_secs()
+                ^ u64::from(duration.subsec_nanos()).rotate_left(32)
+                ^ (duration.as_nanos() as u64)
+        })
+        .unwrap_or(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = u64::from(std::process::id());
+
+    RandomGeneratorHandle {
+        state: mix64(now ^ count.rotate_left(17) ^ pid.rotate_left(41)),
+    }
+}
+
+fn seed_to_state(seed: &SurtrInt) -> u64 {
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    for byte in seed.to_signed_bytes_le() {
+        state = mix64(state ^ u64::from(byte));
+    }
+    state
+}
+
+fn random_next_u64(rng: RandomGeneratorHandle) -> (u64, RandomGeneratorHandle) {
+    let next_state = rng.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    (
+        mix64(next_state),
+        RandomGeneratorHandle { state: next_state },
+    )
+}
+
+fn mix64(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
 fn decode_string_arg<'a>(
     value: &'a Value,
     builtin_name: &str,
@@ -2152,6 +2346,7 @@ mod tests {
             include_str!("../../../lib/lens.srt"),
             include_str!("../../../lib/types/string.srt"),
             include_str!("../../../lib/types/regex.srt"),
+            include_str!("../../../lib/Random.srt"),
         ];
 
         // Collect all lines across the std-module files that currently declare
@@ -2242,6 +2437,75 @@ mod tests {
             !entry_map.contains_key("to_string"),
             "to_string is trait-backed and should not be declared via @@builtin def"
         );
+    }
+
+    #[test]
+    fn random_seeded_range_is_repeatable_and_returns_next_state() {
+        let mut vm = test_vm();
+        let seed = call_builtin(&mut vm, builtin_id("seed"), vec![Value::Int(int(123))])
+            .expect("seed should return RandomGenerator");
+        let Value::RandomGenerator(original_rng) = seed.clone() else {
+            panic!("expected RandomGenerator from seed");
+        };
+
+        let first = call_builtin(
+            &mut vm,
+            builtin_id("next_int_range"),
+            vec![seed.clone(), Value::Int(int(-3)), Value::Int(int(3))],
+        )
+        .expect("next_int_range should return Result");
+        let second = call_builtin(
+            &mut vm,
+            builtin_id("next_int_range"),
+            vec![seed, Value::Int(int(-3)), Value::Int(int(3))],
+        )
+        .expect("next_int_range should return Result");
+        assert_eq!(first, second, "same seed should produce same first value");
+
+        let Value::Tagged { tag: 0, fields } = first else {
+            panic!("expected Ok((Int, RandomGenerator))");
+        };
+        let Some(Value::Tuple(items)) = fields.first() else {
+            panic!("expected tuple payload");
+        };
+        let [Value::Int(value), Value::RandomGenerator(next_rng)] = items.as_slice() else {
+            panic!("expected Int and next RandomGenerator");
+        };
+        assert!(value >= &int(-3) && value < &int(3));
+        assert_ne!(
+            *next_rng, original_rng,
+            "equal calls return equal next states, but the state should be opaque and stable"
+        );
+    }
+
+    #[test]
+    fn random_ranges_validate_half_open_bounds() {
+        let mut vm = test_vm();
+
+        let invalid_until =
+            call_builtin(&mut vm, builtin_id("int_until"), vec![Value::Int(int(0))])
+                .expect("int_until should return Result");
+        match invalid_until {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "InvalidRandomRange"),
+                other => panic!("expected InvalidRandomRange error, got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+
+        let invalid_range = call_builtin(
+            &mut vm,
+            builtin_id("int_range"),
+            vec![Value::Int(int(4)), Value::Int(int(4))],
+        )
+        .expect("int_range should return Result");
+        match invalid_range {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "InvalidRandomRange"),
+                other => panic!("expected InvalidRandomRange error, got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
     }
 
     #[test]

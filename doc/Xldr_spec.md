@@ -51,12 +51,12 @@ Xldr は対話セッション中に次を保持する。
 
 ### 3.2 初期化
 
-- セッション開始時に標準 module source を `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float, Config, Project, StyledDoc] -> [Test]` の順で読み込む
+- セッション開始時に標準 module source を `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float, Config, Project, Random, IO, StyledDoc] -> [Test]` の順で読み込む
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
 - `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole` の canonical builtin type head を登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin を登録する
 - 各 type file の top-level では対応する canonical builtin type head を登録する
-- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/types/special_types.srt`, `lib/kernel.srt`, `lib/traits/operator/*.srt`, `lib/traits/*.srt`, type modules, `lib/lens.srt`, `lib/Config.srt`, `lib/Project.srt`, `lib/styled_doc.srt` を同一段として読み込み、`lib/test.srt` を次段として読み込む
+- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/types/special_types.srt`, `lib/kernel.srt`, `lib/traits/operator/*.srt`, `lib/traits/*.srt`, type modules, `lib/lens.srt`, `lib/Config.srt`, `lib/Project.srt`, `lib/Random.srt`, `lib/IO.srt`, `lib/styled_doc.srt` を同一段として読み込み、`lib/test.srt` を次段として読み込む
 - loader は追加標準 module も `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準 module と重複するものはデフォルト入力から除外する
 - REPL user chunk は標準 module 読み込み後に `SourceKind::ReplChunk` として追加される
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、型定義・`impl`・`defmod` は parse error とする
