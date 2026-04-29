@@ -29,6 +29,14 @@ const FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/from.srt")
 const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_from.srt");
 const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/functor.srt");
 const CHAINABLE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/chainable.srt");
+const PIPE_APPLY_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/pipe_apply.srt");
+const COMPOSABLE_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/composable.srt");
+const LIFT_COMPOSABLE_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/lift_composable.srt");
+const KLEISLI_COMPOSABLE_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/kleisli_composable.srt");
 const INT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/int.srt");
 const STRING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/string.srt");
 const REGEX_MODULE_SOURCE: &str = include_str!("../../../../lib/types/regex.srt");
@@ -315,6 +323,26 @@ pub(crate) fn std_module_stages_with_overrides(
             (
                 "Chainable",
                 pick_override("Chainable", CHAINABLE_MODULE_SOURCE, overrides),
+            ),
+            (
+                "PipeApply",
+                pick_override("PipeApply", PIPE_APPLY_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Composable",
+                pick_override("Composable", COMPOSABLE_MODULE_SOURCE, overrides),
+            ),
+            (
+                "LiftComposable",
+                pick_override("LiftComposable", LIFT_COMPOSABLE_MODULE_SOURCE, overrides),
+            ),
+            (
+                "KleisliComposable",
+                pick_override(
+                    "KleisliComposable",
+                    KLEISLI_COMPOSABLE_MODULE_SOURCE,
+                    overrides,
+                ),
             ),
             ("Int", pick_override("Int", INT_MODULE_SOURCE, overrides)),
             (

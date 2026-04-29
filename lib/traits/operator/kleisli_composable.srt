@@ -1,0 +1,29 @@
+@@doc """
+Standard `KleisliComposable` flow operator trait declaration.
+`KleisliComposable<$A, $B, $Chained>` models composing two contextual unary
+callables. The `>=>` operator lowers through this trait.
+"""
+deftrait KleisliComposable<$A, $B, $Chained> {
+  # Compose the receiver contextual callable before a contextual RHS callable.
+  def kleisli_compose(self: Self, rhs: ($B -> $Chained)) -> ($A -> $Chained)
+}
+
+@@doc """
+`KleisliComposable` implementation for `Result`-returning unary functions.
+This is the source-level meaning of `left >=> right` for `Result`.
+"""
+impl KleisliComposable<$A, $B, Result<$C>> for ($A -> Result<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> Result<$C>)) -> ($A -> Result<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}
+
+@@doc """
+`KleisliComposable` implementation for `List`-returning unary functions.
+This is the source-level meaning of `left >=> right` for `List`.
+"""
+impl KleisliComposable<$A, $B, List<$C>> for ($A -> List<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> List<$C>)) -> ($A -> List<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}

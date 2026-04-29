@@ -1632,6 +1632,106 @@ mapped = Functor::map(Ok(1), &inc)"#,
 }
 
 #[test]
+fn flow_apply_and_compose_operators_lower_to_trait_calls() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+def show_int(x: Int) -> String {
+  to_string(x)
+}
+
+def parse(x: Int) -> Result<Int> {
+  Ok(x)
+}
+
+def parse_list(x: Int) -> List<Int> {
+  [x]
+}
+
+applied = 1 |> &inc
+plain = &inc >> &show_int
+lifted = &parse >* &show_int
+kleisli = &parse_list >=> {|x| [x, x + 1]}"#,
+    );
+    let calls = typed
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => match &rhs.node {
+                TypedInner::TraitCall {
+                    trait_name,
+                    method_name,
+                    origin,
+                    ..
+                } => Some((trait_name.as_str(), method_name.as_str(), origin, &rhs.ty)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(calls
+        .iter()
+        .any(|(trait_name, method_name, origin, result_ty)| {
+            trait_name.starts_with("PipeApply<")
+                && *method_name == "pipe_apply"
+                && matches!(
+                    origin,
+                    TraitCallOrigin::Operator {
+                        op: OperatorTraitOp::PipeApply,
+                        lhs_ty: Ty::Int,
+                        rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                    }
+                )
+                && matches!(result_ty, Ty::Int)
+        }));
+    assert!(calls
+        .iter()
+        .any(|(trait_name, method_name, origin, result_ty)| {
+            trait_name.starts_with("Composable<")
+                && *method_name == "compose"
+                && matches!(
+                    origin,
+                    TraitCallOrigin::Operator {
+                        op: OperatorTraitOp::Compose,
+                        lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                        rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                    }
+                )
+                && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Str))
+        }));
+    assert!(calls.iter().any(|(trait_name, method_name, origin, result_ty)| {
+        trait_name.starts_with("LiftComposable<")
+            && *method_name == "lift_compose"
+            && matches!(
+                origin,
+                TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::LiftCompose,
+                    lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                    rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                }
+            )
+            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::Str)))
+    }));
+    assert!(calls
+        .iter()
+        .any(|(trait_name, method_name, origin, result_ty)| {
+            trait_name.starts_with("KleisliComposable<")
+                && *method_name == "kleisli_compose"
+                && matches!(
+                    origin,
+                    TraitCallOrigin::Operator {
+                        op: OperatorTraitOp::KleisliCompose,
+                        lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                        rhs_ty: Ty::Func(_, _),
+                    }
+                )
+                && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::List(_)))
+        }));
+}
+
+#[test]
 fn user_defined_container_can_use_context_operators_via_traits() {
     let typed = typecheck_with_builtin_prelude(
         r#"defenum Boxed<$T> {
