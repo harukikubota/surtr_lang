@@ -892,15 +892,8 @@ defmod B {
 
     #[test]
     fn default_stdlib_snapshot_contains_only_default_stages() {
-        let snapshot = std::thread::Builder::new()
-            .name("xldr-snapshot-test".into())
-            .stack_size(32 * 1024 * 1024)
-            .spawn(|| {
-                default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build")
-            })
-            .expect("snapshot test thread should spawn")
-            .join()
-            .expect("snapshot test thread should finish");
+        let snapshot =
+            default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build");
 
         assert_eq!(snapshot.default_stage_count, snapshot.module_stages.len());
         assert!(snapshot

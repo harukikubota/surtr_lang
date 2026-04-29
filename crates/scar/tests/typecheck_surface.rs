@@ -2104,33 +2104,28 @@ b = double(1.5)"#,
 
 #[test]
 fn scar_session_preserves_trait_registry_across_chunks() {
-    run_with_large_stack(
-        "scar_session_preserves_trait_registry_across_chunks",
-        || {
-            let mut session = session_from_cached_std_prelude();
-            let user_resolved = resolve_with_builtin_prelude("value = 1 + 2");
-            let typed = session
-                .typecheck(user_resolved)
-                .expect("trait registry should survive across chunks");
+    let mut session = session_from_cached_std_prelude();
+    let user_resolved = resolve_with_builtin_prelude("value = 1 + 2");
+    let typed = session
+        .typecheck(user_resolved)
+        .expect("trait registry should survive across chunks");
 
-            assert!(typed.iter().any(|node| {
-                matches!(
-                    &node.node,
-                    TypedInner::Bind(_, rhs)
-                        if matches!(
-                            &rhs.node,
-                            TypedInner::TraitCall {
-                                method_name,
-                                dispatch: scar::typed::TraitDispatch::Static(
-                                    scar::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
-                                ),
-                                ..
-                            } if method_name == "add"
-                        )
+    assert!(typed.iter().any(|node| {
+        matches!(
+            &node.node,
+            TypedInner::Bind(_, rhs)
+                if matches!(
+                    &rhs.node,
+                    TypedInner::TraitCall {
+                        method_name,
+                        dispatch: scar::typed::TraitDispatch::Static(
+                            scar::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
+                        ),
+                        ..
+                    } if method_name == "add"
                 )
-            }));
-        },
-    );
+        )
+    }));
 }
 
 #[test]

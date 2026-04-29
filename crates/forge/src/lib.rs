@@ -12,14 +12,19 @@ pub use codegen::{
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
-    use std::thread;
 
     use super::codegen;
     use crate::bytecode::Constant;
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
+    use scar::typed::{
+        TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
+    };
+    use scar::types::Ty;
+    use sigil::resolved::ResolvedId;
     use sindr::builtin::builtin_id_by_name;
-    use spire::ast::Ast;
+    use sindr::primitives::int;
+    use spire::ast::{Ast, Lit, Span, Visibility};
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/types/special_types.srt");
@@ -58,20 +63,6 @@ mod tests {
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/types/float.srt");
     const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
     const TEST_MODULE_SOURCE: &str = include_str!("../../../lib/test.srt");
-    const TEST_STACK_SIZE: usize = 32 * 1024 * 1024;
-
-    fn run_with_large_stack<T>(label: &str, f: impl FnOnce() -> T + Send + 'static) -> T
-    where
-        T: Send + 'static,
-    {
-        thread::Builder::new()
-            .name(format!("forge-test-{label}"))
-            .stack_size(TEST_STACK_SIZE)
-            .spawn(f)
-            .unwrap_or_else(|e| panic!("failed to spawn large-stack test thread `{label}`: {e}"))
-            .join()
-            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
-    }
 
     fn strip_test_annotations(source: &str) -> String {
         source
@@ -241,11 +232,171 @@ mod tests {
     }
 
     fn codegen_source(source: &str) -> sindr::ir::Bytecode {
-        let source = source.to_owned();
-        run_with_large_stack("codegen_source", move || {
-            let typed = typed_with_builtin_prelude(&source);
-            codegen(typed).expect("codegen should succeed")
-        })
+        let typed = typed_with_builtin_prelude(source);
+        codegen(typed).expect("codegen should succeed")
+    }
+
+    fn test_span() -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    fn resolved_id(name: &str, unique_id: u32) -> ResolvedId {
+        ResolvedId {
+            name: name.to_string(),
+            qualified_name: None,
+            unique_id,
+            span: test_span(),
+        }
+    }
+
+    fn int_lit(value: i64) -> TypedNode {
+        TypedNode {
+            ty: Ty::Int,
+            span: test_span(),
+            node: TypedInner::Lit(Lit::Int(int(value))),
+        }
+    }
+
+    fn unit_lit() -> TypedNode {
+        TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Lit(Lit::Unit),
+        }
+    }
+
+    fn list_nil() -> TypedNode {
+        TypedNode {
+            ty: Ty::List(Box::new(Ty::Int)),
+            span: test_span(),
+            node: TypedInner::ListNil,
+        }
+    }
+
+    fn list_cons_expr(depth: usize) -> TypedNode {
+        let mut node = list_nil();
+        for value in (0..depth).rev() {
+            node = TypedNode {
+                ty: Ty::List(Box::new(Ty::Int)),
+                span: test_span(),
+                node: TypedInner::ListCons(Box::new(int_lit(value as i64)), Box::new(node)),
+            };
+        }
+        node
+    }
+
+    fn list_cons_bind_pattern(depth: usize) -> TypedPattern {
+        let mut pat = TypedPattern::ListNil(Ty::List(Box::new(Ty::Int)));
+        for _ in 0..depth {
+            pat = TypedPattern::ListCons(
+                Ty::List(Box::new(Ty::Int)),
+                Box::new(TypedPattern::Wildcard(Ty::Int)),
+                Box::new(pat),
+            );
+        }
+        pat
+    }
+
+    fn list_cons_match_pattern(depth: usize) -> TypedMatchPattern {
+        let mut pat = TypedMatchPattern::ListNil;
+        for _ in 0..depth {
+            pat = TypedMatchPattern::ListCons(Box::new(TypedMatchPattern::Wildcard), Box::new(pat));
+        }
+        pat
+    }
+
+    fn nested_tail_blocks(depth: usize, leaf: TypedNode) -> TypedNode {
+        let mut node = leaf;
+        for _ in 0..depth {
+            node = TypedNode {
+                ty: node.ty.clone(),
+                span: test_span(),
+                node: TypedInner::Block(vec![node]),
+            };
+        }
+        node
+    }
+
+    fn codegen_typed(stmts: Vec<TypedNode>) -> sindr::ir::Bytecode {
+        codegen(stmts).expect("typed codegen should succeed")
+    }
+
+    #[test]
+    fn deep_list_cons_expression_codegen_uses_normal_test_stack() {
+        let bytecode = codegen_typed(vec![list_cons_expr(512)]);
+        let cons_count = bytecode
+            .opcodes
+            .iter()
+            .filter(|op| matches!(op, Opcode::ListCons))
+            .count();
+
+        assert_eq!(cons_count, 512);
+    }
+
+    #[test]
+    fn deep_list_cons_bind_pattern_codegen_uses_normal_test_stack() {
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Bind(list_cons_bind_pattern(512), Box::new(list_cons_expr(512))),
+        };
+        let bytecode = codegen_typed(vec![node]);
+        let list_head_count = bytecode
+            .opcodes
+            .iter()
+            .filter(|op| matches!(op, Opcode::ListHead))
+            .count();
+
+        assert_eq!(list_head_count, 1024);
+    }
+
+    #[test]
+    fn deep_list_cons_match_pattern_codegen_uses_normal_test_stack() {
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Match(
+                Box::new(list_cons_expr(512)),
+                vec![TypedMatchArm {
+                    pattern: list_cons_match_pattern(512),
+                    guard: None,
+                    body: unit_lit(),
+                }],
+            ),
+        };
+        let bytecode = codegen_typed(vec![node]);
+        let list_head_count = bytecode
+            .opcodes
+            .iter()
+            .filter(|op| matches!(op, Opcode::ListHead))
+            .count();
+
+        assert_eq!(list_head_count, 1024);
+    }
+
+    #[test]
+    fn deep_tail_block_function_codegen_uses_normal_test_stack() {
+        let body = nested_tail_blocks(512, int_lit(1));
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Def(
+                0,
+                resolved_id("deep", 1),
+                Vec::new(),
+                Vec::<TypedFunParam>::new(),
+                Ty::Int,
+                Box::new(body),
+                Visibility::Public,
+            ),
+        };
+        let bytecode = codegen_typed(vec![node]);
+
+        assert_eq!(bytecode.functions.len(), 1);
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::Return)));
     }
 
     #[test]

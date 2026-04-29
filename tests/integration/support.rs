@@ -3,26 +3,10 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
 
 use forge::bytecode::{populate_error_template_lines, Bytecode};
 use sindr::policy::{CompileUnitKind, RuntimeSourcePolicy};
 use xldr::{CompileSources, ModuleInput, ModuleSources, SourceKind};
-
-const TEST_STACK_SIZE: usize = 32 * 1024 * 1024;
-
-fn run_with_large_stack<T>(label: &str, f: impl FnOnce() -> T + Send + 'static) -> T
-where
-    T: Send + 'static,
-{
-    thread::Builder::new()
-        .name(format!("integration-{label}"))
-        .stack_size(TEST_STACK_SIZE)
-        .spawn(f)
-        .unwrap_or_else(|e| panic!("failed to spawn large-stack integration worker `{label}`: {e}"))
-        .join()
-        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
-}
 
 #[derive(Clone, Copy)]
 enum TestCompileMode {
@@ -534,30 +518,25 @@ fn check_source_phase(
     mode: TestCompileMode,
     phase: &str,
 ) -> Result<(), String> {
-    let phase_name = phase.to_owned();
-    let source_name = source_name.to_owned();
-    let source = source.to_owned();
-    run_with_large_stack("check_source_phase", move || {
-        let phase = CompileFailurePhase::from_str(&phase_name)?;
-        match phase {
-            CompileFailurePhase::Parse => {
-                parse_user_source(&source_name, &source, mode)?;
-                Ok(())
-            }
-            CompileFailurePhase::Resolve => {
-                let compile_sources = collect_script_compile_sources(&source_name, &source)?;
-                resolve_sources_with_mode(&compile_sources, mode)
-            }
-            CompileFailurePhase::Typecheck => {
-                let compile_sources = collect_script_compile_sources(&source_name, &source)?;
-                typecheck_sources_with_mode(&compile_sources, mode)
-            }
-            CompileFailurePhase::Codegen => {
-                let compile_sources = collect_script_compile_sources(&source_name, &source)?;
-                compile_sources_with_mode(&compile_sources, mode).map(|_| ())
-            }
+    let phase = CompileFailurePhase::from_str(phase)?;
+    match phase {
+        CompileFailurePhase::Parse => {
+            parse_user_source(source_name, source, mode)?;
+            Ok(())
         }
-    })
+        CompileFailurePhase::Resolve => {
+            let compile_sources = collect_script_compile_sources(source_name, source)?;
+            resolve_sources_with_mode(&compile_sources, mode)
+        }
+        CompileFailurePhase::Typecheck => {
+            let compile_sources = collect_script_compile_sources(source_name, source)?;
+            typecheck_sources_with_mode(&compile_sources, mode)
+        }
+        CompileFailurePhase::Codegen => {
+            let compile_sources = collect_script_compile_sources(source_name, source)?;
+            compile_sources_with_mode(&compile_sources, mode).map(|_| ())
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -568,10 +547,7 @@ pub fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, Strin
 
 #[allow(dead_code)]
 pub fn compile_script_sources(compile_sources: &CompileSources) -> Result<Bytecode, String> {
-    let compile_sources = compile_sources.clone();
-    run_with_large_stack("compile_script_sources", move || {
-        compile_sources_with_mode(&compile_sources, TestCompileMode::Script)
-    })
+    compile_sources_with_mode(compile_sources, TestCompileMode::Script)
 }
 
 #[allow(dead_code)]
@@ -582,10 +558,7 @@ pub fn compile_project_script(source_name: &str, source: &str) -> Result<Bytecod
 
 #[allow(dead_code)]
 pub fn compile_project_sources(compile_sources: &CompileSources) -> Result<Bytecode, String> {
-    let compile_sources = compile_sources.clone();
-    run_with_large_stack("compile_project_sources", move || {
-        compile_sources_with_mode(&compile_sources, TestCompileMode::Project)
-    })
+    compile_sources_with_mode(compile_sources, TestCompileMode::Project)
 }
 
 fn compile_sources_with_mode(
