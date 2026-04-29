@@ -23,7 +23,7 @@ pub fn parse_repl_command(trimmed: &str) -> Option<ReplCommand> {
         .unwrap_or((body, ""));
 
     let command = match cmd {
-        "quit" | "q" => ReplCommand::Quit,
+        "quit" | "exit" | "q" => ReplCommand::Quit,
         "doc" => ReplCommand::Doc {
             symbol: rest.to_string(),
         },
@@ -72,5 +72,11 @@ mod tests {
             parsed,
             ReplCommand::Error { mode: Some(mode) } if mode == "summary"
         ));
+    }
+
+    #[test]
+    fn parse_exit_command_as_quit_alias() {
+        let parsed = parse_repl_command(":exit").expect("command should parse");
+        assert!(matches!(parsed, ReplCommand::Quit));
     }
 }

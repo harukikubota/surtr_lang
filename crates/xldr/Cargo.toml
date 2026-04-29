@@ -5,7 +5,7 @@ edition = "2021"
 description = "Interactive and eXtensible surtr and eLDR runtime tools"
 
 [features]
-default = []
+default = ["line-editor"]
 line-editor = ["dep:rustyline"]
 tui = ["dep:ratatui", "dep:crossterm"]
 bench = ["dep:criterion"]

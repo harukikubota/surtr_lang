@@ -89,6 +89,17 @@ fn repl_quit_exits_cleanly() {
 }
 
 #[test]
+fn repl_exit_exits_cleanly() {
+    let output = run_repl_session(":exit\n");
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn repl_fails_fast_when_additional_stdlib_bootstrap_fails() {
     let dir = unique_temp_dir("repl-bootstrap-failure");
     let lib_dir = dir.join("lib");
