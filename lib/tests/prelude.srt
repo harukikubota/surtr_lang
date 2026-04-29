@@ -261,11 +261,13 @@ defmod StyledDoc {
     if(
       or(segment.text == "", Boolean::not(_has_style(segment.style))),
       segment.text,
-      {
-        codes = _style_codes(segment.style)
-        _esc() ++ "[" ++ String::join(codes, ";") ++ "m" ++ segment.text ++ _esc() ++ "[0m"
-      },
+      _styled_ansi_segment(segment),
     )
+  }
+
+  defp _styled_ansi_segment(segment: StyledDocSegment) -> String {
+    codes = _style_codes(segment.style)
+    _esc() ++ "[" ++ String::join(codes, ";") ++ "m" ++ segment.text ++ _esc() ++ "[0m"
   }
 
   defp _ansi_segments(segments: List<StyledDocSegment>) -> String {
@@ -304,19 +306,48 @@ defmod Test {
     Err(TestAssertionFailed(detail))
   }
 
+  defp _finish_ok() -> Result<()> {
+    __test_pop()
+    Ok(())
+  }
+
+  defp _finish_unexpected_test_error(err: Error) -> Result<()> {
+    __test_fail_current("unexpected test error: " ++ inspect(err))
+    __test_pop()
+    Ok(())
+  }
+
+  defp _finish_unexpected_describe_error(err: Error) -> Result<()> {
+    __test_fail_current("unexpected describe error: " ++ inspect(err))
+    __test_pop()
+    Ok(())
+  }
+
+  defp _finish_it_ok(name: String) -> Result<()> {
+    __test_pass(name)
+    Ok(())
+  }
+
+  defp _finish_it_err(name: String, err: Error) -> Result<()> {
+    __test_fail(name, inspect(err))
+    Ok(())
+  }
+
+  defp _assert_err_rendered_contains(fragment: String, err: Error) -> Result<()> {
+    rendered = inspect(err)
+    if(
+      String::contains(rendered, fragment),
+      Ok(()),
+      _fail("expected Err containing #{fragment}, got #{rendered}"),
+    )
+  }
+
   def test(name: String, body: (-> Result<()>)) -> Result<()> {
     __test_push("test", name)
     result = body()
     match result {
-      Ok(_) => {
-        __test_pop()
-        Ok(())
-      },
-      Err(err) => {
-        __test_fail_current("unexpected test error: " ++ inspect(err))
-        __test_pop()
-        Ok(())
-      },
+      Ok(_) => _finish_ok(),
+      Err(err) => _finish_unexpected_test_error(err),
     }
   }
 
@@ -324,28 +355,15 @@ defmod Test {
     __test_push("describe", name)
     result = body()
     match result {
-      Ok(_) => {
-        __test_pop()
-        Ok(())
-      },
-      Err(err) => {
-        __test_fail_current("unexpected describe error: " ++ inspect(err))
-        __test_pop()
-        Ok(())
-      },
+      Ok(_) => _finish_ok(),
+      Err(err) => _finish_unexpected_describe_error(err),
     }
   }
 
   def it(name: String, body: (-> Result<()>)) -> Result<()> {
     match body() {
-      Ok(_) => {
-        __test_pass(name)
-        Ok(())
-      },
-      Err(err) => {
-        __test_fail(name, inspect(err))
-        Ok(())
-      },
+      Ok(_) => _finish_it_ok(name),
+      Err(err) => _finish_it_err(name, err),
     }
   }
 
@@ -377,14 +395,7 @@ defmod Test {
   def assert_err_contains(fragment: String, result: Result<$A>) -> Result<()> {
     match result {
       Ok(actual) => _fail("expected Err containing #{fragment}, got Ok(#{inspect(actual)})"),
-      Err(err) => {
-        rendered = inspect(err)
-        if(
-          String::contains(rendered, fragment),
-          Ok(()),
-          _fail("expected Err containing #{fragment}, got #{rendered}"),
-        )
-      },
+      Err(err) => _assert_err_rendered_contains(fragment, err),
     }
   }
 
