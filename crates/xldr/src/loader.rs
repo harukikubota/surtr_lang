@@ -195,6 +195,11 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         include_str!("../../../lib/Project.srt"),
         "Project",
     ),
+    (
+        "Random.srt",
+        include_str!("../../../lib/Random.srt"),
+        "Random",
+    ),
     ("IO.srt", include_str!("../../../lib/IO.srt"), "IO"),
 ];
 const DEFAULT_STD_POST_MODULES: &[(&str, &str, &str)] =
@@ -926,6 +931,7 @@ mod tests {
                 "Float",
                 "Config",
                 "Project",
+                "Random",
                 "IO",
                 "StyledDoc",
             ]
@@ -1066,6 +1072,7 @@ mod tests {
                 "Float",
                 "Config",
                 "Project",
+                "Random",
                 "IO",
                 "StyledDoc",
             ]

@@ -333,6 +333,7 @@ name = "eldr"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "num-bigint",
  "regex",
  "sindr",
 ]

@@ -368,6 +368,32 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(String) -> Result<String, InputError>",
     },
     BuiltinMeta {
+        name: "seed",
+        arity: 1,
+        sig_str: "(Int) -> RandomGenerator",
+    },
+    BuiltinMeta {
+        name: "int_until",
+        arity: 1,
+        sig_str: "(Int) -> Result<Int, InvalidRandomRange>",
+    },
+    BuiltinMeta {
+        name: "int_range",
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Int, InvalidRandomRange>",
+    },
+    BuiltinMeta {
+        name: "next_int_until",
+        arity: 2,
+        sig_str: "(RandomGenerator, Int) -> Result<(Int, RandomGenerator), InvalidRandomRange>",
+    },
+    BuiltinMeta {
+        name: "next_int_range",
+        arity: 3,
+        sig_str:
+            "(RandomGenerator, Int, Int) -> Result<(Int, RandomGenerator), InvalidRandomRange>",
+    },
+    BuiltinMeta {
         name: "kind",
         arity: 1,
         sig_str: "(Error) -> String",
@@ -541,6 +567,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &[],
     },
     BuiltinTypeMeta {
+        name: "RandomGenerator",
+        params: &[],
+    },
+    BuiltinTypeMeta {
         name: "List",
         params: &["$A"],
     },
@@ -616,6 +646,7 @@ pub fn builtin_type_supports_inherent_impl(name: &str) -> bool {
             | "Regex"
             | "RegexCaptures"
             | "RegexMatch"
+            | "RandomGenerator"
             | "List"
             | "HashMap"
             | "Generator"
