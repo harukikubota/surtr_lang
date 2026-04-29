@@ -284,7 +284,7 @@ print(greeting)
 
 `if` は値を返す分岐です。内部契約としては
 `if(Boolean, (-> A), (-> A)) -> A`
-のように branch が関数型で表されますが、通常の source では明示的な block を
+のように branch が関数型で表されますが、通常の source では明示的な closure を
 書く必要はありません。
 
 ```surtr

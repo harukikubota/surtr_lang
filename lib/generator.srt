@@ -106,12 +106,14 @@ impl Generator {
   defp _codepoints_to_chars(values: List<Int>) -> Result<List<String>, InvalidCharRange> {
     match values {
       [] => Ok([]),
-      [head, ..tail] => {
-        head_char =? _ascii_codepoint_to_char(head)
-        tail_chars =? _codepoints_to_chars(tail)
-        Ok([head_char, ..tail_chars])
-      },
+      [head, ..tail] => _codepoint_cons_to_chars(head, tail),
     }
+  }
+
+  defp _codepoint_cons_to_chars(head: Int, tail: List<Int>) -> Result<List<String>, InvalidCharRange> {
+    head_char =? _ascii_codepoint_to_char(head)
+    tail_chars =? _codepoints_to_chars(tail)
+    Ok([head_char, ..tail_chars])
   }
 
   @@doc """
@@ -241,6 +243,18 @@ impl Generator {
     range_char_step(start, stop, 1)
   }
 
+  defp _range_char_step_checked(
+    start: String,
+    stop: String,
+    step: Int,
+  ) -> Result<Generator<String, String>, Error> {
+    start_cp =? _single_ascii_codepoint(start, "start")
+    stop_cp =? _single_ascii_codepoint(stop, "stop")
+    base =? range_step(start_cp, stop_cp, step)
+    chars =? _codepoints_to_chars(to_list(base))
+    Ok(gen_make(idx(base), chars))
+  }
+
   @@doc """
   Inclusive character range with explicit step.
   `step == 0` returns `Err(InvalidRangeStep(...))`.
@@ -256,13 +270,7 @@ impl Generator {
     if(
       step == 0,
       Err(InvalidRangeStep("step must not be 0")),
-      {
-        start_cp =? _single_ascii_codepoint(start, "start")
-        stop_cp =? _single_ascii_codepoint(stop, "stop")
-        base =? range_step(start_cp, stop_cp, step)
-        chars =? _codepoints_to_chars(to_list(base))
-        Ok(gen_make(idx(base), chars))
-      },
+      _range_char_step_checked(start, stop, step),
     )
   }
 }

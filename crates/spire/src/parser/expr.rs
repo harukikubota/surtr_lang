@@ -497,7 +497,7 @@ impl Parser<'_> {
                 }
             }
 
-            // Block expression: { stmt; stmt; expr }
+            // Zero-argument closure expression: { stmt; stmt; expr }
             Token::LBrace => self.parse_trailing_block_expr_from_lbrace(sp),
 
             // Capture / placeholder capture: &foo, &foo(&1), &1
@@ -868,14 +868,29 @@ impl Parser<'_> {
             return self.parse_closure_literal(sp);
         }
 
-        let stmts = self.parse_block_stmts()?;
+        let body_stmts = self.parse_block_stmts()?;
+        if body_stmts.is_empty() {
+            return Err(ParseError::incomplete("expression", self.peek_span()));
+        }
         let end = self.expect(&Token::RBrace)?;
-        Ok(Ast::Block(
+        let body = if body_stmts.len() == 1 {
+            body_stmts.into_iter().next().expect("checked non-empty")
+        } else {
+            Ast::Block(
+                Span {
+                    start: body_stmts[0].span().start,
+                    end: body_stmts[body_stmts.len() - 1].span().end,
+                },
+                body_stmts,
+            )
+        };
+        Ok(Ast::Closure(
             Span {
                 start: sp.start,
                 end: end.end,
             },
-            stmts,
+            Vec::new(),
+            Box::new(body),
         ))
     }
 
@@ -889,24 +904,9 @@ impl Parser<'_> {
         Ok(())
     }
 
-    pub(super) fn trailing_block_uses_closure_sugar(callee: &Ast) -> bool {
-        fn is_test_dsl_name(name: &str) -> bool {
-            matches!(name, "test" | "describe" | "it")
-        }
-
-        match callee {
-            Ast::Var(_, name) => is_test_dsl_name(name),
-            Ast::Path(_, path) => path
-                .segments
-                .last()
-                .is_some_and(|name| is_test_dsl_name(name)),
-            _ => false,
-        }
-    }
-
     pub(super) fn attach_trailing_block_arg(
         &mut self,
-        callee: &Ast,
+        _callee: &Ast,
         mut args: Vec<RecordLitArg>,
         mut call_end: usize,
     ) -> Result<(Vec<RecordLitArg>, usize), ParseError> {
@@ -926,12 +926,6 @@ impl Parser<'_> {
 
         let trailing = self.parse_trailing_block_expr_from_lbrace(self.peek_span())?;
         call_end = trailing.span().end;
-        let trailing = match trailing {
-            Ast::Block(span, stmts) if Self::trailing_block_uses_closure_sugar(callee) => {
-                Ast::Closure(span.clone(), Vec::new(), Box::new(Ast::Block(span, stmts)))
-            }
-            other => other,
-        };
         args.push(RecordLitArg::Positional(trailing));
         Ok((args, call_end))
     }

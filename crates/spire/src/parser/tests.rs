@@ -116,8 +116,13 @@ fn test_function_call_accepts_trailing_block_arg() {
             ));
             assert!(matches!(
                 &args[1],
-                RecordLitArg::Positional(Ast::Block(_, stmts))
-                    if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Var(_, name)] if name == "num")
+                RecordLitArg::Positional(Ast::Closure(_, params, body))
+                    if params.is_empty()
+                    && matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Var(_, name)] if name == "num")
+                    )
             ));
         }
         _ => panic!("Expected App"),
@@ -133,11 +138,31 @@ fn test_zero_arg_call_accepts_trailing_block_arg() {
             assert_eq!(args.len(), 1);
             assert!(matches!(
                 &args[0],
-                RecordLitArg::Positional(Ast::Block(_, stmts))
-                    if matches!(stmts.as_slice(), [Ast::App(_, _, inner_args)] if inner_args.len() == 1)
+                RecordLitArg::Positional(Ast::Closure(_, params, body))
+                    if params.is_empty()
+                    && matches!(body.as_ref(), Ast::App(_, _, inner_args) if inner_args.len() == 1)
             ));
         }
         _ => panic!("Expected App"),
+    }
+}
+
+#[test]
+fn test_brace_expression_is_zero_arg_closure() {
+    let ast = parse("x = { tmp = 10; tmp * 10 }").expect("brace expression should parse");
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Closure(_, params, body) => {
+                assert!(params.is_empty());
+                assert!(matches!(
+                    body.as_ref(),
+                    Ast::Block(_, stmts)
+                        if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::BinOp(_, BinOp::Mul, _, _)])
+                ));
+            }
+            other => panic!("Expected zero-arg Closure, got {:?}", other),
+        },
+        other => panic!("Expected Bind, got {:?}", other),
     }
 }
 
@@ -2177,22 +2202,28 @@ fn test_cond_desugars_to_nested_if_apps() {
 }
 
 #[test]
-fn test_cond_accepts_block_body() {
+fn test_cond_accepts_zero_arg_closure_body() {
     let ast = parse(
         r#"x = cond {
   True => { print("ok"); 1 },
 }"#,
     )
-    .expect("cond with block body should parse");
+    .expect("cond with closure body should parse");
 
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
-            Ast::Block(_, stmts) => {
-                assert!(
-                    matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Lit(_, Lit::Int(n))] if n == &int(1))
-                );
+            Ast::Closure(_, params, body) => {
+                assert!(params.is_empty());
+                assert!(matches!(
+                    body.as_ref(),
+                    Ast::Block(_, stmts)
+                        if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Lit(_, Lit::Int(n))] if n == &int(1))
+                ));
             }
-            _ => panic!("Expected final True clause body to remain as block"),
+            other => panic!(
+                "Expected final True clause body to become closure, got {:?}",
+                other
+            ),
         },
         _ => panic!("Expected Bind"),
     }

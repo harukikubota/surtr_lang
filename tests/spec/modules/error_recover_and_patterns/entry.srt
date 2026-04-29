@@ -19,12 +19,14 @@ print(inspect(Result::recover_kind(Ok("ok"), Timeout, &retry)))
 print(inspect(Result::recover_kind(Err(Timeout), Timeout, &retry)))
 print(inspect(Result::recover_kind(Err(DnsFailure), Timeout, &retry)))
 
+def print_matched_error(e: Error) -> Unit {
+  print("matched:" ++ Error::kind(e))
+  print(Error::format(e))
+}
+
 match Err(ConnectionReset) {
   Ok(value) => print(value),
-  Err(Timeout | ConnectionReset @ e: Error) => {
-    print("matched:" ++ Error::kind(e))
-    print(Error::format(e))
-  },
+  Err(Timeout | ConnectionReset @ e: Error) => print_matched_error(e),
   Err(DnsFailure) => print("dns"),
   Err(err) => print("other:" ++ Error::kind(err)),
 }

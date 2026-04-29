@@ -414,7 +414,7 @@ private field と property access を含む構造体全体の契約は `./struct
 ### 補足
 
 - `if` / `if_then` の branch が関数型で書かれているのは、選ばれた側だけを評価する special form であることを型で表しているため
-- 普段の source では block を明示せず `if(flag, "ok", err_reason)` や `if_then(flag, print("ok"))` のように書ける
+- 普段の source では closure を明示せず `if(flag, "ok", err_reason)` や `if_then(flag, print("ok"))` のように書ける
 - `and` / `or` は宣言上は普通の 2 引数関数だが、コンパイラが short-circuit として解釈する
 - `eq` / `neq` は call-style helper で、`==` / `!=` と同じ比較制約に従う
 - `lt` / `lte` / `gt` / `gte` は call-style helper で、`<` / `<=` / `>` / `>=` と同じ比較制約に従う

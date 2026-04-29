@@ -1,0 +1,6 @@
+block = {
+  tmp = 10
+  tmp * 10
+}
+
+print(to_string(block()))

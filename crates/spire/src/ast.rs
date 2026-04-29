@@ -239,7 +239,7 @@ pub enum Ast {
     /// Function application: `print("hello")`, `to_string(42)`, `add(y: 2, x: 1)`
     App(Span, Box<Ast>, Vec<RecordLitArg>),
 
-    /// Block of statements (implicit in top-level, explicit in `{}`)
+    /// Statement sequence used by declaration bodies and lowered closure bodies.
     Block(Span, Vec<Ast>),
 
     /// Binding: `x = 10`, `num: Int = 42`
@@ -370,7 +370,7 @@ pub enum Ast {
     /// Script include directive: `include "./path/to/module.srt"`
     Include(Span, String),
 
-    /// Closure literal: `{|x, y| expr}` / `{|| expr}`
+    /// Closure literal: `{|x, y| expr}` / `{|| expr}` / `{ expr }`
     Closure(Span, Vec<ClosureParam>, Box<Ast>),
 
     /// Captured function / placeholder capture head: `&print` / `&print(&1)`

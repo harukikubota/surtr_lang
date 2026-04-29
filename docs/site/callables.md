@@ -113,6 +113,7 @@ closure はその場で作る関数値です。
 {|x| x + 1}
 {|x: Int| x + 1}
 {|| "ready"}
+{ "ready" }
 ```
 
 引数型注釈は任意です。
@@ -130,6 +131,20 @@ tap(3, {|n|
   print(to_string(n))
 })
 ```
+
+`{ ... }` はゼロ引数 closure です。即時評価される block 式ではありません。
+
+```surtr
+block = {
+  tmp = 10
+  tmp * 10
+}
+
+print(to_string(block()))
+```
+
+`match expr { pattern => expr, ... }` と `cond { cond => expr, ... }` の braces は
+`=>` を持つ専用構文のコンテナで、closure literal ではありません。
 
 closure は周囲の値を capture します。
 
@@ -208,7 +223,7 @@ plus = {|x| x + 1}
 
 ## trailing block
 
-call 式の最終引数が block なら、末尾へ外出しして書けます。
+call 式の最終引数がゼロ引数 closure なら、末尾へ外出しして書けます。
 
 ```surtr
 Test::it("increments") {

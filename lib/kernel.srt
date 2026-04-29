@@ -25,7 +25,7 @@ defmod Kernel {
   Surtr's evaluation rule: the branch is selected lazily and only the chosen
   side is evaluated.
   This does not mean everyday source code must wrap the argument in an explicit
-  closure or block.
+  closure.
 
   Ordinary expression form stays available:
   `if_then(flag, print("flag is true"))`

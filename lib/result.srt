@@ -53,11 +53,13 @@ impl Result {
   defp _all_go(values: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
     match values {
       [] => Ok(List::reverse(acc_rev)),
-      [head, ..tail] => {
-        value =? head
-        _all_go(tail, [value, ..acc_rev])
-      },
+      [head, ..tail] => _all_cons(head, tail, acc_rev),
     }
+  }
+
+  defp _all_cons(head: Result<$A>, tail: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
+    value =? head
+    _all_go(tail, [value, ..acc_rev])
   }
 
   @@doc """
@@ -375,12 +377,14 @@ impl Result {
   """
   def tap_ok(value: Result<$A>, f: ($A -> Unit)) -> Result<$A> {
     match value {
-      Ok(v) => {
-        f(v)
-        value
-      },
+      Ok(v) => _tap_ok_value(value, f, v),
       Err(_) => value,
     }
+  }
+
+  defp _tap_ok_value(value: Result<$A>, f: ($A -> Unit), inner: $A) -> Result<$A> {
+    f(inner)
+    value
   }
 
   @@doc """
@@ -392,11 +396,13 @@ impl Result {
   def tap_err(value: Result<$A>, f: (Error -> Unit)) -> Result<$A> {
     match value {
       Ok(_) => value,
-      Err(err) => {
-        f(err)
-        value
-      },
+      Err(err) => _tap_err_value(value, f, err),
     }
+  }
+
+  defp _tap_err_value(value: Result<$A>, f: (Error -> Unit), err: Error) -> Result<$A> {
+    f(err)
+    value
   }
 
   @@doc """

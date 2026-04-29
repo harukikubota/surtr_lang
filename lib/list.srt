@@ -128,15 +128,17 @@ impl List {
   defp _partition_go(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
     match values {
       [] => ([], []),
-      [head, ..tail] => {
-        rest = _partition_go(tail, pred)
-        if(
-          pred(head),
-          (cons(head, rest._0), rest._1),
-          (rest._0, cons(head, rest._1)),
-        )
-      },
+      [head, ..tail] => _partition_cons(head, tail, pred),
     }
+  }
+
+  defp _partition_cons(head: $A, tail: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    rest = _partition_go(tail, pred)
+    if(
+      pred(head),
+      (cons(head, rest._0), rest._1),
+      (rest._0, cons(head, rest._1)),
+    )
   }
 
   defp _take_while_go(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {

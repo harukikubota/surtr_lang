@@ -739,13 +739,13 @@ fn cond_selects_first_true_branch_and_skips_later_branches() {
     );
 }
 
-fn cond_allows_block_bodies() {
+fn cond_keeps_arrow_body_expressions() {
     assert_output(
         r#"print(to_string(cond {
   False => 0,
-  True => { print("branch"); 42 },
+  True => 42,
 }))"#,
-        &["branch", "42"],
+        &["42"],
     );
 }
 
@@ -1057,7 +1057,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
             "cond_selects_first_true_branch_and_skips_later_branches",
             cond_selects_first_true_branch_and_skips_later_branches as fn(),
         ),
-        ("cond_allows_block_bodies", cond_allows_block_bodies as fn()),
+        (
+            "cond_keeps_arrow_body_expressions",
+            cond_keeps_arrow_body_expressions as fn(),
+        ),
         (
             "cond_condition_must_be_boolean",
             cond_condition_must_be_boolean as fn(),

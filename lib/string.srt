@@ -155,6 +155,11 @@ impl String {
     }
   }
 
+  defp _parse_negative_decimal(tail: List<String>, input: String) -> Result<Int, InvalidIntegerLiteral> {
+    num =? _parse_decimal_go(tail, 0, input)
+    Ok(0 - num)
+  }
+
   defp _decimal_digit_value(ch: String, input: String) -> Result<Int, InvalidIntegerLiteral> {
     if(
       ch == "0",
@@ -194,11 +199,13 @@ impl String {
   defp _parse_decimal_go(chars: List<String>, acc: Int, input: String) -> Result<Int, InvalidIntegerLiteral> {
     match chars {
       [] => Ok(acc),
-      [head, ..tail] => {
-        digit =? _decimal_digit_value(head, input)
-        _parse_decimal_go(tail, acc * 10 + digit, input)
-      },
+      [head, ..tail] => _parse_decimal_cons(head, tail, acc, input),
     }
+  }
+
+  defp _parse_decimal_cons(head: String, tail: List<String>, acc: Int, input: String) -> Result<Int, InvalidIntegerLiteral> {
+    digit =? _decimal_digit_value(head, input)
+    _parse_decimal_go(tail, acc * 10 + digit, input)
   }
 
   @@doc """
@@ -406,11 +413,13 @@ impl String {
     if(
       value == "",
       [],
-      {
-        stripped = List::map(split(value, "\n"), {|line| _strip_trailing_cr(line) })
-        if(ends_with(value, "\n"), _drop_last(stripped), stripped)
-      },
+      _lines_non_empty(value),
     )
+  }
+
+  defp _lines_non_empty(value: String) -> List<String> {
+    stripped = List::map(split(value, "\n"), {|line| _strip_trailing_cr(line) })
+    if(ends_with(value, "\n"), _drop_last(stripped), stripped)
   }
 
   @@doc """
@@ -508,10 +517,7 @@ impl String {
       ["-", ..tail] => if(
         List::len(tail) == 0,
         Err(InvalidIntegerLiteral(value)),
-        {
-          num =? _parse_decimal_go(tail, 0, value)
-          Ok(0 - num)
-        },
+        _parse_negative_decimal(tail, value),
       ),
       ["+", ..tail] => if(
         List::len(tail) == 0,

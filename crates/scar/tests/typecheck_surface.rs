@@ -937,8 +937,8 @@ fn canonical_builtin_type_name_hole_is_reserved_for_errors() {
 #[test]
 fn trailing_block_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
-        r#"def take(flag: Boolean, value: Int) -> Int {
-  if(flag, value, 0)
+        r#"def take(flag: Boolean, value: (-> Int)) -> Int {
+  if(flag, value(), 0)
 }
 
 print(to_string(take(True) { num = 10; num }))

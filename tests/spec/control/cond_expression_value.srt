@@ -6,5 +6,10 @@ print(to_string(cond {
 print(to_string(cond {
   False => 0,
   False => 1,
-  True => { print("fallback"); 2 },
+  True => fallback_value(),
 }))
+
+def fallback_value() -> Int {
+  print("fallback")
+  2
+}
