@@ -505,7 +505,29 @@ pub fn collect_doc_entries(
     user_module_path: Option<&str>,
 ) -> Vec<DocEntry> {
     let mut docs = Vec::new();
+    collect_doc_entries_into(&mut docs, module_stages, user_ast, user_module_path);
+    docs
+}
 
+/// Collect doc metadata while reusing already-collected prefix docs, such as
+/// the default stdlib docs stored in the semantic snapshot.
+pub fn collect_doc_entries_with_base(
+    base_docs: &[DocEntry],
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    user_ast: &[spire::ast::Ast],
+    user_module_path: Option<&str>,
+) -> Vec<DocEntry> {
+    let mut docs = base_docs.to_vec();
+    collect_doc_entries_into(&mut docs, module_stages, user_ast, user_module_path);
+    docs
+}
+
+fn collect_doc_entries_into(
+    docs: &mut Vec<DocEntry>,
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    user_ast: &[spire::ast::Ast],
+    user_module_path: Option<&str>,
+) {
     for stage in module_stages {
         for module in stage {
             if let Some(doc) = &module.module_doc {
@@ -517,13 +539,11 @@ pub fn collect_doc_entries(
                     doc: doc.clone(),
                 });
             }
-            collect_doc_entries_for_ast(&module.ast, &module.module_path, &mut docs);
+            collect_doc_entries_for_ast(&module.ast, &module.module_path, docs);
         }
     }
 
-    collect_doc_entries_for_ast(user_ast, user_module_path.unwrap_or_default(), &mut docs);
-
-    docs
+    collect_doc_entries_for_ast(user_ast, user_module_path.unwrap_or_default(), docs);
 }
 
 #[derive(Debug, Clone, PartialEq)]

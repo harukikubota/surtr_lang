@@ -526,8 +526,14 @@ pub(crate) fn compile_source(
     if let Some(entry_name) = compile_plan.selected_entry_name.as_deref() {
         user_ast = rewrite_script_ast_for_entry(user_ast, entry_name);
     }
-    let docs = xldr::collect_doc_entries(
-        &module_stages,
+    let suffix_module_stages = if module_stages.len() > std_snapshot.default_stage_count {
+        &module_stages[std_snapshot.default_stage_count..]
+    } else {
+        &[]
+    };
+    let docs = xldr::collect_doc_entries_with_base(
+        &std_snapshot.docs,
+        suffix_module_stages,
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );

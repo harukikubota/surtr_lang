@@ -2,13 +2,14 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::UNIX_EPOCH;
 
 use forge::bytecode::{stable_hash_hex, Bytecode};
 
 use crate::compile::ScriptCompilePlan;
 use crate::error::ExecutionEnv;
 
-const CACHE_VERSION: &str = "surtr-run-cache-v1";
+const CACHE_VERSION: &str = "surtr-run-cache-v2";
 
 pub(crate) fn load(
     env: ExecutionEnv,
@@ -196,20 +197,16 @@ fn current_exe_fingerprint() -> Option<String> {
     FINGERPRINT
         .get_or_init(|| {
             let exe = env::current_exe().ok()?;
-            let bytes = fs::read(exe).ok()?;
-            Some(stable_hash_bytes(&bytes))
+            let metadata = fs::metadata(&exe).ok()?;
+            let modified = metadata.modified().ok()?;
+            let modified = modified.duration_since(UNIX_EPOCH).ok()?;
+            Some(stable_hash_hex(&format!(
+                "{}\x1f{}\x1f{}\x1f{}",
+                exe.display(),
+                metadata.len(),
+                modified.as_secs(),
+                modified.subsec_nanos()
+            )))
         })
         .clone()
-}
-
-fn stable_hash_bytes(bytes: &[u8]) -> String {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-
-    let mut hash = FNV_OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    format!("{hash:016x}")
 }
