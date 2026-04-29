@@ -35,6 +35,8 @@ use self::declarations::{
 };
 use self::imports::{build_global_scope, build_module_scope};
 
+const STAGE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
+
 fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
@@ -191,31 +193,37 @@ fn resolve_stage_modules_parallel(
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(stage.len());
         for module in stage {
-            handles.push(scope.spawn(move || {
-                let mut module_scope = build_module_scope(
-                    global_scope,
-                    auto_import_modules,
-                    declaration_index,
-                    declaration_uids,
-                    declaration_uid_kinds,
-                    &module.ast,
-                    Some(module.module_path.as_str()),
-                    stage_index,
-                )?;
-                module_scope.advance_next_id_to(stage_local_base);
-                let mut resolver = Resolver::with_scope(module_scope);
-                resolver.current_module_path = Some(module.module_path.clone());
-                resolver.declaration_uids = declaration_uids.clone();
-                resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
-                resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
-                resolver.allow_top_level_shadowing = true;
-                let resolved = resolver.resolve_program(module.ast.clone())?;
-                let local_id_count = resolver.scope.next_id().saturating_sub(stage_local_base);
-                Ok(StageModuleResolveResult {
-                    resolved,
-                    local_id_count,
-                })
-            }));
+            handles.push(
+                std::thread::Builder::new()
+                    .stack_size(STAGE_WORKER_STACK_SIZE)
+                    .spawn_scoped(scope, move || {
+                        let mut module_scope = build_module_scope(
+                            global_scope,
+                            auto_import_modules,
+                            declaration_index,
+                            declaration_uids,
+                            declaration_uid_kinds,
+                            &module.ast,
+                            Some(module.module_path.as_str()),
+                            stage_index,
+                        )?;
+                        module_scope.advance_next_id_to(stage_local_base);
+                        let mut resolver = Resolver::with_scope(module_scope);
+                        resolver.current_module_path = Some(module.module_path.clone());
+                        resolver.declaration_uids = declaration_uids.clone();
+                        resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
+                        resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
+                        resolver.allow_top_level_shadowing = true;
+                        let resolved = resolver.resolve_program(module.ast.clone())?;
+                        let local_id_count =
+                            resolver.scope.next_id().saturating_sub(stage_local_base);
+                        Ok(StageModuleResolveResult {
+                            resolved,
+                            local_id_count,
+                        })
+                    })
+                    .expect("stage resolver worker thread should spawn"),
+            );
         }
 
         handles

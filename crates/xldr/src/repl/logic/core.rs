@@ -53,6 +53,7 @@ const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("gte", "Gte"),
     ("concat", "Concat"),
 ];
+const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TypedCallQuery {
@@ -1712,23 +1713,28 @@ fn parse_stage_modules_parallel(
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(stage.len());
         for module in stage {
-            handles.push(scope.spawn(move || {
-                let raw_module_source = sources.source(module.source_id).unwrap_or("");
-                let module_source = crate::strip_test_annotations(raw_module_source);
-                let parsed = spire::parse_with_context(
-                    &module_source,
-                    spire::ParserContext::module(module.source_id.0, None)
-                        .with_rules(derive_parse_rules(module.source_kind)),
-                )
-                .map_err(|e| ModuleStageParseError {
-                    source_id: module.source_id,
-                    kind: ModuleStageParseErrorKind::Parse {
-                        message: e.message().to_string(),
-                        span: e.span().clone(),
-                    },
-                })?;
-                Ok(crate::lower_module_source_ast(parsed, None))
-            }));
+            handles.push(
+                std::thread::Builder::new()
+                    .stack_size(STAGE_PARSE_WORKER_STACK_SIZE)
+                    .spawn_scoped(scope, move || {
+                        let raw_module_source = sources.source(module.source_id).unwrap_or("");
+                        let module_source = crate::strip_test_annotations(raw_module_source);
+                        let parsed = spire::parse_with_context(
+                            &module_source,
+                            spire::ParserContext::module(module.source_id.0, None)
+                                .with_rules(derive_parse_rules(module.source_kind)),
+                        )
+                        .map_err(|e| ModuleStageParseError {
+                            source_id: module.source_id,
+                            kind: ModuleStageParseErrorKind::Parse {
+                                message: e.message().to_string(),
+                                span: e.span().clone(),
+                            },
+                        })?;
+                        Ok(crate::lower_module_source_ast(parsed, None))
+                    })
+                    .expect("stage parser worker thread should spawn"),
+            );
         }
 
         handles
