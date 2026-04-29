@@ -636,6 +636,12 @@ impl Parser<'_> {
                     }
                     match self.peek().clone() {
                         Token::DocString(text) => {
+                            if Self::string_has_interpolation(&text) {
+                                return Err(ParseError::syntax(
+                                    "@@doc does not allow string interpolation",
+                                    self.peek_span(),
+                                ));
+                            }
                             self.advance();
                             attrs.doc = Some(text);
                         }
@@ -1482,6 +1488,12 @@ impl Parser<'_> {
                     let token = self.peek().clone();
                     match token {
                         Token::DocString(text) => {
+                            if Self::string_has_interpolation(&text) {
+                                return Err(ParseError::syntax(
+                                    "@@doc does not allow string interpolation",
+                                    self.peek_span(),
+                                ));
+                            }
                             self.advance();
                             attrs.doc = Some(text);
                         }

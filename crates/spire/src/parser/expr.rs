@@ -380,10 +380,10 @@ impl Parser<'_> {
                 self.advance();
                 self.parse_string_or_interpolated(sp, s)
             }
-            Token::DocString(_) => Err(ParseError::syntax(
-                "Doc strings are only allowed after @@doc",
-                sp,
-            )),
+            Token::DocString(s) => {
+                self.advance();
+                self.parse_triple_string_or_interpolated(sp, s)
+            }
             Token::True => {
                 self.advance();
                 Ok(Ast::Lit(sp, Lit::Bool(true)))
@@ -896,6 +896,41 @@ impl Parser<'_> {
         })
     }
 
+    pub(super) fn parse_match_arm_body(&mut self) -> Result<Ast, ParseError> {
+        if matches!(self.peek(), Token::LBrace) {
+            let sp = self.peek_span();
+            return self.parse_match_arm_block_expr_from_lbrace(sp);
+        }
+        self.parse_expr()
+    }
+
+    pub(super) fn parse_match_arm_block_expr_from_lbrace(
+        &mut self,
+        sp: Span,
+    ) -> Result<Ast, ParseError> {
+        self.with_parse_nesting(sp.clone(), |parser| {
+            parser.expect(&Token::LBrace)?;
+            parser.skip_newlines();
+
+            if matches!(parser.peek(), Token::Pipe) {
+                return parser.parse_closure_literal(sp);
+            }
+
+            let stmts = parser.parse_block_stmts()?;
+            if stmts.is_empty() {
+                return Err(ParseError::incomplete("expression", parser.peek_span()));
+            }
+            let end = parser.expect(&Token::RBrace)?;
+            Ok(Ast::Block(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                stmts,
+            ))
+        })
+    }
+
     pub(super) fn reject_constructor_trailing_block(&self) -> Result<(), ParseError> {
         if self.allow_trailing_call_block && matches!(self.peek(), Token::LBrace) {
             return Err(ParseError::syntax(
@@ -1275,7 +1310,7 @@ impl Parser<'_> {
                 None
             };
             self.expect(&Token::FatArrow)?;
-            let body = self.parse_expr()?;
+            let body = self.parse_match_arm_body()?;
             for pattern in patterns {
                 arms.push(AstMatchArm {
                     pattern,

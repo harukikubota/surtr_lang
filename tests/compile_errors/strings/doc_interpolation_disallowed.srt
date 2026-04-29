@@ -1,0 +1,8 @@
+@@doc """
+hello #{name}
+"""
+def main() -> Unit {
+  ()
+}
+
+main()

@@ -1865,6 +1865,78 @@ fn test_interpolation_escape_drops_backslash() {
 }
 
 #[test]
+fn test_triple_quoted_string_parses_as_plain_string_expr() {
+    let ast = parse("msg = \"\"\"\nhello\n\"\"\"").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Str(s)) if s == "\nhello\n"));
+        }
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_triple_quoted_string_allows_interpolation() {
+    let ast = parse("msg = \"\"\"\nhello #{name}\n\"\"\"").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::InterpolatedStr(_, parts) => {
+                assert!(
+                    matches!(parts.first(), Some(InterpolatedPart::Text(s)) if s == "\nhello ")
+                );
+                assert!(matches!(parts.get(1), Some(InterpolatedPart::Expr(expr))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "name")));
+                assert!(matches!(parts.get(2), Some(InterpolatedPart::Text(s)) if s == "\n"));
+            }
+            _ => panic!("Expected InterpolatedStr"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_triple_quoted_string_dedents_from_starting_line_indent() {
+    let ast = parse("def main() -> Unit {\n  msg = \"\"\"\n  hello\n  world\n  \"\"\"\n}");
+    let ast = ast.unwrap();
+    match &ast[0] {
+        Ast::Def(_, _, _, _, _, body, _) => match body.as_ref() {
+            Ast::Block(_, stmts) => {
+                assert!(matches!(
+                    stmts.as_slice(),
+                    [Ast::Bind(_, _, rhs)]
+                        if matches!(rhs.as_ref(), Ast::Lit(_, Lit::Str(s)) if s == "\nhello\nworld\n")
+                ));
+            }
+            _ => panic!("Expected Block"),
+        },
+        _ => panic!("Expected Def"),
+    }
+}
+
+#[test]
+fn test_doc_attribute_rejects_interpolation() {
+    let err = parse("@@doc \"\"\"\nhello #{name}\n\"\"\"\ndef main() -> Unit { () }")
+        .expect_err("@@doc interpolation must fail");
+    assert!(
+        err.message()
+            .contains("@@doc does not allow string interpolation"),
+        "unexpected error: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn test_triple_quoted_string_rejects_content_shallower_than_starting_line() {
+    let err = parse("def main() -> Unit {\n  msg = \"\"\"\n shallow\n  \"\"\"\n}");
+    assert!(err
+        .expect_err("expected indentation error")
+        .message()
+        .contains(
+            "Triple-quoted string content must be indented at least as far as the starting line"
+        ));
+}
+
+#[test]
 fn test_regex_generated_literal_double_quote_lowers_to_compile_call() {
     let ast = parse(r#"rx = re"^a+$""#).unwrap();
     match &ast[0] {
@@ -2202,6 +2274,50 @@ fn test_match_string_pattern() {
             _ => panic!("Expected Match"),
         },
         _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_match_arm_rhs_brace_block_is_block_expr() {
+    let ast = parse(
+        r#"x = match n {
+  1 => {
+    y = 2
+    y + 3
+  },
+  _ => 0,
+}"#,
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Match(_, _, arms) => {
+                assert!(matches!(&arms[0].body, Ast::Block(_, stmts) if stmts.len() == 2));
+            }
+            other => panic!("Expected Match, got {:?}", other),
+        },
+        other => panic!("Expected Bind with Match, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_match_arm_rhs_explicit_closure_stays_closure() {
+    let ast = parse(
+        r#"x = match n {
+  1 => {|| 2},
+  _ => {|| 0},
+}"#,
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Match(_, _, arms) => {
+                assert!(matches!(&arms[0].body, Ast::Closure(_, params, _) if params.is_empty()));
+                assert!(matches!(&arms[1].body, Ast::Closure(_, params, _) if params.is_empty()));
+            }
+            other => panic!("Expected Match, got {:?}", other),
+        },
+        other => panic!("Expected Bind with Match, got {:?}", other),
     }
 }
 

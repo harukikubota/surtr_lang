@@ -72,24 +72,12 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
-        // Doc string — triple double quote
+        // Raw triple-quoted string. Body indentation is checked against the
+        // indentation of the line that starts the string, matching @@doc.
         if c == '"' && i + 2 < len && chars[i + 1] == '"' && chars[i + 2] == '"' {
-            let start = i;
-            i += 3;
-            let content_start = i;
-            while i + 2 < len && !(chars[i] == '"' && chars[i + 1] == '"' && chars[i + 2] == '"') {
-                i += 1;
-            }
-            if i + 2 >= len {
-                return Err(ParseError::incomplete("\"\"\"", Span { start, end: len }));
-            }
-            validate_doc_string_indent(&chars, start, content_start, i)?;
-            let content: String = chars[content_start..i].iter().collect();
-            i += 3;
-            tokens.push(Spanned {
-                token: Token::DocString(content),
-                span: Span { start, end: i },
-            });
+            let (token, next) = lex_raw_triple_quoted_string(&chars, i, len)?;
+            tokens.push(token);
+            i = next;
             continue;
         }
 
@@ -398,61 +386,99 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
     Ok(tokens)
 }
 
-fn validate_doc_string_indent(
+fn lex_raw_triple_quoted_string(
+    chars: &[char],
+    start: usize,
+    len: usize,
+) -> Result<(Spanned<Token>, usize), ParseError> {
+    let content_start = start + 3;
+    let mut content_end = content_start;
+    while content_end + 2 < len
+        && !(chars[content_end] == '"'
+            && chars[content_end + 1] == '"'
+            && chars[content_end + 2] == '"')
+    {
+        content_end += 1;
+    }
+    if content_end + 2 >= len {
+        return Err(ParseError::incomplete("\"\"\"", Span { start, end: len }));
+    }
+
+    let content = normalize_triple_quoted_string(chars, start, content_start, content_end)?;
+    let end = content_end + 3;
+    Ok((
+        Spanned {
+            token: Token::DocString(content),
+            span: Span { start, end },
+        },
+        end,
+    ))
+}
+
+fn normalize_triple_quoted_string(
     chars: &[char],
     quote_start: usize,
     content_start: usize,
     content_end: usize,
-) -> Result<(), ParseError> {
+) -> Result<String, ParseError> {
     let base_indent = line_indent_before(chars, quote_start);
+    let mut out = String::new();
     let mut i = content_start;
     let mut at_line_start = content_start == 0 || chars[content_start - 1] == '\n';
 
     while i < content_end {
         if !at_line_start {
             while i < content_end && chars[i] != '\n' {
+                out.push(chars[i]);
                 i += 1;
             }
             if i < content_end {
+                out.push(chars[i]);
                 i += 1;
                 at_line_start = true;
             }
             continue;
         }
 
-        let line_start = i;
         let mut columns = 0usize;
+        let mut indent_chars = Vec::new();
         while i < content_end {
             match chars[i] {
                 ' ' => {
                     columns += 1;
+                    indent_chars.push(chars[i]);
                     i += 1;
                 }
                 '\t' => {
                     columns += 4 - (columns % 4);
+                    indent_chars.push(chars[i]);
                     i += 1;
                 }
                 '\r' => {
                     i += 1;
                 }
                 '\n' => {
+                    out.push(chars[i]);
                     i += 1;
                     break;
                 }
                 _ => {
                     if columns < base_indent {
                         return Err(ParseError::syntax(
-                            "Doc string content must be indented at least as far as @@doc",
+                            "Triple-quoted string content must be indented at least as far as the starting line",
                             Span {
                                 start: i,
                                 end: i + 1,
                             },
                         ));
                     }
+                    push_indent_after_base(&mut out, &indent_chars, base_indent);
                     while i < content_end && chars[i] != '\n' {
+                        out.push(chars[i]);
                         i += 1;
                     }
                     if i < content_end {
+                        out.push(chars[i]);
                         i += 1;
                     }
                     break;
@@ -460,13 +486,33 @@ fn validate_doc_string_indent(
             }
         }
         at_line_start = true;
+    }
 
-        if i == line_start {
+    Ok(out)
+}
+
+fn push_indent_after_base(out: &mut String, indent_chars: &[char], base_indent: usize) {
+    let mut columns = 0usize;
+    let mut keep_from = indent_chars.len();
+    for (idx, ch) in indent_chars.iter().enumerate() {
+        let next_columns = match ch {
+            ' ' => columns + 1,
+            '\t' => columns + (4 - (columns % 4)),
+            _ => columns,
+        };
+        if next_columns > base_indent {
+            keep_from = idx + 1;
+            break;
+        }
+        columns = next_columns;
+        if columns == base_indent {
+            keep_from = idx + 1;
             break;
         }
     }
-
-    Ok(())
+    for ch in &indent_chars[keep_from..] {
+        out.push(*ch);
+    }
 }
 
 fn line_indent_before(chars: &[char], idx: usize) -> usize {
@@ -525,9 +571,7 @@ mod tests {
     fn test_doc_string_allows_content_at_doc_indent_with_tabs() {
         let tokens = tokenize("\t@@doc \"\"\"\n\tabcde\n\t    5\n\t\"\"\"").unwrap();
         assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "doc"));
-        assert!(
-            matches!(tokens[1].token, Token::DocString(ref s) if s == "\n\tabcde\n\t    5\n\t")
-        );
+        assert!(matches!(tokens[1].token, Token::DocString(ref s) if s == "\nabcde\n    5\n"));
     }
 
     #[test]
@@ -536,7 +580,7 @@ mod tests {
             .expect_err("expected doc indentation error");
         assert!(
             err.message()
-                .contains("Doc string content must be indented at least as far as @@doc"),
+                .contains("Triple-quoted string content must be indented at least as far as the starting line"),
             "unexpected error: {}",
             err.message()
         );

@@ -1,0 +1,2 @@
+phase: parse
+contains: Triple-quoted string content must be indented at least as far as the starting line

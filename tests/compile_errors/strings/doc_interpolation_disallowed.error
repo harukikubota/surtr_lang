@@ -1,0 +1,2 @@
+phase: parse
+contains: @@doc does not allow string interpolation
