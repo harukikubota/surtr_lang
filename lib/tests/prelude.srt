@@ -1,1 +1,0 @@
-# Compatibility placeholder: the Test DSL now lives in lib/test.srt and StyledDoc in lib/styled_doc.srt.
