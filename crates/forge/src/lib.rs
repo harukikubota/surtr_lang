@@ -10,6 +10,7 @@ pub use codegen::{
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
     use std::thread;
 
     use super::codegen;
@@ -203,14 +204,25 @@ mod tests {
         ]
     }
 
+    fn cached_std_modules_and_declarations(
+    ) -> &'static (Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex) {
+        static CACHE: OnceLock<(Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex)> =
+            OnceLock::new();
+
+        CACHE.get_or_init(|| {
+            let module_stages = std_module_stages();
+            let declaration_index = sigil::precollect_declaration_index(&module_stages)
+                .expect("std modules should precollect");
+            (module_stages, declaration_index)
+        })
+    }
+
     fn typed_with_builtin_prelude(source: &str) -> Vec<scar::typed::TypedNode> {
-        let module_stages = std_module_stages();
+        let (module_stages, declaration_index) = cached_std_modules_and_declarations();
         let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
             .expect("source should parse");
-        let declaration_index = sigil::precollect_declaration_index(&module_stages)
-            .expect("std modules should precollect");
         let resolved =
-            sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
+            sigil::resolve_staged_program(module_stages, user_ast, declaration_index, None)
                 .expect("source should resolve");
         scar::typecheck(resolved).expect("source should typecheck")
     }
