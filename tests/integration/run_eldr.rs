@@ -1,10 +1,8 @@
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use serde_json::Value;
-
-use crate::common::{surtr_bin, unique_temp_dir, write_source};
+use crate::common::{surtr_command, unique_temp_dir, write_source};
 
 fn run_cache_files(cache_dir: &Path) -> Vec<PathBuf> {
     let mut files = fs::read_dir(cache_dir)
@@ -18,12 +16,14 @@ fn run_cache_files(cache_dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn run_source_with_cache(bin: &str, source_path: &Path, cache_dir: &Path) -> std::process::Output {
-    Command::new(bin)
+fn run_source_with_cache(source_path: &Path, cache_dir: &Path) -> std::process::Output {
+    let mut command = surtr_command();
+    command
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
         ])
+        .env("SURTR_RUN_CACHE", "1")
         .env("SURTR_RUN_CACHE_DIR", cache_dir)
         .output()
         .expect("failed to run source command")
@@ -40,9 +40,7 @@ fn run_eldr_matches_run_srt_output() {
         "num = 10\nnum2 = 5\nprint(to_string(num + num2))\nprint(\"ok\")\n",
     );
 
-    let bin = surtr_bin();
-
-    let build = Command::new(&bin)
+    let build = surtr_command()
         .args([
             "build",
             source_path.to_str().expect("source path must be utf-8"),
@@ -57,7 +55,7 @@ fn run_eldr_matches_run_srt_output() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let run_srt = Command::new(&bin)
+    let run_srt = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -71,7 +69,7 @@ fn run_eldr_matches_run_srt_output() {
         String::from_utf8_lossy(&run_srt.stderr)
     );
 
-    let run_eldr = Command::new(&bin)
+    let run_eldr = surtr_command()
         .args(["run", eldr_path.to_str().expect("eldr path must be utf-8")])
         .output()
         .expect("failed to run eldr command");
@@ -98,7 +96,6 @@ fn run_eldr_matches_run_srt_output() {
 
 #[test]
 fn run_source_uses_run_cache_on_repeated_invocation() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_cache_hit");
     let source_path = temp.join("sample.srt");
     let alternate_source_path = temp.join("alternate.srt");
@@ -108,7 +105,7 @@ fn run_source_uses_run_cache_on_repeated_invocation() {
     write_source(&source_path, "print(\"from source\")\n");
     write_source(&alternate_source_path, "print(\"from cache\")\n");
 
-    let first = run_source_with_cache(&bin, &source_path, &cache_dir);
+    let first = run_source_with_cache(&source_path, &cache_dir);
     assert!(
         first.status.success(),
         "first run should succeed\nstdout:\n{}\nstderr:\n{}",
@@ -119,7 +116,7 @@ fn run_source_uses_run_cache_on_repeated_invocation() {
     let cache_files = run_cache_files(&cache_dir);
     assert_eq!(cache_files.len(), 1, "expected one cache file");
 
-    let build_alternate = Command::new(&bin)
+    let build_alternate = surtr_command()
         .args([
             "build",
             alternate_source_path
@@ -139,7 +136,7 @@ fn run_source_uses_run_cache_on_repeated_invocation() {
     );
     fs::copy(&alternate_eldr_path, &cache_files[0]).expect("failed to replace cache file");
 
-    let second = run_source_with_cache(&bin, &source_path, &cache_dir);
+    let second = run_source_with_cache(&source_path, &cache_dir);
     assert!(
         second.status.success(),
         "second run should succeed\nstdout:\n{}\nstderr:\n{}",
@@ -157,18 +154,17 @@ fn run_source_uses_run_cache_on_repeated_invocation() {
 
 #[test]
 fn run_source_cache_misses_when_source_changes() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_cache_source_change");
     let source_path = temp.join("sample.srt");
     let cache_dir = temp.join("cache");
 
     write_source(&source_path, "print(\"one\")\n");
-    let first = run_source_with_cache(&bin, &source_path, &cache_dir);
+    let first = run_source_with_cache(&source_path, &cache_dir);
     assert!(first.status.success(), "first run should succeed");
     assert_eq!(String::from_utf8_lossy(&first.stdout), "one\n");
 
     write_source(&source_path, "print(\"two\")\n");
-    let second = run_source_with_cache(&bin, &source_path, &cache_dir);
+    let second = run_source_with_cache(&source_path, &cache_dir);
     assert!(
         second.status.success(),
         "second run should succeed\nstdout:\n{}\nstderr:\n{}",
@@ -187,7 +183,6 @@ fn run_source_cache_misses_when_source_changes() {
 
 #[test]
 fn run_source_cache_misses_when_include_changes() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_cache_include_change");
     let source_path = temp.join("sample.srt");
     let helper_path = temp.join("Helper.srt");
@@ -205,7 +200,7 @@ print(message())"#,
   def message() -> String { "one" }
 }"#,
     );
-    let first = run_source_with_cache(&bin, &source_path, &cache_dir);
+    let first = run_source_with_cache(&source_path, &cache_dir);
     assert!(first.status.success(), "first run should succeed");
     assert_eq!(String::from_utf8_lossy(&first.stdout), "one\n");
 
@@ -215,7 +210,7 @@ print(message())"#,
   def message() -> String { "two" }
 }"#,
     );
-    let second = run_source_with_cache(&bin, &source_path, &cache_dir);
+    let second = run_source_with_cache(&source_path, &cache_dir);
     assert!(
         second.status.success(),
         "second run should succeed\nstdout:\n{}\nstderr:\n{}",
@@ -234,7 +229,6 @@ print(message())"#,
 
 #[test]
 fn run_source_cache_keys_selected_entrypoint() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_cache_entry");
     let source_path = temp.join("sample.srt");
     let cache_dir = temp.join("cache");
@@ -250,17 +244,18 @@ def start() -> Result<()> {
 "#,
     );
 
-    let top = run_source_with_cache(&bin, &source_path, &cache_dir);
+    let top = run_source_with_cache(&source_path, &cache_dir);
     assert!(top.status.success(), "top-level run should succeed");
     assert_eq!(String::from_utf8_lossy(&top.stdout), "top\n");
 
-    let entry = Command::new(&bin)
+    let entry = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
             "--entry",
             "start",
         ])
+        .env("SURTR_RUN_CACHE", "1")
         .env("SURTR_RUN_CACHE_DIR", &cache_dir)
         .output()
         .expect("failed to run source command");
@@ -282,19 +277,18 @@ def start() -> Result<()> {
 
 #[test]
 fn run_source_cache_corrupt_entry_falls_back_to_compile() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_cache_corrupt");
     let source_path = temp.join("sample.srt");
     let cache_dir = temp.join("cache");
 
     write_source(&source_path, "print(\"ok\")\n");
-    let first = run_source_with_cache(&bin, &source_path, &cache_dir);
+    let first = run_source_with_cache(&source_path, &cache_dir);
     assert!(first.status.success(), "first run should succeed");
     let cache_files = run_cache_files(&cache_dir);
     assert_eq!(cache_files.len(), 1, "expected one cache file");
     fs::write(&cache_files[0], b"not bytecode").expect("failed to corrupt cache file");
 
-    let second = run_source_with_cache(&bin, &source_path, &cache_dir);
+    let second = run_source_with_cache(&source_path, &cache_dir);
     assert!(
         second.status.success(),
         "corrupt cache should fall back to compile\nstdout:\n{}\nstderr:\n{}",
@@ -308,13 +302,12 @@ fn run_source_cache_corrupt_entry_falls_back_to_compile() {
 
 #[test]
 fn run_source_cache_can_be_disabled() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_cache_disabled");
     let source_path = temp.join("sample.srt");
     let cache_dir = temp.join("cache");
 
     write_source(&source_path, "print(\"ok\")\n");
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -345,7 +338,7 @@ fn run_vm_dump_writes_json_on_success_when_always_enabled() {
     let dump_path = temp.join("vm-dump.json");
     write_source(&source_path, "print(\"ok\")\n");
 
-    let output = Command::new(surtr_bin())
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -386,7 +379,7 @@ fn run_vm_dump_skips_success_when_error_mode_is_default() {
     let dump_path = temp.join("vm-dump.json");
     write_source(&source_path, "print(\"ok\")\n");
 
-    let output = Command::new(surtr_bin())
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -417,7 +410,7 @@ fn run_vm_dump_writes_json_for_err_result_in_error_mode() {
     let dump_path = temp.join("vm-dump.json");
     write_source(&source_path, "safe_div(1, 0)\n");
 
-    let output = Command::new(surtr_bin())
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -451,7 +444,6 @@ fn run_vm_dump_writes_json_for_err_result_in_error_mode() {
 
 #[test]
 fn run_source_allows_explicit_bootstrap_import() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_explicit_bootstrap_import");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -461,7 +453,7 @@ fn run_source_allows_explicit_bootstrap_import() {
 print("ok")"#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -488,7 +480,6 @@ print("ok")"#,
 
 #[test]
 fn run_source_rejects_explicit_kernel_import() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_explicit_kernel_import");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -498,7 +489,7 @@ fn run_source_rejects_explicit_kernel_import() {
 print(to_string(add(1, 2)))"#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -530,7 +521,6 @@ print(to_string(add(1, 2)))"#,
 
 #[test]
 fn run_source_include_loads_module_relative_to_script() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_include_relative_module");
     let source_path = temp.join("sample.srt");
     let helper_path = temp.join("Helper.srt");
@@ -548,7 +538,7 @@ import Helper::add
 print(to_string(add(1, 2)))"#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -580,7 +570,6 @@ print(to_string(add(1, 2)))"#,
 
 #[test]
 fn run_source_include_rejects_non_literal_argument() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_include_non_literal");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -590,7 +579,7 @@ include path
 print("ok")"#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -617,7 +606,6 @@ print("ok")"#,
 
 #[test]
 fn run_source_module_file_rejects_include_directive() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_module_include_forbidden");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -629,7 +617,7 @@ fn run_source_module_file_rejects_include_directive() {
 include './extra.srt'"#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -661,7 +649,6 @@ include './extra.srt'"#,
 
 #[test]
 fn run_source_error_points_to_generation_site() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_deferror_location");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -672,7 +659,7 @@ match err_result {
   Err(e)  => eprint(e)
 }"#,
     );
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -699,7 +686,6 @@ match err_result {
 
 #[test]
 fn run_source_compile_error_points_to_offending_expression() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_deferror_compile_location");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -710,7 +696,7 @@ fn run_source_compile_error_points_to_offending_expression() {
 
 main()"#,
     );
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -737,11 +723,10 @@ main()"#,
 
 #[test]
 fn run_source_safe_div_zero_returns_err_value() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_safe_div_zero");
     let source_path = temp.join("sample.srt");
     write_source(&source_path, r#"print(inspect(safe_div(1, 0)))"#);
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -775,11 +760,10 @@ fn run_source_safe_div_zero_returns_err_value() {
 
 #[test]
 fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_safe_mod_zero");
     let source_path = temp.join("sample.srt");
     write_source(&source_path, r#"print(inspect(safe_mod(1, 0)))"#);
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .env("SURTR_VERBOSE_RUNTIME_ERROR", "1")
         .args([
             "run",
@@ -814,7 +798,6 @@ fn run_source_safe_mod_zero_returns_err_value_even_with_verbose_runtime_flag() {
 
 #[test]
 fn run_source_main_set_exit_code_updates_process_status_and_keeps_running() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_main_set_exit_code");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -829,7 +812,7 @@ main()
 "#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -860,7 +843,6 @@ main()
 
 #[test]
 fn run_source_main_err_overrides_set_exit_code_with_runtime_error_exit() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_main_err_overrides_exit_code");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -874,7 +856,7 @@ main()
 "#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -902,7 +884,6 @@ main()
 
 #[test]
 fn run_source_cli_entry_executes_selected_function_only() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_cli_entry");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -916,7 +897,7 @@ def start() -> Result<()> {
 "#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -943,7 +924,6 @@ def start() -> Result<()> {
 
 #[test]
 fn run_source_entrypoint_annotation_executes_annotated_function() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_annotation_entry");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -958,7 +938,7 @@ def auto_entry() -> Result<()> {
 "#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -983,7 +963,6 @@ def auto_entry() -> Result<()> {
 
 #[test]
 fn run_source_cli_entry_overrides_entrypoint_annotation() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_entry_precedence");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -1001,7 +980,7 @@ def manual_entry() -> Result<()> {
 "#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -1024,7 +1003,6 @@ def manual_entry() -> Result<()> {
 
 #[test]
 fn run_source_duplicate_entrypoint_annotation_is_compile_error() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_duplicate_entrypoint");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -1036,7 +1014,7 @@ def second() -> Result<()> { Ok(()) }
 "#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),
@@ -1061,7 +1039,6 @@ def second() -> Result<()> { Ok(()) }
 
 #[test]
 fn run_source_entry_signature_is_checked_when_entry_selected() {
-    let bin = surtr_bin();
     let temp = unique_temp_dir("surtr_run_entry_signature");
     let source_path = temp.join("sample.srt");
     write_source(
@@ -1072,7 +1049,7 @@ fn run_source_entry_signature_is_checked_when_entry_selected() {
 "#,
     );
 
-    let output = Command::new(&bin)
+    let output = surtr_command()
         .args([
             "run",
             source_path.to_str().expect("source path must be utf-8"),

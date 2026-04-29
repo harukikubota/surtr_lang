@@ -128,7 +128,7 @@ Generator::idx(fib150)"#,
     );
 }
 
-pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
+pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
     let cases: &[(&str, fn())] = &[
         (
             "tail_recursive_function_reuses_single_non_top_level_frame",
@@ -151,5 +151,5 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
             generator_fibonacci_resume_consumer_uses_tail_calls as fn(),
         ),
     ];
-    super::run_bucket_cases("runtime_observation", cases, bucket, bucket_count);
+    super::run_bucket_cases("runtime_observation", cases, bucket, bucket_count)
 }

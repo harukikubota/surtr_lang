@@ -1,11 +1,11 @@
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
-use crate::common::{surtr_bin, unique_temp_dir, write_source};
+use crate::common::{surtr_command, unique_temp_dir, write_source};
 
 fn run_surtr(temp: &Path, args: &[&str]) -> Output {
-    Command::new(surtr_bin())
+    surtr_command()
         .args(args)
         .current_dir(temp)
         .output()
@@ -13,7 +13,7 @@ fn run_surtr(temp: &Path, args: &[&str]) -> Output {
 }
 
 fn run_surtr_with_env(temp: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
-    let mut command = Command::new(surtr_bin());
+    let mut command = surtr_command();
     command.args(args).current_dir(temp);
     for (key, value) in envs {
         command.env(key, value);

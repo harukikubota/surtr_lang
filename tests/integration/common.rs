@@ -3,6 +3,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use xldr::ModuleInput;
@@ -41,6 +42,12 @@ pub fn surtr_bin() -> String {
         path.display()
     );
     path.to_string_lossy().into_owned()
+}
+
+pub fn surtr_command() -> Command {
+    let mut command = Command::new(surtr_bin());
+    command.env("SURTR_RUN_CACHE", "0");
+    command
 }
 
 pub fn unique_temp_dir(prefix: &str) -> PathBuf {

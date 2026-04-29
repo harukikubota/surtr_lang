@@ -464,7 +464,7 @@ match Result::chain(Err(Lower), Result::cause(Err(Tail), Higher)) {
     );
 }
 
-pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
+pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
     let cases: &[(&str, fn())] = &[
         ("safebind_top_level_ok", safebind_top_level_ok as fn()),
         ("safebind_list_pattern_ok", safebind_list_pattern_ok as fn()),
@@ -598,5 +598,5 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
             eprint_renders_linear_cause_chain_lines as fn(),
         ),
     ];
-    super::run_bucket_cases("safebind_and_errors", cases, bucket, bucket_count);
+    super::run_bucket_cases("safebind_and_errors", cases, bucket, bucket_count)
 }

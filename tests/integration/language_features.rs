@@ -9,7 +9,14 @@ mod runtime_observation;
 #[path = "language_features/safebind_and_errors.rs"]
 mod safebind_and_errors;
 
-fn run_bucket_cases(module: &str, cases: &[(&str, fn())], bucket: usize, bucket_count: usize) {
+const LANGUAGE_FEATURE_BUCKETS: usize = 8;
+
+fn run_bucket_cases(
+    module: &str,
+    cases: &[(&str, fn())],
+    bucket: usize,
+    bucket_count: usize,
+) -> usize {
     assert!(bucket_count > 0, "bucket_count must be positive");
     assert!(
         bucket < bucket_count,
@@ -47,38 +54,36 @@ fn run_bucket_cases(module: &str, cases: &[(&str, fn())], bucket: usize, bucket_
         }
     }
 
-    assert!(
-        ran > 0,
-        "no cases assigned to language_features bucket {} of {} for module {}",
-        bucket,
-        bucket_count,
-        module
-    );
+    ran
 }
 
 fn run_language_features_bucket(bucket: usize, bucket_count: usize) {
-    core_language::run_bucket(bucket, bucket_count);
-    pipelines_and_usecases::run_bucket(bucket, bucket_count);
-    runtime_observation::run_bucket(bucket, bucket_count);
-    safebind_and_errors::run_bucket(bucket, bucket_count);
+    let ran = core_language::run_bucket(bucket, bucket_count)
+        + pipelines_and_usecases::run_bucket(bucket, bucket_count)
+        + runtime_observation::run_bucket(bucket, bucket_count)
+        + safebind_and_errors::run_bucket(bucket, bucket_count);
+    assert!(
+        ran > 0,
+        "no cases assigned to language_features bucket {} of {}",
+        bucket,
+        bucket_count
+    );
 }
 
-#[test]
-fn language_features_bucket_0() {
-    run_language_features_bucket(0, 4);
+macro_rules! language_feature_bucket_test {
+    ($name:ident, $bucket:expr) => {
+        #[test]
+        fn $name() {
+            run_language_features_bucket($bucket, LANGUAGE_FEATURE_BUCKETS);
+        }
+    };
 }
 
-#[test]
-fn language_features_bucket_1() {
-    run_language_features_bucket(1, 4);
-}
-
-#[test]
-fn language_features_bucket_2() {
-    run_language_features_bucket(2, 4);
-}
-
-#[test]
-fn language_features_bucket_3() {
-    run_language_features_bucket(3, 4);
-}
+language_feature_bucket_test!(language_features_bucket_0, 0);
+language_feature_bucket_test!(language_features_bucket_1, 1);
+language_feature_bucket_test!(language_features_bucket_2, 2);
+language_feature_bucket_test!(language_features_bucket_3, 3);
+language_feature_bucket_test!(language_features_bucket_4, 4);
+language_feature_bucket_test!(language_features_bucket_5, 5);
+language_feature_bucket_test!(language_features_bucket_6, 6);
+language_feature_bucket_test!(language_features_bucket_7, 7);

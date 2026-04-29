@@ -1,16 +1,15 @@
-use crate::common::{surtr_bin, unique_temp_dir};
+use crate::common::{surtr_command, unique_temp_dir};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
     run_repl_session_with_args_in_dir(args, input, None)
 }
 
 fn run_repl_session_with_args_in_dir(args: &[&str], input: &str, cwd: Option<&PathBuf>) -> Output {
-    let bin = PathBuf::from(surtr_bin());
-    let mut command = Command::new(bin);
+    let mut command = surtr_command();
     command
         .arg("repl")
         .args(args)
@@ -37,8 +36,7 @@ fn run_repl_session(input: &str) -> Output {
 }
 
 fn run_repl_session_with_color(input: &str) -> Output {
-    let bin = PathBuf::from(surtr_bin());
-    let mut command = Command::new(bin);
+    let mut command = surtr_command();
     command
         .arg("repl")
         .env("SURTR_REPL_COLOR", "always")

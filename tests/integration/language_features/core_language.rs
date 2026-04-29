@@ -886,7 +886,7 @@ match ret {
     );
 }
 
-pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
+pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
     let cases: &[(&str, fn())] = &[
         ("bindings_basic_print", bindings_basic_print as fn()),
         (
@@ -1132,5 +1132,5 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) {
         ),
         ("function_zero_arg_call", function_zero_arg_call as fn()),
     ];
-    super::run_bucket_cases("core_language", cases, bucket, bucket_count);
+    super::run_bucket_cases("core_language", cases, bucket, bucket_count)
 }
