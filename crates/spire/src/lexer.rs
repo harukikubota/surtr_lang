@@ -83,6 +83,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             if i + 2 >= len {
                 return Err(ParseError::incomplete("\"\"\"", Span { start, end: len }));
             }
+            validate_doc_string_indent(&chars, start, content_start, i)?;
             let content: String = chars[content_start..i].iter().collect();
             i += 3;
             tokens.push(Spanned {
@@ -397,6 +398,97 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
     Ok(tokens)
 }
 
+fn validate_doc_string_indent(
+    chars: &[char],
+    quote_start: usize,
+    content_start: usize,
+    content_end: usize,
+) -> Result<(), ParseError> {
+    let base_indent = line_indent_before(chars, quote_start);
+    let mut i = content_start;
+    let mut at_line_start = content_start == 0 || chars[content_start - 1] == '\n';
+
+    while i < content_end {
+        if !at_line_start {
+            while i < content_end && chars[i] != '\n' {
+                i += 1;
+            }
+            if i < content_end {
+                i += 1;
+                at_line_start = true;
+            }
+            continue;
+        }
+
+        let line_start = i;
+        let mut columns = 0usize;
+        while i < content_end {
+            match chars[i] {
+                ' ' => {
+                    columns += 1;
+                    i += 1;
+                }
+                '\t' => {
+                    columns += 4 - (columns % 4);
+                    i += 1;
+                }
+                '\r' => {
+                    i += 1;
+                }
+                '\n' => {
+                    i += 1;
+                    break;
+                }
+                _ => {
+                    if columns < base_indent {
+                        return Err(ParseError::syntax(
+                            "Doc string content must be indented at least as far as @@doc",
+                            Span {
+                                start: i,
+                                end: i + 1,
+                            },
+                        ));
+                    }
+                    while i < content_end && chars[i] != '\n' {
+                        i += 1;
+                    }
+                    if i < content_end {
+                        i += 1;
+                    }
+                    break;
+                }
+            }
+        }
+        at_line_start = true;
+
+        if i == line_start {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn line_indent_before(chars: &[char], idx: usize) -> usize {
+    let mut line_start = idx;
+    while line_start > 0 && chars[line_start - 1] != '\n' {
+        line_start -= 1;
+    }
+
+    let mut columns = 0usize;
+    let mut i = line_start;
+    while i < idx {
+        match chars[i] {
+            ' ' => columns += 1,
+            '\t' => columns += 4 - (columns % 4),
+            '\r' => {}
+            _ => break,
+        }
+        i += 1;
+    }
+    columns
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +519,27 @@ mod tests {
         let tokens = tokenize("@@doc \"\"\"\nHello\n\"\"\"").unwrap();
         assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "doc"));
         assert!(matches!(tokens[1].token, Token::DocString(ref s) if s == "\nHello\n"));
+    }
+
+    #[test]
+    fn test_doc_string_allows_content_at_doc_indent_with_tabs() {
+        let tokens = tokenize("\t@@doc \"\"\"\n\tabcde\n\t    5\n\t\"\"\"").unwrap();
+        assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "doc"));
+        assert!(
+            matches!(tokens[1].token, Token::DocString(ref s) if s == "\n\tabcde\n\t    5\n\t")
+        );
+    }
+
+    #[test]
+    fn test_doc_string_rejects_content_shallower_than_doc_indent() {
+        let err = tokenize("\t@@doc \"\"\"\nabcde\n    5\n\t\"\"\"")
+            .expect_err("expected doc indentation error");
+        assert!(
+            err.message()
+                .contains("Doc string content must be indented at least as far as @@doc"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 
     #[test]

@@ -40,6 +40,24 @@ const OPERATOR_DOC_ALIASES: &[(&str, &str)] = &[
     (">*", "LiftComposable"),
     (">=>", "KleisliComposable"),
 ];
+const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
+    ("add", "Add"),
+    ("sub", "Sub"),
+    ("mul", "Mul"),
+    ("eq", "Eq"),
+    ("neq", "Neq"),
+    ("lt", "Lt"),
+    ("lte", "Lte"),
+    ("gt", "Gt"),
+    ("gte", "Gte"),
+    ("concat", "Concat"),
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TypedCallQuery {
+    callee: String,
+    arg_types: Vec<String>,
+}
 
 /// Error returned when loading a `.eldr` file into a REPL engine.
 #[derive(Debug)]
@@ -737,14 +755,17 @@ impl ReplEngine {
     fn doc_help_lines() -> Vec<String> {
         vec![
             "Usage: :doc <symbol>".to_string(),
-            "Examples: :doc print, :doc Kernel::if, :doc Add, :doc +".to_string(),
+            "Also: :doc <typed-call>".to_string(),
+            "Examples: :doc print, :doc Kernel::if, :doc Add, :doc +, :doc gt(3, 2)".to_string(),
         ]
     }
 
     fn sig_help_lines() -> Vec<String> {
         vec![
             "Usage: :sig <function>".to_string(),
-            "Examples: :sig print, :sig Kernel::if, :sig add".to_string(),
+            "Also: :sig <typed-call>".to_string(),
+            "Examples: :sig print, :sig Kernel::if, :sig add, :sig gt(_ : Float, _ : Float)"
+                .to_string(),
         ]
     }
 
@@ -765,7 +786,20 @@ impl ReplEngine {
 
     fn handle_doc(&self, symbol: &str) -> ReplResult {
         let trimmed = symbol.trim();
-        if trimmed.is_empty() || trimmed.split_whitespace().count() != 1 {
+        if trimmed.is_empty() {
+            return ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: Self::doc_help_lines(),
+            });
+        }
+        if let Some(query) = self.parse_typed_call_query(trimmed) {
+            return match query {
+                Ok(query) => self.handle_doc_typed_call(trimmed, &query),
+                Err(message) => ReplResult::ok(ReplOutput::CommandOutput {
+                    rendered: vec![message],
+                }),
+            };
+        }
+        if trimmed.split_whitespace().count() != 1 {
             return ReplResult::ok(ReplOutput::CommandOutput {
                 rendered: Self::doc_help_lines(),
             });
@@ -776,34 +810,15 @@ impl ReplEngine {
             .find_map(|(alias, trait_name)| (*alias == trimmed).then_some(*trait_name))
             .unwrap_or(trimmed);
 
-        let match_doc = self.docs.iter().rev().find(|entry| {
-            entry.qualified_name == canonical
-                || entry
-                    .qualified_name
-                    .rsplit("::")
-                    .next()
-                    .is_some_and(|tail| tail == canonical)
-        });
+        let matches = self.matching_doc_entries(canonical, None);
 
-        match match_doc {
-            Some(entry) => {
-                let summary = entry
-                    .doc
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(ToString::to_string);
-                ReplResult::ok(ReplOutput::DocResolved {
-                    symbol: entry.qualified_name.clone(),
-                    signature: entry.signature.clone(),
-                    summary,
-                    source_snippet: Some(entry.doc.clone()),
-                })
-            }
-            None => ReplResult::ok(ReplOutput::EvalError {
-                idx: self.results.len(),
-                source: format!(":doc {trimmed}"),
+        match matches.as_slice() {
+            [] => ReplResult::ok(ReplOutput::CommandOutput {
                 rendered: vec![format!("No docs found for {}", trimmed)],
+            }),
+            [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
+            entries => ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: Self::ambiguous_doc_lines(trimmed, entries),
             }),
         }
     }
@@ -821,6 +836,133 @@ impl ReplEngine {
                 .rsplit("::")
                 .next()
                 .is_some_and(|tail| tail == symbol)
+    }
+
+    fn doc_resolved_output(entry: &DocEntry) -> ReplOutput {
+        let summary = entry
+            .doc
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(ToString::to_string);
+        ReplOutput::DocResolved {
+            symbol: entry.qualified_name.clone(),
+            signature: entry.signature.clone(),
+            summary,
+            source_snippet: Some(entry.doc.clone()),
+        }
+    }
+
+    fn doc_method_tail(qualified_name: &str) -> &str {
+        qualified_name.rsplit("::").next().unwrap_or(qualified_name)
+    }
+
+    fn matching_doc_entries<'a>(
+        &'a self,
+        symbol: &str,
+        kind: Option<DocKind>,
+    ) -> Vec<&'a DocEntry> {
+        let mut matches = self
+            .docs
+            .iter()
+            .filter(|entry| kind.as_ref().is_none_or(|kind| &entry.kind == kind))
+            .filter(|entry| Self::symbol_matches(&entry.qualified_name, symbol))
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        matches.dedup_by(|a, b| {
+            a.qualified_name == b.qualified_name
+                && a.kind == b.kind
+                && a.signature == b.signature
+                && a.doc == b.doc
+        });
+        matches
+    }
+
+    fn ambiguous_doc_lines(symbol: &str, entries: &[&DocEntry]) -> Vec<String> {
+        let mut rendered = vec![format!("{symbol} has multiple docs:")];
+        rendered.extend(
+            entries
+                .iter()
+                .map(|entry| format!("  {}", entry.qualified_name)),
+        );
+        rendered.push(
+            "Use a qualified name or add type annotations, for example `:doc gt(3, 2)`."
+                .to_string(),
+        );
+        rendered
+    }
+
+    fn handle_doc_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
+        let matches = self.match_typed_call_docs(query);
+        match matches.as_slice() {
+            [] => ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: vec![format!("No docs found for {}", source_query)],
+            }),
+            [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
+            entries => ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: Self::ambiguous_doc_lines(source_query, entries),
+            }),
+        }
+    }
+
+    fn match_typed_call_docs<'a>(&'a self, query: &TypedCallQuery) -> Vec<&'a DocEntry> {
+        let Some(receiver_ty) = query.arg_types.first() else {
+            return Vec::new();
+        };
+        let preferred_trait = METHOD_DOC_TRAIT_ALIASES
+            .iter()
+            .find_map(|(method, trait_name)| (*method == query.callee).then_some(*trait_name));
+        let mut matches = self
+            .docs
+            .iter()
+            .filter(|entry| entry.kind == DocKind::Function)
+            .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == query.callee)
+            .filter(|entry| {
+                entry.signature.as_deref().is_some_and(|sig| {
+                    if sig.starts_with("impl ") {
+                        return sig.contains(&format!(" for {receiver_ty}::{}", query.callee));
+                    }
+                    sig.starts_with(&format!("{}(", query.callee))
+                        || sig.contains(&format!("::{}(", query.callee))
+                })
+            })
+            .filter(|entry| {
+                preferred_trait.is_none_or(|trait_name| {
+                    entry
+                        .signature
+                        .as_deref()
+                        .is_some_and(|sig| sig.starts_with(&format!("impl {trait_name} for ")))
+                })
+            })
+            .filter(|entry| {
+                entry
+                    .signature
+                    .as_deref()
+                    .is_none_or(|sig| Self::signature_accepts_arg_types(sig, &query.arg_types))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        matches
+    }
+
+    fn signature_accepts_arg_types(signature: &str, arg_types: &[String]) -> bool {
+        let Some(params) = signature
+            .split_once('(')
+            .and_then(|(_, rest)| rest.rsplit_once(')').map(|(params, _)| params))
+        else {
+            return false;
+        };
+        let param_types = split_top_level_commas(params)
+            .into_iter()
+            .filter_map(|param| param.split_once(':').map(|(_, ty)| ty.trim().to_string()))
+            .collect::<Vec<_>>();
+        if param_types.len() != arg_types.len() {
+            return false;
+        }
+        param_types
+            .iter()
+            .zip(arg_types)
+            .all(|(param, arg)| param == arg || param == "Self")
     }
 
     fn find_signature(&self, symbol: &str) -> Option<(String, String)> {
@@ -871,7 +1013,20 @@ impl ReplEngine {
 
     fn handle_sig(&self, symbol: &str) -> ReplResult {
         let trimmed = symbol.trim();
-        if trimmed.is_empty() || trimmed.split_whitespace().count() != 1 {
+        if trimmed.is_empty() {
+            return ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: Self::sig_help_lines(),
+            });
+        }
+        if let Some(query) = self.parse_typed_call_query(trimmed) {
+            return match query {
+                Ok(query) => self.handle_sig_typed_call(trimmed, &query),
+                Err(message) => ReplResult::ok(ReplOutput::CommandOutput {
+                    rendered: vec![message],
+                }),
+            };
+        }
+        if trimmed.split_whitespace().count() != 1 {
             return ReplResult::ok(ReplOutput::CommandOutput {
                 rendered: Self::sig_help_lines(),
             });
@@ -898,6 +1053,107 @@ impl ReplEngine {
                 rendered: vec![format!("No signature found for {}", trimmed)],
             }),
         }
+    }
+
+    fn handle_sig_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
+        let matches = self.match_typed_call_docs(query);
+        match matches.as_slice() {
+            [entry] => {
+                let defined = entry
+                    .signature
+                    .clone()
+                    .unwrap_or_else(|| entry.qualified_name.clone());
+                let rendered = format!(
+                    "defined:\n  {defined}\n\nspecialized:\n  {}({}) -> {}",
+                    query.callee,
+                    query.arg_types.join(", "),
+                    signature_return_type(&defined).unwrap_or("_")
+                );
+                ReplResult::ok(ReplOutput::SigResolved {
+                    signature: rendered,
+                })
+            }
+            [] => ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: vec![format!("No signature found for {}", source_query)],
+            }),
+            entries => ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: Self::ambiguous_doc_lines(source_query, entries),
+            }),
+        }
+    }
+
+    fn parse_typed_call_query(&self, input: &str) -> Option<Result<TypedCallQuery, String>> {
+        let open = input.find('(')?;
+        if !input.ends_with(')') {
+            return Some(Err(
+                "Invalid typed call query: missing closing `)`.".to_string()
+            ));
+        }
+        let callee = input[..open].trim();
+        if callee.is_empty() || callee.chars().any(char::is_whitespace) {
+            return Some(Err("Invalid typed call query: missing callee.".to_string()));
+        }
+        let args_src = &input[open + 1..input.len() - 1];
+        let args = split_top_level_commas(args_src);
+        let mut arg_types = Vec::with_capacity(args.len());
+        for arg in args {
+            let arg = arg.trim();
+            if arg.is_empty() {
+                return Some(Err("Invalid typed call query: empty argument.".to_string()));
+            }
+            let ty = match self.query_arg_type(arg) {
+                Ok(ty) => ty,
+                Err(message) => return Some(Err(message)),
+            };
+            arg_types.push(ty);
+        }
+        Some(Ok(TypedCallQuery {
+            callee: Self::canonical_doc_symbol(callee).to_string(),
+            arg_types,
+        }))
+    }
+
+    fn query_arg_type(&self, arg: &str) -> Result<String, String> {
+        if let Some(ty) = split_type_annotation(arg) {
+            return Ok(ty.to_string());
+        }
+        if arg == "()" {
+            return Ok("Unit".to_string());
+        }
+        if matches!(arg, "True" | "False") {
+            return Ok("Boolean".to_string());
+        }
+        if is_string_literal(arg) {
+            return Ok("String".to_string());
+        }
+        if is_float_literal(arg) {
+            return Ok("Float".to_string());
+        }
+        if is_int_literal(arg) {
+            return Ok("Int".to_string());
+        }
+        if is_bare_type_query(arg) {
+            return Ok(arg.to_string());
+        }
+        if is_simple_name(arg) {
+            if let Some(ty) = self.binding_type(arg) {
+                return Ok(ty);
+            }
+            return Err(format!("Unknown query binding `{arg}`."));
+        }
+        Err(format!(
+            "Unsupported typed call query argument `{arg}`. Use literals, existing bindings, or `_ : Type`."
+        ))
+    }
+
+    fn binding_type(&self, name: &str) -> Option<String> {
+        self.result_metas
+            .iter()
+            .rev()
+            .flatten()
+            .flat_map(|meta| meta.bindings.iter().rev())
+            .find(|binding| binding.name == name)
+            .map(|binding| binding.ty.clone())
     }
 
     fn handle_error_mode(&mut self, mode: Option<&str>) -> Vec<String> {
@@ -1464,6 +1720,97 @@ pub(crate) fn parse_module_stages_from_sources(
 
 pub(crate) fn xldr_version() -> &'static str {
     XLDR_VERSION
+}
+
+fn split_top_level_commas(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut paren_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            ',' if paren_depth == 0 && angle_depth == 0 => {
+                parts.push(input[start..idx].trim());
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    let tail = input[start..].trim();
+    if !tail.is_empty() || !input.trim().is_empty() {
+        parts.push(tail);
+    }
+    parts
+}
+
+fn split_type_annotation(input: &str) -> Option<&str> {
+    let (name, ty) = input.split_once(':')?;
+    let name = name.trim();
+    let ty = ty.trim();
+    if ty.is_empty() || !(name == "_" || is_simple_name(name)) {
+        return None;
+    }
+    Some(ty)
+}
+
+fn is_simple_name(input: &str) -> bool {
+    let mut chars = input.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn is_bare_type_query(input: &str) -> bool {
+    input
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_uppercase())
+}
+
+fn is_string_literal(input: &str) -> bool {
+    input.len() >= 2 && input.starts_with('"') && input.ends_with('"')
+}
+
+fn is_int_literal(input: &str) -> bool {
+    let digits = input.strip_prefix('-').unwrap_or(input);
+    !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn is_float_literal(input: &str) -> bool {
+    let digits = input.strip_prefix('-').unwrap_or(input);
+    let Some((lhs, rhs)) = digits.split_once('.') else {
+        return false;
+    };
+    !lhs.is_empty()
+        && !rhs.is_empty()
+        && lhs.chars().all(|ch| ch.is_ascii_digit())
+        && rhs.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn signature_return_type(signature: &str) -> Option<&str> {
+    signature.rsplit_once("->").map(|(_, ret)| ret.trim())
 }
 
 #[cfg(test)]

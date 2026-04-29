@@ -104,10 +104,10 @@ pub fn doc_body_lines(text: &str) -> Vec<String> {
     let mut rendered = Vec::new();
     let mut expect_repl_result = false;
 
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+    for line in normalized_doc_lines(text) {
         let prompt_line = line.find("xldr(").or_else(|| line.find("xldr>"));
         if prompt_line.is_some() {
-            rendered.push(doc_body_line(line));
+            rendered.push(doc_body_line(&line));
             expect_repl_result = true;
             continue;
         }
@@ -123,11 +123,69 @@ pub fn doc_body_lines(text: &str) -> Vec<String> {
             continue;
         }
 
-        rendered.push(doc_body_line(line));
+        rendered.push(doc_body_line(&line));
         expect_repl_result = false;
     }
 
     rendered
+}
+
+pub fn plain_doc_body_lines(text: &str) -> Vec<String> {
+    normalized_doc_lines(text)
+}
+
+fn normalized_doc_lines(text: &str) -> Vec<String> {
+    let mut lines = text.lines().collect::<Vec<_>>();
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+
+    let common_indent = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| visual_indent(line))
+        .min()
+        .unwrap_or(0);
+
+    lines
+        .into_iter()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| strip_visual_indent(line, common_indent).to_string())
+        .collect()
+}
+
+fn visual_indent(line: &str) -> usize {
+    let mut columns = 0usize;
+    for ch in line.chars() {
+        match ch {
+            ' ' => columns += 1,
+            '\t' => columns += 4 - (columns % 4),
+            _ => break,
+        }
+    }
+    columns
+}
+
+fn strip_visual_indent(line: &str, columns_to_strip: usize) -> &str {
+    let mut columns = 0usize;
+    for (idx, ch) in line.char_indices() {
+        let width = match ch {
+            ' ' => 1,
+            '\t' => 4 - (columns % 4),
+            _ => return &line[idx..],
+        };
+        if columns + width > columns_to_strip {
+            return &line[idx..];
+        }
+        columns += width;
+        if columns == columns_to_strip {
+            return &line[idx + ch.len_utf8()..];
+        }
+    }
+    ""
 }
 
 fn doc_body_line(line: &str) -> String {
@@ -643,8 +701,22 @@ mod tests {
     fn doc_body_lines_styles_repl_result_after_prompt() {
         let rendered = doc_body_lines("  xldr> Ok(1)\n  Ok(1)");
         assert_eq!(rendered.len(), 2);
+        assert!(!rendered[0].starts_with("  "));
         assert!(rendered[0].contains("xldr>"));
         assert!(rendered[1].contains("\x1b[1;35mOk\x1b[0m"));
+    }
+
+    #[test]
+    fn plain_doc_body_lines_dedents_common_space_and_tab_indent() {
+        let rendered = plain_doc_body_lines("\n\t  First line\n\t  ## Heading\n\t    Nested\n");
+        assert_eq!(
+            rendered,
+            vec![
+                "First line".to_string(),
+                "## Heading".to_string(),
+                "  Nested".to_string(),
+            ]
+        );
     }
 
     #[test]
