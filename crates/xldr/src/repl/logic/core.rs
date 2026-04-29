@@ -909,8 +909,9 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
+                let error = diagnostics::TypeErrorDiagnostic::new(e.message, e.span, e.hint);
                 let spec =
-                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &e);
+                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,

@@ -24,4 +24,4 @@ pub use report::{
 pub use resolve::resolve_error_spec;
 pub use runtime::{runtime_error_spec, runtime_error_spec_by_id, runtime_value_error_spec};
 pub use source::{SourceEntry, SourceId, SourceRegistry};
-pub use typecheck::{type_error_spec, type_error_spec_by_id};
+pub use typecheck::{type_error_spec, type_error_spec_by_id, TypeErrorDiagnostic};

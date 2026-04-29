@@ -312,7 +312,6 @@ name = "diagnostics"
 version = "0.1.0"
 dependencies = [
  "ariadne",
- "scar",
  "serde",
  "spire",
 ]

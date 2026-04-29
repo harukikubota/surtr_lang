@@ -2,9 +2,9 @@ use super::*;
 use crate::heuristics::*;
 use crate::render::write_fallback_diagnostic;
 use ariadne::Fmt;
-use scar::error::TypeError;
 use spire::ast::Span;
 use std::io::{self, Write};
+use typecheck::TypeErrorDiagnostic as TypeError;
 
 struct FailingWriter;
 

@@ -528,8 +528,7 @@ pub(crate) fn compile_source(
     )
     .map_err(|e| {
         let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-        let mut local_error = e.clone();
-        local_error.span = span;
+        let local_error = diagnostics::TypeErrorDiagnostic::new(e.message, span, e.hint);
         RuneError::diagnostic(
             1,
             sources,

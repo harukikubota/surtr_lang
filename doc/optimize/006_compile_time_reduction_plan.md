@@ -205,6 +205,8 @@ cargo nextest run --workspace
 
 ### 2.1 テスト分類
 
+Status: Done
+
 `scar` tests を次の 2 層へ分ける。
 
 | 層 | 配置 | 対象 |
@@ -232,7 +234,17 @@ cargo nextest run --workspace
 - `scar lib(test)` の compile duration が有意に下がる
 - private helper を `pub` 化しない
 
+実施結果:
+
+- public API だけで検証できる surface tests を `crates/scar/tests/typecheck_surface.rs` へ移動した
+- `crates/scar/tests/support/mod.rs` に `parse -> resolve -> typecheck` helper を集約した
+- `crates/scar/src/**` の unit tests は `TypeEnv` と builtin signature bootstrap の private invariant に限定した
+- private helper の追加 `pub` 化は行っていない
+- `cargo nextest run -p scar` で 112 tests run: 112 passed, 2 skipped を確認した
+
 ### 2.2 標準 prelude 初期化の共有
+
+Status: Done
 
 既存の `003_compile_time_followup_profile.md` / `004_forge_test_prelude_cache.md` と同じ方向で、`scar` test helper の標準 module parse / precollect を `OnceLock` で共有する。
 
@@ -248,6 +260,32 @@ cargo nextest run --workspace
 - production path に影響しない
 - failed test が共有状態を汚さない
 - `cargo nextest run -p scar` の summary / real が before より下がる
+
+実施結果:
+
+- `crates/scar/tests/support/mod.rs` に `CachedStdPrelude` と `OnceLock` cache を追加した
+- cache は標準 module stages / `DeclarationIndex` / std resolved length / typechecked `ScarCheckpoint` を保持する
+- 各 test は checkpoint から新しい `ScarSession` を復元して実行するため、test 間で mutable session state を共有しない
+- production path には影響しない integration-test helper 内の変更に限定した
+
+検証:
+
+```bash
+cargo test -p scar --no-run --timings
+cargo nextest run -p scar
+rm -rf /tmp/surtr-cargo-timing-scar-step5
+CARGO_TARGET_DIR=/tmp/surtr-cargo-timing-scar-step5 /usr/bin/time -p cargo test -p scar --no-run --timings
+cargo nextest run --workspace
+```
+
+結果:
+
+- warm `cargo test -p scar --no-run --timings`: pass
+- `cargo nextest run -p scar`: 112 passed, 2 skipped, real 9.826s
+- cold `cargo test -p scar --no-run --timings`: real 10.06s, user 19.00s, sys 3.04s
+- cold timing report: `scar v0.1.0 lib (test)` は 1.0s、`scar v0.1.0 test "typecheck_surface" (test)` は 0.5s
+- baseline の `scar lib(test)` 4.8s から有意に縮小した
+- `cargo nextest run --workspace`: 757 passed, 1 leaky, 7 skipped
 
 ## 3. `diagnostics` の中期改善
 
@@ -303,7 +341,9 @@ crates/diagnostics/src/
 
 ### 4.1 `diagnostics -> scar` 依存の圧縮
 
-現状 `diagnostics` は `scar` / `spire` に直接依存する。これにより `scar` 変更時に `diagnostics` 以降も再ビルドされる。
+Status: Done
+
+着手時点では `diagnostics` が `scar` / `spire` に直接依存していた。これにより `scar` 変更時に `diagnostics` 以降も再ビルドされる。
 
 中期候補:
 
@@ -317,7 +357,38 @@ crates/diagnostics/src/
 - human / JSON output の構造は維持する
 - 依存境界変更で診断品質を落とさない
 
+実施結果:
+
+- `diagnostics` の通常依存から `scar` を削除した
+- `diagnostics::TypeErrorDiagnostic` を追加し、`diagnostics` は phase error 型ではなく表示に必要な `message` / `span` / `hint` だけを受け取る形へ変更した
+- `spire` 依存は diagnostics の公開 `Span` 型境界として維持した
+- `scar::error::TypeError` の所有 crate は `scar` のまま維持した
+- `rune` / `xldr` は `scar::error::TypeError` を捕捉した境界で `TypeErrorDiagnostic` に変換してから diagnostics に渡す
+- diagnostics unit tests も `scar::error::TypeError` ではなく `TypeErrorDiagnostic` を使う形へ更新した
+
+検証:
+
+```bash
+cargo tree -p diagnostics -e normal
+cargo test -p diagnostics
+cargo check -p rune -p xldr
+cargo nextest run -p diagnostics
+cargo nextest run -p rune --test integration
+cargo nextest run --workspace
+```
+
+結果:
+
+- `cargo tree -p diagnostics -e normal` で `scar` が出ないことを確認した
+- `cargo test -p diagnostics`: 55 passed
+- `cargo check -p rune -p xldr`: pass
+- `cargo nextest run -p diagnostics`: 55 passed
+- `cargo nextest run -p rune --test integration`: 101 passed, 5 skipped
+- `cargo nextest run --workspace`: 757 passed, 7 skipped
+
 ### 4.2 `rune` / `xldr` の default dependency graph 維持
+
+Status: Done
 
 既に `line-editor`, `tui`, `viewer-schema`, `bench` は opt-in 化されている。今後も default build に対話 UI / schema / benchmark 専用依存を戻さない。
 
@@ -328,6 +399,12 @@ cargo tree -p rune -e features
 cargo tree -p xldr -e features
 cargo tree -p sindr -e features
 ```
+
+確認結果:
+
+- `cargo tree -p rune -e features`: default graph に `line-editor` / `tui` / `viewer-schema` / `bench` 専用依存が戻っていないことを確認した
+- `cargo tree -p xldr -e features`: default graph に対話 UI 専用依存が戻っていないことを確認した
+- `cargo tree -p sindr -e features`: default graph に schema / benchmark 専用依存が戻っていないことを確認した
 
 ## 5. 計測と完了条件
 

@@ -7,9 +7,26 @@ use crate::heuristics::{
     parse_binary_operator_error,
 };
 use crate::{simple_error, Color, DiagnosticLabel, DiagnosticSpec, SourceId, SourceRegistry};
-use scar::error::TypeError;
+use spire::ast::Span;
 
-pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeErrorDiagnostic {
+    pub message: String,
+    pub span: Span,
+    pub hint: Option<String>,
+}
+
+impl TypeErrorDiagnostic {
+    pub fn new(message: impl Into<String>, span: Span, hint: Option<String>) -> Self {
+        Self {
+            message: message.into(),
+            span,
+            hint,
+        }
+    }
+}
+
+pub fn type_error_spec(source: &str, error: &TypeErrorDiagnostic) -> DiagnosticSpec {
     let mut spec = simple_error(
         "TypeError",
         error.message.clone(),
@@ -80,7 +97,7 @@ pub fn type_error_spec(source: &str, error: &TypeError) -> DiagnosticSpec {
 pub fn type_error_spec_by_id(
     sources: &SourceRegistry,
     source_id: SourceId,
-    error: &TypeError,
+    error: &TypeErrorDiagnostic,
 ) -> DiagnosticSpec {
     let mut spec = type_error_spec(sources.source(source_id).unwrap_or(""), error);
     apply_extractor_context_by_id(sources, source_id, error, &mut spec);
@@ -106,7 +123,7 @@ pub fn type_error_spec_by_id(
 fn apply_extractor_context_by_id(
     sources: &SourceRegistry,
     source_id: SourceId,
-    error: &TypeError,
+    error: &TypeErrorDiagnostic,
     spec: &mut DiagnosticSpec,
 ) {
     if !error.message.starts_with("Extractor ") {
