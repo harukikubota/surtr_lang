@@ -1129,8 +1129,8 @@ impl Checker {
                     .iter()
                     .zip(requested_trait_args.iter())
                     .all(|(expected, actual)| self.types_compatible(expected, actual));
-            self.substitutions = before;
             if !args_match {
+                self.substitutions = before;
                 continue;
             }
 
@@ -1151,6 +1151,80 @@ impl Checker {
                 name: method.function_id.name.clone(),
                 fun_idx: *fun_idx,
             }));
+        }
+        None
+    }
+
+    fn operator_trait_dispatch_for_args(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+        requested_trait_args: &[Ty],
+    ) -> Option<(TraitDispatch, Vec<Ty>)> {
+        let base_trait_name = trait_name
+            .split_once('<')
+            .map_or(trait_name, |(base, _)| base);
+        let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+        for impl_info in impls {
+            if self.trait_key(&impl_info.trait_id) != base_trait_name {
+                continue;
+            }
+            let Some(method) = impl_info.methods.get(method_name) else {
+                continue;
+            };
+            if impl_info.trait_arg_tys.len() != requested_trait_args.len() {
+                continue;
+            }
+
+            let mut fresh = HashMap::new();
+            let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let impl_trait_args = impl_info
+                .trait_arg_tys
+                .iter()
+                .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
+                .collect::<Vec<_>>();
+
+            let before = self.substitutions.clone();
+            let target_matches = self.types_compatible(&impl_target, receiver_ty);
+            let args_match = target_matches
+                && impl_trait_args
+                    .iter()
+                    .zip(requested_trait_args.iter())
+                    .all(|(expected, actual)| self.types_compatible(expected, actual));
+            if !args_match {
+                self.substitutions = before;
+                continue;
+            }
+            let resolved_trait_args = requested_trait_args
+                .iter()
+                .map(|ty| self.resolve_ty(ty))
+                .collect::<Vec<_>>();
+
+            if let Some(dispatch_override) = &method.dispatch_override {
+                return Some((
+                    TraitDispatch::Static(dispatch_override.clone()),
+                    resolved_trait_args,
+                ));
+            }
+            let function_key = method
+                .function_id
+                .qualified_name
+                .as_ref()
+                .unwrap_or(&method.function_id.name);
+            let function_id = self.function_ids_by_name.get(function_key)?;
+            let function_ty = self.env.lookup_var(function_id.unique_id)?;
+            let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                self.substitutions = before;
+                continue;
+            };
+            return Some((
+                TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                    name: method.function_id.name.clone(),
+                    fun_idx: *fun_idx,
+                }),
+                resolved_trait_args,
+            ));
         }
         None
     }
@@ -1418,6 +1492,7 @@ impl Checker {
                 method_name: method_name.into(),
                 receiver_ty,
                 dispatch,
+                origin: TraitCallOrigin::Explicit,
                 args: typed_args,
             },
         })
@@ -1558,17 +1633,6 @@ impl Checker {
         }
     }
 
-    pub(super) fn build_list_helper_call(
-        &mut self,
-        helper_name: &str,
-        span: &Span,
-        value: TypedNode,
-        callable: TypedNode,
-    ) -> Result<TypedNode, TypeError> {
-        let helper = self.typed_function_var_by_name(helper_name, span)?;
-        self.build_typed_app(span, helper, vec![value, callable])
-    }
-
     pub(super) fn ensure_plain_map_output(
         &self,
         output_ty: &Ty,
@@ -1638,8 +1702,9 @@ impl Checker {
         self.ensure_plain_map_output(&rhs_out, "`|*>`", &typed_right.span)?;
 
         let typed_left = self.check_node(left)?;
-        match self.resolve_ty(&typed_left.ty) {
-            Ty::Result(ok, err) => {
+        let receiver_ty = self.resolve_ty(&typed_left.ty);
+        match &receiver_ty {
+            Ty::Result(ok, _) => {
                 if !self.types_compatible(ok.as_ref(), &rhs_in) {
                     return Err(TypeError {
                         message: format!(
@@ -1650,18 +1715,13 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|*>`",
-                            "LHS: Result<A> or List<A>; RHS: (A -> B); result: Result<B> or List<B>",
+                            "LHS: Functor container such as Result<A> or List<A>; RHS: (A -> B); result: mapped container",
                             &typed_left.ty,
                             &typed_right.ty,
                             None,
                         )),
                     });
                 }
-                Ok(TypedNode {
-                    ty: Ty::Result(Box::new(rhs_out), Box::new(self.resolve_ty(err.as_ref()))),
-                    span: span.clone(),
-                    node: TypedInner::ResultMap(Box::new(typed_left), Box::new(typed_right)),
-                })
             }
             Ty::List(item) => {
                 if !self.types_compatible(item.as_ref(), &rhs_in) {
@@ -1674,33 +1734,71 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|*>`",
-                            "LHS: Result<A> or List<A>; RHS: (A -> B); result: Result<B> or List<B>",
+                            "LHS: Functor container such as Result<A> or List<A>; RHS: (A -> B); result: mapped container",
                             &typed_left.ty,
                             &typed_right.ty,
                             None,
                         )),
                     });
                 }
-                self.build_list_helper_call("List::map", span, typed_left, typed_right)
             }
-            other => Err(TypeError {
+            _ => {}
+        }
+
+        let functor_trait = self
+            .trait_key_by_short_name("Functor")
+            .ok_or_else(|| TypeError {
+                message: "Unknown trait: Functor".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let result_ty = self.env.fresh_tyvar();
+        let requested_trait_args = vec![rhs_in.clone(), rhs_out.clone(), result_ty.clone()];
+        let Some((dispatch, resolved_trait_args)) = self.operator_trait_dispatch_for_args(
+            &functor_trait,
+            "map",
+            &receiver_ty,
+            &requested_trait_args,
+        ) else {
+            return Err(TypeError {
                 message: format!(
-                    "`|*>` requires Result or List on the left, got {}",
-                    self.ty_name(&other)
+                    "`|*>` requires Functor implementation on the left, got {}",
+                    self.ty_name(&receiver_ty)
                 ),
                 span: typed_left.span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|*>`",
-                    "LHS: Result<A> or List<A>; RHS: (A -> B); result: Result<B> or List<B>",
+                    "LHS: Functor container such as Result<A> or List<A>; RHS: (A -> B); result: mapped container",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
-                        "The evaluated LHS is {}, so no Result/List container is available yet.",
-                        self.ty_name(&other)
+                        "Standard Functor implementations are available for Result and List. The evaluated LHS is {}.",
+                        self.ty_name(&receiver_ty)
                     )),
                 )),
-            }),
-        }
+            });
+        };
+        let result_ty = resolved_trait_args
+            .get(2)
+            .cloned()
+            .unwrap_or_else(|| self.resolve_ty(&result_ty));
+        let trait_name = self.trait_instance_key_from_tys(&functor_trait, &resolved_trait_args);
+        Ok(TypedNode {
+            ty: result_ty,
+            span: span.clone(),
+            node: TypedInner::TraitCall {
+                trait_name,
+                method_name: "map".into(),
+                receiver_ty: receiver_ty.clone(),
+                dispatch,
+                origin: TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::PipeMap,
+                    lhs_ty: receiver_ty,
+                    rhs_ty: self.resolve_ty(&typed_right.ty),
+                },
+                args: vec![typed_left, typed_right],
+            },
+        })
     }
 
     pub(super) fn check_context_bind(
@@ -1714,7 +1812,8 @@ impl Checker {
             self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span)?;
 
         let typed_left = self.check_node(left)?;
-        match (self.resolve_ty(&typed_left.ty), self.resolve_ty(&rhs_ret)) {
+        let receiver_ty = self.resolve_ty(&typed_left.ty);
+        match (&receiver_ty, self.resolve_ty(&rhs_ret)) {
             (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
                 if !self.types_compatible(ok.as_ref(), &rhs_in)
                     || !self.types_compatible(err.as_ref(), next_err.as_ref())
@@ -1724,7 +1823,7 @@ impl Checker {
                         span: span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: Result<B, E> or List<B>",
+                            "LHS: Chainable container such as Result<A> or List<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
                             Some(format!(
@@ -1736,14 +1835,6 @@ impl Checker {
                         )),
                     });
                 }
-                Ok(TypedNode {
-                    ty: Ty::Result(
-                        Box::new(self.resolve_ty(next_ok.as_ref())),
-                        Box::new(self.resolve_ty(err.as_ref())),
-                    ),
-                    span: span.clone(),
-                    node: TypedInner::ResultBind(Box::new(typed_left), Box::new(typed_right)),
-                })
             }
             (Ty::List(item), Ty::List(_)) => {
                 if !self.types_compatible(item.as_ref(), &rhs_in) {
@@ -1756,27 +1847,30 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: Result<B, E> or List<B>",
+                            "LHS: Chainable container such as Result<A> or List<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
                             Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List.".into()),
                         )),
                     });
                 }
-                self.build_list_helper_call("List::flat_map", span, typed_left, typed_right)
             }
-            (Ty::Result(_, _), Ty::List(_)) | (Ty::List(_), Ty::Result(_, _)) => Err(TypeError {
-                message: "`|>=` cannot mix Result and List context".into(),
+            (Ty::Result(_, _), Ty::List(_)) | (Ty::List(_), Ty::Result(_, _)) => {
+                return Err(TypeError {
+                message: "`|>=` container context mismatch: cannot mix Result and List context"
+                    .into(),
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|>=`",
-                    "LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: same container family",
+                    "LHS: Chainable container such as Result<A> or List<A>; RHS: contextual function; result: same context family",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some("Result and List containers cannot be mixed in one bind operator.".into()),
                 )),
-            }),
-            (Ty::Result(_, _), rhs_plain) => Err(TypeError {
+                });
+            }
+            (Ty::Result(_, _), rhs_plain) => {
+                return Err(TypeError {
                 message: format!(
                     "`|>=` requires the right-hand side to return Result, got {}",
                     self.ty_name(&rhs_plain)
@@ -1792,8 +1886,10 @@ impl Checker {
                         self.ty_name(&rhs_plain)
                     )),
                 )),
-            }),
-            (Ty::List(_), rhs_plain) => Err(TypeError {
+                });
+            }
+            (Ty::List(_), rhs_plain) => {
+                return Err(TypeError {
                 message: format!(
                     "`|>=` requires the right-hand side to return List, got {}",
                     self.ty_name(&rhs_plain)
@@ -1809,25 +1905,64 @@ impl Checker {
                         self.ty_name(&rhs_plain)
                     )),
                 )),
-            }),
-            (other, _) => Err(TypeError {
+                });
+            }
+            _ => {}
+        }
+
+        let chainable_trait =
+            self.trait_key_by_short_name("Chainable")
+                .ok_or_else(|| TypeError {
+                    message: "Unknown trait: Chainable".into(),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+        let requested_trait_args = vec![rhs_in.clone(), self.resolve_ty(&rhs_ret)];
+        let Some((dispatch, resolved_trait_args)) = self.operator_trait_dispatch_for_args(
+            &chainable_trait,
+            "chain",
+            &receiver_ty,
+            &requested_trait_args,
+        ) else {
+            return Err(TypeError {
                 message: format!(
-                    "`|>=` requires Result or List on the left, got {}",
-                    self.ty_name(&other)
+                    "`|>=` requires Chainable implementation on the left, got {}",
+                    self.ty_name(&receiver_ty)
                 ),
                 span: typed_left.span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|>=`",
-                    "LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: Result<B, E> or List<B>",
+                    "LHS: Chainable container such as Result<A> or List<A>; RHS: contextual function; result: same context family",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
-                        "The evaluated LHS is {}, so no Result/List container is available yet. Use `|*>` after a Result value when the RHS is plain.",
-                        self.ty_name(&other)
+                        "Standard Chainable implementations are available for Result and List. The evaluated LHS is {}. Use `|*>` after a contextual value when the RHS is plain.",
+                        self.ty_name(&receiver_ty)
                     )),
                 )),
-            }),
-        }
+            });
+        };
+        let result_ty = resolved_trait_args
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| self.resolve_ty(&rhs_ret));
+        let trait_name = self.trait_instance_key_from_tys(&chainable_trait, &resolved_trait_args);
+        Ok(TypedNode {
+            ty: result_ty,
+            span: span.clone(),
+            node: TypedInner::TraitCall {
+                trait_name,
+                method_name: "chain".into(),
+                receiver_ty: receiver_ty.clone(),
+                dispatch,
+                origin: TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::PipeBind,
+                    lhs_ty: receiver_ty,
+                    rhs_ty: self.resolve_ty(&typed_right.ty),
+                },
+                args: vec![typed_left, typed_right],
+            },
+        })
     }
 
     pub(super) fn check_compose(
@@ -3320,6 +3455,7 @@ impl Checker {
                     method_name: method_name.into(),
                     receiver_ty,
                     dispatch,
+                    origin: TraitCallOrigin::Explicit,
                     args: vec![typed_left, typed_right],
                 },
             }

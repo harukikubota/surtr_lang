@@ -1,6 +1,6 @@
 mod support;
 
-use scar::typed::{TypedInner, TypedLensSegment, TypedNode};
+use scar::typed::{OperatorTraitOp, TraitCallOrigin, TypedInner, TypedLensSegment, TypedNode};
 use scar::types::Ty;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
@@ -1526,6 +1526,164 @@ ok = parse(1) |*> &inc |>= &stringify"#,
 }
 
 #[test]
+fn context_map_and_bind_lower_to_operator_trait_calls() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def parse(x: Int) -> Result<Int> {
+  Ok(x)
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def stringify(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+mapped = parse(1) |*> &inc
+bound = parse(1) |>= &stringify"#,
+    );
+    let trait_calls = typed
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => match &rhs.node {
+                TypedInner::TraitCall {
+                    trait_name,
+                    method_name,
+                    dispatch,
+                    origin,
+                    args,
+                    ..
+                } => Some((trait_name, method_name, dispatch, origin, args, &rhs.ty)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(trait_calls.iter().any(
+        |(trait_name, method_name, dispatch, origin, args, result_ty)| {
+            trait_name.starts_with("Functor<")
+                && *method_name == "map"
+                && matches!(
+                    dispatch,
+                    scar::typed::TraitDispatch::Static(
+                        scar::typed::TraitDispatchTarget::UserFunction { name, .. }
+                    ) if name.ends_with("::map") || name == "map"
+                )
+                && matches!(
+                    origin,
+                    TraitCallOrigin::Operator {
+                        op: OperatorTraitOp::PipeMap,
+                        lhs_ty: Ty::Result(_, _),
+                        rhs_ty: Ty::Func(_, _) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. },
+                    }
+                )
+                && args.len() == 2
+                && matches!(result_ty, Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::Int))
+        }
+    ));
+    assert!(trait_calls.iter().any(
+        |(trait_name, method_name, dispatch, origin, args, result_ty)| {
+            trait_name.starts_with("Chainable<")
+                && *method_name == "chain"
+                && matches!(
+                    dispatch,
+                    scar::typed::TraitDispatch::Static(
+                        scar::typed::TraitDispatchTarget::UserFunction { name, .. }
+                    ) if name.ends_with("::chain") || name == "chain"
+                )
+                && matches!(
+                    origin,
+                    TraitCallOrigin::Operator {
+                        op: OperatorTraitOp::PipeBind,
+                        lhs_ty: Ty::Result(_, _),
+                        rhs_ty: Ty::Func(_, _) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. },
+                    }
+                )
+                && args.len() == 2
+                && matches!(result_ty, Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::Str))
+        }
+    ));
+}
+
+#[test]
+fn explicit_functor_call_has_explicit_origin() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+mapped = Functor::map(Ok(1), &inc)"#,
+    );
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("bind rhs should exist");
+    match &rhs.node {
+        TypedInner::TraitCall {
+            method_name,
+            origin,
+            ..
+        } => {
+            assert_eq!(method_name, "map");
+            assert_eq!(origin, &TraitCallOrigin::Explicit);
+            assert!(matches!(rhs.ty, Ty::Result(_, _)));
+        }
+        other => panic!("expected trait call, got {:?}", other),
+    }
+}
+
+#[test]
+fn user_defined_container_can_use_context_operators_via_traits() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defenum Boxed<$T> {
+  Box($T),
+}
+
+impl Functor<$A, $B, Boxed<$B>> for Boxed<$A> {
+  def map(self: Self, f: ($A -> $B)) -> Boxed<$B> {
+    match self {
+      Boxed::Box(value) => Boxed::Box(f(value)),
+    }
+  }
+}
+
+impl Chainable<$A, Boxed<$B>> for Boxed<$A> {
+  def chain(self: Self, f: ($A -> Boxed<$B>)) -> Boxed<$B> {
+    match self {
+      Boxed::Box(value) => f(value),
+    }
+  }
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def stringify(x: Int) -> Boxed<String> {
+  Boxed::Box(to_string(x))
+}
+
+mapped = Boxed::Box(1) |*> &inc
+bound = Boxed::Box(1) |>= &stringify"#,
+    );
+
+    let boxed_results = typed
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(&rhs.ty),
+            _ => None,
+        })
+        .filter(|ty| matches!(ty, Ty::Enum(name, _) if name == "Boxed"))
+        .count();
+    assert_eq!(boxed_results, 2);
+}
+
+#[test]
 fn closure_param_annotation_must_match_expected_signature() {
     let resolved = resolve_with_builtin_prelude(r#"id: (String -> String) = {|value: Int| value}"#);
     let err = typecheck(resolved).expect_err("mismatched expected signature must fail");
@@ -1880,8 +2038,6 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             } => has_pending_trait_call(source) || has_pending_trait_call(update_fun),
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
-            | TypedInner::ResultMap(left, right)
-            | TypedInner::ResultBind(left, right)
             | TypedInner::Compose(_, left, right)
             | TypedInner::ListCons(left, right) => {
                 has_pending_trait_call(left) || has_pending_trait_call(right)
@@ -2032,6 +2188,7 @@ fn from_helper_typechecks_as_generic_trait_call() {
                     ..
                 }),
             args,
+            ..
         } => {
             assert_eq!(trait_name, "From<String>");
             assert_eq!(method_name, "from");
@@ -2065,6 +2222,7 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
                     ..
                 }),
             args,
+            ..
         } => {
             assert_eq!(trait_name, "TryFrom<Int>");
             assert_eq!(method_name, "try_from");

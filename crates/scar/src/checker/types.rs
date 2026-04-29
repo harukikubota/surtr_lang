@@ -1711,6 +1711,17 @@ impl Checker {
         }
     }
 
+    fn resolve_trait_call_origin(&self, origin: TraitCallOrigin) -> TraitCallOrigin {
+        match origin {
+            TraitCallOrigin::Explicit => TraitCallOrigin::Explicit,
+            TraitCallOrigin::Operator { op, lhs_ty, rhs_ty } => TraitCallOrigin::Operator {
+                op,
+                lhs_ty: self.resolve_ty(&lhs_ty),
+                rhs_ty: self.resolve_ty(&rhs_ty),
+            },
+        }
+    }
+
     pub(super) fn resolve_typed_node(&self, node: TypedNode) -> TypedNode {
         let span = node.span.clone();
         let ty = self.resolve_ty(&node.ty);
@@ -1728,12 +1739,14 @@ impl Checker {
                 method_name,
                 receiver_ty,
                 dispatch,
+                origin,
                 args,
             } => TypedInner::TraitCall {
                 trait_name,
                 method_name,
                 receiver_ty: self.resolve_ty(&receiver_ty),
                 dispatch,
+                origin: self.resolve_trait_call_origin(origin),
                 args: args
                     .into_iter()
                     .map(|arg| self.resolve_typed_node(arg))
@@ -1765,14 +1778,6 @@ impl Checker {
                 Box::new(self.resolve_typed_node(*right)),
             ),
             TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                Box::new(self.resolve_typed_node(*left)),
-                Box::new(self.resolve_typed_node(*right)),
-            ),
-            TypedInner::ResultMap(left, right) => TypedInner::ResultMap(
-                Box::new(self.resolve_typed_node(*left)),
-                Box::new(self.resolve_typed_node(*right)),
-            ),
-            TypedInner::ResultBind(left, right) => TypedInner::ResultBind(
                 Box::new(self.resolve_typed_node(*left)),
                 Box::new(self.resolve_typed_node(*right)),
             ),

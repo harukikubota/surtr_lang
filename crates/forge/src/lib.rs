@@ -39,6 +39,8 @@ mod tests {
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
     const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/try_from.srt");
+    const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/trait/functor.srt");
+    const CHAINABLE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/chainable.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
     const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/regex.srt");
@@ -185,6 +187,8 @@ mod tests {
                 ("Ord", ORD_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
+                ("Functor", FUNCTOR_MODULE_SOURCE),
+                ("Chainable", CHAINABLE_MODULE_SOURCE),
                 ("Int", INT_MODULE_SOURCE),
                 ("String", STRING_MODULE_SOURCE),
                 ("Regex", REGEX_MODULE_SOURCE),

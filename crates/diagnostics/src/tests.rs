@@ -490,7 +490,7 @@ fn type_error_spec_splits_multiline_annotation_mismatch() {
 fn render_flow_operator_error_keeps_actual_types_out_of_help() {
     let source = "bad = 1 |>= &inc";
     let err = TypeError {
-            message: "`|>=` requires Result or List on the left, got Int".into(),
+            message: "`|>=` requires Chainable implementation on the left, got Int".into(),
             span: Span { start: 6, end: 7 },
             hint: Some(
                 "`|>=` signature rule: LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: Result<B, E> or List<B>. LHS: Int. RHS: (Int -> Result<Int>). Operators share precedence and resolve left-to-right, so LHS is the type produced so far."
@@ -505,7 +505,9 @@ fn render_flow_operator_error_keeps_actual_types_out_of_help() {
     assert!(rendered_plain.contains("LHS actual: Int"));
     assert!(rendered_plain.contains("OP rule: Result<A> |>= (A -> Result<B>) -> Result<B>"));
     assert!(rendered_plain.contains("Step: Int |>= (Int -> Result<Int>) -> Result<Int>"));
-    assert!(rendered_plain.contains("Reason: LHS is Int, but `|>=` requires Result<A> or List<A>."));
+    assert!(rendered_plain.contains(
+        "Reason: LHS is Int, but `|>=` requires a Chainable such as Result<A> or List<A>."
+    ));
     assert_eq!(
         spec.help.as_deref(),
         Some("Use `|>` for a plain value, or make the LHS Result/List.")

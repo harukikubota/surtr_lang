@@ -28,6 +28,8 @@ const ORD_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/ord.srt");
 const CONCAT_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/concat.srt");
 const FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/from.srt");
 const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/try_from.srt");
+const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/functor.srt");
+const CHAINABLE_MODULE_SOURCE: &str = include_str!("../../../../lib/trait/chainable.srt");
 const INT_MODULE_SOURCE: &str = include_str!("../../../../lib/int.srt");
 const STRING_MODULE_SOURCE: &str = include_str!("../../../../lib/string.srt");
 const REGEX_MODULE_SOURCE: &str = include_str!("../../../../lib/regex.srt");
@@ -319,6 +321,14 @@ pub(crate) fn std_module_stages_with_overrides(
             (
                 "TryFrom",
                 pick_override("TryFrom", TRY_FROM_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Functor",
+                pick_override("Functor", FUNCTOR_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Chainable",
+                pick_override("Chainable", CHAINABLE_MODULE_SOURCE, overrides),
             ),
             ("Int", pick_override("Int", INT_MODULE_SOURCE, overrides)),
             (

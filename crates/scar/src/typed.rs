@@ -48,6 +48,22 @@ pub enum TraitDispatchTarget {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum TraitCallOrigin {
+    Explicit,
+    Operator {
+        op: OperatorTraitOp,
+        lhs_ty: Ty,
+        rhs_ty: Ty,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperatorTraitOp {
+    PipeMap,
+    PipeBind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypedLensSegment {
     Field {
         field_name: String,
@@ -85,6 +101,7 @@ pub enum TypedInner {
         method_name: String,
         receiver_ty: Ty,
         dispatch: TraitDispatch,
+        origin: TraitCallOrigin,
         args: Vec<TypedNode>,
     },
     /// Unary callable synthesized from `f(...)` for apply-style operators.
@@ -94,8 +111,6 @@ pub enum TypedInner {
     SafeBind(TypedPattern, Box<TypedNode>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
     Pipe(Box<TypedNode>, Box<TypedNode>),
-    ResultMap(Box<TypedNode>, Box<TypedNode>),
-    ResultBind(Box<TypedNode>, Box<TypedNode>),
     Compose(ComposeFlavor, Box<TypedNode>, Box<TypedNode>),
     ListNil,
     ListCons(Box<TypedNode>, Box<TypedNode>),

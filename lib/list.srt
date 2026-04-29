@@ -552,3 +552,23 @@ impl List {
   """
   @@builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
 }
+
+@@doc """
+`Functor` implementation for `List`.
+This is the source-level meaning of `values |*> f`.
+"""
+impl Functor<$A, $B, List<$B>> for List<$A> {
+  def map(self: Self, f: ($A -> $B)) -> List<$B> {
+    List::map(self, f)
+  }
+}
+
+@@doc """
+`Chainable` implementation for `List`.
+This is the source-level meaning of `values |>= f`.
+"""
+impl Chainable<$A, List<$B>> for List<$A> {
+  def chain(self: Self, f: ($A -> List<$B>)) -> List<$B> {
+    List::flat_map(self, f)
+  }
+}

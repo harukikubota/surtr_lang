@@ -1,3 +1,4 @@
 phase: typecheck
-contains: `|>=` requires Result or List on the left
+contains: `|>=` requires Chainable implementation on the left
 contains: LHS: Int
+contains: Standard Chainable implementations are available for Result and List

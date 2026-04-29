@@ -784,6 +784,7 @@ impl Checker {
             Ty::Unit => Some("Unit".into()),
             Ty::Error => Some("Error".into()),
             Ty::Result(_, _) => Some("Result".into()),
+            Ty::List(_) => Some("List".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
             Ty::Enum(name, _) => Some(name),
             _ => None,

@@ -409,3 +409,29 @@ impl Result {
     flat_lift(Ok({|_| next()}), value)
   }
 }
+
+@@doc """
+`Functor` implementation for `Result`.
+This is the source-level meaning of `value |*> f`.
+"""
+impl Functor<$A, $B, Result<$B>> for Result<$A> {
+  def map(self: Self, f: ($A -> $B)) -> Result<$B> {
+    match self {
+      Ok(value) => Ok(f(value)),
+      Err(err) => Err(err),
+    }
+  }
+}
+
+@@doc """
+`Chainable` implementation for `Result`.
+This is the source-level meaning of `value |>= f`.
+"""
+impl Chainable<$A, Result<$B>> for Result<$A> {
+  def chain(self: Self, f: ($A -> Result<$B>)) -> Result<$B> {
+    match self {
+      Ok(value) => f(value),
+      Err(err) => Err(err),
+    }
+  }
+}

@@ -156,6 +156,7 @@ impl Checker {
                 method_name,
                 receiver_ty,
                 dispatch,
+                origin,
                 args,
             } => {
                 let args = args
@@ -190,6 +191,7 @@ impl Checker {
                     method_name,
                     receiver_ty,
                     dispatch,
+                    origin,
                     args,
                 }
             }
@@ -272,42 +274,6 @@ impl Checker {
                 )?),
             ),
             TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                Box::new(self.rewrite_specializations_in_node(
-                    *left,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
-                    *right,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?),
-            ),
-            TypedInner::ResultMap(left, right) => TypedInner::ResultMap(
-                Box::new(self.rewrite_specializations_in_node(
-                    *left,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
-                    *right,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?),
-            ),
-            TypedInner::ResultBind(left, right) => TypedInner::ResultBind(
                 Box::new(self.rewrite_specializations_in_node(
                     *left,
                     defs_by_fun_idx,
@@ -1004,8 +970,6 @@ impl Checker {
             }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
-            | TypedInner::ResultMap(left, right)
-            | TypedInner::ResultBind(left, right)
             | TypedInner::Compose(_, left, right) => {
                 self.collect_bound_tyvars_in_node(left, ordered, seen);
                 self.collect_bound_tyvars_in_node(right, ordered, seen);
@@ -1183,12 +1147,14 @@ impl Checker {
                 method_name,
                 receiver_ty,
                 dispatch,
+                origin,
                 args,
             } => TypedInner::TraitCall {
                 trait_name,
                 method_name,
                 receiver_ty: self.substitute_ty_with_mapping(&receiver_ty, mapping),
                 dispatch,
+                origin: self.substitute_trait_call_origin_with_mapping(origin, mapping),
                 args: args
                     .into_iter()
                     .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
@@ -1220,14 +1186,6 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*right, mapping)),
             ),
             TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                Box::new(self.substitute_typed_node_with_mapping(*left, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*right, mapping)),
-            ),
-            TypedInner::ResultMap(left, right) => TypedInner::ResultMap(
-                Box::new(self.substitute_typed_node_with_mapping(*left, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*right, mapping)),
-            ),
-            TypedInner::ResultBind(left, right) => TypedInner::ResultBind(
                 Box::new(self.substitute_typed_node_with_mapping(*left, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*right, mapping)),
             ),
@@ -1699,6 +1657,21 @@ impl Checker {
         }
     }
 
+    fn substitute_trait_call_origin_with_mapping(
+        &self,
+        origin: TraitCallOrigin,
+        mapping: &HashMap<u32, Ty>,
+    ) -> TraitCallOrigin {
+        match origin {
+            TraitCallOrigin::Explicit => TraitCallOrigin::Explicit,
+            TraitCallOrigin::Operator { op, lhs_ty, rhs_ty } => TraitCallOrigin::Operator {
+                op,
+                lhs_ty: self.substitute_ty_with_mapping(&lhs_ty, mapping),
+                rhs_ty: self.substitute_ty_with_mapping(&rhs_ty, mapping),
+            },
+        }
+    }
+
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
             TypedInner::TraitCall { dispatch, args, .. } => {
@@ -1717,8 +1690,6 @@ impl Checker {
             }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
-            | TypedInner::ResultMap(left, right)
-            | TypedInner::ResultBind(left, right)
             | TypedInner::Compose(_, left, right) => {
                 Self::typed_node_has_pending_trait_call(left)
                     || Self::typed_node_has_pending_trait_call(right)

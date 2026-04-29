@@ -2420,11 +2420,12 @@ pub(crate) fn flow_operator_reason(
             }
         }
         "|*>" => {
-            if let Some(got) =
-                message.strip_prefix("`|*>` requires Result or List on the left, got ")
+            if let Some(got) = message
+                .strip_prefix("`|*>` requires Functor implementation on the left, got ")
+                .or_else(|| message.strip_prefix("`|*>` requires Result or List on the left, got "))
             {
                 format!(
-                    "Reason: LHS is {}, but `|*>` maps over Result<A> or List<A>.",
+                    "Reason: LHS is {}, but `|*>` maps over a Functor such as Result<A> or List<A>.",
                     got
                 )
             } else if let Some((_prefix, got)) = message.split_once(
@@ -2449,11 +2450,12 @@ pub(crate) fn flow_operator_reason(
             }
         }
         "|>=" => {
-            if let Some(got) =
-                message.strip_prefix("`|>=` requires Result or List on the left, got ")
+            if let Some(got) = message
+                .strip_prefix("`|>=` requires Chainable implementation on the left, got ")
+                .or_else(|| message.strip_prefix("`|>=` requires Result or List on the left, got "))
             {
                 format!(
-                    "Reason: LHS is {}, but `|>=` requires Result<A> or List<A>.",
+                    "Reason: LHS is {}, but `|>=` requires a Chainable such as Result<A> or List<A>.",
                     got
                 )
             } else if let Some(got) =
@@ -2547,14 +2549,18 @@ pub(crate) fn flow_operator_help(
                 "Change the LHS value, or use a function that accepts the current LHS type.".into()
             }
         }
-        "|*>" if message.contains("requires Result or List on the left") => {
+        "|*>" if message.contains("requires Functor implementation")
+            || message.contains("requires Result or List on the left") =>
+        {
             "Use `|>` for a plain value, or make the LHS Result/List.".into()
         }
         "|*>" if message.contains("plain function on the right-hand side") => {
             "Use `|>=` to bind a function that already returns Result/List.".into()
         }
         "|*>" => "Keep the RHS plain, or switch to `|>=` if it already returns Result/List.".into(),
-        "|>=" if message.contains("requires Result or List on the left") => {
+        "|>=" if message.contains("requires Chainable implementation")
+            || message.contains("requires Result or List on the left") =>
+        {
             "Use `|>` for a plain value, or make the LHS Result/List.".into()
         }
         "|>=" if message.contains("right-hand side to return Result") => {
