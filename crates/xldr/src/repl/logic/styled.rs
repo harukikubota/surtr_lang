@@ -88,6 +88,10 @@ pub fn doc_signature(signature: &str) -> String {
     ])
 }
 
+pub fn signature(signature: &str) -> String {
+    signature_doc(signature)
+}
+
 pub fn doc_signature_banner(symbol: &str, signature: &str) -> String {
     signature_banner(symbol, signature, true)
 }

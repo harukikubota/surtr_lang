@@ -23,6 +23,9 @@ pub enum ReplOutput {
         summary: Option<String>,
         source_snippet: Option<String>,
     },
+    SigResolved {
+        signature: String,
+    },
     StatusMessage(String),
 }
 

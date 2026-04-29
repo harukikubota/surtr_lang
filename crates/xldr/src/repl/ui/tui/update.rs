@@ -219,6 +219,9 @@ pub(super) fn submit_input(app: &mut App, engine: &mut ReplEngine) {
         ReplOutput::CommandOutput { rendered } => {
             app.push_result(&source, rendered, ResultEntryKind::CommandOutput);
         }
+        ReplOutput::SigResolved { signature } => {
+            app.push_result(&source, vec![signature], ResultEntryKind::Info);
+        }
         ReplOutput::DocResolved {
             symbol,
             signature,
@@ -331,6 +334,13 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
                             ResultEntryKind::CommandOutput,
                         );
                     }
+                    ReplOutput::SigResolved { signature } => {
+                        app.push_result(
+                            format!(":doc {arg}"),
+                            vec![signature],
+                            ResultEntryKind::Info,
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -353,11 +363,39 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             }
         }
         "sig" => {
-            app.push_result(
-                format!(":sig {arg}"),
-                vec![format!("sig({arg}): (not yet implemented)")],
-                ResultEntryKind::Info,
-            );
+            if arg.is_empty() {
+                app.push_result(
+                    ":sig",
+                    vec!["Usage: :sig <function>".to_string()],
+                    ResultEntryKind::EvalError,
+                );
+            } else {
+                let result = engine.handle_line(&format!(":sig {arg}"));
+                match result.output {
+                    ReplOutput::SigResolved { signature } => {
+                        app.push_result(
+                            format!(":sig {arg}"),
+                            vec![signature],
+                            ResultEntryKind::Info,
+                        );
+                    }
+                    ReplOutput::EvalError { rendered, .. } => {
+                        app.push_result(
+                            format!(":sig {arg}"),
+                            rendered,
+                            ResultEntryKind::EvalError,
+                        );
+                    }
+                    ReplOutput::CommandOutput { rendered } => {
+                        app.push_result(
+                            format!(":sig {arg}"),
+                            rendered,
+                            ResultEntryKind::CommandOutput,
+                        );
+                    }
+                    _ => {}
+                }
+            }
         }
         "type" => {
             if arg.is_empty() {

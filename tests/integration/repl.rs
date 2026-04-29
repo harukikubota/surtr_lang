@@ -446,6 +446,40 @@ fn repl_sig_command_shows_builtin_and_local_function_signatures() {
 }
 
 #[test]
+fn repl_colorizes_sig_command_signature() {
+    let output = run_repl_session_with_color(":sig print\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\u{1b}["),
+        "expected ANSI styling for :sig print, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\u{1b}[36ma\u{1b}[0m"),
+        "expected parameter name styling inside :sig output, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\u{1b}[1;96mString\u{1b}[0m")
+            && stdout.contains("\u{1b}[1;96mUnit\u{1b}[0m"),
+        "expected type styling inside :sig output, got:\n{}",
+        stdout
+    );
+    assert!(
+        strip_ansi(&stdout).contains("Kernel::print(a: String) -> Unit"),
+        "expected styled :sig output to preserve plain text, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_help_command_lists_available_commands() {
     let output = run_repl_session(":help\n:quit\n");
     assert!(

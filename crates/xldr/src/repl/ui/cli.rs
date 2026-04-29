@@ -275,6 +275,14 @@ fn print_result(result: &ReplResult, color: bool) {
                 println!("> {}", line);
             }
         }
+        ReplOutput::SigResolved { signature } => {
+            let rendered = if color {
+                styled::signature(signature)
+            } else {
+                signature.clone()
+            };
+            println!("> {}", rendered);
+        }
         ReplOutput::DocResolved {
             symbol,
             signature,

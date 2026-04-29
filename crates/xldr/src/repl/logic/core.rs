@@ -888,8 +888,8 @@ impl ReplEngine {
                 } else {
                     signature
                 };
-                ReplResult::ok(ReplOutput::CommandOutput {
-                    rendered: vec![rendered],
+                ReplResult::ok(ReplOutput::SigResolved {
+                    signature: rendered,
                 })
             }
             None => ReplResult::ok(ReplOutput::EvalError {
