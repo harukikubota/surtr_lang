@@ -110,19 +110,18 @@ defmod MahjongExtractor {
 
   @@doc """
   再帰分解（順子+刻子）:
-  入力を `(mentsu, unresolved)` の枝リストとして返す extractor。
+  入力を `(mentsu, unresolved)` の枝リストとして返す探索関数。
   """
-  defextractor suited_branches(input: List<Int>) -> MatchResult<List<ExtractBranch>, Error> {
+  def suited_branches(input: List<Int>) -> Result<List<ExtractBranch>> {
     match input {
-      [] => MatchResult::Success([ExtractBranch(mentsu: [], unresolved: [])]),
+      [] => Ok([ExtractBranch(mentsu: [], unresolved: [])]),
       [head, ..tail] => {
         triplet_branches = if(
           _id_count(input, head) >= 3,
           match _remove_n(input, head, 3) {
-            Ok(rest) => match suited_branches(rest) {
-              MatchResult::Success(branches) => _prepend_to_all(_triplet_meld(head), branches),
-              MatchResult::NoMatch => [],
-              MatchResult::Err(err) => [ExtractBranch(mentsu: [], unresolved: input)],
+            Ok(rest) => {
+              branches =? suited_branches(rest)
+              _prepend_to_all(_triplet_meld(head), branches)
             },
             Err(_) => [],
           },
@@ -139,10 +138,9 @@ defmod MahjongExtractor {
               match _remove_first(input, head) {
                 Ok(rest1) => match _remove_first(rest1, second) {
                   Ok(rest2) => match _remove_first(rest2, third) {
-                    Ok(rest3) => match suited_branches(rest3) {
-                      MatchResult::Success(branches) => _prepend_to_all(_sequence_meld(head), branches),
-                      MatchResult::NoMatch => [],
-                      MatchResult::Err(err) => [ExtractBranch(mentsu: [], unresolved: input)],
+                    Ok(rest3) => {
+                      branches =? suited_branches(rest3)
+                      _prepend_to_all(_sequence_meld(head), branches)
                     },
                     Err(_) => [],
                   },
@@ -156,17 +154,14 @@ defmod MahjongExtractor {
           [],
         )
 
-        unresolved_branches = match suited_branches(tail) {
-          MatchResult::Success(branches) => _prepend_unresolved_to_all(head, branches),
-          MatchResult::NoMatch => [ExtractBranch(mentsu: [], unresolved: input)],
-          MatchResult::Err(err) => [ExtractBranch(mentsu: [], unresolved: input)],
-        }
+        tail_branches =? suited_branches(tail)
+        unresolved_branches = _prepend_unresolved_to_all(head, tail_branches)
 
         branches = List::concat([triplet_branches, sequence_branches, unresolved_branches])
         if(
           List::len(branches) > 0,
-          MatchResult::Success(branches),
-          MatchResult::Success([ExtractBranch(mentsu: [], unresolved: input)]),
+          Ok(branches),
+          Ok([ExtractBranch(mentsu: [], unresolved: input)]),
         )
       },
     }
@@ -176,31 +171,27 @@ defmod MahjongExtractor {
   再帰分解（刻子のみ）:
   字牌側の枝探索。
   """
-  defextractor honor_branches(input: List<Int>) -> MatchResult<List<ExtractBranch>, Error> {
+  def honor_branches(input: List<Int>) -> Result<List<ExtractBranch>> {
     match input {
-      [] => MatchResult::Success([ExtractBranch(mentsu: [], unresolved: [])]),
+      [] => Ok([ExtractBranch(mentsu: [], unresolved: [])]),
       [head, ..tail] => {
         triplet_branches = if(
           _id_count(input, head) >= 3,
           match _remove_n(input, head, 3) {
-            Ok(rest) => match honor_branches(rest) {
-              MatchResult::Success(branches) => _prepend_to_all(_triplet_meld(head), branches),
-              MatchResult::NoMatch => [],
-              MatchResult::Err(err) => [ExtractBranch(mentsu: [], unresolved: input)],
+            Ok(rest) => {
+              branches =? honor_branches(rest)
+              _prepend_to_all(_triplet_meld(head), branches)
             },
             Err(_) => [],
           },
           [],
         )
 
-        unresolved_branches = match honor_branches(tail) {
-          MatchResult::Success(branches) => _prepend_unresolved_to_all(head, branches),
-          MatchResult::NoMatch => [ExtractBranch(mentsu: [], unresolved: input)],
-          MatchResult::Err(err) => [ExtractBranch(mentsu: [], unresolved: input)],
-        }
+        tail_branches =? honor_branches(tail)
+        unresolved_branches = _prepend_unresolved_to_all(head, tail_branches)
 
         branches = List::concat([triplet_branches, unresolved_branches])
-        MatchResult::Success(branches)
+        Ok(branches)
       },
     }
   }
@@ -249,19 +240,13 @@ defmod MahjongExtractor {
   }
 
   defp _suited_success(ids: List<Int>) -> Result<List<ExtractBranch>> {
-    match suited_branches(ids) {
-      MatchResult::Success(branches) => Ok(_success_only(branches)),
-      MatchResult::NoMatch => Ok([]),
-      MatchResult::Err(err) => Err(HandValidationError("suited extractor failed: " ++ inspect(err))),
-    }
+    branches =? suited_branches(ids)
+    Ok(_success_only(branches))
   }
 
   defp _honor_success(ids: List<Int>) -> Result<List<ExtractBranch>> {
-    match honor_branches(ids) {
-      MatchResult::Success(branches) => Ok(_success_only(branches)),
-      MatchResult::NoMatch => Ok([]),
-      MatchResult::Err(err) => Err(HandValidationError("honor extractor failed: " ++ inspect(err))),
-    }
+    branches =? honor_branches(ids)
+    Ok(_success_only(branches))
   }
 
   defp _build_suit_matrix(ids: List<Int>) -> Result<SuitBranchMatrix> {

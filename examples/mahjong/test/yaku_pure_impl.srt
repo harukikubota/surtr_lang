@@ -68,11 +68,7 @@ defmod MahjongYakuPureTest {
   }
 
   defp _suited_success(ids: List<Int>) -> Result<List<ExtractBranch>> {
-    match MahjongExtractor::suited_branches(ids) {
-      MatchResult::Success(branches) => Ok(branches),
-      MatchResult::NoMatch => Err(HandValidationError("extractor no-match: " ++ inspect(ids))),
-      MatchResult::Err(err) => Err(HandValidationError("extractor failed: " ++ inspect(err))),
-    }
+    MahjongExtractor::suited_branches(ids)
   }
 
   defp _is_sequence(meld: ExtractedMeld) -> Boolean {
