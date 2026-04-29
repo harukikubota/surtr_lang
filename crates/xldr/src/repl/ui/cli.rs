@@ -281,7 +281,7 @@ fn print_result(result: &ReplResult, color: bool) {
             } else {
                 signature.clone()
             };
-            println!("> {}", rendered);
+            println!("{}", rendered);
         }
         ReplOutput::DocResolved {
             symbol,
@@ -295,26 +295,23 @@ fn print_result(result: &ReplResult, color: bool) {
                 } else {
                     styled::plain_doc_signature_banner(symbol, sig)
                 };
-                println!("> {}", banner);
+                println!("{}", banner);
             } else {
                 let symbol = if color {
                     styled::doc_symbol(symbol)
                 } else {
                     symbol.clone()
                 };
-                println!("> {}", symbol);
+                println!("{}", symbol);
             }
             if let Some(text) = source_snippet.as_ref().or(summary.as_ref()) {
                 let lines: Vec<String> = if color {
                     styled::doc_body_lines(text)
                 } else {
-                    text.lines()
-                        .filter(|line| !line.trim().is_empty())
-                        .map(ToString::to_string)
-                        .collect()
+                    styled::plain_doc_body_lines(text)
                 };
                 for line in lines {
-                    println!("> {}", line);
+                    println!("{}", line);
                 }
             }
         }

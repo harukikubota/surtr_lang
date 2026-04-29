@@ -646,6 +646,121 @@ fn repl_doc_command_resolves_operator_trait_aliases() {
 }
 
 #[test]
+fn repl_doc_command_lists_ambiguous_trait_method_candidates() {
+    let output = run_repl_session(":doc gt\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("gt has multiple docs:"),
+        "expected :doc gt to show candidates, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("impl Gt for Int::gt") && stdout.contains("impl Gt for Float::gt"),
+        "expected Int and Float gt candidates, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_doc_typed_call_resolves_trait_impl_docs_without_evaluation() {
+    let output = run_repl_session(":doc gt(3, 2)\n:doc gt(2.0, 1.5)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"),
+        "expected Int gt impl docs, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("impl Gt for Float::gt(self: Self, rhs: Self) -> Boolean"),
+        "expected Float gt impl docs, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_doc_typed_call_accepts_type_placeholders_and_rejects_calls() {
+    let output = run_repl_session(
+        ":doc gt(_ : Float, _ : Float)\n:doc gt(Float, Float)\n:doc gt(make_value(), 1)\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .matches("impl Gt for Float::gt(self: Self, rhs: Self) -> Boolean")
+            .count()
+            >= 2,
+        "expected Float gt impl docs, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Unsupported typed call query argument `make_value()`"),
+        "expected non-evaluating query rejection, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_doc_and_sig_render_without_result_prefix_and_dedent_doc_body() {
+    let output = run_repl_session(":sig gt(Int, Int)\n:doc gt(Int, Int)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("\n> defined:")
+            && !stdout.contains("\n> specialized:")
+            && !stdout.contains("\n> Return `True`"),
+        "expected :doc/:sig output without result prefix, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\ndefined:\n  impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean")
+            || stdout
+                .contains("> defined:\n  impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"),
+        "expected defined signature block, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains(
+            "\nReturn `True` when the left integer is strictly greater than the right integer."
+        ),
+        "expected doc body to be dedented, got:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains(
+            "\n  Return `True` when the left integer is strictly greater than the right integer."
+        ),
+        "expected doc body not to keep source indentation, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_doc_command_resolves_flow_operator_trait_aliases() {
     let output = run_repl_session(":doc |>\n:doc >>\n:doc >*\n:doc >=>\n:quit\n");
     assert!(
