@@ -323,6 +323,37 @@ impl ReplEngine {
     /// context that sigil and scar provide.  Forge codegen and vm.push_atomic
     /// are intentionally skipped.
     fn bootstrap_std_modules_scope_only(&mut self) -> Result<(), LoadError> {
+        if let Ok(snapshot) = crate::default_stdlib_semantic_snapshot() {
+            if self.module_stages.len() == snapshot.default_stage_count {
+                self.auto_import_modules = snapshot.auto_import_modules.clone();
+                self.declaration_index = snapshot.declaration_index.clone();
+                self.scar_session.rollback(snapshot.scar_checkpoint.clone());
+                self.sync_scar_fun_index_with_vm();
+                self.append_docs(snapshot.docs.clone());
+
+                let scope = match sigil::build_scope_for_module(
+                    &snapshot.module_stages,
+                    Some(&self.repl_module_path),
+                    snapshot.module_stages.len(),
+                ) {
+                    Ok(scope) => scope,
+                    Err(e) => {
+                        return Err(load_error_from_span_failure(
+                            &self.sources,
+                            &self.module_stages,
+                            &e.span,
+                            self.builtin_source_id,
+                            "resolve",
+                            e.message,
+                        ));
+                    }
+                };
+                self.sigil_session
+                    .replace_scope_with_declarations(scope, &self.declaration_index);
+                return Ok(());
+            }
+        }
+
         let module_stages = match parse_module_stages_from_sources(
             &self.sources,
             &self.module_stages,

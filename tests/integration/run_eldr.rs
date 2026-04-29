@@ -57,6 +57,11 @@ fn run_eldr_matches_run_srt_output() {
         String::from_utf8_lossy(&run_eldr.stdout),
         String::from_utf8_lossy(&run_eldr.stderr)
     );
+    assert!(
+        run_eldr.stderr.is_empty(),
+        "run eldr should not emit stderr on success, got:\n{}",
+        String::from_utf8_lossy(&run_eldr.stderr)
+    );
 
     assert_eq!(
         String::from_utf8_lossy(&run_srt.stdout),
@@ -292,7 +297,13 @@ print(to_string(add(1, 2)))"#,
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains('3'),
+        output.stderr.is_empty(),
+        "run source should not emit stderr on success, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "3\n",
         "expected loaded module function output, got:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

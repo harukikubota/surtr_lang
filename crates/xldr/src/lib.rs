@@ -3,6 +3,9 @@ mod loader;
 pub mod repl;
 pub mod tui;
 
+use std::collections::BTreeSet;
+use std::sync::OnceLock;
+
 pub use error_display::ErrorDisplayMode;
 pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
@@ -730,6 +733,124 @@ pub fn parse_module_stages_from_compile_sources(
     )
 }
 
+pub fn parse_module_stages_from_compile_sources_suffix(
+    compile_sources: &CompileSources,
+    compile_unit_kind: CompileUnitKind,
+    start_stage_index: usize,
+) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
+    let suffix = compile_sources
+        .module_stages
+        .iter()
+        .skip(start_stage_index)
+        .cloned()
+        .collect::<Vec<_>>();
+    repl::logic::core::parse_module_stages_from_sources(
+        &compile_sources.sources,
+        &suffix,
+        compile_unit_kind,
+    )
+}
+
+#[derive(Debug, Clone)]
+pub struct DefaultStdlibSnapshot {
+    pub module_stages: Vec<Vec<sigil::StagedModuleAst>>,
+    pub declaration_index: sigil::DeclarationIndex,
+    pub resolve_state: sigil::ResolveResumeState,
+    pub scar_checkpoint: scar::ScarCheckpoint,
+    pub bytecode: forge::bytecode::Bytecode,
+    pub docs: Vec<DocEntry>,
+    pub auto_import_modules: BTreeSet<String>,
+    pub default_stage_count: usize,
+}
+
+pub fn default_stdlib_semantic_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
+    static SNAPSHOT: OnceLock<Result<DefaultStdlibSnapshot, LoadError>> = OnceLock::new();
+    SNAPSHOT.get_or_init(build_default_stdlib_snapshot).clone()
+}
+
+fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
+    let module_sources = collect_module_sources_with_module_stages(&[])?;
+    let module_stages = repl::logic::core::parse_module_stages_from_sources(
+        &module_sources.sources,
+        &module_sources.module_stages,
+        CompileUnitKind::Script,
+    )
+    .map_err(|e| LoadError::BootstrapFailed {
+        phase: "parse".into(),
+        file_name: module_sources
+            .sources
+            .file_name(e.source_id)
+            .unwrap_or("<stdlib>")
+            .to_string(),
+        message: e.message(),
+    })?;
+    let docs = collect_doc_entries(&module_stages, &[], None);
+    let auto_import_modules = module_stages
+        .iter()
+        .flat_map(|stage| stage.iter())
+        .filter(|module| module.auto_import)
+        .map(|module| module.module_path.clone())
+        .collect::<BTreeSet<_>>();
+    let declaration_index = sigil::precollect_declaration_index(&module_stages).map_err(|e| {
+        LoadError::BootstrapFailed {
+            phase: "resolve".into(),
+            file_name: "<stdlib>".into(),
+            message: e.message,
+        }
+    })?;
+    let resolved = sigil::resolve_staged_program_with_state(
+        &module_stages,
+        Vec::new(),
+        &declaration_index,
+        None,
+    )
+    .map_err(|e| LoadError::BootstrapFailed {
+        phase: "resolve".into(),
+        file_name: "<stdlib>".into(),
+        message: e.message,
+    })?;
+    let mut scar_session = scar::ScarSession::new();
+    let typed = scar_session
+        .typecheck_with_context(
+            resolved.resolved,
+            scar::TypecheckContext {
+                runtime_policy: RuntimeSourcePolicy::std_module(),
+                enforce_builtin_type_contracts: true,
+            },
+        )
+        .map_err(|e| LoadError::BootstrapFailed {
+            phase: "typecheck".into(),
+            file_name: "<stdlib>".into(),
+            message: e.message,
+        })?;
+    let mut bytecode = forge::codegen(typed).map_err(|e| LoadError::BootstrapFailed {
+        phase: "codegen".into(),
+        file_name: "<stdlib>".into(),
+        message: e.message,
+    })?;
+    bytecode.docs = docs.clone();
+    let next_fun_idx = bytecode
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    let resolve_state = sigil::ResolveResumeState {
+        next_local_id: resolved.resume_state.next_local_id.max(next_fun_idx),
+    };
+
+    Ok(DefaultStdlibSnapshot {
+        default_stage_count: module_stages.len(),
+        module_stages,
+        declaration_index,
+        resolve_state,
+        scar_checkpoint: scar_session.checkpoint(),
+        bytecode,
+        docs,
+        auto_import_modules,
+    })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -767,6 +888,29 @@ defmod B {
             .ast
             .iter()
             .any(|stmt| matches!(stmt, spire::ast::Ast::RecordDef(_, _, _))));
+    }
+
+    #[test]
+    fn default_stdlib_snapshot_contains_only_default_stages() {
+        let snapshot = std::thread::Builder::new()
+            .name("xldr-snapshot-test".into())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build")
+            })
+            .expect("snapshot test thread should spawn")
+            .join()
+            .expect("snapshot test thread should finish");
+
+        assert_eq!(snapshot.default_stage_count, snapshot.module_stages.len());
+        assert!(snapshot
+            .declaration_index
+            .values()
+            .any(|entry| entry.fq_name == "Kernel::print"));
+        assert!(!snapshot
+            .declaration_index
+            .values()
+            .any(|entry| entry.module_path == "TestOnly"));
     }
 
     #[test]
