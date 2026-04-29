@@ -15,7 +15,20 @@ const TEST_CACHE_VERSION: &str = "surtr-test-dsl-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestOptions {
-    pub(crate) selector: String,
+    pub(crate) mode: TestMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TestMode {
+    One(String),
+    All,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct TestRunSummary {
+    passed: usize,
+    failed: usize,
+    total: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,11 +55,33 @@ pub(crate) fn parse_test_options(args: &[String]) -> RuneResult<TestOptions> {
         return Err(RuneError::usage("test: selector must not be empty"));
     }
 
-    Ok(TestOptions { selector })
+    let mode = if selector == "--all" {
+        TestMode::All
+    } else {
+        TestMode::One(selector)
+    };
+
+    Ok(TestOptions { mode })
 }
 
 fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
-    let script = load_test_script(&options.selector)?;
+    match options.mode {
+        TestMode::One(selector) => run_one_test(&selector, env).map(|_| ()),
+        TestMode::All => run_all_tests(env),
+    }
+}
+
+fn run_one_test(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunSummary> {
+    let summary = execute_test_script(selector, env)?;
+    if summary.failed == 0 {
+        Ok(summary)
+    } else {
+        Err(RuneError::silent(1))
+    }
+}
+
+fn execute_test_script(selector: &str, env: ExecutionEnv) -> RuneResult<TestRunSummary> {
+    let script = load_test_script(selector)?;
     let bytecode = compile_test_script(&script, env)?;
 
     let mut vm = eldr::VM::new(bytecode)
@@ -61,16 +96,15 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
         return Err(RuneError::silent(1));
     }
 
-    let mut passed = 0usize;
-    let mut failed = 0usize;
+    let mut summary = TestRunSummary::default();
     for event in vm.test_events() {
         match event.kind {
             VmTestEventKind::Passed => {
-                passed += 1;
+                summary.passed += 1;
                 println!("[PASS] {}", format_event_path(event));
             }
             VmTestEventKind::Failed => {
-                failed += 1;
+                summary.failed += 1;
                 println!("[FAIL] {} ({})", format_event_path(event), script.file_path);
                 if let Some(detail) = &event.detail {
                     println!("  note: {}", detail);
@@ -79,18 +113,49 @@ fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
         }
     }
 
-    let total = passed + failed;
-    if total == 0 {
+    summary.total = summary.passed + summary.failed;
+    if summary.total == 0 {
         println!("No tests found in {}.", script.file_path);
-        return Ok(());
+        return Ok(summary);
     }
 
     println!(
         "test result: passed={}, failed={}, total={}",
-        passed, failed, total
+        summary.passed, summary.failed, summary.total
     );
 
-    if failed == 0 {
+    Ok(summary)
+}
+
+fn run_all_tests(env: ExecutionEnv) -> RuneResult<()> {
+    let selectors = collect_all_test_selectors()?;
+    if selectors.is_empty() {
+        println!("No test scripts found in lib/tests.");
+        return Ok(());
+    }
+
+    let mut aggregate = TestRunSummary::default();
+    for selector in selectors {
+        match execute_test_script(&selector, env) {
+            Ok(summary) => {
+                aggregate.passed += summary.passed;
+                aggregate.failed += summary.failed;
+                aggregate.total += summary.total;
+            }
+            Err(err) => {
+                err.emit();
+                aggregate.failed += 1;
+                aggregate.total += 1;
+            }
+        }
+    }
+
+    println!(
+        "test result: passed={}, failed={}, total={}",
+        aggregate.passed, aggregate.failed, aggregate.total
+    );
+
+    if aggregate.failed == 0 {
         Ok(())
     } else {
         Err(RuneError::silent(1))
@@ -129,6 +194,56 @@ fn resolve_test_script_path(selector: &str) -> PathBuf {
         format!("{normalized}.srt")
     };
     Path::new("lib").join("tests").join(relative)
+}
+
+fn collect_all_test_selectors() -> RuneResult<Vec<String>> {
+    let root = Path::new("lib").join("tests");
+    let mut paths = Vec::new();
+    collect_test_script_paths(&root, &mut paths)?;
+    paths.sort();
+
+    let selectors = paths
+        .into_iter()
+        .filter(|path| path.file_name().and_then(|name| name.to_str()) != Some("prelude.srt"))
+        .filter_map(|path| selector_for_test_path(&root, &path))
+        .collect();
+    Ok(selectors)
+}
+
+fn collect_test_script_paths(dir: &Path, paths: &mut Vec<PathBuf>) -> RuneResult<()> {
+    let entries = fs::read_dir(dir).map_err(|e| {
+        RuneError::message(
+            1,
+            format!(
+                "test: failed to read test directory {}: {}",
+                display_path(dir),
+                e
+            ),
+        )
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            RuneError::message(
+                1,
+                format!("test: failed to read test directory entry: {}", e),
+            )
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_test_script_paths(&path, paths)?;
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("srt") {
+            paths.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn selector_for_test_path(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let without_extension = relative.with_extension("");
+    Some(display_path(&without_extension))
 }
 
 fn collect_test_compile_sources(
@@ -320,15 +435,21 @@ fn display_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_test_options, resolve_test_script_path};
+    use super::{parse_test_options, resolve_test_script_path, TestMode};
     use std::path::Path;
 
     #[test]
     fn test_options_require_single_selector() {
         let opts = parse_test_options(&["string".to_string()]).expect("selector should parse");
-        assert_eq!(opts.selector, "string");
+        assert_eq!(opts.mode, TestMode::One("string".to_string()));
         assert!(parse_test_options(&[]).is_err());
         assert!(parse_test_options(&["a".to_string(), "b".to_string()]).is_err());
+    }
+
+    #[test]
+    fn test_options_accept_all_flag() {
+        let opts = parse_test_options(&["--all".to_string()]).expect("--all should parse");
+        assert_eq!(opts.mode, TestMode::All);
     }
 
     #[test]

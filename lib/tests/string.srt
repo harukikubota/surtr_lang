@@ -97,7 +97,7 @@ test("String") {
 
     it("rejects multi-character items") {
       assert_eq(
-        "Err(InvalidCharList(\"expected single-character string at index 0, got ab\"))",
+        "Err(InvalidCharList(\"expected single-character string at index 0, got \\\"ab\\\"\"))",
         inspect(from_chars(["ab"])),
       )
     }

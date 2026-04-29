@@ -214,6 +214,48 @@ fn test_command_reports_missing_test_script() {
 }
 
 #[test]
+fn test_command_all_runs_lib_test_scripts() {
+    let temp = unique_temp_dir("surtr_test_command_all");
+    write_source(
+        &temp.join("lib/tests/alpha.srt"),
+        r#"import Test;
+
+test("Alpha") {
+  it("passes") { assert_eq(1, 1) }
+}
+"#,
+    );
+    write_source(
+        &temp.join("lib/tests/nested/beta.srt"),
+        r#"import Test;
+
+test("Beta") {
+  it("passes") { assert_true(True) }
+}
+"#,
+    );
+    write_source(
+        &temp.join("lib/tests/prelude.srt"),
+        r#"this file is intentionally ignored by --all"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "--all"]);
+    assert!(
+        output.status.success(),
+        "test --all should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PASS] Alpha > passes"));
+    assert!(stdout.contains("[PASS] Beta > passes"));
+    assert!(stdout.contains("test result: passed=2, failed=0, total=2"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn test_nested_lib_tests_are_ignored_by_normal_script_run() {
     let temp = unique_temp_dir("surtr_test_command_nested_lib_tests_ignored");
     write_source(&temp.join("main.srt"), r#"print("ok")"#);
