@@ -518,6 +518,9 @@ impl Checker {
             self.env.bind_var(*unique_id, ty.clone());
         }
 
+        // Function and trait method bodies are embedded in a top-level typed
+        // definition. Check the body now, but defer subtree normalization to the
+        // single resolve_typed_node pass in check_program.
         let profile = self.profiler.start();
         let result = self.check_node(body);
         self.profiler

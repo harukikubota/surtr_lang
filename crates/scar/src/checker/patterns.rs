@@ -376,12 +376,15 @@ impl Checker {
     }
 
     pub(super) fn normalize_env_bindings(&mut self) {
+        let profile = self.profiler.start();
         let keys = self.env.vars.keys().copied().collect::<Vec<_>>();
         for key in keys {
             if let Some(ty) = self.env.vars.get(&key).cloned() {
                 self.env.vars.insert(key, self.resolve_ty(&ty));
             }
         }
+        self.profiler
+            .finish(ProfileEvent::NormalizeEnvBindings, profile);
     }
 
     pub(super) fn collect_pattern_result_error_types(&self, pat: &TypedPattern, out: &mut Vec<Ty>) {

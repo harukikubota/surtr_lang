@@ -32,6 +32,8 @@ impl Checker {
             typed_arms.push(typed_arm);
         }
 
+        // Arm-local bindings are rolled back by each arm scope. Keep typed arm
+        // subtrees unresolved here and let check_program do one final pass.
         self.check_match_exhaustive(span, &typed_scrut.ty, &typed_arms)?;
 
         let ty = result_ty.unwrap_or(Ty::Unit);
@@ -233,6 +235,9 @@ impl Checker {
                 None
             };
             let typed_body = self.check_node(&arm.body)?;
+            // Do not normalize env bindings or typed guard/body subtrees in this
+            // scoped arm. The env frame is discarded below, and the containing
+            // TypedInner::Match is normalized once at the program boundary.
             Ok(TypedMatchArm {
                 pattern: typed_pat,
                 guard: typed_guard,

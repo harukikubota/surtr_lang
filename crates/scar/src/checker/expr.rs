@@ -3331,6 +3331,8 @@ impl Checker {
                     hint: Some("Use Lens::view(...) inside the closure instead.".into()),
                 });
             }
+            // The closure result type is needed immediately for inference, but
+            // the body tree itself is normalized by the enclosing typed node.
             let body_ty = self.resolve_ty(&typed_body.ty);
 
             let param_tys = typed_params

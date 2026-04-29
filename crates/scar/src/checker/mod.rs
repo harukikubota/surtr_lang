@@ -42,6 +42,7 @@ enum ProfileEvent {
     CheckBodyIsolated,
     MatchArm,
     ClosureBody,
+    NormalizeEnvBindings,
 }
 
 #[derive(Default)]
@@ -89,6 +90,7 @@ struct ProfileData {
     check_body_isolated: ProfileCounter,
     match_arm: ProfileCounter,
     closure_body: ProfileCounter,
+    normalize_env_bindings: ProfileCounter,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,6 +129,8 @@ struct ProfileSnapshot {
     match_arm_nanos: u64,
     closure_body_calls: u64,
     closure_body_nanos: u64,
+    normalize_env_bindings_calls: u64,
+    normalize_env_bindings_nanos: u64,
 }
 
 #[derive(Clone)]
@@ -189,6 +193,7 @@ impl TypecheckProfiler {
             ProfileEvent::CheckBodyIsolated => self.data.check_body_isolated.add(elapsed),
             ProfileEvent::MatchArm => self.data.match_arm.add(elapsed),
             ProfileEvent::ClosureBody => self.data.closure_body.add(elapsed),
+            ProfileEvent::NormalizeEnvBindings => self.data.normalize_env_bindings.add(elapsed),
         }
     }
 
@@ -213,6 +218,7 @@ impl TypecheckProfiler {
         self.data.check_body_isolated.reset();
         self.data.match_arm.reset();
         self.data.closure_body.reset();
+        self.data.normalize_env_bindings.reset();
     }
 
     fn snapshot(&self) -> ProfileSnapshot {
@@ -247,6 +253,8 @@ impl TypecheckProfiler {
             self.data.check_body_isolated.snapshot();
         let (match_arm_calls, match_arm_nanos) = self.data.match_arm.snapshot();
         let (closure_body_calls, closure_body_nanos) = self.data.closure_body.snapshot();
+        let (normalize_env_bindings_calls, normalize_env_bindings_nanos) =
+            self.data.normalize_env_bindings.snapshot();
         ProfileSnapshot {
             types_compatible_calls,
             types_compatible_nanos,
@@ -282,6 +290,8 @@ impl TypecheckProfiler {
             match_arm_nanos,
             closure_body_calls,
             closure_body_nanos,
+            normalize_env_bindings_calls,
+            normalize_env_bindings_nanos,
         }
     }
 
@@ -330,9 +340,11 @@ impl TypecheckProfiler {
             snap.child_checker_absorb_nanos as f64 / 1_000_000.0,
         );
         eprintln!(
-            "scar-profile normalize resolve_typed_node={} ({:.3}ms) | isolated_body={} ({:.3}ms) | match_arm={} ({:.3}ms) | closure_body={} ({:.3}ms)",
+            "scar-profile normalize resolve_typed_node={} ({:.3}ms) | env_bindings={} ({:.3}ms) | isolated_body={} ({:.3}ms) | match_arm={} ({:.3}ms) | closure_body={} ({:.3}ms)",
             snap.resolve_typed_node_calls,
             snap.resolve_typed_node_nanos as f64 / 1_000_000.0,
+            snap.normalize_env_bindings_calls,
+            snap.normalize_env_bindings_nanos as f64 / 1_000_000.0,
             snap.check_body_isolated_calls,
             snap.check_body_isolated_nanos as f64 / 1_000_000.0,
             snap.match_arm_calls,
