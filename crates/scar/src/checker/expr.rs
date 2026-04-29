@@ -918,99 +918,6 @@ impl Checker {
         Ok((self.resolve_ty(&params[0]), self.resolve_ty(ret)))
     }
 
-    pub(super) fn typed_function_var_by_name(
-        &mut self,
-        name: &str,
-        span: &Span,
-    ) -> Result<TypedNode, TypeError> {
-        let id = self
-            .function_ids_by_name
-            .get(name)
-            .cloned()
-            .ok_or_else(|| TypeError {
-                message: format!("Missing helper function: {}", name),
-                span: span.clone(),
-                hint: None,
-            })?;
-        let ty = self
-            .env
-            .lookup_var(id.unique_id)
-            .cloned()
-            .ok_or_else(|| TypeError {
-                message: format!("Missing helper function type: {}", name),
-                span: span.clone(),
-                hint: None,
-            })?;
-        let ty = match &ty {
-            Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => self.instantiate_builtin_ty(&ty),
-            _ => self.resolve_ty(&ty),
-        };
-        Ok(TypedNode {
-            ty,
-            span: span.clone(),
-            node: TypedInner::Var(ResolvedId {
-                span: span.clone(),
-                ..id
-            }),
-        })
-    }
-
-    pub(super) fn build_typed_app(
-        &mut self,
-        span: &Span,
-        func: TypedNode,
-        args: Vec<TypedNode>,
-    ) -> Result<TypedNode, TypeError> {
-        let (params, ret, callable_hint) = match self.resolve_ty(&func.ty) {
-            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
-                (params, ret.as_ref().clone(), None)
-            }
-            Ty::Func(params, ret) => {
-                let hint = self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()));
-                (params, ret.as_ref().clone(), hint)
-            }
-            other => {
-                return Err(TypeError {
-                    message: format!("Not a function: {}", self.ty_name(&other)),
-                    span: span.clone(),
-                    hint: None,
-                })
-            }
-        };
-        if params.len() != args.len() {
-            return Err(TypeError {
-                message: format!(
-                    "function expects {} argument(s), got {}",
-                    params.len(),
-                    args.len()
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        for (expected, arg) in params.iter().zip(&args) {
-            if !matches!(self.resolve_ty(expected), Ty::Hole)
-                && !self.types_compatible(expected, &arg.ty)
-            {
-                return Err(TypeError {
-                    message: format!(
-                        "Argument type mismatch: expected {}, got {}",
-                        self.ty_name(expected),
-                        self.ty_name(&arg.ty)
-                    ),
-                    span: arg.span.clone(),
-                    hint: callable_hint.clone(),
-                });
-            }
-        }
-        self.ensure_no_runtime_lens_args(&args, span, "Function application")?;
-        Ok(TypedNode {
-            ty: self.resolve_ty(&ret),
-            span: span.clone(),
-            node: TypedInner::App(Box::new(func), args),
-        })
-    }
-
     pub(super) fn trait_method_ref<'a>(
         &self,
         func: &'a Resolved,
@@ -1589,50 +1496,6 @@ impl Checker {
         })
     }
 
-    pub(super) fn build_injected_app(
-        &mut self,
-        span: &Span,
-        injected_value: TypedNode,
-        callable: TypedNode,
-    ) -> Result<TypedNode, TypeError> {
-        let TypedInner::InjectCall(func, mut args) = callable.node else {
-            return Err(TypeError {
-                message: "internal error: expected injected call".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        };
-        let mut full_args = Vec::with_capacity(args.len() + 1);
-        full_args.push(injected_value);
-        full_args.append(&mut args);
-        self.build_typed_app(span, *func, full_args)
-    }
-
-    pub(super) fn list_helper_ref_by_name(
-        &mut self,
-        helper_name: &str,
-        span: &Span,
-    ) -> Result<ListHelperRef, TypeError> {
-        let helper = self.typed_function_var_by_name(helper_name, span)?;
-        match helper.ty {
-            Ty::UserFunc { fun_idx, .. } => Ok(ListHelperRef::User(fun_idx)),
-            Ty::BuiltinFunc { ref name, .. } => {
-                let builtin_id =
-                    sindr::builtin::builtin_id_by_name(name).ok_or_else(|| TypeError {
-                        message: format!("Unknown builtin helper: {}", helper_name),
-                        span: span.clone(),
-                        hint: None,
-                    })?;
-                Ok(ListHelperRef::Builtin(builtin_id))
-            }
-            _ => Err(TypeError {
-                message: format!("{} must be a callable helper", helper_name),
-                span: span.clone(),
-                hint: None,
-            }),
-        }
-    }
-
     pub(super) fn ensure_plain_map_output(
         &self,
         output_ty: &Ty,
@@ -1642,14 +1505,85 @@ impl Checker {
         match self.resolve_ty(output_ty) {
             Ty::Result(_, _) | Ty::List(_) => Err(TypeError {
                 message: format!(
-                    "{} expects a plain function on the right-hand side; use `|>=` for contextual output",
-                    op_name
+                    "{} expects a plain function on the right-hand side; use {} for contextual output",
+                    op_name,
+                    if op_name == "`>*`" { "`>=>`" } else { "`|>=`" }
                 ),
                 span: span.clone(),
                 hint: None,
             }),
             _ => Ok(()),
         }
+    }
+
+    fn flow_operator_trait_call(
+        &mut self,
+        span: &Span,
+        trait_short_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+        requested_trait_args: Vec<Ty>,
+        op: OperatorTraitOp,
+        args: Vec<TypedNode>,
+        result_ty: Ty,
+        op_name: &str,
+    ) -> Result<TypedNode, TypeError> {
+        let trait_key = self
+            .trait_key_by_short_name(trait_short_name)
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown trait: {}", trait_short_name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let Some((dispatch, resolved_trait_args)) = self.operator_trait_dispatch_for_args(
+            &trait_key,
+            method_name,
+            receiver_ty,
+            &requested_trait_args,
+        ) else {
+            return Err(TypeError {
+                message: format!(
+                    "{} requires {} implementation on the left, got {}",
+                    op_name,
+                    trait_short_name,
+                    self.ty_name(receiver_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        let trait_name = self.trait_instance_key_from_tys(&trait_key, &resolved_trait_args);
+        let (lhs_ty, rhs_ty) = if op == OperatorTraitOp::PipeApply {
+            (
+                args.get(1)
+                    .map(|arg| self.resolve_ty(&arg.ty))
+                    .unwrap_or_else(|| Ty::Unit),
+                args.first()
+                    .map(|arg| self.resolve_ty(&arg.ty))
+                    .unwrap_or_else(|| self.resolve_ty(receiver_ty)),
+            )
+        } else {
+            (
+                args.first()
+                    .map(|arg| self.resolve_ty(&arg.ty))
+                    .unwrap_or_else(|| self.resolve_ty(receiver_ty)),
+                args.get(1)
+                    .map(|arg| self.resolve_ty(&arg.ty))
+                    .unwrap_or_else(|| Ty::Unit),
+            )
+        };
+        Ok(TypedNode {
+            ty: result_ty,
+            span: span.clone(),
+            node: TypedInner::TraitCall {
+                trait_name,
+                method_name: method_name.into(),
+                receiver_ty: self.resolve_ty(receiver_ty),
+                dispatch,
+                origin: TraitCallOrigin::Operator { op, lhs_ty, rhs_ty },
+                args,
+            },
+        })
     }
 
     pub(super) fn check_pipe(
@@ -1680,14 +1614,19 @@ impl Checker {
                 )),
             });
         }
-        match typed_right.node {
-            TypedInner::InjectCall(_, _) => self.build_injected_app(span, typed_left, typed_right),
-            _ => Ok(TypedNode {
-                ty: ret,
-                span: span.clone(),
-                node: TypedInner::Pipe(Box::new(typed_left), Box::new(typed_right)),
-            }),
-        }
+        let receiver_ty = self.resolve_ty(&typed_right.ty);
+        let left_ty = self.resolve_ty(&typed_left.ty);
+        self.flow_operator_trait_call(
+            span,
+            "PipeApply",
+            "pipe_apply",
+            &receiver_ty,
+            vec![left_ty, self.resolve_ty(&ret)],
+            OperatorTraitOp::PipeApply,
+            vec![typed_right, typed_left],
+            ret,
+            "`|>`",
+        )
     }
 
     pub(super) fn check_context_map(
@@ -2004,15 +1943,26 @@ impl Checker {
                 )),
             });
         }
-        Ok(TypedNode {
-            ty: Ty::Func(vec![left_in], Box::new(right_out)),
-            span: span.clone(),
-            node: TypedInner::Compose(
-                ComposeFlavor::Plain,
-                Box::new(typed_left),
-                Box::new(typed_right),
-            ),
-        })
+        let result_ty = Ty::Func(
+            vec![self.resolve_ty(&left_in)],
+            Box::new(self.resolve_ty(&right_out)),
+        );
+        let receiver_ty = self.resolve_ty(&typed_left.ty);
+        self.flow_operator_trait_call(
+            span,
+            "Composable",
+            "compose",
+            &receiver_ty,
+            vec![
+                self.resolve_ty(&left_in),
+                self.resolve_ty(&left_out),
+                self.resolve_ty(&right_out),
+            ],
+            OperatorTraitOp::Compose,
+            vec![typed_left, typed_right],
+            result_ty,
+            "`>>`",
+        )
     }
 
     pub(super) fn check_lifted_compose(
@@ -2049,21 +1999,29 @@ impl Checker {
                         )),
                     });
                 }
-                Ok(TypedNode {
-                    ty: Ty::Func(
-                        vec![left_in],
-                        Box::new(Ty::Result(
-                            Box::new(self.resolve_ty(&right_out)),
-                            Box::new(self.resolve_ty(err.as_ref())),
-                        )),
-                    ),
-                    span: span.clone(),
-                    node: TypedInner::Compose(
-                        ComposeFlavor::ResultMap,
-                        Box::new(typed_left),
-                        Box::new(typed_right),
-                    ),
-                })
+                let mapped_ty = Ty::Result(
+                    Box::new(self.resolve_ty(&right_out)),
+                    Box::new(self.resolve_ty(err.as_ref())),
+                );
+                let result_ty =
+                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "LiftComposable",
+                    "lift_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(ok.as_ref()),
+                        self.resolve_ty(&right_out),
+                        mapped_ty,
+                    ],
+                    OperatorTraitOp::LiftCompose,
+                    vec![typed_left, typed_right],
+                    result_ty,
+                    "`>*`",
+                )
             }
             Ty::List(item) => {
                 if !self.types_compatible(item.as_ref(), &right_in) {
@@ -2085,20 +2043,26 @@ impl Checker {
                         )),
                     });
                 }
-                Ok(TypedNode {
-                    ty: Ty::Func(
-                        vec![left_in],
-                        Box::new(Ty::List(Box::new(self.resolve_ty(&right_out)))),
-                    ),
-                    span: span.clone(),
-                    node: TypedInner::Compose(
-                        ComposeFlavor::ListMap {
-                            helper: self.list_helper_ref_by_name("List::map", span)?,
-                        },
-                        Box::new(typed_left),
-                        Box::new(typed_right),
-                    ),
-                })
+                let mapped_ty = Ty::List(Box::new(self.resolve_ty(&right_out)));
+                let result_ty =
+                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "LiftComposable",
+                    "lift_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(item.as_ref()),
+                        self.resolve_ty(&right_out),
+                        mapped_ty,
+                    ],
+                    OperatorTraitOp::LiftCompose,
+                    vec![typed_left, typed_right],
+                    result_ty,
+                    "`>*`",
+                )
             }
             _ => Err(TypeError {
                 message: "`>*` requires Result or List on the left-hand side".into(),
@@ -2150,21 +2114,28 @@ impl Checker {
                         )),
                     });
                 }
-                Ok(TypedNode {
-                    ty: Ty::Func(
-                        vec![left_in],
-                        Box::new(Ty::Result(
-                            Box::new(self.resolve_ty(next_ok.as_ref())),
-                            Box::new(self.resolve_ty(err.as_ref())),
-                        )),
-                    ),
-                    span: span.clone(),
-                    node: TypedInner::Compose(
-                        ComposeFlavor::ResultBind,
-                        Box::new(typed_left),
-                        Box::new(typed_right),
-                    ),
-                })
+                let chained_ty = Ty::Result(
+                    Box::new(self.resolve_ty(next_ok.as_ref())),
+                    Box::new(self.resolve_ty(err.as_ref())),
+                );
+                let result_ty =
+                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "KleisliComposable",
+                    "kleisli_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(ok.as_ref()),
+                        chained_ty,
+                    ],
+                    OperatorTraitOp::KleisliCompose,
+                    vec![typed_left, typed_right],
+                    result_ty,
+                    "`>=>`",
+                )
             }
             (Ty::List(item), Ty::List(next_item)) => {
                 if !self.types_compatible(item.as_ref(), &right_in) {
@@ -2185,20 +2156,25 @@ impl Checker {
                         )),
                     });
                 }
-                Ok(TypedNode {
-                    ty: Ty::Func(
-                        vec![left_in],
-                        Box::new(Ty::List(Box::new(self.resolve_ty(next_item.as_ref())))),
-                    ),
-                    span: span.clone(),
-                    node: TypedInner::Compose(
-                        ComposeFlavor::ListBind {
-                            helper: self.list_helper_ref_by_name("List::flat_map", span)?,
-                        },
-                        Box::new(typed_left),
-                        Box::new(typed_right),
-                    ),
-                })
+                let chained_ty = Ty::List(Box::new(self.resolve_ty(next_item.as_ref())));
+                let result_ty =
+                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "KleisliComposable",
+                    "kleisli_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(item.as_ref()),
+                        chained_ty,
+                    ],
+                    OperatorTraitOp::KleisliCompose,
+                    vec![typed_left, typed_right],
+                    result_ty,
+                    "`>=>`",
+                )
             }
             _ => Err(TypeError {
                 message: "`>=>` requires matching Result or List context on both sides".into(),

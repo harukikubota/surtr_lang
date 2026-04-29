@@ -715,8 +715,9 @@ impl Parser<'_> {
         match ty {
             AstTy::Named(_, name) => Ok(name.clone()),
             AstTy::Generic(_, name, _) => Ok(name.clone()),
+            AstTy::Func(_, _, _) => Ok("Function".to_string()),
             _ => Err(ParseError::syntax(
-                "trait impl target must be a concrete named type in V1",
+                "trait impl target must be a concrete named type or function type in V1",
                 ast_ty_span(ty).clone(),
             )),
         }

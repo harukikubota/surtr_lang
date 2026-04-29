@@ -48,6 +48,14 @@ mod tests {
     const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/functor.srt");
     const CHAINABLE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/chainable.srt");
+    const PIPE_APPLY_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/pipe_apply.srt");
+    const COMPOSABLE_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/composable.srt");
+    const LIFT_COMPOSABLE_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/lift_composable.srt");
+    const KLEISLI_COMPOSABLE_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/kleisli_composable.srt");
     const INT_MODULE_SOURCE: &str = include_str!("../../../lib/types/int.srt");
     const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/types/string.srt");
     const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/types/regex.srt");
@@ -184,6 +192,10 @@ mod tests {
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
                 ("Functor", FUNCTOR_MODULE_SOURCE),
                 ("Chainable", CHAINABLE_MODULE_SOURCE),
+                ("PipeApply", PIPE_APPLY_MODULE_SOURCE),
+                ("Composable", COMPOSABLE_MODULE_SOURCE),
+                ("LiftComposable", LIFT_COMPOSABLE_MODULE_SOURCE),
+                ("KleisliComposable", KLEISLI_COMPOSABLE_MODULE_SOURCE),
                 ("Int", INT_MODULE_SOURCE),
                 ("String", STRING_MODULE_SOURCE),
                 ("Regex", REGEX_MODULE_SOURCE),

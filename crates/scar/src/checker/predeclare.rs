@@ -785,6 +785,7 @@ impl Checker {
             Ty::Error => Some("Error".into()),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
+            Ty::Func(_, _) => Some("Function".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
             Ty::Enum(name, _) => Some(name),
             _ => None,
@@ -1120,9 +1121,9 @@ impl Checker {
             let (trait_arg_tys, target_ty, type_param_vars) =
                 self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
-                message: "trait impl target must be a concrete named type".into(),
+                message: "trait impl target must be a concrete named type or function type".into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
-                hint: Some("Use `impl Trait for Int` / `impl Trait for Float` / `impl Trait for UserType`.".into()),
+                hint: Some("Use `impl Trait for Int` / `impl Trait for Float` / `impl Trait for UserType` / `impl Trait for ($A -> $B)`.".into()),
             })?;
 
             let mut method_map = HashMap::new();

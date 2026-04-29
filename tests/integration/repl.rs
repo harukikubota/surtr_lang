@@ -565,7 +565,7 @@ fn repl_doc_command_resolves_operator_trait_aliases() {
 }
 
 #[test]
-fn repl_doc_command_shows_generated_function_operator_docs() {
+fn repl_doc_command_resolves_flow_operator_trait_aliases() {
     let output = run_repl_session(":doc |>\n:doc >>\n:doc >*\n:doc >=>\n:quit\n");
     assert!(
         output.status.success(),
@@ -576,23 +576,23 @@ fn repl_doc_command_shows_generated_function_operator_docs() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Built-in value-apply operator."),
-        "expected generated docs for |>, got:\n{}",
+        stdout.contains("Standard `PipeApply` flow operator trait declaration."),
+        "expected :doc |> to render PipeApply docs from source, got:\n{}",
         stdout
     );
     assert!(
-        stdout.contains("Built-in plain composition operator."),
-        "expected generated docs for >>, got:\n{}",
+        stdout.contains("Standard `Composable` flow operator trait declaration."),
+        "expected :doc >> to render Composable docs from source, got:\n{}",
         stdout
     );
     assert!(
-        stdout.contains("Built-in lifted composition operator."),
-        "expected generated docs for >*, got:\n{}",
+        stdout.contains("Standard `LiftComposable` flow operator trait declaration."),
+        "expected :doc >* to render LiftComposable docs from source, got:\n{}",
         stdout
     );
     assert!(
-        stdout.contains("Built-in contextual composition operator."),
-        "expected generated docs for >=>, got:\n{}",
+        stdout.contains("Standard `KleisliComposable` flow operator trait declaration."),
+        "expected :doc >=> to render KleisliComposable docs from source, got:\n{}",
         stdout
     );
 }

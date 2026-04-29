@@ -59,8 +59,12 @@ pub enum TraitCallOrigin {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperatorTraitOp {
+    PipeApply,
     PipeMap,
     PipeBind,
+    Compose,
+    LiftCompose,
+    KleisliCompose,
 }
 
 #[derive(Debug, Clone, PartialEq)]

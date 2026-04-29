@@ -33,37 +33,12 @@ const OPERATOR_DOC_ALIASES: &[(&str, &str)] = &[
     (">", "Gt"),
     (">=", "Gte"),
     ("++", "Concat"),
+    ("|>", "PipeApply"),
     ("|*>", "Functor"),
     ("|>=", "Chainable"),
-];
-
-struct GeneratedOperatorDoc {
-    symbol: &'static str,
-    signature: &'static str,
-    doc: &'static str,
-}
-
-const GENERATED_FUNCTION_OPERATOR_DOCS: &[GeneratedOperatorDoc] = &[
-    GeneratedOperatorDoc {
-        symbol: "|>",
-        signature: "A |> (A -> B) -> B",
-        doc: "Built-in value-apply operator.\n`|>` injects the evaluated left-hand value into the first argument position of the right-hand callable.\nUse this for plain pipelines such as `value |> f()`.\nIf the right-hand side returns a contextual value and you want to stay in that context, use `|*>` or `|>=` instead.",
-    },
-    GeneratedOperatorDoc {
-        symbol: ">>",
-        signature: "(A -> B) >> (B -> C) -> (A -> C)",
-        doc: "Built-in plain composition operator.\n`>>` composes two unary callables without introducing Result/List context handling.\nUse this when both sides are plain functions.\nIf the left side returns a contextual value, prefer `>*` for map-style composition or `>=>` for bind-style composition.",
-    },
-    GeneratedOperatorDoc {
-        symbol: ">*",
-        signature: "(A -> Result<B, E> | List<B>) >* (B -> C) -> (A -> Result<C, E> | List<C>)",
-        doc: "Built-in lifted composition operator.\n`>*` composes a contextual unary callable on the left with a plain unary callable on the right.\nThe current compiler supports Result and List contexts here.\nThis is the composition form corresponding to applying `|*>` after a contextual-producing step.",
-    },
-    GeneratedOperatorDoc {
-        symbol: ">=>",
-        signature: "(A -> Result<B, E> | List<B>) >=> (B -> Result<C, E> | List<C>) -> (A -> Result<C, E> | List<C>)",
-        doc: "Built-in contextual composition operator.\n`>=>` composes two unary callables that both stay inside the same context family.\nThe current compiler supports Result and List contexts here.\nThis is the composition form corresponding to applying `|>=` after a contextual-producing step.",
-    },
+    (">>", "Composable"),
+    (">*", "LiftComposable"),
+    (">=>", "KleisliComposable"),
 ];
 
 /// Error returned when loading a `.eldr` file into a REPL engine.
@@ -782,23 +757,6 @@ impl ReplEngine {
         if trimmed.is_empty() || trimmed.split_whitespace().count() != 1 {
             return ReplResult::ok(ReplOutput::CommandOutput {
                 rendered: Self::doc_help_lines(),
-            });
-        }
-
-        if let Some(entry) = GENERATED_FUNCTION_OPERATOR_DOCS
-            .iter()
-            .find(|entry| entry.symbol == trimmed)
-        {
-            return ReplResult::ok(ReplOutput::DocResolved {
-                symbol: entry.symbol.to_string(),
-                signature: Some(entry.signature.to_string()),
-                summary: entry
-                    .doc
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(ToString::to_string),
-                source_snippet: Some(entry.doc.to_string()),
             });
         }
 
