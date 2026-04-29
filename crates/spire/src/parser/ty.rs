@@ -19,79 +19,81 @@ impl Parser<'_> {
         let sp = self.peek_span();
 
         if matches!(self.peek(), Token::LParen) {
-            self.advance();
-            self.skip_newlines();
-            if matches!(self.peek(), Token::Arrow) {
-                self.advance();
-                let ret = self.parse_type_in_impl_context(impl_target.clone())?;
-                self.skip_newlines();
-                let end = self.expect(&Token::RParen)?;
-                return Ok(AstTy::Func(
-                    Span {
-                        start: sp.start,
-                        end: end.end,
-                    },
-                    Vec::new(),
-                    Box::new(ret),
-                ));
-            }
-
-            let mut params = Vec::new();
-            params.push(self.parse_type_in_impl_context(impl_target.clone())?);
-            self.skip_newlines();
-            while matches!(self.peek(), Token::Comma) {
-                self.advance();
-                self.skip_newlines();
-                if matches!(self.peek(), Token::RParen) {
-                    return Err(ParseError::syntax(
-                        "1-tuple types are not supported",
+            return self.with_parse_nesting(sp.clone(), |parser| {
+                parser.advance();
+                parser.skip_newlines();
+                if matches!(parser.peek(), Token::Arrow) {
+                    parser.advance();
+                    let ret = parser.parse_type_in_impl_context(impl_target.clone())?;
+                    parser.skip_newlines();
+                    let end = parser.expect(&Token::RParen)?;
+                    return Ok(AstTy::Func(
                         Span {
                             start: sp.start,
-                            end: self.peek_span().end,
+                            end: end.end,
+                        },
+                        Vec::new(),
+                        Box::new(ret),
+                    ));
+                }
+
+                let mut params = Vec::new();
+                params.push(parser.parse_type_in_impl_context(impl_target.clone())?);
+                parser.skip_newlines();
+                while matches!(parser.peek(), Token::Comma) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    if matches!(parser.peek(), Token::RParen) {
+                        return Err(ParseError::syntax(
+                            "1-tuple types are not supported",
+                            Span {
+                                start: sp.start,
+                                end: parser.peek_span().end,
+                            },
+                        ));
+                    }
+                    params.push(parser.parse_type_in_impl_context(impl_target.clone())?);
+                    parser.skip_newlines();
+                }
+                if matches!(parser.peek(), Token::Arrow) {
+                    parser.advance();
+                    let ret = parser.parse_type_in_impl_context(impl_target.clone())?;
+                    parser.skip_newlines();
+                    let end = parser.expect(&Token::RParen)?;
+                    return Ok(AstTy::Func(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        params,
+                        Box::new(ret),
+                    ));
+                }
+
+                let end = parser.expect(&Token::RParen)?;
+                if params.len() == 1 {
+                    parser.skip_newlines();
+                    let message = if matches!(parser.peek(), Token::Arrow) {
+                        "Parenthesized type signatures must choose tuple or function syntax after the first element: use `,` and another type for a tuple, or put `->` before `)` for a function type (for example, `(Int -> String)`, not `(Int) -> String`)."
+                    } else {
+                        "Parenthesized type annotations with one element are not supported: use the type without parentheses, `(T, U)` for a tuple, or `(T -> R)` for a function type."
+                    };
+                    return Err(ParseError::syntax(
+                        message,
+                        Span {
+                            start: sp.start,
+                            end: end.end,
                         },
                     ));
                 }
-                params.push(self.parse_type_in_impl_context(impl_target.clone())?);
-                self.skip_newlines();
-            }
-            if matches!(self.peek(), Token::Arrow) {
-                self.advance();
-                let ret = self.parse_type_in_impl_context(impl_target.clone())?;
-                self.skip_newlines();
-                let end = self.expect(&Token::RParen)?;
-                return Ok(AstTy::Func(
+                Ok(AstTy::Tuple(
                     Span {
                         start: sp.start,
                         end: end.end,
                     },
                     params,
-                    Box::new(ret),
-                ));
-            }
-
-            let end = self.expect(&Token::RParen)?;
-            if params.len() == 1 {
-                self.skip_newlines();
-                let message = if matches!(self.peek(), Token::Arrow) {
-                    "Parenthesized type signatures must choose tuple or function syntax after the first element: use `,` and another type for a tuple, or put `->` before `)` for a function type (for example, `(Int -> String)`, not `(Int) -> String`)."
-                } else {
-                    "Parenthesized type annotations with one element are not supported: use the type without parentheses, `(T, U)` for a tuple, or `(T -> R)` for a function type."
-                };
-                return Err(ParseError::syntax(
-                    message,
-                    Span {
-                        start: sp.start,
-                        end: end.end,
-                    },
-                ));
-            }
-            return Ok(AstTy::Tuple(
-                Span {
-                    start: sp.start,
-                    end: end.end,
-                },
-                params,
-            ));
+                ))
+            });
         }
 
         if matches!(self.peek(), Token::Dollar) {
@@ -157,25 +159,27 @@ impl Parser<'_> {
 
         // Check for type parameters: Name<T> or Name<T, E>
         if matches!(self.peek(), Token::Lt) {
-            self.advance();
-            self.skip_newlines();
-            let mut args = vec![self.parse_type_in_impl_context(impl_target.clone())?];
-            self.skip_newlines();
-            while matches!(self.peek(), Token::Comma) {
-                self.advance();
-                self.skip_newlines();
-                args.push(self.parse_type_in_impl_context(impl_target.clone())?);
-                self.skip_newlines();
-            }
-            let end = self.expect_type_gt()?;
-            return Ok(AstTy::Generic(
-                Span {
-                    start: sp.start,
-                    end: end.end,
-                },
-                name,
-                args,
-            ));
+            return self.with_parse_nesting(sp.clone(), |parser| {
+                parser.advance();
+                parser.skip_newlines();
+                let mut args = vec![parser.parse_type_in_impl_context(impl_target.clone())?];
+                parser.skip_newlines();
+                while matches!(parser.peek(), Token::Comma) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    args.push(parser.parse_type_in_impl_context(impl_target.clone())?);
+                    parser.skip_newlines();
+                }
+                let end = parser.expect_type_gt()?;
+                Ok(AstTy::Generic(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    name,
+                    args,
+                ))
+            });
         }
 
         Ok(AstTy::Named(

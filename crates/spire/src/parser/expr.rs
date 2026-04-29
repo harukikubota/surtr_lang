@@ -449,35 +449,35 @@ impl Parser<'_> {
             Token::LBrack => self.parse_list_expr(sp),
 
             // Parenthesized expression
-            Token::LParen => {
-                self.advance();
-                self.skip_newlines();
-                let first = self.parse_expr()?;
-                self.skip_newlines();
-                if matches!(self.peek(), Token::Comma) {
-                    self.advance();
-                    self.skip_newlines();
-                    if matches!(self.peek(), Token::RParen) {
+            Token::LParen => self.with_parse_nesting(sp.clone(), |parser| {
+                parser.advance();
+                parser.skip_newlines();
+                let first = parser.parse_expr()?;
+                parser.skip_newlines();
+                if matches!(parser.peek(), Token::Comma) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    if matches!(parser.peek(), Token::RParen) {
                         return Err(ParseError::syntax(
                             "1-tuple literals are not supported",
                             Span {
                                 start: sp.start,
-                                end: self.peek_span().end,
+                                end: parser.peek_span().end,
                             },
                         ));
                     }
-                    let mut items = vec![first, self.parse_expr()?];
-                    self.skip_newlines();
-                    while matches!(self.peek(), Token::Comma) {
-                        self.advance();
-                        self.skip_newlines();
-                        if matches!(self.peek(), Token::RParen) {
+                    let mut items = vec![first, parser.parse_expr()?];
+                    parser.skip_newlines();
+                    while matches!(parser.peek(), Token::Comma) {
+                        parser.advance();
+                        parser.skip_newlines();
+                        if matches!(parser.peek(), Token::RParen) {
                             break;
                         }
-                        items.push(self.parse_expr()?);
-                        self.skip_newlines();
+                        items.push(parser.parse_expr()?);
+                        parser.skip_newlines();
                     }
-                    let end = self.expect(&Token::RParen)?;
+                    let end = parser.expect(&Token::RParen)?;
                     Ok(Ast::TupleLiteral(
                         Span {
                             start: sp.start,
@@ -486,7 +486,7 @@ impl Parser<'_> {
                         items,
                     ))
                 } else {
-                    let end = self.expect(&Token::RParen)?;
+                    let end = parser.expect(&Token::RParen)?;
                     Ok(Ast::Grouped(
                         Span {
                             start: sp.start,
@@ -495,7 +495,7 @@ impl Parser<'_> {
                         Box::new(first),
                     ))
                 }
-            }
+            }),
 
             // Zero-argument closure expression: { stmt; stmt; expr }
             Token::LBrace => self.parse_trailing_block_expr_from_lbrace(sp),
@@ -861,37 +861,39 @@ impl Parser<'_> {
         &mut self,
         sp: Span,
     ) -> Result<Ast, ParseError> {
-        self.expect(&Token::LBrace)?;
-        self.skip_newlines();
+        self.with_parse_nesting(sp.clone(), |parser| {
+            parser.expect(&Token::LBrace)?;
+            parser.skip_newlines();
 
-        if matches!(self.peek(), Token::Pipe) {
-            return self.parse_closure_literal(sp);
-        }
+            if matches!(parser.peek(), Token::Pipe) {
+                return parser.parse_closure_literal(sp);
+            }
 
-        let body_stmts = self.parse_block_stmts()?;
-        if body_stmts.is_empty() {
-            return Err(ParseError::incomplete("expression", self.peek_span()));
-        }
-        let end = self.expect(&Token::RBrace)?;
-        let body = if body_stmts.len() == 1 {
-            body_stmts.into_iter().next().expect("checked non-empty")
-        } else {
-            Ast::Block(
+            let body_stmts = parser.parse_block_stmts()?;
+            if body_stmts.is_empty() {
+                return Err(ParseError::incomplete("expression", parser.peek_span()));
+            }
+            let end = parser.expect(&Token::RBrace)?;
+            let body = if body_stmts.len() == 1 {
+                body_stmts.into_iter().next().expect("checked non-empty")
+            } else {
+                Ast::Block(
+                    Span {
+                        start: body_stmts[0].span().start,
+                        end: body_stmts[body_stmts.len() - 1].span().end,
+                    },
+                    body_stmts,
+                )
+            };
+            Ok(Ast::Closure(
                 Span {
-                    start: body_stmts[0].span().start,
-                    end: body_stmts[body_stmts.len() - 1].span().end,
+                    start: sp.start,
+                    end: end.end,
                 },
-                body_stmts,
-            )
-        };
-        Ok(Ast::Closure(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            Vec::new(),
-            Box::new(body),
-        ))
+                Vec::new(),
+                Box::new(body),
+            ))
+        })
     }
 
     pub(super) fn reject_constructor_trailing_block(&self) -> Result<(), ParseError> {
@@ -962,67 +964,69 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_list_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
-        self.expect(&Token::LBrack)?;
-        self.skip_newlines();
+        self.with_parse_nesting(sp.clone(), |parser| {
+            parser.expect(&Token::LBrack)?;
+            parser.skip_newlines();
 
-        if matches!(self.peek(), Token::RBrack) {
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(Ast::ListNil(Span {
-                start: sp.start,
-                end: end.end,
-            }));
-        }
+            if matches!(parser.peek(), Token::RBrack) {
+                let end = parser.expect(&Token::RBrack)?;
+                return Ok(Ast::ListNil(Span {
+                    start: sp.start,
+                    end: end.end,
+                }));
+            }
 
-        let first = self.parse_expr()?;
-        self.skip_newlines();
-        if matches!(self.peek(), Token::Comma) {
-            self.advance();
-            self.skip_newlines();
-            if matches!(self.peek(), Token::DotDot) {
-                self.advance();
-                self.skip_newlines();
-                let tail = self.parse_expr()?;
-                self.skip_newlines();
-                let end = self.expect(&Token::RBrack)?;
-                return Ok(Ast::ListCons(
+            let first = parser.parse_expr()?;
+            parser.skip_newlines();
+            if matches!(parser.peek(), Token::Comma) {
+                parser.advance();
+                parser.skip_newlines();
+                if matches!(parser.peek(), Token::DotDot) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    let tail = parser.parse_expr()?;
+                    parser.skip_newlines();
+                    let end = parser.expect(&Token::RBrack)?;
+                    return Ok(Ast::ListCons(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        Box::new(first),
+                        Box::new(tail),
+                    ));
+                }
+
+                let mut elems = vec![first];
+                elems.push(parser.parse_expr()?);
+                while matches!(parser.peek(), Token::Comma) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    if matches!(parser.peek(), Token::RBrack) {
+                        break;
+                    }
+                    elems.push(parser.parse_expr()?);
+                }
+                parser.skip_newlines();
+                let end = parser.expect(&Token::RBrack)?;
+                return Ok(Ast::ListLiteral(
                     Span {
                         start: sp.start,
                         end: end.end,
                     },
-                    Box::new(first),
-                    Box::new(tail),
+                    elems,
                 ));
             }
 
-            let mut elems = vec![first];
-            elems.push(self.parse_expr()?);
-            while matches!(self.peek(), Token::Comma) {
-                self.advance();
-                self.skip_newlines();
-                if matches!(self.peek(), Token::RBrack) {
-                    break;
-                }
-                elems.push(self.parse_expr()?);
-            }
-            self.skip_newlines();
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(Ast::ListLiteral(
+            let end = parser.expect(&Token::RBrack)?;
+            Ok(Ast::ListLiteral(
                 Span {
                     start: sp.start,
                     end: end.end,
                 },
-                elems,
-            ));
-        }
-
-        let end = self.expect(&Token::RBrack)?;
-        Ok(Ast::ListLiteral(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            vec![first],
-        ))
+                vec![first],
+            ))
+        })
     }
 
     // ── Type annotation parsing ──

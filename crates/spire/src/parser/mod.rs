@@ -27,6 +27,9 @@ pub use diagnostic::{
     ParseDiagnostic,
 };
 
+pub const MAX_PARSE_NESTING: usize = 32;
+pub const MAX_PARSE_NESTING_MESSAGE: &str = "maximum parse nesting depth exceeded";
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EntryAnnotation {
     pub name: String,
@@ -41,6 +44,7 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
 /// Parse Surtr source text with explicit compile-unit context.
 pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
+    reject_excessive_delimiter_nesting(&tokens)?;
     chumsky_program::parse_program_with_chumsky(&tokens, context)
 }
 
@@ -50,8 +54,31 @@ pub fn parse_with_context_diagnostic(
     context: ParserContext,
 ) -> Result<Vec<Ast>, ParseDiagnostic> {
     let tokens = tokenize(source).map_err(ParseDiagnostic::from)?;
+    reject_excessive_delimiter_nesting(&tokens).map_err(ParseDiagnostic::from)?;
     chumsky_program::parse_program_with_chumsky_diagnostic(&tokens, context)
         .map_err(ParseDiagnostic::from)
+}
+
+fn reject_excessive_delimiter_nesting(tokens: &[Spanned<Token>]) -> Result<(), ParseError> {
+    let mut depth = 0usize;
+    for token in tokens {
+        match token.token {
+            Token::LParen | Token::LBrack | Token::LBrace => {
+                depth += 1;
+                if depth > MAX_PARSE_NESTING {
+                    return Err(ParseError::syntax(
+                        MAX_PARSE_NESTING_MESSAGE,
+                        token.span.clone(),
+                    ));
+                }
+            }
+            Token::RParen | Token::RBrack | Token::RBrace => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Strip `@@test <expr>` annotations while preserving source span offsets.
@@ -150,6 +177,7 @@ struct Parser<'a> {
     context: ParserContext,
     impl_target_stack: Vec<Symbol>,
     allow_trailing_call_block: bool,
+    parse_nesting_depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -161,6 +189,7 @@ impl<'a> Parser<'a> {
             context,
             impl_target_stack: Vec::new(),
             allow_trailing_call_block: true,
+            parse_nesting_depth: 0,
         }
     }
 
@@ -306,6 +335,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn with_parse_nesting<T>(
+        &mut self,
+        span: Span,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        self.parse_nesting_depth += 1;
+        if self.parse_nesting_depth > MAX_PARSE_NESTING {
+            self.parse_nesting_depth -= 1;
+            return Err(ParseError::syntax(MAX_PARSE_NESTING_MESSAGE, span));
+        }
+        let result = f(self);
+        self.parse_nesting_depth -= 1;
+        result
+    }
+
     fn stmt_has_explicit_separator(stmt: &Ast) -> bool {
         matches!(stmt, Ast::Semi(_, _))
     }
@@ -380,6 +424,18 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::Tuple(span, _)
         | AstPattern::Or(span, _)
         | AstPattern::As(span, _, _, _) => span,
+    }
+}
+
+fn pattern_depth(pat: &AstPattern) -> usize {
+    match pat {
+        AstPattern::ListCons(_, head, tail) => 1 + pattern_depth(head).max(pattern_depth(tail)),
+        AstPattern::Constructor(_, _, inners)
+        | AstPattern::Call(_, _, inners)
+        | AstPattern::Tuple(_, inners)
+        | AstPattern::Or(_, inners) => 1 + inners.iter().map(pattern_depth).max().unwrap_or(0),
+        AstPattern::As(_, inner, _, _) => 1 + pattern_depth(inner),
+        _ => 1,
     }
 }
 

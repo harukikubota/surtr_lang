@@ -378,21 +378,20 @@
 - 背景:
   - compile time reduction 1.1 で `chumsky` の default feature を外し、`stacker` / `psm` / `object` などを default build graph から除外した。
   - 確認時、`value = (((...1...)))` のような深い `Grouped` 式は `chumsky/stacker` ではなく、現行の手書き parser / AST 処理側の再帰で test thread の stack overflow を起こすことが分かった。
-  - 16 段の括弧ネストは回帰テストとして固定済みだが、64 / 256 段は現状では abort する。
+  - 16 段の括弧ネストは回帰テストとして固定済みだったが、64 / 256 段は process abort する状態だった。
 - 2026-04-29 時点の固定事項:
   - `chumsky` は `default-features = false, features = ["std"]` を default とする。
   - `stacker` は compile time cost 削減のため、現時点では default graph に戻さない。
-- 未確定点:
-  - 深い `Grouped` / 型 / pattern ネストを iterative parse または post-parse normalization に寄せるか
-  - 受理する最大ネスト深度を明文化し、超過時に parse error とするか
-  - `chumsky/stacker` 相当を opt-in feature として復活させる必要があるか
+- 採用方針:
+  - parser の最大ネスト深度は `32` とする。
+  - `Grouped` / list / block / type / pattern の深い合法入力は、上限超過時に通常の `ParseError` として拒否する。
+  - default build graph に `stacker` 系依存は戻さない。
 - 受け入れ条件:
-  - 深いネスト入力が process abort ではなく、成功または通常の `ParseError` として扱われる。
-  - default build graph に `stacker` 系依存を戻す場合は、compile time への影響と rollback 条件が明記される。
+  - 深いネスト入力が process abort ではなく、32 段までは成功、33 段以上は通常の `ParseError` として扱われる。
   - 既存の shallow / ordinary parser behavior と span 診断が変わらない。
 - テスト方針:
-  - `unit/spire` に安全に受理するネスト深度の回帰テストを残す。
-  - 方針確定後、上限超過を `ParseError` にする場合は `compile_errors/parse` に fixture を追加する。
+  - `unit/spire` に 16 / 32 段成功と 33 段以上失敗の回帰テストを残す。
+  - `compile_errors/parse` に上限超過 fixture を追加する。
   - iterative 対応を入れる場合は 64 / 256 段相当の成功テストを追加し、`cargo nextest run -p spire` で固定する。
 
 ---

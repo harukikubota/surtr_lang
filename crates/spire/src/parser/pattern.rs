@@ -44,59 +44,61 @@ impl Parser<'_> {
 
     fn parse_list_bind_pattern(&mut self) -> Result<AstPattern, ParseError> {
         let sp = self.peek_span();
-        self.expect(&Token::LBrack)?;
-        self.skip_newlines();
-        if matches!(self.peek(), Token::RBrack) {
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(AstPattern::ListNil(Span {
-                start: sp.start,
-                end: end.end,
-            }));
-        }
-
-        let first = self.parse_bind_pattern()?;
-        self.skip_newlines();
-        let end = if matches!(self.peek(), Token::Comma) {
-            self.advance();
-            self.skip_newlines();
-            if matches!(self.peek(), Token::DotDot) {
-                self.advance();
-                self.skip_newlines();
-                let tail = self.parse_bind_pattern()?;
-                self.skip_newlines();
-                let end = self.expect(&Token::RBrack)?;
-                return Ok(AstPattern::ListCons(
-                    Span {
-                        start: sp.start,
-                        end: end.end,
-                    },
-                    Box::new(first),
-                    Box::new(tail),
-                ));
+        self.with_parse_nesting(sp.clone(), |parser| {
+            parser.expect(&Token::LBrack)?;
+            parser.skip_newlines();
+            if matches!(parser.peek(), Token::RBrack) {
+                let end = parser.expect(&Token::RBrack)?;
+                return Ok(AstPattern::ListNil(Span {
+                    start: sp.start,
+                    end: end.end,
+                }));
             }
 
-            let mut items = vec![first];
-            items.push(self.parse_bind_pattern()?);
-            while matches!(self.peek(), Token::Comma) {
-                self.advance();
-                self.skip_newlines();
-                if matches!(self.peek(), Token::RBrack) {
-                    break;
+            let first = parser.parse_bind_pattern()?;
+            parser.skip_newlines();
+            let end = if matches!(parser.peek(), Token::Comma) {
+                parser.advance();
+                parser.skip_newlines();
+                if matches!(parser.peek(), Token::DotDot) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    let tail = parser.parse_bind_pattern()?;
+                    parser.skip_newlines();
+                    let end = parser.expect(&Token::RBrack)?;
+                    return Ok(AstPattern::ListCons(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        Box::new(first),
+                        Box::new(tail),
+                    ));
                 }
-                items.push(self.parse_bind_pattern()?);
-            }
-            self.skip_newlines();
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(super::fixed_bind_list_pattern(sp.start, end.end, items));
-        } else {
-            self.expect(&Token::RBrack)?
-        };
 
-        Ok(super::fixed_bind_list_pattern(
-            sp.start,
-            end.end,
-            vec![first],
-        ))
+                let mut items = vec![first];
+                items.push(parser.parse_bind_pattern()?);
+                while matches!(parser.peek(), Token::Comma) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    if matches!(parser.peek(), Token::RBrack) {
+                        break;
+                    }
+                    items.push(parser.parse_bind_pattern()?);
+                }
+                parser.skip_newlines();
+                let end = parser.expect(&Token::RBrack)?;
+                return Ok(super::fixed_bind_list_pattern(sp.start, end.end, items));
+            } else {
+                parser.expect(&Token::RBrack)?
+            };
+
+            Ok(super::fixed_bind_list_pattern(
+                sp.start,
+                end.end,
+                vec![first],
+            ))
+        })
     }
 
     fn parse_bind_pattern(&mut self) -> Result<AstPattern, ParseError> {
@@ -124,6 +126,12 @@ impl Parser<'_> {
             }
             self.advance(); // '@'
             self.skip_newlines();
+            if super::pattern_depth(&pat) >= super::MAX_PARSE_NESTING {
+                return Err(ParseError::syntax(
+                    super::MAX_PARSE_NESTING_MESSAGE,
+                    super::pattern_span(&pat).clone(),
+                ));
+            }
             let (alias, alias_span) = self.expect_ident()?;
             if alias == "self" && self.impl_target_stack.is_empty() {
                 return Err(ParseError::syntax(
@@ -215,31 +223,33 @@ impl Parser<'_> {
 
                 let callee_name = segments.join("::");
                 if matches!(self.peek(), Token::LParen) {
-                    self.advance();
-                    self.skip_newlines();
-                    let mut inners = Vec::new();
-                    if !matches!(self.peek(), Token::RParen) {
-                        inners.push(self.parse_bind_pattern()?);
-                        self.skip_newlines();
-                        while matches!(self.peek(), Token::Comma) {
-                            self.advance();
-                            self.skip_newlines();
-                            if matches!(self.peek(), Token::RParen) {
-                                break;
+                    return self.with_parse_nesting(sp.clone(), |parser| {
+                        parser.advance();
+                        parser.skip_newlines();
+                        let mut inners = Vec::new();
+                        if !matches!(parser.peek(), Token::RParen) {
+                            inners.push(parser.parse_bind_pattern()?);
+                            parser.skip_newlines();
+                            while matches!(parser.peek(), Token::Comma) {
+                                parser.advance();
+                                parser.skip_newlines();
+                                if matches!(parser.peek(), Token::RParen) {
+                                    break;
+                                }
+                                inners.push(parser.parse_bind_pattern()?);
+                                parser.skip_newlines();
                             }
-                            inners.push(self.parse_bind_pattern()?);
-                            self.skip_newlines();
                         }
-                    }
-                    let end = self.expect(&Token::RParen)?;
-                    return Ok(AstPattern::Call(
-                        Span {
-                            start: sp.start,
-                            end: end.end,
-                        },
-                        callee_name,
-                        inners,
-                    ));
+                        let end = parser.expect(&Token::RParen)?;
+                        Ok(AstPattern::Call(
+                            Span {
+                                start: sp.start,
+                                end: end.end,
+                            },
+                            callee_name,
+                            inners,
+                        ))
+                    });
                 }
 
                 let is_ctor = segments
@@ -284,45 +294,47 @@ impl Parser<'_> {
             }
             Token::LBrack => self.parse_list_bind_pattern(),
             Token::LParen => {
-                self.advance();
-                self.skip_newlines();
-                let first = self.parse_bind_pattern()?;
-                self.skip_newlines();
-                if matches!(self.peek(), Token::Comma) {
-                    self.advance();
-                    self.skip_newlines();
-                    if matches!(self.peek(), Token::RParen) {
-                        return Err(ParseError::syntax(
-                            "1-tuple patterns are not supported",
+                self.with_parse_nesting(sp.clone(), |parser| {
+                    parser.advance();
+                    parser.skip_newlines();
+                    let first = parser.parse_bind_pattern()?;
+                    parser.skip_newlines();
+                    if matches!(parser.peek(), Token::Comma) {
+                        parser.advance();
+                        parser.skip_newlines();
+                        if matches!(parser.peek(), Token::RParen) {
+                            return Err(ParseError::syntax(
+                                "1-tuple patterns are not supported",
+                                Span {
+                                    start: sp.start,
+                                    end: parser.peek_span().end,
+                                },
+                            ));
+                        }
+                        let mut items = vec![first, parser.parse_bind_pattern()?];
+                        parser.skip_newlines();
+                        while matches!(parser.peek(), Token::Comma) {
+                            parser.advance();
+                            parser.skip_newlines();
+                            if matches!(parser.peek(), Token::RParen) {
+                                break;
+                            }
+                            items.push(parser.parse_bind_pattern()?);
+                            parser.skip_newlines();
+                        }
+                        let end = parser.expect(&Token::RParen)?;
+                        Ok(AstPattern::Tuple(
                             Span {
                                 start: sp.start,
-                                end: self.peek_span().end,
+                                end: end.end,
                             },
-                        ));
+                            items,
+                        ))
+                    } else {
+                        parser.expect(&Token::RParen)?;
+                        Ok(first)
                     }
-                    let mut items = vec![first, self.parse_bind_pattern()?];
-                    self.skip_newlines();
-                    while matches!(self.peek(), Token::Comma) {
-                        self.advance();
-                        self.skip_newlines();
-                        if matches!(self.peek(), Token::RParen) {
-                            break;
-                        }
-                        items.push(self.parse_bind_pattern()?);
-                        self.skip_newlines();
-                    }
-                    let end = self.expect(&Token::RParen)?;
-                    Ok(AstPattern::Tuple(
-                        Span {
-                            start: sp.start,
-                            end: end.end,
-                        },
-                        items,
-                    ))
-                } else {
-                    self.expect(&Token::RParen)?;
-                    Ok(first)
-                }
+                })
             }
             Token::Eof => Err(ParseError::incomplete("list pattern", sp)),
             _ => Err(ParseError::syntax(
