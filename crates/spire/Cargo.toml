@@ -5,5 +5,5 @@ edition = "2021"
 description = "Surtr's Parser Ingesting Raw Expressions"
 
 [dependencies]
-chumsky = "0.12.0"
+chumsky = { version = "0.12.0", default-features = false, features = ["std"] }
 sindr = { path = "../sindr" }

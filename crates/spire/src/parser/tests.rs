@@ -1932,6 +1932,18 @@ fn test_parenthesized_expression_is_not_tuple_literal() {
 }
 
 #[test]
+fn test_deep_parenthesized_expression_parses_without_stacker_feature() {
+    let depth = 16;
+    let mut source = String::from("value = ");
+    source.push_str(&"(".repeat(depth));
+    source.push('1');
+    source.push_str(&")".repeat(depth));
+
+    let ast = parse(&source).expect("deep parenthesized expression should parse");
+    assert_eq!(ast.len(), 1);
+}
+
+#[test]
 fn test_grouped_pipe_rhs_preserves_callable_returning_call() {
     let ast = parse("out = value |> (make_closure(1))").unwrap();
     match &ast[0] {

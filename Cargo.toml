@@ -16,3 +16,9 @@ members = [
 [workspace.dependencies]
 num-bigint = { version = "0.4", features = ["serde"] }
 num-traits = "0.2"
+
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1

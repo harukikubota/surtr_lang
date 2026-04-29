@@ -67,6 +67,8 @@ CARGO_TARGET_DIR=/tmp/surtr-cargo-timing-testbuild /usr/bin/time -p cargo test -
 
 #### 1.1 `chumsky` から `stacker` を外す
 
+Status: Done (`codex/compile-time-reduction-1`)
+
 変更候補:
 
 ```toml
@@ -91,7 +93,17 @@ chumsky = { version = "0.12.0", default-features = false, features = ["std"] }
 - 深いネスト入力の parser regression を追加または既存 fixture で確認
 - stack overflow が再発する入力がある場合は rollback し、`chumsky/stacker` を feature opt-in にする
 
+実施結果:
+
+- `crates/spire/Cargo.toml` を候補どおり変更した
+- `Cargo.lock` から `stacker`, `psm`, `object`, `cc`, `ar_archive_writer` が外れた
+- `cargo tree -p spire -e features` で `chumsky feature "std"` のみを確認した
+- `crates/spire/src/parser/tests.rs` に 16 段の括弧ネスト regression を追加した
+- 64 / 256 段の括弧ネストは現行 parser 側の再帰で stack overflow するため、`doc/open-issues.md` の OI-017 として分離した
+
 #### 1.2 `regex` feature を絞る
+
+Status: Done (`codex/compile-time-reduction-1`)
 
 変更候補:
 
@@ -123,7 +135,17 @@ rollback 条件:
 - regex builtin の実行時間が実用上問題になる
 - `Regex::find_all` / `split` / `replace_all` などの標準関数で明確な regression が出る
 
+実施結果:
+
+- `crates/eldr/Cargo.toml` を候補どおり変更した
+- `cargo tree -p eldr -e features` で `regex` の `std` / `unicode` feature を確認した
+- `perf-*` feature が default graph に出ないことを確認した
+- `cargo test -p eldr regex` で regex builtin unit tests が通ることを確認した
+- `cargo test -p rune language_features_bucket_` で surface 経由の regex wrapper を含む language feature bucket が通ることを確認した
+
 #### 1.3 `dev` / `test` profile の debug 情報を軽くする
+
+Status: Done (`codex/compile-time-reduction-1`)
 
 変更候補:
 
@@ -148,6 +170,34 @@ debug = 1
 - wall-clock への効果は小さい
 - CPU 時間と生成物サイズには効く可能性がある
 - debug 情報を使う調査が多い場合は導入を分けて判断する
+
+実施結果:
+
+- workspace root `Cargo.toml` に `[profile.dev] debug = 1` と `[profile.test] debug = 1` を追加した
+- `cargo nextest run --workspace` で全体回帰を確認した
+
+### 1.4 実施時の検証ログ
+
+2026-04-29 に 1.1〜1.3 を同一 branch で実施した。
+
+```bash
+cargo test -p spire test_deep_parenthesized_expression_parses_without_stacker_feature
+cargo test -p eldr regex
+cargo test -p rune language_features_bucket_
+cargo nextest run --workspace
+```
+
+結果:
+
+- `cargo test -p spire test_deep_parenthesized_expression_parses_without_stacker_feature`: pass
+- `cargo test -p eldr regex`: pass
+- `cargo test -p rune language_features_bucket_`: pass
+- `cargo nextest run --workspace`: 757 passed, 7 skipped
+
+未解決事項:
+
+- 深い `Grouped` 式の stack overflow は OI-017 として追跡する
+- clean build / clean test build の before / after 再計測は、main 統合後に別 `CARGO_TARGET_DIR` で実施する
 
 ## 2. `scar` test build の中期改善
 
