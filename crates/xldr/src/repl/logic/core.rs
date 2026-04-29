@@ -22,6 +22,18 @@ use crate::{
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
+const OPERATOR_DOC_ALIASES: &[(&str, &str)] = &[
+    ("+", "Add"),
+    ("-", "Sub"),
+    ("*", "Mul"),
+    ("==", "Eq"),
+    ("!=", "Neq"),
+    ("<", "Lt"),
+    ("<=", "Lte"),
+    (">", "Gt"),
+    (">=", "Gte"),
+    ("++", "Concat"),
+];
 
 /// Error returned when loading a `.eldr` file into a REPL engine.
 #[derive(Debug)]
@@ -678,13 +690,18 @@ impl ReplEngine {
             });
         }
 
+        let canonical = OPERATOR_DOC_ALIASES
+            .iter()
+            .find_map(|(alias, trait_name)| (*alias == trimmed).then_some(*trait_name))
+            .unwrap_or(trimmed);
+
         let match_doc = self.docs.iter().rev().find(|entry| {
-            entry.qualified_name == trimmed
+            entry.qualified_name == canonical
                 || entry
                     .qualified_name
                     .rsplit("::")
                     .next()
-                    .is_some_and(|tail| tail == trimmed)
+                    .is_some_and(|tail| tail == canonical)
         });
 
         match match_doc {

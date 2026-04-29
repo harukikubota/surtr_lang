@@ -411,6 +411,33 @@ fn repl_doc_command_shows_builtin_docs() {
 }
 
 #[test]
+fn repl_doc_command_resolves_operator_trait_aliases() {
+    let output = run_repl_session(":doc Add\n:doc +\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let add_hits = stdout.matches("trait Add { add(self: Self, rhs: Self) -> Self }").count();
+    assert!(
+        add_hits >= 2,
+        "expected both :doc Add and :doc + to render Add docs, got:\n{}",
+        stdout
+    );
+    let summary_hits = stdout
+        .matches("Standard `Add` operator trait declaration.")
+        .count();
+    assert!(
+        summary_hits >= 2,
+        "expected both doc lookups to print the Add summary, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_colorizes_doc_for_qualified_kernel_if() {
     let output = run_repl_session(":doc Kernel::if\n:quit\n");
     assert!(

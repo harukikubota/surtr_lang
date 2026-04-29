@@ -115,7 +115,7 @@ Xldr は対話セッション中に次を保持する。
 |---|---|
 | `:quit` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する |
-| `:doc <symbol>` | 現在セッションで見える symbol の doc を表示する |
+| `:doc <symbol>` | 現在セッションで見える symbol の doc を表示する。operator trait は `:doc Add` / `:doc +` のように trait 名と演算子 alias の両方を受け付ける |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 
 ### 5.2 予約済み
