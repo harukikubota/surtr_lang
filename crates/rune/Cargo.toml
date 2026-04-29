@@ -6,6 +6,7 @@ description = "Runtime User-facing Node Entry — the Surtr CLI"
 
 [features]
 default = []
+line-editor = ["xldr/line-editor"]
 tui = ["xldr/tui"]
 
 [[bin]]

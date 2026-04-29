@@ -1,0 +1,76 @@
+def inc(x: Int) -> Int { x + 1 }
+def dec(x: Int) -> Int { x - 1 }
+def double(x: Int) -> Int { x * 2 }
+def add3(x: Int) -> Int { x + 3 }
+def add5(x: Int) -> Int { x + 5 }
+def square(x: Int) -> Int { x * x }
+def clamp_positive(x: Int) -> Result<Int> {
+  if(x < 0, Err(NoneError), Ok(x))
+}
+def render(x: Int) -> String { to_string(x) }
+def parse_ok(text: String) -> Result<Int> { Ok(42) }
+def normalize(text: String) -> Result<String> {
+  match parse_ok(text) {
+    Ok(value) => Ok(render(value)),
+    Err(e) => Err(e),
+  }
+}
+
+def stage01(x: Int) -> Int { x |> inc() |> double() |> dec() }
+def stage02(x: Int) -> Int { x |> add3() |> square() |> dec() }
+def stage03(x: Int) -> Int { x |> add5() |> double() |> inc() }
+def stage04(x: Int) -> Int { x |> stage01() |> stage02() }
+def stage05(x: Int) -> Int { x |> stage03() |> stage01() }
+def stage06(x: Int) -> Int { x |> stage04() |> stage05() }
+def stage07(x: Int) -> Int { x |> stage02() |> stage03() }
+def stage08(x: Int) -> Int { x |> stage07() |> stage06() }
+def stage09(x: Int) -> Int { x |> stage08() |> stage05() }
+def stage10(x: Int) -> Int { x |> stage09() |> stage04() }
+
+def choose(flag: Boolean, left: Int, right: Int) -> Int {
+  match flag {
+    True => left,
+    False => right,
+  }
+}
+
+def fold_pair(pair: (Int, Int)) -> Int {
+  match pair {
+    (left, right) => left + right,
+  }
+}
+
+def safe_stage(x: Int) -> Result<Int> {
+  match clamp_positive(x) {
+    Ok(value) => Ok(stage03(value)),
+    Err(e) => Err(e),
+  }
+}
+
+def render_result(x: Int) -> String {
+  match safe_stage(x) {
+    Ok(value) => "ok:" ++ to_string(value),
+    Err(e) => "err:" ++ inspect(e),
+  }
+}
+
+seed = 7
+value01 = stage01(seed)
+value02 = stage02(value01)
+value03 = stage03(value02)
+value04 = stage04(value03)
+value05 = stage05(value04)
+value06 = stage06(value05)
+value07 = stage07(value06)
+value08 = stage08(value07)
+value09 = stage09(value08)
+value10 = stage10(value09)
+
+pair = (value05, value10)
+chosen = choose(value01 < value10, fold_pair(pair), value03)
+
+print(render_result(chosen))
+match normalize("profile") {
+  Ok(text) => print(text),
+  Err(e) => print(inspect(e)),
+}

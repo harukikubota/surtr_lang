@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+#[cfg(feature = "viewer-schema")]
 use schemars::{schema::RootSchema, schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +13,8 @@ use crate::ir::{
 pub const VIEWER_SCHEMA_VERSION: u32 = 1;
 pub const VIEWER_FORMAT: &str = "eldr_viewer";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct ViewerFile {
     pub schema_version: u32,
     pub format: String,
@@ -25,7 +27,8 @@ pub struct ViewerFile {
     pub errors: Vec<ErrorTemplateView>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct ViewerHeader {
     pub magic: String,
     pub version: u32,
@@ -33,7 +36,8 @@ pub struct ViewerHeader {
     pub num_chunks: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct ChunkView {
     pub chunk_id: String,
     pub tag: String,
@@ -42,7 +46,8 @@ pub struct ChunkView {
     pub padded_size: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct FunctionView {
     pub function_id: String,
     pub fun_idx: u32,
@@ -56,7 +61,8 @@ pub struct FunctionView {
     pub opcode_pcs: Vec<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 #[serde(tag = "kind")]
 pub enum ConstantView {
     Int { idx: u32, value: String },
@@ -67,7 +73,8 @@ pub enum ConstantView {
     Unit { idx: u32 },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct OpcodeRowView {
     pub pc: u32,
     pub function_id: Option<String>,
@@ -76,7 +83,8 @@ pub struct OpcodeRowView {
     pub label: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 #[serde(tag = "kind")]
 pub enum OpcodeView {
     LoadConst {
@@ -196,7 +204,8 @@ pub enum OpcodeView {
     Halt,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct SourceFileView {
     pub source_id: String,
     pub name: Option<String>,
@@ -205,7 +214,8 @@ pub struct SourceFileView {
     pub text: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct SourceRefView {
     pub source_id: String,
     pub span_start: u32,
@@ -214,7 +224,8 @@ pub struct SourceRefView {
     pub column: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct ErrorTemplateView {
     pub template_id: u32,
     pub kind: String,
@@ -223,6 +234,7 @@ pub struct ErrorTemplateView {
     pub source_ref: Option<SourceRefView>,
 }
 
+#[cfg(feature = "viewer-schema")]
 pub fn viewer_schema() -> RootSchema {
     schema_for!(ViewerFile)
 }
@@ -609,7 +621,9 @@ mod tests {
     };
     use crate::primitives::int;
 
-    use super::{viewer_file_from_inspect, viewer_schema, VIEWER_FORMAT, VIEWER_SCHEMA_VERSION};
+    #[cfg(feature = "viewer-schema")]
+    use super::viewer_schema;
+    use super::{viewer_file_from_inspect, VIEWER_FORMAT, VIEWER_SCHEMA_VERSION};
 
     #[test]
     fn viewer_model_contains_core_sections() {
@@ -724,6 +738,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "viewer-schema")]
     fn viewer_schema_is_buildable() {
         let schema = viewer_schema();
         assert_eq!(
