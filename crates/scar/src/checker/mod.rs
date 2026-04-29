@@ -33,6 +33,11 @@ enum ProfileEvent {
     EnumVariantCtorLookup,
     EnumVariantsLookup,
     EnumVariantSelectorLookup,
+    TraitDispatchLookup,
+    GenericTraitCandidateScan,
+    OperatorTraitCandidateScan,
+    ChildCheckerSpawn,
+    ChildCheckerAbsorb,
 }
 
 #[derive(Default)]
@@ -71,6 +76,11 @@ struct ProfileData {
     enum_variant_ctor_lookup: ProfileCounter,
     enum_variants_lookup: ProfileCounter,
     enum_variant_selector_lookup: ProfileCounter,
+    trait_dispatch_lookup: ProfileCounter,
+    generic_trait_candidate_scan: ProfileCounter,
+    operator_trait_candidate_scan: ProfileCounter,
+    child_checker_spawn: ProfileCounter,
+    child_checker_absorb: ProfileCounter,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,6 +101,16 @@ struct ProfileSnapshot {
     enum_variants_lookup_nanos: u64,
     enum_variant_selector_lookup_calls: u64,
     enum_variant_selector_lookup_nanos: u64,
+    trait_dispatch_lookup_calls: u64,
+    trait_dispatch_lookup_nanos: u64,
+    generic_trait_candidate_scan_calls: u64,
+    generic_trait_candidate_scan_nanos: u64,
+    operator_trait_candidate_scan_calls: u64,
+    operator_trait_candidate_scan_nanos: u64,
+    child_checker_spawn_calls: u64,
+    child_checker_spawn_nanos: u64,
+    child_checker_absorb_calls: u64,
+    child_checker_absorb_nanos: u64,
 }
 
 #[derive(Clone)]
@@ -140,6 +160,15 @@ impl TypecheckProfiler {
             ProfileEvent::EnumVariantSelectorLookup => {
                 self.data.enum_variant_selector_lookup.add(elapsed)
             }
+            ProfileEvent::TraitDispatchLookup => self.data.trait_dispatch_lookup.add(elapsed),
+            ProfileEvent::GenericTraitCandidateScan => {
+                self.data.generic_trait_candidate_scan.add(elapsed)
+            }
+            ProfileEvent::OperatorTraitCandidateScan => {
+                self.data.operator_trait_candidate_scan.add(elapsed)
+            }
+            ProfileEvent::ChildCheckerSpawn => self.data.child_checker_spawn.add(elapsed),
+            ProfileEvent::ChildCheckerAbsorb => self.data.child_checker_absorb.add(elapsed),
         }
     }
 
@@ -155,6 +184,11 @@ impl TypecheckProfiler {
         self.data.enum_variant_ctor_lookup.reset();
         self.data.enum_variants_lookup.reset();
         self.data.enum_variant_selector_lookup.reset();
+        self.data.trait_dispatch_lookup.reset();
+        self.data.generic_trait_candidate_scan.reset();
+        self.data.operator_trait_candidate_scan.reset();
+        self.data.child_checker_spawn.reset();
+        self.data.child_checker_absorb.reset();
     }
 
     fn snapshot(&self) -> ProfileSnapshot {
@@ -173,6 +207,16 @@ impl TypecheckProfiler {
             self.data.enum_variants_lookup.snapshot();
         let (enum_variant_selector_lookup_calls, enum_variant_selector_lookup_nanos) =
             self.data.enum_variant_selector_lookup.snapshot();
+        let (trait_dispatch_lookup_calls, trait_dispatch_lookup_nanos) =
+            self.data.trait_dispatch_lookup.snapshot();
+        let (generic_trait_candidate_scan_calls, generic_trait_candidate_scan_nanos) =
+            self.data.generic_trait_candidate_scan.snapshot();
+        let (operator_trait_candidate_scan_calls, operator_trait_candidate_scan_nanos) =
+            self.data.operator_trait_candidate_scan.snapshot();
+        let (child_checker_spawn_calls, child_checker_spawn_nanos) =
+            self.data.child_checker_spawn.snapshot();
+        let (child_checker_absorb_calls, child_checker_absorb_nanos) =
+            self.data.child_checker_absorb.snapshot();
         ProfileSnapshot {
             types_compatible_calls,
             types_compatible_nanos,
@@ -190,6 +234,16 @@ impl TypecheckProfiler {
             enum_variants_lookup_nanos,
             enum_variant_selector_lookup_calls,
             enum_variant_selector_lookup_nanos,
+            trait_dispatch_lookup_calls,
+            trait_dispatch_lookup_nanos,
+            generic_trait_candidate_scan_calls,
+            generic_trait_candidate_scan_nanos,
+            operator_trait_candidate_scan_calls,
+            operator_trait_candidate_scan_nanos,
+            child_checker_spawn_calls,
+            child_checker_spawn_nanos,
+            child_checker_absorb_calls,
+            child_checker_absorb_nanos,
         }
     }
 
@@ -223,6 +277,19 @@ impl TypecheckProfiler {
             snap.enum_variants_lookup_nanos as f64 / 1_000_000.0,
             snap.enum_variant_selector_lookup_calls,
             snap.enum_variant_selector_lookup_nanos as f64 / 1_000_000.0,
+        );
+        eprintln!(
+            "scar-profile dispatch lookup={} ({:.3}ms) | generic_scan={} ({:.3}ms) | operator_scan={} ({:.3}ms) | child_spawn={} ({:.3}ms) | child_absorb={} ({:.3}ms)",
+            snap.trait_dispatch_lookup_calls,
+            snap.trait_dispatch_lookup_nanos as f64 / 1_000_000.0,
+            snap.generic_trait_candidate_scan_calls,
+            snap.generic_trait_candidate_scan_nanos as f64 / 1_000_000.0,
+            snap.operator_trait_candidate_scan_calls,
+            snap.operator_trait_candidate_scan_nanos as f64 / 1_000_000.0,
+            snap.child_checker_spawn_calls,
+            snap.child_checker_spawn_nanos as f64 / 1_000_000.0,
+            snap.child_checker_absorb_calls,
+            snap.child_checker_absorb_nanos as f64 / 1_000_000.0,
         );
     }
 }
@@ -595,6 +662,9 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
     }
 }
 
+type TraitImplKey = (String, String);
+type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
+
 #[derive(Debug, Clone)]
 pub struct ScarCheckpoint {
     env: TypeEnv,
@@ -603,6 +673,7 @@ pub struct ScarCheckpoint {
     function_ids_by_name: HashMap<String, ResolvedId>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
 }
@@ -615,6 +686,7 @@ pub struct ScarSession {
     function_ids_by_name: HashMap<String, ResolvedId>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
 }
@@ -626,6 +698,7 @@ struct CheckerParts {
     function_ids_by_name: HashMap<String, ResolvedId>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
 }
@@ -639,6 +712,7 @@ impl ScarSession {
             function_ids_by_name: HashMap::new(),
             traits: HashMap::new(),
             trait_impls: HashMap::new(),
+            trait_impl_index_by_base_trait: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
         }
@@ -660,6 +734,7 @@ impl ScarSession {
             self.function_ids_by_name.clone(),
             self.traits.clone(),
             self.trait_impls.clone(),
+            self.trait_impl_index_by_base_trait.clone(),
             self.trait_methods_by_qualified_name.clone(),
             self.tyvar_bounds.clone(),
             context,
@@ -672,6 +747,7 @@ impl ScarSession {
             function_ids_by_name,
             traits,
             trait_impls,
+            trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name,
             tyvar_bounds,
         } = checker.into_parts();
@@ -681,6 +757,7 @@ impl ScarSession {
         self.function_ids_by_name = function_ids_by_name;
         self.traits = traits;
         self.trait_impls = trait_impls;
+        self.trait_impl_index_by_base_trait = trait_impl_index_by_base_trait;
         self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
         self.tyvar_bounds = tyvar_bounds;
         Ok(typed)
@@ -694,6 +771,7 @@ impl ScarSession {
             function_ids_by_name: self.function_ids_by_name.clone(),
             traits: self.traits.clone(),
             trait_impls: self.trait_impls.clone(),
+            trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
         }
@@ -706,6 +784,7 @@ impl ScarSession {
         self.function_ids_by_name = checkpoint.function_ids_by_name;
         self.traits = checkpoint.traits;
         self.trait_impls = checkpoint.trait_impls;
+        self.trait_impl_index_by_base_trait = checkpoint.trait_impl_index_by_base_trait;
         self.trait_methods_by_qualified_name = checkpoint.trait_methods_by_qualified_name;
         self.tyvar_bounds = checkpoint.tyvar_bounds;
     }
@@ -743,6 +822,7 @@ struct Checker {
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     profiler: TypecheckProfiler,
 }
@@ -768,6 +848,7 @@ impl Checker {
             seen_builtin_type_decls: HashMap::new(),
             traits: HashMap::new(),
             trait_impls: HashMap::new(),
+            trait_impl_index_by_base_trait: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
             profiler: TypecheckProfiler::new_from_env(),
         }
@@ -780,6 +861,7 @@ impl Checker {
         function_ids_by_name: HashMap<String, ResolvedId>,
         traits: HashMap<String, TraitInfo>,
         trait_impls: HashMap<(String, String), TraitImplInfo>,
+        trait_impl_index_by_base_trait: TraitImplIndex,
         trait_methods_by_qualified_name: HashMap<String, (String, String)>,
         tyvar_bounds: HashMap<u32, Vec<String>>,
         context: TypecheckContext,
@@ -803,12 +885,14 @@ impl Checker {
             seen_builtin_type_decls: HashMap::new(),
             traits,
             trait_impls,
+            trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name,
             profiler: TypecheckProfiler::new_from_env(),
         }
     }
 
     fn spawn_child_checker(&self, env: TypeEnv) -> Self {
+        let profile = self.profiler.start();
         let mut checker = Checker::with_env_and_params(
             env,
             self.user_func_params.clone(),
@@ -816,6 +900,7 @@ impl Checker {
             self.function_ids_by_name.clone(),
             self.traits.clone(),
             self.trait_impls.clone(),
+            self.trait_impl_index_by_base_trait.clone(),
             self.trait_methods_by_qualified_name.clone(),
             self.tyvar_bounds.clone(),
             TypecheckContext {
@@ -833,10 +918,13 @@ impl Checker {
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.profiler = self.profiler.clone();
+        self.profiler
+            .finish(ProfileEvent::ChildCheckerSpawn, profile);
         checker
     }
 
     fn absorb_child_progress(&mut self, child: &Checker) {
+        let profile = self.profiler.start();
         self.substitutions = child.substitutions.clone();
         self.tyvar_bounds = child.tyvar_bounds.clone();
         self.env.next_tyvar = self.env.next_tyvar.max(child.env.next_tyvar);
@@ -852,11 +940,14 @@ impl Checker {
         }
         if self.trait_impls.len() != child.trait_impls.len() {
             self.trait_impls = child.trait_impls.clone();
+            self.trait_impl_index_by_base_trait = child.trait_impl_index_by_base_trait.clone();
         }
         if self.trait_methods_by_qualified_name.len() != child.trait_methods_by_qualified_name.len()
         {
             self.trait_methods_by_qualified_name = child.trait_methods_by_qualified_name.clone();
         }
+        self.profiler
+            .finish(ProfileEvent::ChildCheckerAbsorb, profile);
     }
 
     pub(super) fn lookup_enum_variant_by_constructor_id(
@@ -909,9 +1000,34 @@ impl Checker {
             function_ids_by_name: self.function_ids_by_name,
             traits: self.traits,
             trait_impls: self.trait_impls,
+            trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
             tyvar_bounds: self.tyvar_bounds,
         }
+    }
+
+    pub(super) fn base_trait_key(trait_name: &str) -> &str {
+        trait_name
+            .split_once('<')
+            .map_or(trait_name, |(base, _)| base)
+    }
+
+    pub(super) fn index_trait_impl(&mut self, trait_impl_key: TraitImplKey) {
+        let base_trait_name = Self::base_trait_key(&trait_impl_key.0).to_string();
+        let entries = self
+            .trait_impl_index_by_base_trait
+            .entry(base_trait_name)
+            .or_default();
+        if !entries.iter().any(|existing| existing == &trait_impl_key) {
+            entries.push(trait_impl_key);
+        }
+    }
+
+    pub(super) fn trait_impl_candidate_keys(&self, trait_name: &str) -> Vec<TraitImplKey> {
+        self.trait_impl_index_by_base_trait
+            .get(Self::base_trait_key(trait_name))
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {

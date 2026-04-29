@@ -1295,8 +1295,9 @@ impl Checker {
                 }
             }
 
+            let impl_key = (trait_instance_key.clone(), target_name.clone());
             self.trait_impls.insert(
-                (trait_instance_key.clone(), target_name.clone()),
+                impl_key.clone(),
                 TraitImplInfo {
                     trait_id: trait_id.clone(),
                     trait_args: trait_args.clone(),
@@ -1308,6 +1309,7 @@ impl Checker {
                     methods: method_map,
                 },
             );
+            self.index_trait_impl(impl_key);
         }
 
         Ok(())

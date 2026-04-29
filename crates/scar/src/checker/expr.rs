@@ -949,8 +949,9 @@ impl Checker {
         receiver_ty: &Ty,
         requested_trait_args: &[Ty],
     ) -> Option<TraitDispatch> {
+        let profile = self.profiler.start();
         let receiver_ty = self.resolve_ty(receiver_ty);
-        match receiver_ty {
+        let result = match receiver_ty {
             Ty::Var(var) => {
                 if self.tyvar_has_bound(var, trait_name)
                     || self.tyvar_satisfies_compiler_trait(var, trait_name)
@@ -998,7 +999,10 @@ impl Checker {
                 self.compiler_trait_dispatch_target(trait_name, method_name, &concrete)
                     .map(TraitDispatch::Static)
             }
-        }
+        };
+        self.profiler
+            .finish(ProfileEvent::TraitDispatchLookup, profile);
+        result
     }
 
     fn generic_trait_dispatch_target(
@@ -1008,58 +1012,60 @@ impl Checker {
         receiver_ty: &Ty,
         requested_trait_args: &[Ty],
     ) -> Option<TraitDispatch> {
-        let base_trait_name = trait_name
-            .split_once('<')
-            .map_or(trait_name, |(base, _)| base);
-        let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
-        for impl_info in impls {
-            if self.trait_key(&impl_info.trait_id) != base_trait_name {
-                continue;
-            }
-            let Some(method) = impl_info.methods.get(method_name) else {
-                continue;
-            };
-            if impl_info.trait_arg_tys.len() != requested_trait_args.len() {
-                continue;
-            }
-            let mut fresh = HashMap::new();
-            let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let impl_trait_args = impl_info
-                .trait_arg_tys
-                .iter()
-                .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
-                .collect::<Vec<_>>();
-            let before = self.substitutions.clone();
-            let target_matches = self.types_compatible(&impl_target, receiver_ty);
-            let args_match = target_matches
-                && impl_trait_args
+        let profile = self.profiler.start();
+        let result = (|| {
+            for impl_key in self.trait_impl_candidate_keys(trait_name) {
+                let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                    continue;
+                };
+                let Some(method) = impl_info.methods.get(method_name) else {
+                    continue;
+                };
+                if impl_info.trait_arg_tys.len() != requested_trait_args.len() {
+                    continue;
+                }
+                let mut fresh = HashMap::new();
+                let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+                let impl_trait_args = impl_info
+                    .trait_arg_tys
                     .iter()
-                    .zip(requested_trait_args.iter())
-                    .all(|(expected, actual)| self.types_compatible(expected, actual));
-            if !args_match {
-                self.substitutions = before;
-                continue;
-            }
+                    .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
+                    .collect::<Vec<_>>();
+                let before = self.substitutions.clone();
+                let target_matches = self.types_compatible(&impl_target, receiver_ty);
+                let args_match = target_matches
+                    && impl_trait_args
+                        .iter()
+                        .zip(requested_trait_args.iter())
+                        .all(|(expected, actual)| self.types_compatible(expected, actual));
+                if !args_match {
+                    self.substitutions = before;
+                    continue;
+                }
 
-            if let Some(dispatch_override) = &method.dispatch_override {
-                return Some(TraitDispatch::Static(dispatch_override.clone()));
+                if let Some(dispatch_override) = &method.dispatch_override {
+                    return Some(TraitDispatch::Static(dispatch_override.clone()));
+                }
+                let function_key = method
+                    .function_id
+                    .qualified_name
+                    .as_ref()
+                    .unwrap_or(&method.function_id.name);
+                let function_id = self.function_ids_by_name.get(function_key)?;
+                let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                    return None;
+                };
+                return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                    name: method.function_id.name.clone(),
+                    fun_idx: *fun_idx,
+                }));
             }
-            let function_key = method
-                .function_id
-                .qualified_name
-                .as_ref()
-                .unwrap_or(&method.function_id.name);
-            let function_id = self.function_ids_by_name.get(function_key)?;
-            let function_ty = self.env.lookup_var(function_id.unique_id)?;
-            let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                return None;
-            };
-            return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                name: method.function_id.name.clone(),
-                fun_idx: *fun_idx,
-            }));
-        }
-        None
+            None
+        })();
+        self.profiler
+            .finish(ProfileEvent::GenericTraitCandidateScan, profile);
+        result
     }
 
     fn operator_trait_dispatch_for_args(
@@ -1069,71 +1075,73 @@ impl Checker {
         receiver_ty: &Ty,
         requested_trait_args: &[Ty],
     ) -> Option<(TraitDispatch, Vec<Ty>)> {
-        let base_trait_name = trait_name
-            .split_once('<')
-            .map_or(trait_name, |(base, _)| base);
-        let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
-        for impl_info in impls {
-            if self.trait_key(&impl_info.trait_id) != base_trait_name {
-                continue;
-            }
-            let Some(method) = impl_info.methods.get(method_name) else {
-                continue;
-            };
-            if impl_info.trait_arg_tys.len() != requested_trait_args.len() {
-                continue;
-            }
+        let profile = self.profiler.start();
+        let result = (|| {
+            for impl_key in self.trait_impl_candidate_keys(trait_name) {
+                let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                    continue;
+                };
+                let Some(method) = impl_info.methods.get(method_name) else {
+                    continue;
+                };
+                if impl_info.trait_arg_tys.len() != requested_trait_args.len() {
+                    continue;
+                }
 
-            let mut fresh = HashMap::new();
-            let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let impl_trait_args = impl_info
-                .trait_arg_tys
-                .iter()
-                .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
-                .collect::<Vec<_>>();
-
-            let before = self.substitutions.clone();
-            let target_matches = self.types_compatible(&impl_target, receiver_ty);
-            let args_match = target_matches
-                && impl_trait_args
+                let mut fresh = HashMap::new();
+                let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+                let impl_trait_args = impl_info
+                    .trait_arg_tys
                     .iter()
-                    .zip(requested_trait_args.iter())
-                    .all(|(expected, actual)| self.types_compatible(expected, actual));
-            if !args_match {
-                self.substitutions = before;
-                continue;
-            }
-            let resolved_trait_args = requested_trait_args
-                .iter()
-                .map(|ty| self.resolve_ty(ty))
-                .collect::<Vec<_>>();
+                    .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
+                    .collect::<Vec<_>>();
 
-            if let Some(dispatch_override) = &method.dispatch_override {
+                let before = self.substitutions.clone();
+                let target_matches = self.types_compatible(&impl_target, receiver_ty);
+                let args_match = target_matches
+                    && impl_trait_args
+                        .iter()
+                        .zip(requested_trait_args.iter())
+                        .all(|(expected, actual)| self.types_compatible(expected, actual));
+                if !args_match {
+                    self.substitutions = before;
+                    continue;
+                }
+                let resolved_trait_args = requested_trait_args
+                    .iter()
+                    .map(|ty| self.resolve_ty(ty))
+                    .collect::<Vec<_>>();
+
+                if let Some(dispatch_override) = &method.dispatch_override {
+                    return Some((
+                        TraitDispatch::Static(dispatch_override.clone()),
+                        resolved_trait_args,
+                    ));
+                }
+                let function_key = method
+                    .function_id
+                    .qualified_name
+                    .as_ref()
+                    .unwrap_or(&method.function_id.name);
+                let function_id = self.function_ids_by_name.get(function_key)?;
+                let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                    self.substitutions = before;
+                    continue;
+                };
                 return Some((
-                    TraitDispatch::Static(dispatch_override.clone()),
+                    TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                        name: method.function_id.name.clone(),
+                        fun_idx: *fun_idx,
+                    }),
                     resolved_trait_args,
                 ));
             }
-            let function_key = method
-                .function_id
-                .qualified_name
-                .as_ref()
-                .unwrap_or(&method.function_id.name);
-            let function_id = self.function_ids_by_name.get(function_key)?;
-            let function_ty = self.env.lookup_var(function_id.unique_id)?;
-            let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                self.substitutions = before;
-                continue;
-            };
-            return Some((
-                TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                    name: method.function_id.name.clone(),
-                    fun_idx: *fun_idx,
-                }),
-                resolved_trait_args,
-            ));
-        }
-        None
+            None
+        })();
+        self.profiler
+            .finish(ProfileEvent::OperatorTraitCandidateScan, profile);
+        result
     }
 
     fn opposite_conversion_hint(
@@ -3220,124 +3228,138 @@ impl Checker {
         body: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let mut body_checker = self.spawn_child_checker(self.env.clone());
-        body_checker.closure_depth = self.closure_depth.saturating_add(1);
-        let mut typed_params = Vec::new();
-        let param_tys = match expected {
-            Some(Ty::Func(expected_params, _)) => {
-                if expected_params.len() != params.len() {
+        let saved_function_return_ty = self.function_return_ty.clone();
+        let saved_current_function_symbol = self.current_function_symbol.clone();
+        let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
+        let saved_in_extractor_body = self.in_extractor_body;
+        let saved_closure_depth = self.closure_depth;
+        let saved_lens_bindings = self.lens_bindings.clone();
+
+        self.env.push_var_scope();
+        self.closure_depth = self.closure_depth.saturating_add(1);
+        let result = (|| -> Result<TypedNode, TypeError> {
+            let mut typed_params = Vec::new();
+            let param_tys = match expected {
+                Some(Ty::Func(expected_params, _)) => {
+                    if expected_params.len() != params.len() {
+                        return Err(TypeError {
+                            message: format!(
+                                "closure expects {} parameter(s), got {}",
+                                expected_params.len(),
+                                params.len()
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    expected_params.clone()
+                }
+                Some(other) => {
                     return Err(TypeError {
-                        message: format!(
-                            "closure expects {} parameter(s), got {}",
-                            expected_params.len(),
-                            params.len()
-                        ),
+                        message: format!("Expected function type, got {}", self.ty_name(other)),
                         span: span.clone(),
                         hint: None,
                     });
                 }
-                expected_params.clone()
-            }
-            Some(other) => {
-                return Err(TypeError {
-                    message: format!("Expected function type, got {}", self.ty_name(other)),
-                    span: span.clone(),
-                    hint: None,
+                None => params
+                    .iter()
+                    .map(|param| match &param.ty {
+                        Some(ast_ty) => {
+                            self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())
+                        }
+                        None => Ok(self.env.fresh_tyvar()),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+
+            for (param, param_ty) in params.iter().zip(param_tys.iter()) {
+                let param_ty = if let Some(ast_ty) = &param.ty {
+                    let annotated =
+                        self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
+                    if !self.types_compatible(param_ty, &annotated) {
+                        return Err(TypeError {
+                            message: format!(
+                                "closure parameter `{}` expected {}, got {}",
+                                param.id.name,
+                                self.ty_name(param_ty),
+                                self.ty_name(&annotated)
+                            ),
+                            span: param.id.span.clone(),
+                            hint: None,
+                        });
+                    }
+                    self.resolve_ty(&annotated)
+                } else {
+                    self.resolve_ty(param_ty)
+                };
+                self.env.bind_var(param.id.unique_id, param_ty.clone());
+                typed_params.push(TypedClosureParam {
+                    id: param.id.clone(),
+                    ty: param_ty,
                 });
             }
-            None => params
-                .iter()
-                .map(|param| match &param.ty {
-                    Some(ast_ty) => body_checker.resolve_ast_ty_in_context(
-                        ast_ty,
-                        body_checker.local_type_syntax_context(),
-                    ),
-                    None => Ok(body_checker.env.fresh_tyvar()),
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        };
 
-        for (param, param_ty) in params.iter().zip(param_tys.iter()) {
-            let param_ty = if let Some(ast_ty) = &param.ty {
-                let annotated = body_checker
-                    .resolve_ast_ty_in_context(ast_ty, body_checker.local_type_syntax_context())?;
-                if !body_checker.types_compatible(param_ty, &annotated) {
-                    return Err(TypeError {
-                        message: format!(
-                            "closure parameter `{}` expected {}, got {}",
-                            param.id.name,
-                            body_checker.ty_name(param_ty),
-                            body_checker.ty_name(&annotated)
-                        ),
-                        span: param.id.span.clone(),
-                        hint: None,
-                    });
+            for capture in captures {
+                if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
+                    if matches!(ty, Ty::Lens(_, _)) {
+                        return Err(TypeError {
+                            message: "Lens values are scope-local compile-time capabilities and cannot be captured by closures".into(),
+                            span: capture.span.clone(),
+                            hint: Some(
+                                "Consume the Lens in the current scope with Lens::view/set/over before creating the closure."
+                                    .into(),
+                            ),
+                        });
+                    }
+                    let resolved_ty = self.resolve_ty(&ty);
+                    self.env.bind_var(capture.unique_id, resolved_ty);
                 }
-                body_checker.resolve_ty(&annotated)
-            } else {
-                body_checker.resolve_ty(param_ty)
-            };
-            body_checker
-                .env
-                .bind_var(param.id.unique_id, param_ty.clone());
-            typed_params.push(TypedClosureParam {
-                id: param.id.clone(),
-                ty: param_ty,
-            });
-        }
-
-        for capture in captures {
-            if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
-                if matches!(ty, Ty::Lens(_, _)) {
-                    return Err(TypeError {
-                        message: "Lens values are scope-local compile-time capabilities and cannot be captured by closures".into(),
-                        span: capture.span.clone(),
-                        hint: Some(
-                            "Consume the Lens in the current scope with Lens::view/set/over before creating the closure."
-                                .into(),
-                        ),
-                    });
-                }
-                body_checker
-                    .env
-                    .bind_var(capture.unique_id, body_checker.resolve_ty(&ty));
             }
-        }
 
-        if let Some(Ty::Func(_, expected_ret)) = expected {
-            body_checker.function_return_ty = Some(expected_ret.as_ref().clone());
-        }
-        let typed_body = body_checker.check_node(body)?;
-        if matches!(typed_body.ty, Ty::Lens(_, _)) {
-            return Err(TypeError {
-                message: "Lens is compile-time only in Stage1 and cannot be returned from closures"
-                    .into(),
-                span: typed_body.span.clone(),
-                hint: Some("Use Lens::view(...) inside the closure instead.".into()),
-            });
-        }
-        let typed_body = body_checker.resolve_typed_node(typed_body);
-        self.absorb_child_progress(&body_checker);
+            if let Some(Ty::Func(_, expected_ret)) = expected {
+                self.function_return_ty = Some(expected_ret.as_ref().clone());
+            }
+            let typed_body = self.check_node(body)?;
+            if matches!(typed_body.ty, Ty::Lens(_, _)) {
+                return Err(TypeError {
+                    message:
+                        "Lens is compile-time only in Stage1 and cannot be returned from closures"
+                            .into(),
+                    span: typed_body.span.clone(),
+                    hint: Some("Use Lens::view(...) inside the closure instead.".into()),
+                });
+            }
+            let typed_body = self.resolve_typed_node(typed_body);
 
-        let param_tys = typed_params
-            .iter()
-            .map(|p| body_checker.resolve_ty(&p.ty))
-            .collect::<Vec<_>>();
-        Ok(TypedNode {
-            ty: Ty::Func(param_tys, Box::new(body_checker.resolve_ty(&typed_body.ty))),
-            span: span.clone(),
-            node: TypedInner::Closure(
-                typed_params
-                    .into_iter()
-                    .map(|param| TypedClosureParam {
-                        id: param.id,
-                        ty: body_checker.resolve_ty(&param.ty),
-                    })
-                    .collect(),
-                captures.to_vec(),
-                Box::new(typed_body),
-            ),
-        })
+            let param_tys = typed_params
+                .iter()
+                .map(|p| self.resolve_ty(&p.ty))
+                .collect::<Vec<_>>();
+            Ok(TypedNode {
+                ty: Ty::Func(param_tys, Box::new(self.resolve_ty(&typed_body.ty))),
+                span: span.clone(),
+                node: TypedInner::Closure(
+                    typed_params
+                        .into_iter()
+                        .map(|param| TypedClosureParam {
+                            id: param.id,
+                            ty: self.resolve_ty(&param.ty),
+                        })
+                        .collect(),
+                    captures.to_vec(),
+                    Box::new(typed_body),
+                ),
+            })
+        })();
+
+        self.env.pop_var_scope();
+        self.function_return_ty = saved_function_return_ty;
+        self.current_function_symbol = saved_current_function_symbol;
+        self.current_impl_struct_target = saved_current_impl_struct_target;
+        self.in_extractor_body = saved_in_extractor_body;
+        self.closure_depth = saved_closure_depth;
+        self.lens_bindings = saved_lens_bindings;
+        result
     }
 
     pub(super) fn check_capture(

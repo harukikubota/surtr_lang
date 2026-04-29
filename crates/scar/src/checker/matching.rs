@@ -213,33 +213,36 @@ impl Checker {
         scrut_ty: &Ty,
         _span: &Span,
     ) -> Result<TypedMatchArm, TypeError> {
-        let mut arm_checker = self.spawn_child_checker(self.env.clone());
-        let typed_pat = arm_checker.check_match_subpattern(&arm.pattern, scrut_ty)?;
-        let typed_guard = if let Some(guard) = &arm.guard {
-            let typed_guard = arm_checker.check_node(guard)?;
-            if !arm_checker.types_compatible(&Ty::Bool, &typed_guard.ty) {
-                return Err(TypeError {
-                    message: format!(
-                        "match guard must be Boolean, got {}",
-                        arm_checker.ty_name(&typed_guard.ty)
-                    ),
-                    span: typed_guard.span.clone(),
-                    hint: None,
-                });
-            }
-            Some(arm_checker.resolve_typed_node(typed_guard))
-        } else {
-            None
-        };
-        let typed_body = arm_checker.check_node(&arm.body)?;
-        arm_checker.normalize_env_bindings();
-        let typed_body = arm_checker.resolve_typed_node(typed_body);
-        self.absorb_child_progress(&arm_checker);
-        Ok(TypedMatchArm {
-            pattern: typed_pat,
-            guard: typed_guard,
-            body: typed_body,
-        })
+        self.env.push_var_scope();
+        let result = (|| {
+            let typed_pat = self.check_match_subpattern(&arm.pattern, scrut_ty)?;
+            let typed_guard = if let Some(guard) = &arm.guard {
+                let typed_guard = self.check_node(guard)?;
+                if !self.types_compatible(&Ty::Bool, &typed_guard.ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "match guard must be Boolean, got {}",
+                            self.ty_name(&typed_guard.ty)
+                        ),
+                        span: typed_guard.span.clone(),
+                        hint: None,
+                    });
+                }
+                Some(self.resolve_typed_node(typed_guard))
+            } else {
+                None
+            };
+            let typed_body = self.check_node(&arm.body)?;
+            self.normalize_env_bindings();
+            let typed_body = self.resolve_typed_node(typed_body);
+            Ok(TypedMatchArm {
+                pattern: typed_pat,
+                guard: typed_guard,
+                body: typed_body,
+            })
+        })();
+        self.env.pop_var_scope();
+        result
     }
 
     pub(super) fn check_match_subpattern(
