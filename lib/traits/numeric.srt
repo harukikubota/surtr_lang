@@ -11,7 +11,6 @@ objects.
 xldr(1)> Numeric::abs(-4)
 4
 """
-@@autoimport
 deftrait Numeric {
   # Divide and return `Err(ZeroDivisionError)` on zero.
   def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError>
