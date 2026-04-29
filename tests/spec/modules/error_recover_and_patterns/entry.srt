@@ -1,9 +1,3 @@
-def retry(err: Error) -> Result<String> {
-  print("retry:" ++ Error::kind(err))
-  print(Error::format(err))
-  Ok("retry")
-}
-
 def fallback() -> Result<String> {
   print("fallback")
   Ok("fallback")
@@ -15,18 +9,25 @@ print(Error::format(Timeout))
 
 print(inspect(Result::recover(Ok("ok"), &fallback)))
 print(inspect(Result::recover(Err(DnsFailure), &fallback)))
-print(inspect(Result::recover_kind(Ok("ok"), Timeout, &retry)))
-print(inspect(Result::recover_kind(Err(Timeout), Timeout, &retry)))
-print(inspect(Result::recover_kind(Err(DnsFailure), Timeout, &retry)))
-
-def print_matched_error(e: Error) -> Unit {
-  print("matched:" ++ Error::kind(e))
-  print(Error::format(e))
-}
+print(inspect(Result::recover_kind(Ok("ok"), Timeout, {|err|
+  print("retry:" ++ Error::kind(err))
+  print(Error::format(err))
+  Ok("retry")
+})))
+print(inspect(Result::recover_kind(Err(Timeout), Timeout, {|err|
+  print("retry:" ++ Error::kind(err))
+  print(Error::format(err))
+  Ok("retry")
+})))
+print(inspect(Result::recover_kind(Err(DnsFailure), Timeout, {|err|
+  print("retry:" ++ Error::kind(err))
+  print(Error::format(err))
+  Ok("retry")
+})))
 
 match Err(ConnectionReset) {
   Ok(value) => print(value),
-  Err(Timeout | ConnectionReset @ e: Error) => print_matched_error(e),
+  Err(Timeout | ConnectionReset @ e: Error) => print("matched:" ++ Error::kind(e) ++ "\n" ++ Error::format(e)),
   Err(DnsFailure) => print("dns"),
   Err(err) => print("other:" ++ Error::kind(err)),
 }

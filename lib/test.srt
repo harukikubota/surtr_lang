@@ -29,14 +29,14 @@ defmod Test {
     Ok(())
   }
 
-  defp _finish_unexpected_test_error(err: Error) -> Result<()> {
-    __test_fail_current("unexpected test error: " ++ inspect(err))
+  defp _finish_unexpected_test_error_rendered(rendered: String) -> Result<()> {
+    __test_fail_current("unexpected test error: " ++ rendered)
     __test_pop()
     Ok(())
   }
 
-  defp _finish_unexpected_describe_error(err: Error) -> Result<()> {
-    __test_fail_current("unexpected describe error: " ++ inspect(err))
+  defp _finish_unexpected_describe_error_rendered(rendered: String) -> Result<()> {
+    __test_fail_current("unexpected describe error: " ++ rendered)
     __test_pop()
     Ok(())
   }
@@ -51,8 +51,7 @@ defmod Test {
     Ok(())
   }
 
-  defp _assert_err_rendered_contains(fragment: String, err: Error) -> Result<()> {
-    rendered = inspect(err)
+  defp _assert_err_rendered_contains(fragment: String, rendered: String) -> Result<()> {
     if(
       String::contains(rendered, fragment),
       Ok(()),
@@ -65,7 +64,7 @@ defmod Test {
     result = body()
     match result {
       Ok(_) => _finish_ok(),
-      Err(err) => _finish_unexpected_test_error(err),
+      Err(err) => _finish_unexpected_test_error_rendered(inspect(err)),
     }
   }
 
@@ -74,7 +73,7 @@ defmod Test {
     result = body()
     match result {
       Ok(_) => _finish_ok(),
-      Err(err) => _finish_unexpected_describe_error(err),
+      Err(err) => _finish_unexpected_describe_error_rendered(inspect(err)),
     }
   }
 
@@ -113,7 +112,7 @@ defmod Test {
   def assert_err_contains(fragment: String, result: Result<$A>) -> Result<()> {
     match result {
       Ok(actual) => _fail("expected Err containing #{fragment}, got Ok(#{inspect(actual)})"),
-      Err(err) => _assert_err_rendered_contains(fragment, err),
+      Err(err) => _assert_err_rendered_contains(fragment, inspect(err)),
     }
   }
 

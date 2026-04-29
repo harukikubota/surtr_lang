@@ -301,6 +301,7 @@ pub fn typecheck_with_context(
 pub struct TypecheckContext {
     pub runtime_policy: RuntimeSourcePolicy,
     pub enforce_builtin_type_contracts: bool,
+    pub allow_error_function_params: bool,
 }
 
 impl Default for TypecheckContext {
@@ -308,6 +309,7 @@ impl Default for TypecheckContext {
         Self {
             runtime_policy: RuntimeSourcePolicy::script(),
             enforce_builtin_type_contracts: false,
+            allow_error_function_params: false,
         }
     }
 }
@@ -737,6 +739,7 @@ struct Checker {
     tyvar_bounds: HashMap<u32, Vec<String>>,
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
+    allow_error_function_params: bool,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
@@ -761,6 +764,7 @@ impl Checker {
             tyvar_bounds: HashMap::new(),
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
+            allow_error_function_params: context.allow_error_function_params,
             seen_builtin_type_decls: HashMap::new(),
             traits: HashMap::new(),
             trait_impls: HashMap::new(),
@@ -795,6 +799,7 @@ impl Checker {
             tyvar_bounds,
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
+            allow_error_function_params: context.allow_error_function_params,
             seen_builtin_type_decls: HashMap::new(),
             traits,
             trait_impls,
@@ -816,6 +821,7 @@ impl Checker {
             TypecheckContext {
                 runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
+                allow_error_function_params: self.allow_error_function_params,
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();

@@ -24,6 +24,46 @@ impl Checker {
         }
     }
 
+    pub(super) fn error_function_param_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Error cannot be used as a user-defined function parameter type".into(),
+            span: span.clone(),
+            hint: Some(
+                "Keep Error inside Err(...), and inspect it only from an Err(...) match arm."
+                    .into(),
+            ),
+        }
+    }
+
+    pub(super) fn ty_exposes_error_value(ty: &Ty) -> bool {
+        match ty {
+            Ty::Error => true,
+            Ty::Result(ok, _) => Self::ty_exposes_error_value(ok),
+            Ty::List(inner) | Ty::TypeRef(inner) => Self::ty_exposes_error_value(inner),
+            Ty::Lens(source, focus) => {
+                Self::ty_exposes_error_value(source) || Self::ty_exposes_error_value(focus)
+            }
+            Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(Self::ty_exposes_error_value),
+            Ty::Func(params, ret) => {
+                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
+            }
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
+            }
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+                .iter()
+                .any(|(_, field_ty)| Self::ty_exposes_error_value(field_ty)),
+            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Hole | Ty::Var(_) => false,
+        }
+    }
+
+    pub(super) fn allows_std_error_function_param_exception(id: &ResolvedId) -> bool {
+        matches!(
+            id.qualified_name.as_deref(),
+            Some("Result::tap_err") | Some("Result::_tap_err_value") | Some("Test::_finish_it_err")
+        )
+    }
+
     fn match_result_type_allowed(&self, context: TypeSyntaxContext) -> bool {
         matches!(
             context,

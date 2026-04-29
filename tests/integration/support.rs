@@ -120,6 +120,7 @@ fn typecheck_context_for_mode(mode: TestCompileMode) -> scar::TypecheckContext {
             TestCompileMode::Project => RuntimeSourcePolicy::project(),
         },
         enforce_builtin_type_contracts: true,
+        allow_error_function_params: false,
     }
 }
 
@@ -131,6 +132,7 @@ fn std_typecheck_context_for_mode(mode: TestCompileMode) -> scar::TypecheckConte
             None,
         ),
         enforce_builtin_type_contracts: true,
+        allow_error_function_params: true,
     }
 }
 

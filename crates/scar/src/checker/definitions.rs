@@ -554,6 +554,14 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
+            if !self.allow_error_function_params
+                && !Self::allows_std_error_function_param_exception(id)
+                && Self::ty_exposes_error_value(&param_ty)
+            {
+                return Err(
+                    self.error_function_param_not_allowed_error(Self::ast_ty_span(&param.ty))
+                );
+            }
             if self.ty_contains_lens(&param_ty) {
                 return Err(TypeError {
                     message:

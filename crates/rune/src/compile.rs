@@ -568,6 +568,7 @@ pub(crate) fn compile_source(
                     compile_plan.normalized_entrypoint.as_ref(),
                 ),
                 enforce_builtin_type_contracts: false,
+                allow_error_function_params: false,
             },
         )
         .map_err(|e| {

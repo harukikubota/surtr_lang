@@ -40,15 +40,10 @@ def compare_guess(secret: Int, remaining: Int, guess: Int) -> Result<()> {
   )
 }
 
-def handle_input_error(err: Error, remaining: Int) -> Result<()> {
-  print(Error::message(err))
-  guess_loop(remaining)
-}
-
 def handle_guess(secret: Int, remaining: Int, input: String) -> Result<()> {
   match parse_guess(input) {
     Ok(guess) => compare_guess(secret, remaining, guess),
-    Err(err) => handle_input_error(err, remaining),
+    Err(err) => Result::then(Ok(print(Error::message(err))), {guess_loop(remaining)}),
   }
 }
 

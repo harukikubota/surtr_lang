@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Error cannot be used as a user-defined function parameter type

@@ -1,5 +1,1 @@
-def retry(err: Error) -> Result<Int> {
-  Ok(1)
-}
-
-value = Result::recover_kind(Err(Timeout), NotAnError, &retry)
+value = Result::recover_kind(Err(Timeout), NotAnError, {|err| Ok(1)})

@@ -1,0 +1,9 @@
+def handle(err: Error) -> Result<()> {
+  print(Error::message(err))
+  Ok(())
+}
+
+result = match Err(NoneError) {
+  Ok(_) => Ok(()),
+  Err(err) => handle(err),
+}

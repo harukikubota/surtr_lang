@@ -1396,11 +1396,20 @@ impl Checker {
                     let param_tys = params
                         .iter()
                         .map(|param| {
-                            self.resolve_signature_ast_ty_in_context(
+                            let param_ty = self.resolve_signature_ast_ty_in_context(
                                 &param.ty,
                                 TypeSyntaxContext::General,
                                 &mut tyvars,
-                            )
+                            )?;
+                            if !self.allow_error_function_params
+                                && !Self::allows_std_error_function_param_exception(id)
+                                && Self::ty_exposes_error_value(&param_ty)
+                            {
+                                return Err(self.error_function_param_not_allowed_error(
+                                    Self::ast_ty_span(&param.ty),
+                                ));
+                            }
+                            Ok(param_ty)
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let param_names = params

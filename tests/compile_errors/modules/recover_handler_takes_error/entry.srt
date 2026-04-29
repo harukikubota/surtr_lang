@@ -1,5 +1,1 @@
-def retry(err: Error) -> Result<Int> {
-  Ok(1)
-}
-
-value = Result::recover(Err(Timeout), &retry)
+value = Result::recover(Err(Timeout), {|err| Ok(1)})

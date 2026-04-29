@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Argument type mismatch: expected (-> Result<
+contains: closure expects 0 parameter(s), got 1

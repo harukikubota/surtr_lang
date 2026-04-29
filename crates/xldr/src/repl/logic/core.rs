@@ -279,6 +279,7 @@ impl ReplEngine {
                     None,
                 ),
                 enforce_builtin_type_contracts: true,
+                allow_error_function_params: true,
             },
         ) {
             Ok(t) => t,
@@ -461,6 +462,7 @@ impl ReplEngine {
                     None,
                 ),
                 enforce_builtin_type_contracts: true,
+                allow_error_function_params: true,
             },
         ) {
             return Err(load_error_from_span_failure(
@@ -1036,6 +1038,7 @@ impl ReplEngine {
                     None,
                 ),
                 enforce_builtin_type_contracts: false,
+                allow_error_function_params: false,
             },
         ) {
             Ok(t) => t,

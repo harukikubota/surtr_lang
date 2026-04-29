@@ -816,6 +816,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
             scar::TypecheckContext {
                 runtime_policy: RuntimeSourcePolicy::std_module(),
                 enforce_builtin_type_contracts: true,
+                allow_error_function_params: true,
             },
         )
         .map_err(|e| LoadError::BootstrapFailed {
