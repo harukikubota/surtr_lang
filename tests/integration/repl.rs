@@ -422,6 +422,30 @@ fn repl_doc_command_shows_builtin_docs() {
 }
 
 #[test]
+fn repl_sig_command_shows_builtin_and_local_function_signatures() {
+    let output =
+        run_repl_session(":sig print\ndef add(x: Int, y: Int) -> Int { x + y }\n:sig add\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Kernel::print(a: String) -> Unit"),
+        "expected :sig to print the builtin signature, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("__Repl::Session::add(x: Int, y: Int) -> Int"),
+        "expected :sig to print the REPL function signature, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_help_command_lists_available_commands() {
     let output = run_repl_session(":help\n:quit\n");
     assert!(
@@ -437,6 +461,7 @@ fn repl_help_command_lists_available_commands() {
         ":help, :h [command]",
         ":quit, :exit",
         ":doc <symbol>",
+        ":sig <symbol>",
         ":error [full|summary]",
         ":save <path.eldr>",
         ":v <line>",
@@ -448,6 +473,30 @@ fn repl_help_command_lists_available_commands() {
             stdout
         );
     }
+}
+
+#[test]
+fn repl_help_sig_topic_shows_sig_usage() {
+    let output = run_repl_session(":h sig\n:h :sig\n:sig\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let usage_hits = stdout.matches("Usage: :sig <function>").count();
+    assert!(
+        usage_hits >= 3,
+        "expected sig help forms to show sig usage, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Examples: :sig print, :sig Kernel::if, :sig add"),
+        "expected sig help examples, got:\n{}",
+        stdout
+    );
 }
 
 #[test]

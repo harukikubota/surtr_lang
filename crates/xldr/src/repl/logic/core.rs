@@ -7,7 +7,7 @@ use eldr::value::Value;
 use forge::bytecode::populate_error_template_lines;
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
-use sindr::ir::DocEntry;
+use sindr::ir::{DocEntry, DocKind};
 use sindr::policy::CompileUnitKind;
 use spire::ast::{Ast, ImportSpec, Span};
 
@@ -727,6 +727,7 @@ impl ReplEngine {
             ":help, :h [command]  Show REPL help".to_string(),
             ":quit, :exit         Exit the REPL".to_string(),
             ":doc <symbol>        Show documentation for a visible symbol".to_string(),
+            ":sig <symbol>        Show the signature for a visible function".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
             ":v <line>            Recall a previous result".to_string(),
@@ -740,12 +741,20 @@ impl ReplEngine {
         ]
     }
 
+    fn sig_help_lines() -> Vec<String> {
+        vec![
+            "Usage: :sig <function>".to_string(),
+            "Examples: :sig print, :sig Kernel::if, :sig add".to_string(),
+        ]
+    }
+
     fn handle_help(&self, topic: Option<&str>) -> Vec<String> {
         let Some(topic) = topic.map(str::trim).filter(|topic| !topic.is_empty()) else {
             return Self::help_lines();
         };
         match topic.strip_prefix(':').unwrap_or(topic) {
             "doc" => Self::doc_help_lines(),
+            "sig" => Self::sig_help_lines(),
             other => {
                 let mut rendered = vec![format!("No help found for :{}", other)];
                 rendered.push("Type :help for available REPL commands.".to_string());
@@ -795,6 +804,98 @@ impl ReplEngine {
                 idx: self.results.len(),
                 source: format!(":doc {trimmed}"),
                 rendered: vec![format!("No docs found for {}", trimmed)],
+            }),
+        }
+    }
+
+    fn canonical_doc_symbol(symbol: &str) -> &str {
+        OPERATOR_DOC_ALIASES
+            .iter()
+            .find_map(|(alias, trait_name)| (*alias == symbol).then_some(*trait_name))
+            .unwrap_or(symbol)
+    }
+
+    fn symbol_matches(qualified_name: &str, symbol: &str) -> bool {
+        qualified_name == symbol
+            || qualified_name
+                .rsplit("::")
+                .next()
+                .is_some_and(|tail| tail == symbol)
+    }
+
+    fn find_signature(&self, symbol: &str) -> Option<(String, String)> {
+        let canonical = Self::canonical_doc_symbol(symbol);
+
+        if canonical == symbol {
+            if let Some(found) = self
+                .vm
+                .function_entries()
+                .iter()
+                .rev()
+                .filter(|entry| !entry.flags.generated)
+                .find_map(|entry| {
+                    let qualified_name = entry.qualified_name.as_ref()?;
+                    if !Self::symbol_matches(qualified_name, canonical) {
+                        return None;
+                    }
+                    let signature = entry.signature.clone()?;
+                    Some((qualified_name.clone(), signature))
+                })
+            {
+                return Some(found);
+            }
+        }
+
+        if let Some(entry) = self
+            .docs
+            .iter()
+            .rev()
+            .find(|entry| entry.kind == DocKind::Function && entry.qualified_name == canonical)
+        {
+            if let Some(signature) = entry.signature.clone() {
+                return Some((entry.qualified_name.clone(), signature));
+            }
+        }
+
+        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+            entry.kind == DocKind::Function
+                && Self::symbol_matches(&entry.qualified_name, canonical)
+        }) {
+            if let Some(signature) = entry.signature.clone() {
+                return Some((entry.qualified_name.clone(), signature));
+            }
+        }
+
+        None
+    }
+
+    fn handle_sig(&self, symbol: &str) -> ReplResult {
+        let trimmed = symbol.trim();
+        if trimmed.is_empty() || trimmed.split_whitespace().count() != 1 {
+            return ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: Self::sig_help_lines(),
+            });
+        }
+
+        match self.find_signature(trimmed) {
+            Some((qualified_name, signature)) => {
+                let rendered = if let Some((module, tail)) = qualified_name.rsplit_once("::") {
+                    if signature == tail || signature.starts_with(&format!("{tail}(")) {
+                        format!("{module}::{signature}")
+                    } else {
+                        signature
+                    }
+                } else {
+                    signature
+                };
+                ReplResult::ok(ReplOutput::CommandOutput {
+                    rendered: vec![rendered],
+                })
+            }
+            None => ReplResult::ok(ReplOutput::EvalError {
+                idx: self.results.len(),
+                source: format!(":sig {trimmed}"),
+                rendered: vec![format!("No signature found for {}", trimmed)],
             }),
         }
     }
@@ -850,6 +951,9 @@ impl ReplEngine {
                     }
                     ReplCommand::Doc { symbol } => {
                         return self.handle_doc(&symbol);
+                    }
+                    ReplCommand::Sig { symbol } => {
+                        return self.handle_sig(&symbol);
                     }
                     ReplCommand::Error { mode } => {
                         let rendered = self.handle_error_mode(mode.as_deref());

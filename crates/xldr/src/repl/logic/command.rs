@@ -3,6 +3,7 @@ pub enum ReplCommand {
     Quit,
     Help { topic: Option<String> },
     Doc { symbol: String },
+    Sig { symbol: String },
     Error { mode: Option<String> },
     ValueRecall { arg: String },
     Save { path: String },
@@ -33,6 +34,9 @@ pub fn parse_repl_command(trimmed: &str) -> Option<ReplCommand> {
             },
         },
         "doc" => ReplCommand::Doc {
+            symbol: rest.to_string(),
+        },
+        "sig" => ReplCommand::Sig {
             symbol: rest.to_string(),
         },
         "error" => ReplCommand::Error {
@@ -109,6 +113,15 @@ mod tests {
         assert!(matches!(
             parsed,
             ReplCommand::Help { topic: Some(topic) } if topic == ":doc"
+        ));
+    }
+
+    #[test]
+    fn parse_sig_command_with_symbol() {
+        let parsed = parse_repl_command(":sig add").expect("command should parse");
+        assert!(matches!(
+            parsed,
+            ReplCommand::Sig { symbol } if symbol == "add"
         ));
     }
 }

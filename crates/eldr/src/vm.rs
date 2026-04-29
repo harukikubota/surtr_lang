@@ -334,6 +334,10 @@ impl VM {
         self.source_file.as_deref()
     }
 
+    pub fn function_entries(&self) -> &[FunctionEntry] {
+        &self.bytecode.functions
+    }
+
     pub fn runtime_error_location(&self) -> Option<Location> {
         let (span_start, span_end) = self.current_frame().ok()?.call_site?;
         let file = self
