@@ -744,11 +744,44 @@ impl ReplEngine {
         self.next_line += 1;
     }
 
+    fn help_lines() -> Vec<String> {
+        vec![
+            "REPL commands:".to_string(),
+            ":help, :h [command]  Show REPL help".to_string(),
+            ":quit, :exit         Exit the REPL".to_string(),
+            ":doc <symbol>        Show documentation for a visible symbol".to_string(),
+            ":error [full|summary]  Show or change error display mode".to_string(),
+            ":save <path.eldr>    Save the current session as .eldr".to_string(),
+            ":v <line>            Recall a previous result".to_string(),
+        ]
+    }
+
+    fn doc_help_lines() -> Vec<String> {
+        vec![
+            "Usage: :doc <symbol>".to_string(),
+            "Examples: :doc print, :doc Kernel::if, :doc Add, :doc +".to_string(),
+        ]
+    }
+
+    fn handle_help(&self, topic: Option<&str>) -> Vec<String> {
+        let Some(topic) = topic.map(str::trim).filter(|topic| !topic.is_empty()) else {
+            return Self::help_lines();
+        };
+        match topic.strip_prefix(':').unwrap_or(topic) {
+            "doc" => Self::doc_help_lines(),
+            other => {
+                let mut rendered = vec![format!("No help found for :{}", other)];
+                rendered.push("Type :help for available REPL commands.".to_string());
+                rendered
+            }
+        }
+    }
+
     fn handle_doc(&self, symbol: &str) -> ReplResult {
         let trimmed = symbol.trim();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() || trimmed.split_whitespace().count() != 1 {
             return ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec!["Usage: :doc <symbol>".to_string()],
+                rendered: Self::doc_help_lines(),
             });
         }
 
@@ -851,6 +884,10 @@ impl ReplEngine {
                     ReplCommand::Quit => {
                         return ReplResult::exit(ReplOutput::StatusMessage("quit".to_string()));
                     }
+                    ReplCommand::Help { topic } => {
+                        let rendered = self.handle_help(topic.as_deref());
+                        return ReplResult::ok(ReplOutput::CommandOutput { rendered });
+                    }
                     ReplCommand::Doc { symbol } => {
                         return self.handle_doc(&symbol);
                     }
@@ -867,10 +904,11 @@ impl ReplEngine {
                         return ReplResult::ok(ReplOutput::CommandOutput { rendered });
                     }
                     ReplCommand::Unknown { raw } => {
-                        return ReplResult::ok(ReplOutput::EvalError {
-                            idx: self.results.len(),
-                            source: raw.clone(),
-                            rendered: vec![format!("Unknown REPL command: {}", raw)],
+                        return ReplResult::ok(ReplOutput::CommandOutput {
+                            rendered: vec![
+                                format!("Unknown REPL command: {}", raw),
+                                "Type :help for available REPL commands.".to_string(),
+                            ],
                         });
                     }
                 }

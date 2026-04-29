@@ -113,6 +113,7 @@ Xldr は対話セッション中に次を保持する。
 
 | コマンド | 説明 |
 |---|---|
+| `:help`, `:h [command]` | REPL コマンド一覧、または指定コマンドのヘルプを表示する |
 | `:quit`, `:exit` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する |
 | `:doc <symbol>` | 現在セッションで見える symbol の doc を表示する。operator trait は `:doc Add` / `:doc +` のように trait 名と演算子 alias の両方を受け付ける。関数演算子は `:doc |*>` / `:doc |>=` を標準 trait source doc に解決し、`:doc |>`, `:doc >>`, `:doc >*`, `:doc >=>` は compiler-generated operator doc を表示する |
@@ -130,6 +131,7 @@ Xldr は対話セッション中に次を保持する。
 ### 5.3 不明コマンド
 
 - `:` で始まる未定義コマンドはエラーとして表示する
+- 未定義コマンドの表示には `:help` の入力案内を含める
 - セッションは継続する
 
 ---

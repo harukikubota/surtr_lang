@@ -422,6 +422,110 @@ fn repl_doc_command_shows_builtin_docs() {
 }
 
 #[test]
+fn repl_help_command_lists_available_commands() {
+    let output = run_repl_session(":help\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for expected in [
+        "REPL commands:",
+        ":help, :h [command]",
+        ":quit, :exit",
+        ":doc <symbol>",
+        ":error [full|summary]",
+        ":save <path.eldr>",
+        ":v <line>",
+    ] {
+        assert!(
+            stdout.contains(expected),
+            "expected help output to contain `{}`, got:\n{}",
+            expected,
+            stdout
+        );
+    }
+}
+
+#[test]
+fn repl_help_doc_topic_shows_doc_usage() {
+    let output = run_repl_session(":h doc\n:h :doc\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let usage_hits = stdout.matches("Usage: :doc <symbol>").count();
+    assert!(
+        usage_hits >= 2,
+        "expected both doc help forms to show doc usage, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Examples: :doc print, :doc Kernel::if, :doc Add, :doc +"),
+        "expected doc help examples, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_doc_without_symbol_shows_doc_help() {
+    let output = run_repl_session(":doc\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage: :doc <symbol>"),
+        "expected :doc without a symbol to show doc help, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Examples: :doc print, :doc Kernel::if, :doc Add, :doc +"),
+        "expected :doc help examples, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_unknown_command_suggests_help_and_keeps_session_alive() {
+    let output = run_repl_session(":nope\n1\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Unknown REPL command: :nope"),
+        "expected unknown command message, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Type :help for available REPL commands."),
+        "expected help suggestion, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("> 1"),
+        "expected session to continue after unknown command, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn repl_doc_command_resolves_operator_trait_aliases() {
     let output = run_repl_session(":doc Add\n:doc +\n:doc |*>\n:doc |>=\n:quit\n");
     assert!(
@@ -432,7 +536,9 @@ fn repl_doc_command_resolves_operator_trait_aliases() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let add_hits = stdout.matches("trait Add { add(self: Self, rhs: Self) -> Self }").count();
+    let add_hits = stdout
+        .matches("trait Add { add(self: Self, rhs: Self) -> Self }")
+        .count();
     assert!(
         add_hits >= 2,
         "expected both :doc Add and :doc + to render Add docs, got:\n{}",

@@ -1,6 +1,7 @@
 /// A parsed REPL command (lines beginning with `:`).
 pub enum ReplCommand {
     Quit,
+    Help { topic: Option<String> },
     Doc { symbol: String },
     Error { mode: Option<String> },
     ValueRecall { arg: String },
@@ -24,6 +25,13 @@ pub fn parse_repl_command(trimmed: &str) -> Option<ReplCommand> {
 
     let command = match cmd {
         "quit" | "exit" | "q" => ReplCommand::Quit,
+        "help" | "h" => ReplCommand::Help {
+            topic: if rest.is_empty() {
+                None
+            } else {
+                Some(rest.to_string())
+            },
+        },
         "doc" => ReplCommand::Doc {
             symbol: rest.to_string(),
         },
@@ -78,5 +86,29 @@ mod tests {
     fn parse_exit_command_as_quit_alias() {
         let parsed = parse_repl_command(":exit").expect("command should parse");
         assert!(matches!(parsed, ReplCommand::Quit));
+    }
+
+    #[test]
+    fn parse_help_commands_without_topic() {
+        let parsed = parse_repl_command(":help").expect("command should parse");
+        assert!(matches!(parsed, ReplCommand::Help { topic: None }));
+
+        let parsed = parse_repl_command(":h").expect("command should parse");
+        assert!(matches!(parsed, ReplCommand::Help { topic: None }));
+    }
+
+    #[test]
+    fn parse_help_doc_topic() {
+        let parsed = parse_repl_command(":h doc").expect("command should parse");
+        assert!(matches!(
+            parsed,
+            ReplCommand::Help { topic: Some(topic) } if topic == "doc"
+        ));
+
+        let parsed = parse_repl_command(":h :doc").expect("command should parse");
+        assert!(matches!(
+            parsed,
+            ReplCommand::Help { topic: Some(topic) } if topic == ":doc"
+        ));
     }
 }
