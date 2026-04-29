@@ -412,7 +412,7 @@ fn repl_doc_command_shows_builtin_docs() {
 
 #[test]
 fn repl_doc_command_resolves_operator_trait_aliases() {
-    let output = run_repl_session(":doc Add\n:doc +\n:quit\n");
+    let output = run_repl_session(":doc Add\n:doc +\n:doc |*>\n:doc |>=\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -433,6 +433,49 @@ fn repl_doc_command_resolves_operator_trait_aliases() {
     assert!(
         summary_hits >= 2,
         "expected both doc lookups to print the Add summary, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Standard `Functor` trait declaration."),
+        "expected :doc |*> to render Functor docs from source, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Standard `Chainable` trait declaration."),
+        "expected :doc |>= to render Chainable docs from source, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn repl_doc_command_shows_generated_function_operator_docs() {
+    let output = run_repl_session(":doc |>\n:doc >>\n:doc >*\n:doc >=>\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Built-in value-apply operator."),
+        "expected generated docs for |>, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Built-in plain composition operator."),
+        "expected generated docs for >>, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Built-in lifted composition operator."),
+        "expected generated docs for >*, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Built-in contextual composition operator."),
+        "expected generated docs for >=>, got:\n{}",
         stdout
     );
 }
