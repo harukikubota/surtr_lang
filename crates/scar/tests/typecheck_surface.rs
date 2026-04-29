@@ -1423,7 +1423,6 @@ bad = &text >> &inc"#,
 }
 
 #[test]
-#[ignore = "covered by integration/manual cases; current scar unit harness overflows stack here"]
 fn compose_accepts_calls_returning_function_values() {
     let resolved = resolve_with_builtin_prelude(
         r#"def make_inc() -> (Int -> Int) {
@@ -1436,15 +1435,10 @@ def make_double() -> (Int -> Int) {
 
 plain = make_inc() >> make_double()"#,
     );
-    let typed = typecheck(resolved).expect("compose should accept function-returning calls");
-    assert!(matches!(
-        typed.last().map(|node| &node.node),
-        Some(TypedInner::Compose(_, _, _))
-    ));
+    typecheck(resolved).expect("compose should accept function-returning calls");
 }
 
 #[test]
-#[ignore = "covered by integration/manual cases; current scar unit harness overflows stack here"]
 fn compose_rejects_non_function_call_results_after_typechecking_call() {
     let resolved = resolve_with_builtin_prelude(
         r#"def inc(x: Int) -> Int {

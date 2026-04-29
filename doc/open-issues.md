@@ -410,11 +410,26 @@
 - closure の `expected=None` 推論強化
   - 期待型や注釈なしでも強く推論する方向は別 issue で扱う
   - let-generalization を入れない current baseline を前提に reopen する
+  - 退避した pending case:
+    - `id = {|value| value}` を `Int` と `String` の両方へ再利用するケースは、現状 `id` が最初の呼び出しで `(Int -> Int)` として固まり、後続の `String` 呼び出しが `Argument type mismatch` になる
+    - 仕様化時は、期待型なしクロージャをどこまで多相的に扱うか、let-generalization なしの baseline と矛盾しない範囲で決める
+- runtime fuel budget
+  - 非停止プログラムを VM 側の step / fuel budget で停止し、安定した runtime error reason を返すかを決める
+  - 退避した pending case:
+    - 再帰関数 `loop()` が自分自身を呼び続けるプログラムを実行し、`fuel` / `budget` / `step limit` 相当の文言で停止することを期待していた
+  - 仕様化時は CLI / REPL / library execution のどこで budget を設定できるか、デフォルト値を持つか、無効化できるかを併せて決める
+- std module の `@@builtin` と `@@test` 共存
+  - 標準モジュール内に `@@builtin type` / `@@builtin def` と `@@test` annotation が共存する surface を許すかを決める
+  - 退避した pending case:
+    - `defmod Bootstrap` 内で `@@builtin type Int`、`@@builtin def print(...)`、`@@test 1 == 1` 付き `def smoke()` が同居するケース
+  - 現状の正本テストは `lib/tests/*.srt` 側へ分離しており、標準ライブラリの正本テストには `@@test` を使わない
 - FuncLiteral surface の将来拡張
   - backtick capture / qualified FuncLiteral path / operator capture は実装済み
   - 今後 reopen する場合は、現在の `ident | qualified_path | operator` を超える surface 追加に限定する
 - OOM / host failure policy
   - 上限値、停止文言、回復可否は host 依存方針のまま、詳細契約は将来確定する
+  - 退避した pending case:
+    - allocation failure を `RuntimeError`、process failure、host abort のどれとして扱うかを決め、ユーザー向け報告文言と責務境界を固定する
 - Enum conversion helper
   - `defenum` 本体（variant payload / discriminant / 条件付き循環）は正本 (`doc/要件定義v9.md`) と `docs/site/*` へ反映済み
   - `.idx` アクセッサは廃止済み（Enum への field access は禁止）

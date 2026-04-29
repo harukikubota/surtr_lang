@@ -36,3 +36,18 @@
 2. `==`, `!=`, `<`, `<=`, `>`, `>=` の `Float` 契約を固定する
 3. 表示規則を `to_string` / `inspect` とあわせて固定する
 4. `spec` と `compile_errors` の fixture を追加する
+
+## 退避した pending case
+
+以前は skipped integration test として、次のケースを先置きしていた。
+
+```surtr
+value = safe_div(0.0, 0.0)
+print(to_string(value))
+```
+
+このテストは `NaN` を表示しても `ZeroDivisionError` にしても通る曖昧な assertion だったため、テストからは外し、本メモの確定項目として管理する。
+仕様化時は次のどちらかを明示してから通常の `spec` / `compile_errors` に追加する。
+
+- `safe_div(0.0, 0.0)` を `Ok(NaN)` 相当として扱い、表示規則を固定する
+- `safe_div(0.0, 0.0)` を `Err(ZeroDivisionError)` 相当として扱い、非有限値を発生させない

@@ -146,7 +146,7 @@ Forge は `GetField(idx)` を emit するだけでよい。
 
 各クレートに `#[test]` を書く。デフォルトのテストランナーは `cargo nextest run` とし、workspace 全体が通ること。
 
-将来仕様の先置きには `#[ignore]` テストを使ってよい。pending 理由をテスト名か ignore 理由で明記すること。
+未実装・未確定の将来仕様は、原則として skipped / ignored テストではなく `doc/open-issues.md` に退避すること。
 
 ### 仕様ベーステスト
 
@@ -371,7 +371,7 @@ Error: TypeMismatch
 1. 仕様を変えるなら `doc/要件定義v9.md` と `doc/open-issues.md` を先に更新する
 2. 標準ライブラリの利用者向け説明は `lib/*.srt` の `@@doc` を更新する
 3. バイトコードや REPL まわりを変えるときは `doc/EldrVM_spec.md` と `doc/Xldr_spec.md` を一緒に見る
-4. 将来仕様の先置きは `tests/integration/pending_regressions.rs` に `#[ignore]` で残す
+4. 将来仕様の先置きは `doc/open-issues.md` に退避し、仕様確定後に通常テストとして追加する
 
 ---
 

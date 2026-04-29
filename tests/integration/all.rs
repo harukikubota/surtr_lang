@@ -7,8 +7,6 @@ mod build_roundtrip;
 mod language_features;
 #[path = "module_import_fixtures.rs"]
 mod module_import_fixtures;
-#[path = "pending_regressions.rs"]
-mod pending_regressions;
 #[path = "private_visibility.rs"]
 mod private_visibility;
 #[path = "repl.rs"]
