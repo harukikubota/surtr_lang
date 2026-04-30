@@ -156,12 +156,30 @@ impl Parser<'_> {
         self.parse_defmod_with_attrs(DeclAttrs::default(), None)
     }
 
+    pub(super) fn parse_namespace(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        self.expect(&Token::Namespace)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        let body = self.parse_namespace_body_stmts()?;
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::Namespace(
+            Span {
+                start: sp.start,
+                end: end.end,
+            },
+            name,
+            body,
+        ))
+    }
+
     pub(super) fn parse_trait_def(&mut self) -> Result<Ast, ParseError> {
         self.parse_trait_def_with_attrs(DeclAttrs::default(), None)
     }
 
     pub(super) fn parse_trait_impl_head(&mut self) -> Result<(Symbol, Vec<AstTy>), ParseError> {
-        let (trait_name, _) = self.expect_ident()?;
+        let (trait_name, _) = self.expect_qualified_ident(2, "trait")?;
         let trait_args = if matches!(self.peek(), Token::Lt) {
             self.advance();
             self.skip_newlines();
@@ -742,7 +760,7 @@ impl Parser<'_> {
             ));
         }
         self.expect(&Token::Defmod)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "module")?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         let body = self.parse_module_body_stmts(Some(name.clone()))?;

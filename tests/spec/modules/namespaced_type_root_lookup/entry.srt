@@ -1,0 +1,2 @@
+user: Auth::User = Auth::User(name: "surtr")
+print(user.name)

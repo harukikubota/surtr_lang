@@ -1,0 +1,4 @@
+import Alpha::Worker::run;
+import Beta::Worker::run;
+
+print(run())

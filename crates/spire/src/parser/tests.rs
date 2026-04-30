@@ -2796,6 +2796,50 @@ fn test_module_compile_unit_accepts_top_level_defmod() {
 }
 
 #[test]
+fn test_namespace_block_lowers_type_and_module_heads() {
+    let ast = parse_with_context(
+        r#"namespace Auth {
+  defrecord User(name: String)
+  defmod Repo {
+    def wrap(user: Auth::User) -> Auth::User { user }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("namespace declarations should lower into ordinary top-level declarations");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::RecordDef(_, name, _), Ast::Defmod(_, module_name, _, _)]
+            if name == "Auth::User" && module_name == "Auth::Repo"
+    ));
+}
+
+#[test]
+fn test_defmod_accepts_qualified_module_path() {
+    let ast = parse_with_context(
+        "defmod Auth::Repo { def name() -> String { \"repo\" } }",
+        ParserContext::module(1, None),
+    )
+    .expect("qualified defmod path should parse");
+    assert!(matches!(ast.as_slice(), [Ast::Defmod(_, name, _, _)] if name == "Auth::Repo"));
+}
+
+#[test]
+fn test_impl_accepts_qualified_type_target() {
+    let ast = parse_with_context(
+        r#"impl Auth::User {
+  def id(self: Self) -> Auth::User { self }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("qualified impl target should parse");
+    assert!(matches!(ast.as_slice(), [Ast::ImplDef(_, target, methods, _)]
+        if target == "Auth::User"
+            && matches!(methods.as_slice(), [Ast::Def(_, _, _, _, Some(AstTy::Named(_, ret_ty)), _, _)] if ret_ty == "Auth::User")));
+}
+
+#[test]
 fn test_defmod_body_accepts_defextractor() {
     let ast = parse_with_context(
         r#"defmod Matchers {

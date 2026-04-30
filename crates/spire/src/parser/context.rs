@@ -17,6 +17,7 @@ pub(crate) enum TopLevelDeclKind {
     Def,
     ExtractorDef,
     Defmod,
+    Namespace,
     ImplDef,
     TraitDef,
     TraitImplDef,
@@ -77,6 +78,7 @@ impl ParseRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::Namespace,
                 TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::TraitDef,
                 TopLevelDeclKind::TraitImplDef,
@@ -94,6 +96,7 @@ impl ParseRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::Namespace,
                 TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::TraitDef,
                 TopLevelDeclKind::TraitImplDef,
@@ -151,6 +154,7 @@ impl ParseRules {
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::Namespace,
                 TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::TraitDef,
                 TopLevelDeclKind::TraitImplDef,

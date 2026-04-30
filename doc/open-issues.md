@@ -87,7 +87,7 @@
 ### OI-006 `defmod` の module path 導出正本
 
 - 背景:
-  - `xldr::loader::derive_primary_module_path` は AST / lowering 優先になっているが、`defmod A::B` を扱う token 走査 fallback がまだ残っている。
+  - `xldr::loader::derive_primary_module_path` は AST / lowering 優先になっているが、qualified head（`defmod A::B`, `namespace A { defmod B { ... } }`）を扱う token 走査 fallback がまだ残っている。
   - loader が token 仕様に依存し続けると、字句変更やコメント配置の影響を受けやすい。
 - 未確定点:
   - module path の正本を `spire` AST と `xldr` lowering のどちらに置くか

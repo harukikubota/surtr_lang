@@ -5,6 +5,8 @@ mod support;
 mod build_roundtrip;
 #[path = "language_features.rs"]
 mod language_features;
+#[path = "namespaces.rs"]
+mod namespaces;
 #[path = "module_import_fixtures.rs"]
 mod module_import_fixtures;
 #[path = "private_visibility.rs"]

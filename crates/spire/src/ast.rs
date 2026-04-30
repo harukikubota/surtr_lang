@@ -354,6 +354,9 @@ pub enum Ast {
     /// Module declaration: `defmod Kernel { ... }`
     Defmod(Span, Symbol, Vec<Ast>, DeclAttrs),
 
+    /// Parser-only namespace declaration: `namespace Auth { ... }`
+    Namespace(Span, Symbol, Vec<Ast>),
+
     /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
     ImplDef(Span, Symbol, Vec<Ast>, DeclAttrs),
 

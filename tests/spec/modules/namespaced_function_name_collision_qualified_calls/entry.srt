@@ -1,0 +1,2 @@
+print(Alpha::Worker::run())
+print(Beta::Worker::run())

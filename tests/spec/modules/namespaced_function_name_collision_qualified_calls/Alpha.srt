@@ -1,0 +1,5 @@
+defmod Alpha::Worker {
+  def run() -> String {
+    "alpha"
+  }
+}

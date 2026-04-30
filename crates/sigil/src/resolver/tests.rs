@@ -88,8 +88,8 @@ deferror Oops(reason: String) { reason }"#,
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
     assert!(index.contains_key("Bootstrap::to_int"));
-    assert!(index.contains_key("Bootstrap::Pair"));
-    assert!(index.contains_key("Bootstrap::Oops"));
+    assert!(index.contains_key("Pair"));
+    assert!(index.contains_key("Oops"));
 }
 
 #[test]
@@ -124,6 +124,40 @@ fn test_precollect_declaration_index_rejects_duplicate_fully_qualified_name() {
     assert!(err
         .message
         .contains("Duplicate fully-qualified declaration: Std::Math::add"));
+}
+
+#[test]
+fn test_precollect_namespaced_types_can_coexist() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"namespace Auth { defrecord User(name: String) }
+namespace Billing { defrecord User(name: String) }"#,
+            "",
+        ),
+    )]];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    assert!(index.contains_key("Auth::User"));
+    assert!(index.contains_key("Billing::User"));
+}
+
+#[test]
+fn test_precollect_namespaced_duplicate_type_is_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"namespace Auth { defrecord User(name: String) }
+namespace Auth { defrecord User(name: String) }"#,
+            "",
+        ),
+    )]];
+
+    let err = precollect_declaration_index(&module_stages)
+        .expect_err("duplicate namespaced type must fail");
+    assert!(err
+        .message
+        .contains("Duplicate fully-qualified declaration: Auth::User"));
 }
 
 #[test]
@@ -164,7 +198,7 @@ fn test_precollect_declaration_index_tracks_bootstrap_std_user_stage_split() {
     ];
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
-    assert_eq!(index["Bootstrap::NoneError"].stage_index, 0);
+    assert_eq!(index["NoneError"].stage_index, 0);
     assert_eq!(index["Std::Math::add"].stage_index, 1);
     assert_eq!(index["User::Main::main"].stage_index, 2);
 }

@@ -249,6 +249,10 @@ impl Checker {
         }
     }
 
+    fn surface_type_name<'a>(name: &'a str) -> &'a str {
+        name.strip_prefix("Global::").unwrap_or(name)
+    }
+
     pub(super) fn resolve_ast_ty_in_context(
         &self,
         ast_ty: &AstTy,
@@ -259,7 +263,7 @@ impl Checker {
         }
 
         match ast_ty {
-            AstTy::Named(span, name) => match name.as_str() {
+            AstTy::Named(span, name) => match Self::surface_type_name(name) {
                 "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
                 "Seq" => Err(self.seq_not_allowed_error(span)),
                 "Int" => Ok(Ty::Int),
@@ -272,8 +276,8 @@ impl Checker {
                 "RegexCaptures" => Ok(Ty::Enum("RegexCaptures".into(), Vec::new())),
                 "RegexMatch" => Ok(Ty::Enum("RegexMatch".into(), Vec::new())),
                 "RandomGenerator" => Ok(Ty::Enum("RandomGenerator".into(), Vec::new())),
-                other => {
-                    if let Some(def) = self.env.lookup_type_def(other) {
+                _ => {
+                    if let Some(def) = self.env.lookup_type_def(name) {
                         match &def.kind {
                             crate::env::TypeKind::Struct => {
                                 Ok(Ty::Struct(def.name.clone(), def.fields.clone()))
@@ -289,7 +293,7 @@ impl Checker {
                                     Err(TypeError {
                                         message: format!(
                                             "Type {} requires {} type argument(s)",
-                                            other,
+                                            name,
                                             def.type_params.len()
                                         ),
                                         span: span.clone(),
@@ -300,18 +304,18 @@ impl Checker {
                         }
                     } else {
                         Err(TypeError {
-                            message: format!("Unknown type: {}", other),
+                            message: format!("Unknown type: {}", name),
                             span: span.clone(),
                             hint: None,
                         })
                     }
                 }
             },
-            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
-            AstTy::Generic(span, name, _) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
-            AstTy::Generic(span, name, args) => match name.as_str() {
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Generic(span, name, args) => match Self::surface_type_name(name) {
                 "MatchResult" => {
                     if !self.match_result_type_allowed(context) {
                         return Err(self.match_result_not_allowed_error(span));
@@ -418,9 +422,9 @@ impl Checker {
                     };
                     Ok(Ty::Result(Box::new(ok), Box::new(err)))
                 }
-                other => {
-                    let def = self.env.lookup_type_def(other).ok_or_else(|| TypeError {
-                        message: format!("Unknown generic type: {}", other),
+                _ => {
+                    let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
+                        message: format!("Unknown generic type: {}", name),
                         span: span.clone(),
                         hint: None,
                     })?;
@@ -428,7 +432,7 @@ impl Checker {
                         return Err(TypeError {
                             message: format!(
                                 "Type {} requires {} type argument(s), got {}",
-                                other,
+                                name,
                                 def.type_params.len(),
                                 args.len()
                             ),
@@ -445,7 +449,7 @@ impl Checker {
                         _ => Err(TypeError {
                             message: format!(
                                 "Generic type {} is not supported in this context",
-                                other
+                                name
                             ),
                             span: span.clone(),
                             hint: None,
@@ -530,10 +534,14 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Named(span, name) if name == "_" || name == "Hole" => {
+            AstTy::Named(span, name)
+                if matches!(Self::surface_type_name(name), "_" | "Hole") =>
+            {
                 self.resolve_hole_surface_ty(span, context)
             }
-            AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
             AstTy::ImplTrait(_, trait_name) => {
                 if context == TypeSyntaxContext::ErrorMarker {
                     return Err(TypeError {
@@ -550,11 +558,11 @@ impl Checker {
                 }
                 Ok(fresh)
             }
-            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
             }
-            AstTy::Generic(span, name, _) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
-            AstTy::Generic(span, name, args) if name == "List" => {
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
                         message: "List<T> requires exactly 1 type argument".into(),
@@ -569,7 +577,7 @@ impl Checker {
                 )?;
                 Ok(Ty::List(Box::new(inner)))
             }
-            AstTy::Generic(span, name, args) if name == "HashMap" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "HashMap" => {
                 if args.len() != 1 {
                     return Err(TypeError {
                         message: "HashMap<V> requires exactly 1 type argument".into(),
@@ -584,7 +592,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("HashMap".into(), vec![value]))
             }
-            AstTy::Generic(span, name, args) if name == "Generator" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Generator" => {
                 if args.len() != 2 {
                     return Err(TypeError {
                         message: "Generator<State, Item> requires exactly 2 type arguments".into(),
@@ -604,7 +612,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("Generator".into(), vec![state, item]))
             }
-            AstTy::Generic(span, name, args) if name == "Lens" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
                 if args.len() != 2 {
                     return Err(TypeError {
                         message: "Lens<S, A> requires exactly 2 type arguments".into(),
@@ -624,7 +632,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Lens(Box::new(source), Box::new(focus)))
             }
-            AstTy::Generic(span, name, args) if name == "MatchResult" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
                 if !self.match_result_type_allowed(context) {
                     return Err(self.match_result_not_allowed_error(span));
                 }
@@ -658,7 +666,7 @@ impl Checker {
                 }
                 Ok(Ty::Enum("MatchResult".into(), vec![value]))
             }
-            AstTy::Generic(span, name, args) if name == "Result" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Result" => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
                         message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
@@ -818,10 +826,14 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Named(span, name) if name == "_" || name == "Hole" => {
+            AstTy::Named(span, name)
+                if matches!(Self::surface_type_name(name), "_" | "Hole") =>
+            {
                 self.resolve_hole_surface_ty(span, context)
             }
-            AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
             AstTy::ImplTrait(span, trait_name) => Err(TypeError {
                 message: format!(
                     "`impl {}` is not supported inside trait method signatures",
@@ -830,11 +842,11 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             }),
-            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
             }
-            AstTy::Generic(span, name, _) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
-            AstTy::Generic(span, name, args) if name == "List" => {
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
                         message: "List<T> requires exactly 1 type argument".into(),
@@ -850,7 +862,7 @@ impl Checker {
                 )?;
                 Ok(Ty::List(Box::new(inner)))
             }
-            AstTy::Generic(span, name, args) if name == "HashMap" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "HashMap" => {
                 if args.len() != 1 {
                     return Err(TypeError {
                         message: "HashMap<V> requires exactly 1 type argument".into(),
@@ -866,7 +878,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("HashMap".into(), vec![value]))
             }
-            AstTy::Generic(span, name, args) if name == "Generator" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Generator" => {
                 if args.len() != 2 {
                     return Err(TypeError {
                         message: "Generator<State, Item> requires exactly 2 type arguments".into(),
@@ -888,7 +900,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("Generator".into(), vec![state, item]))
             }
-            AstTy::Generic(span, name, args) if name == "Lens" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
                 if args.len() != 2 {
                     return Err(TypeError {
                         message: "Lens<S, A> requires exactly 2 type arguments".into(),
@@ -910,7 +922,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Lens(Box::new(source), Box::new(focus)))
             }
-            AstTy::Generic(span, name, args) if name == "MatchResult" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
                 if !self.match_result_type_allowed(context) {
                     return Err(self.match_result_not_allowed_error(span));
                 }
@@ -946,7 +958,7 @@ impl Checker {
                 }
                 Ok(Ty::Enum("MatchResult".into(), vec![value]))
             }
-            AstTy::Generic(span, name, args) if name == "Result" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Result" => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
                         message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
@@ -1094,15 +1106,19 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Named(span, name) if name == "_" || name == "Hole" => {
+            AstTy::Named(span, name)
+                if matches!(Self::surface_type_name(name), "_" | "Hole") =>
+            {
                 self.resolve_hole_surface_ty(span, context)
             }
-            AstTy::Named(span, name) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
-            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+            AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
-            AstTy::Generic(span, name, _) if name == "Seq" => Err(self.seq_not_allowed_error(span)),
-            AstTy::Generic(span, name, args) => match name.as_str() {
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Generic(span, name, args) => match Self::surface_type_name(name) {
                 "MatchResult" => {
                     if !self.match_result_type_allowed(context) {
                         return Err(self.match_result_not_allowed_error(span));
@@ -1298,7 +1314,7 @@ impl Checker {
             });
         };
 
-        if name == "Error" {
+        if Self::surface_type_name(name) == "Error" {
             return Ok(Ty::Error);
         }
 

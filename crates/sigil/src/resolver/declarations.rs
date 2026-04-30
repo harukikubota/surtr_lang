@@ -84,6 +84,10 @@ fn lower_impl_member_name(
     }
 }
 
+fn type_decl_entry_module_path() -> String {
+    String::new()
+}
+
 pub(super) fn trait_method_qualified_name(trait_name: &str, method_name: &str) -> String {
     format!("{}::{}", trait_name, method_name)
 }
@@ -188,7 +192,8 @@ fn resolve_impl_target_kind(
             related_labels: Vec::new(),
         }),
         None => {
-            if builtin_type_supports_inherent_impl(target) {
+            let builtin_target = target.strip_prefix("Global::").unwrap_or(target);
+            if builtin_type_supports_inherent_impl(builtin_target) {
                 Ok(DeclarationKind::BuiltinType)
             } else {
                 Err(ResolveError {
@@ -794,11 +799,7 @@ pub fn precollect_declaration_index(
                             related_labels: Vec::new(),
                         });
                     }
-                    let fq_name = if module.module_path.is_empty() {
-                        name.to_string()
-                    } else {
-                        format!("{}::{}", module.module_path, name)
-                    };
+                    let fq_name = name.to_string();
                     if let Some(prev) = index.get(&fq_name) {
                         return Err(ResolveError {
                             message: format!(
@@ -812,7 +813,7 @@ pub fn precollect_declaration_index(
                     index.insert(
                         fq_name.clone(),
                         DeclarationEntry {
-                            module_path: module.module_path.clone(),
+                            module_path: type_decl_entry_module_path(),
                             name: name.clone(),
                             fq_name,
                             kind: DeclarationKind::Enum,
@@ -824,11 +825,7 @@ pub fn precollect_declaration_index(
 
                     for variant in variants {
                         let variant_name = format!("{}::{}", name, variant.name);
-                        let variant_fq_name = if module.module_path.is_empty() {
-                            variant_name.clone()
-                        } else {
-                            format!("{}::{}", module.module_path, variant_name)
-                        };
+                        let variant_fq_name = variant_name.clone();
                         if let Some(prev) = index.get(&variant_fq_name) {
                             return Err(ResolveError {
                                 message: format!(
@@ -842,7 +839,7 @@ pub fn precollect_declaration_index(
                         index.insert(
                             variant_fq_name.clone(),
                             DeclarationEntry {
-                                module_path: module.module_path.clone(),
+                                module_path: type_decl_entry_module_path(),
                                 name: variant_name,
                                 fq_name: variant_fq_name,
                                 kind: DeclarationKind::EnumVariant,
@@ -938,7 +935,15 @@ pub fn precollect_declaration_index(
                     });
                 }
 
-                let fq_name = if module.module_path.is_empty() {
+                let fq_name = if matches!(
+                    kind,
+                    DeclarationKind::BuiltinType
+                        | DeclarationKind::Struct
+                        | DeclarationKind::Record
+                        | DeclarationKind::Deferror
+                ) {
+                    name.to_string()
+                } else if module.module_path.is_empty() {
                     name.to_string()
                 } else {
                     format!("{}::{}", module.module_path, name)
@@ -958,7 +963,17 @@ pub fn precollect_declaration_index(
                 index.insert(
                     fq_name.clone(),
                     DeclarationEntry {
-                        module_path: module.module_path.clone(),
+                        module_path: if matches!(
+                            kind,
+                            DeclarationKind::BuiltinType
+                                | DeclarationKind::Struct
+                                | DeclarationKind::Record
+                                | DeclarationKind::Deferror
+                        ) {
+                            type_decl_entry_module_path()
+                        } else {
+                            module.module_path.clone()
+                        },
                         name: name.to_string(),
                         fq_name,
                         kind,
@@ -1456,7 +1471,15 @@ impl Resolver {
                             related_labels: Vec::new(),
                         });
                     }
-                    let uid = self.scope.reserve_id();
+                    let uid = self
+                        .declaration_uids
+                        .get(&head.name)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let fresh = self.scope.reserve_id();
+                            self.declaration_uids.insert(head.name.clone(), fresh);
+                            fresh
+                        });
                     self.predeclared_ids
                         .entry(head.name.clone())
                         .or_default()
@@ -1491,7 +1514,7 @@ impl Resolver {
                             related_labels: Vec::new(),
                         });
                     }
-                    let qualified_name = self.qualify_current_declaration_name(name);
+                    let qualified_name = name.clone();
                     let uid = self
                         .declaration_uids
                         .get(&qualified_name)
@@ -1539,7 +1562,7 @@ impl Resolver {
                             related_labels: Vec::new(),
                         });
                     }
-                    let qualified_enum = self.qualify_current_declaration_name(name);
+                    let qualified_enum = name.clone();
                     let uid = self
                         .declaration_uids
                         .get(&qualified_enum)
@@ -1583,13 +1606,11 @@ impl Resolver {
                         }
                         let ctor_uid = self
                             .declaration_uids
-                            .get(&self.qualify_current_declaration_name(&qualified_ctor))
+                            .get(&qualified_ctor)
                             .copied()
                             .unwrap_or_else(|| {
                                 let fresh = self.scope.reserve_id();
-                                let qualified_ctor_name =
-                                    self.qualify_current_declaration_name(&qualified_ctor);
-                                self.declaration_uids.insert(qualified_ctor_name, fresh);
+                                self.declaration_uids.insert(qualified_ctor.clone(), fresh);
                                 fresh
                             });
                         self.predeclared_ids

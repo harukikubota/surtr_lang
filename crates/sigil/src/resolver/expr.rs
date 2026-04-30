@@ -339,6 +339,7 @@ impl Resolver {
             | Ast::BuiltinTypeDecl(_, _, _)
             | Ast::ResultCtorDecl(_, _, _, _, _)
             | Ast::Defmod(_, _, _, _)
+            | Ast::Namespace(_, _, _)
             | Ast::ImplDef(_, _, _, _)
             | Ast::TraitDef(_, _, _, _, _)
             | Ast::TraitImplDef(_, _, _, _, _, _)
@@ -2214,6 +2215,11 @@ impl Resolver {
                     resolved_arms,
                 ))
             }
+            Ast::Namespace(span, _, _) => Err(ResolveError {
+                message: "namespace declarations must be lowered before name resolution".into(),
+                span,
+                related_labels: Vec::new(),
+            }),
         }
     }
 

@@ -36,6 +36,7 @@ fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         Ast::Def(_, _, _, _, _, _, _) => Some(TopLevelDeclKind::Def),
         Ast::ExtractorDef(_, _, _, _, _, _, _) => Some(TopLevelDeclKind::ExtractorDef),
         Ast::Defmod(_, _, _, _) => Some(TopLevelDeclKind::Defmod),
+        Ast::Namespace(_, _, _) => Some(TopLevelDeclKind::Namespace),
         Ast::ImplDef(_, _, _, _) => Some(TopLevelDeclKind::ImplDef),
         Ast::TraitDef(_, _, _, _, _) => Some(TopLevelDeclKind::TraitDef),
         Ast::TraitImplDef(_, _, _, _, _, _) => Some(TopLevelDeclKind::TraitImplDef),

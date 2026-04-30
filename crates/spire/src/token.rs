@@ -74,6 +74,7 @@ pub enum Token {
     Def,
     Defp,
     Defmod,
+    Namespace,
     Deftrait,
     Import,
     Include,

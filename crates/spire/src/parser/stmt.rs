@@ -16,6 +16,7 @@ impl Parser<'_> {
                     | Token::Def
                     | Token::Defp
                     | Token::Defmod
+                    | Token::Namespace
                     | Token::Deftrait
                     | Token::Impl
                     | Token::Import
@@ -38,6 +39,7 @@ impl Parser<'_> {
             Token::Annotator(_) => self.parse_annotated_decl()?,
             Token::Def | Token::Defp => self.parse_def()?,
             Token::Defmod => self.parse_defmod()?,
+            Token::Namespace => self.parse_namespace()?,
             Token::Deftrait => self.parse_trait_def()?,
             Token::Impl => self.parse_impl_def()?,
             Token::Import => self.parse_import()?,
@@ -119,6 +121,34 @@ impl Parser<'_> {
         } else {
             ParseRules::module_member()
         };
+
+        let result = (|| {
+            let mut stmts = Vec::new();
+            self.skip_newlines();
+
+            while !matches!(self.peek(), Token::RBrace) {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete("}", self.peek_span()));
+                }
+                let stmt = self.parse_stmt()?;
+                self.ensure_stmt_boundary(&stmt, true)?;
+                stmts.push(stmt);
+                while matches!(self.peek(), Token::Newline) {
+                    self.advance();
+                }
+            }
+
+            Ok(stmts)
+        })();
+
+        self.context = prev_context;
+        result
+    }
+
+    pub(super) fn parse_namespace_body_stmts(&mut self) -> Result<Vec<Ast>, ParseError> {
+        let prev_context = self.context.clone();
+        self.context.level = DeclLevel::Top;
+        self.context.module_path = None;
 
         let result = (|| {
             let mut stmts = Vec::new();

@@ -1,0 +1,3 @@
+phase: resolve
+contains: Duplicate fully-qualified declaration
+contains: Auth::User

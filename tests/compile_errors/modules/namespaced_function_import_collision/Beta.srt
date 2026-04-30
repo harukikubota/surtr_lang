@@ -1,0 +1,5 @@
+defmod Beta::Worker {
+  def run() -> String {
+    "beta"
+  }
+}

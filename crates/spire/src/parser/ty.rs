@@ -126,10 +126,10 @@ impl Parser<'_> {
         if matches!(self.peek(), Token::Impl) {
             self.advance();
             self.skip_newlines();
-            let (trait_name, trait_span) = self.expect_ident()?;
-            return Ok(AstTy::ImplTrait(
-                Span {
-                    start: sp.start,
+        let (trait_name, trait_span) = self.expect_qualified_ident(2, "trait")?;
+        return Ok(AstTy::ImplTrait(
+            Span {
+                start: sp.start,
                     end: trait_span.end,
                 },
                 trait_name,
@@ -137,13 +137,13 @@ impl Parser<'_> {
         }
 
         // Named type, possibly with type args: Result<Int>, List<Int>, Option<Int>, ...
-        let (name, _) = self.expect_ident()?;
+        let (name, name_span) = self.expect_qualified_ident(2, "type")?;
         if name == "Self" {
             if impl_target.is_some() {
                 return Ok(AstTy::Named(
                     Span {
                         start: sp.start,
-                        end: sp.end,
+                        end: name_span.end,
                     },
                     "Self".to_string(),
                 ));
@@ -185,7 +185,7 @@ impl Parser<'_> {
         Ok(AstTy::Named(
             Span {
                 start: sp.start,
-                end: sp.end,
+                end: name_span.end,
             },
             name,
         ))

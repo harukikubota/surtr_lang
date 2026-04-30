@@ -45,7 +45,8 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
 pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
     reject_excessive_delimiter_nesting(&tokens)?;
-    chumsky_program::parse_program_with_chumsky(&tokens, context)
+    let ast = chumsky_program::parse_program_with_chumsky(&tokens, context)?;
+    lower_namespaces(ast)
 }
 
 /// Parse Surtr source with parser diagnostic metadata for editor tooling.
@@ -55,8 +56,9 @@ pub fn parse_with_context_diagnostic(
 ) -> Result<Vec<Ast>, ParseDiagnostic> {
     let tokens = tokenize(source).map_err(ParseDiagnostic::from)?;
     reject_excessive_delimiter_nesting(&tokens).map_err(ParseDiagnostic::from)?;
-    chumsky_program::parse_program_with_chumsky_diagnostic(&tokens, context)
-        .map_err(ParseDiagnostic::from)
+    let ast = chumsky_program::parse_program_with_chumsky_diagnostic(&tokens, context)
+        .map_err(ParseDiagnostic::from)?;
+    lower_namespaces(ast).map_err(ParseDiagnostic::from)
 }
 
 fn reject_excessive_delimiter_nesting(tokens: &[Spanned<Token>]) -> Result<(), ParseError> {
@@ -412,12 +414,200 @@ impl<'a> Parser<'a> {
         self.advance();
         Ok(Span { start, end })
     }
+
+    fn expect_qualified_ident(
+        &mut self,
+        max_segments: usize,
+        label: &str,
+    ) -> Result<(Symbol, Span), ParseError> {
+        let (first, first_span) = self.expect_ident()?;
+        let start = first_span.start;
+        let mut end = first_span.end;
+        let mut segments = vec![first];
+        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+            self.consume_path_separator()?;
+            let (segment, span) = self.expect_ident()?;
+            end = span.end;
+            segments.push(segment);
+            if segments.len() > max_segments {
+                return Err(ParseError::syntax(
+                    format!("{label} path must not exceed {max_segments} segments"),
+                    Span { start, end },
+                ));
+            }
+        }
+        Ok((segments.join("::"), Span { start, end }))
+    }
 }
 
 fn shift_span(span: Span, delta: usize) -> Span {
     Span {
         start: span.start + delta,
         end: span.end + delta,
+    }
+}
+
+fn lower_namespaces(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> {
+    let mut out = Vec::new();
+    for node in ast {
+        lower_namespace_node(node, None, &mut out)?;
+    }
+    Ok(out)
+}
+
+fn lower_namespace_node(
+    node: Ast,
+    namespace: Option<&str>,
+    out: &mut Vec<Ast>,
+) -> Result<(), ParseError> {
+    match node {
+        Ast::Namespace(span, name, body) => {
+            if namespace.is_some() {
+                return Err(ParseError::syntax(
+                    "Nested namespace declarations are not allowed",
+                    span,
+                ));
+            }
+            for inner in body {
+                lower_namespace_node(inner, Some(name.as_str()), out)?;
+            }
+            Ok(())
+        }
+        other => {
+            out.push(apply_namespace_to_decl(other, namespace)?);
+            Ok(())
+        }
+    }
+}
+
+fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, ParseError> {
+    let Some(namespace) = namespace else {
+        return Ok(node);
+    };
+    match node {
+        Ast::Defmod(span, name, body, attrs) => Ok(Ast::Defmod(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "module")?,
+            body,
+            attrs,
+        )),
+        Ast::ImplDef(span, target, methods, attrs) => Ok(Ast::ImplDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &target, 2, &span, "impl target")?,
+            methods,
+            attrs,
+        )),
+        Ast::TraitDef(span, name, type_params, methods, attrs) => Ok(Ast::TraitDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "trait")?,
+            type_params,
+            methods,
+            attrs,
+        )),
+        Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+            Ok(Ast::TraitImplDef(
+                span.clone(),
+                qualify_namespace_head(namespace, &trait_name, 2, &span, "trait")?,
+                trait_args,
+                qualify_namespace_type(target_ty, namespace)?,
+                methods,
+                attrs,
+            ))
+        }
+        Ast::StructDef(span, name, fields) => Ok(Ast::StructDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            fields,
+        )),
+        Ast::RecordDef(span, name, fields) => Ok(Ast::RecordDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            fields,
+        )),
+        Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ok(Ast::DeferrorDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            fields,
+            show_expr,
+            attrs,
+        )),
+        Ast::EnumDef(span, name, type_params, variants, attrs) => Ok(Ast::EnumDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            type_params,
+            variants,
+            attrs,
+        )),
+        Ast::BuiltinTypeDecl(span, mut head, attrs) => {
+            head.name = qualify_namespace_head(namespace, &head.name, 2, &span, "type")?;
+            Ok(Ast::BuiltinTypeDecl(span, head, attrs))
+        }
+        Ast::Namespace(span, _, _) => Err(ParseError::syntax(
+            "Nested namespace declarations are not allowed",
+            span,
+        )),
+        other => Ok(other),
+    }
+}
+
+fn qualify_namespace_head(
+    namespace: &str,
+    name: &str,
+    max_segments: usize,
+    span: &Span,
+    label: &str,
+) -> Result<String, ParseError> {
+    let segments = name.split("::").collect::<Vec<_>>();
+    if segments.len() > max_segments {
+        return Err(ParseError::syntax(
+            format!("{label} path must not exceed {max_segments} segments"),
+            span.clone(),
+        ));
+    }
+    if segments.len() == max_segments {
+        return Ok(name.to_string());
+    }
+    Ok(format!("{namespace}::{name}"))
+}
+
+fn qualify_namespace_type(ty: AstTy, namespace: &str) -> Result<AstTy, ParseError> {
+    match ty {
+        AstTy::Named(span, name) => {
+            if name == "Self" || name.starts_with('$') || name == "_" || name == "Hole" {
+                Ok(AstTy::Named(span, name))
+            } else {
+                Ok(AstTy::Named(
+                    span.clone(),
+                    qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+                ))
+            }
+        }
+        AstTy::ImplTrait(span, name) => Ok(AstTy::ImplTrait(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "trait")?,
+        )),
+        AstTy::Generic(span, name, args) => Ok(AstTy::Generic(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            args.into_iter()
+                .map(|arg| qualify_namespace_type(arg, namespace))
+                .collect::<Result<Vec<_>, ParseError>>()?,
+        )),
+        AstTy::Tuple(span, items) => Ok(AstTy::Tuple(
+            span,
+            items
+                .into_iter()
+                .map(|item| qualify_namespace_type(item, namespace))
+                .collect::<Result<Vec<_>, ParseError>>()?,
+        )),
+        AstTy::Func(span, params, ret) => Ok(AstTy::Func(
+            span,
+            params
+                .into_iter()
+                .map(|param| qualify_namespace_type(param, namespace))
+                .collect::<Result<Vec<_>, ParseError>>()?,
+            Box::new(qualify_namespace_type(*ret, namespace)?),
+        )),
     }
 }
 
@@ -862,6 +1052,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             shift_builtin_type_head(head, delta),
             shift_decl_attrs(attrs),
         ),
+        Ast::Namespace(span, name, body) => Ast::Namespace(
+            shift_span(span, delta),
+            name,
+            body.into_iter().map(|stmt| shift_ast_span(stmt, delta)).collect(),
+        ),
         Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
             shift_span(span, delta),
             name,
@@ -1012,6 +1207,7 @@ impl Ast {
             | Ast::BuiltinDecl(s, _, _, _, _)
             | Ast::BuiltinExtractorDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)
+            | Ast::Namespace(s, _, _)
             | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)
             | Ast::ImplDef(s, _, _, _)
