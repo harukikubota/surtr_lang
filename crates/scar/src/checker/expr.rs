@@ -1520,6 +1520,15 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             }),
+            Ty::Enum(name, _) if name == "Option" => Err(TypeError {
+                message: format!(
+                    "{} expects a plain function on the right-hand side; use {} for contextual output",
+                    op_name,
+                    if op_name == "`>*`" { "`>=>`" } else { "`|>=`" }
+                ),
+                span: span.clone(),
+                hint: None,
+            }),
             _ => Ok(()),
         }
     }
@@ -1662,7 +1671,7 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|*>`",
-                            "LHS: Functor container such as Result<A> or List<A>; RHS: (A -> B); result: mapped container",
+                            "LHS: Functor container such as Result<A>, List<A>, or Option<A>; RHS: (A -> B); result: mapped container",
                             &typed_left.ty,
                             &typed_right.ty,
                             None,
@@ -1681,7 +1690,26 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|*>`",
-                            "LHS: Functor container such as Result<A> or List<A>; RHS: (A -> B); result: mapped container",
+                            "LHS: Functor container such as Result<A>, List<A>, or Option<A>; RHS: (A -> B); result: mapped container",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            None,
+                        )),
+                    });
+                }
+            }
+            Ty::Enum(name, args) if name == "Option" && args.len() == 1 => {
+                if !self.types_compatible(&args[0], &rhs_in) {
+                    return Err(TypeError {
+                        message: format!(
+                            "`|*>` type mismatch: expected {}, got {}",
+                            self.ty_name(&args[0]),
+                            self.ty_name(&rhs_in)
+                        ),
+                        span: typed_right.span.clone(),
+                        hint: Some(self.operator_rule_hint(
+                            "`|*>`",
+                            "LHS: Functor container such as Result<A>, List<A>, or Option<A>; RHS: (A -> B); result: mapped container",
                             &typed_left.ty,
                             &typed_right.ty,
                             None,
@@ -1715,11 +1743,11 @@ impl Checker {
                 span: typed_left.span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|*>`",
-                    "LHS: Functor container such as Result<A> or List<A>; RHS: (A -> B); result: mapped container",
+                    "LHS: Functor container such as Result<A>, List<A>, or Option<A>; RHS: (A -> B); result: mapped container",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
-                        "Standard Functor implementations are available for Result and List. The evaluated LHS is {}.",
+                        "Standard Functor implementations are available for Result, List, and Option. The evaluated LHS is {}.",
                         self.ty_name(&receiver_ty)
                     )),
                 )),
@@ -1760,6 +1788,7 @@ impl Checker {
 
         let typed_left = self.check_node(left)?;
         let receiver_ty = self.resolve_ty(&typed_left.ty);
+        let is_option_ctx = |ty: &Ty| matches!(ty, Ty::Enum(name, _) if name == "Option");
         match (&receiver_ty, self.resolve_ty(&rhs_ret)) {
             (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
                 if !self.types_compatible(ok.as_ref(), &rhs_in)
@@ -1770,7 +1799,7 @@ impl Checker {
                         span: span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Chainable container such as Result<A> or List<A>; RHS: contextual function; result: same context family",
+                            "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
                             Some(format!(
@@ -1794,25 +1823,84 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Chainable container such as Result<A> or List<A>; RHS: contextual function; result: same context family",
+                            "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
-                            Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List.".into()),
+                            Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List/Option.".into()),
                         )),
                     });
                 }
             }
-            (Ty::Result(_, _), Ty::List(_)) | (Ty::List(_), Ty::Result(_, _)) => {
+            (Ty::Enum(name, args), Ty::Enum(next_name, _))
+                if name == "Option" && args.len() == 1 && next_name == "Option" =>
+            {
+                if !self.types_compatible(&args[0], &rhs_in) {
+                    return Err(TypeError {
+                        message: format!(
+                            "`|>=` type mismatch: expected {}, got {}",
+                            self.ty_name(&args[0]),
+                            self.ty_name(&rhs_in)
+                        ),
+                        span: typed_right.span.clone(),
+                        hint: Some(self.operator_rule_hint(
+                            "`|>=`",
+                            "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List/Option.".into()),
+                        )),
+                    });
+                }
+            }
+            (lhs_ctx, Ty::Result(_, _)) if is_option_ctx(lhs_ctx) => {
                 return Err(TypeError {
-                message: "`|>=` container context mismatch: cannot mix Result and List context"
+                    message: "`|>=` cannot use Option as a standard failure container for Result bind"
+                        .into(),
+                    span: span.clone(),
+                    hint: Some(self.operator_rule_hint(
+                        "`|>=`",
+                        "LHS: Option<A>; RHS: (A -> Result<B, E>); Option is not the standard failure container for this bind",
+                        &typed_left.ty,
+                        &typed_right.ty,
+                        Some(
+                            "Option is not standard for failure propagation. Convert explicitly with `from(value, Result)` before using `|>=`, for example `from(option_value, Result) |>= rhs()`.".into(),
+                        ),
+                    )),
+                });
+            }
+            (Ty::Result(_, _), rhs_ctx) if is_option_ctx(&rhs_ctx) => {
+                return Err(TypeError {
+                    message: "`|>=` cannot switch from Result into Option bind context".into(),
+                    span: span.clone(),
+                    hint: Some(self.operator_rule_hint(
+                        "`|>=`",
+                        "LHS: Result<A, E>; RHS: (A -> Option<B>); Option is not the standard failure container for this bind",
+                        &typed_left.ty,
+                        &typed_right.ty,
+                        Some(
+                            "Option is not standard for failure propagation. Convert the RHS explicitly to Result with `from(value, Result)` around the Option result, for example `result_value |>= {|value| from(option_rhs(value), Result)}`.".into(),
+                        ),
+                    )),
+                });
+            }
+            (lhs_ctx, rhs_ctx)
+                if (matches!(lhs_ctx, Ty::Result(_, _))
+                    && (matches!(rhs_ctx, Ty::List(_)) || is_option_ctx(&rhs_ctx)))
+                    || (matches!(lhs_ctx, Ty::List(_))
+                        && (matches!(rhs_ctx, Ty::Result(_, _)) || is_option_ctx(&rhs_ctx)))
+                    || (is_option_ctx(lhs_ctx)
+                        && (matches!(rhs_ctx, Ty::Result(_, _)) || matches!(rhs_ctx, Ty::List(_)))) =>
+            {
+                return Err(TypeError {
+                message: "`|>=` container context mismatch: cannot mix Result, List, and Option context"
                     .into(),
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|>=`",
-                    "LHS: Chainable container such as Result<A> or List<A>; RHS: contextual function; result: same context family",
+                    "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                     &typed_left.ty,
                     &typed_right.ty,
-                    Some("Result and List containers cannot be mixed in one bind operator.".into()),
+                    Some("Result, List, and Option containers cannot be mixed in one bind operator.".into()),
                 )),
                 });
             }
@@ -1854,6 +1942,25 @@ impl Checker {
                 )),
                 });
             }
+            (Ty::Enum(name, _), rhs_plain) if name == "Option" => {
+                return Err(TypeError {
+                message: format!(
+                    "`|>=` requires the right-hand side to return Option, got {}",
+                    self.ty_name(&rhs_plain)
+                ),
+                span: typed_right.span.clone(),
+                hint: Some(self.operator_rule_hint(
+                    "`|>=`",
+                    "LHS: Option<A>; RHS: (A -> Option<B>); result: Option<B>",
+                    &typed_left.ty,
+                    &typed_right.ty,
+                    Some(format!(
+                        "RHS returns plain {}. Use `|*>` when the RHS is a plain function and you want to keep the Option context.",
+                        self.ty_name(&rhs_plain)
+                    )),
+                )),
+                });
+            }
             _ => {}
         }
 
@@ -1879,11 +1986,11 @@ impl Checker {
                 span: typed_left.span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|>=`",
-                    "LHS: Chainable container such as Result<A> or List<A>; RHS: contextual function; result: same context family",
+                    "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
-                        "Standard Chainable implementations are available for Result and List. The evaluated LHS is {}. Use `|*>` after a contextual value when the RHS is plain.",
+                        "Standard Chainable implementations are available for Result, List, and Option. The evaluated LHS is {}. Use `|*>` after a contextual value when the RHS is plain.",
                         self.ty_name(&receiver_ty)
                     )),
                 )),

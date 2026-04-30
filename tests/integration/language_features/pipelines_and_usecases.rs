@@ -404,7 +404,23 @@ bad = value |*> lift()"#,
 
 value: Result<Int> = Ok(1)
 bad = value |>= expand()"#,
-        "cannot mix Result and List context",
+        "cannot mix Result, List, and Option context",
+    );
+
+    assert_compile_error(
+        r#"def maybe_inc(value: Int) -> Option<Int> {
+  if(value > 0, Option::Some(value + 1), Option::None)
+}
+
+value: Result<Int> = Ok(1)
+bad = value |>= maybe_inc()"#,
+        "cannot switch from Result into Option bind context",
+    );
+
+    assert_compile_error(
+        r#"value: Option<Int> = Option::Some(1)
+bad = value |*> {|value| Option::Some(value + 1)}"#,
+        "expects a plain function on the right-hand side",
     );
 
     assert_compile_error(

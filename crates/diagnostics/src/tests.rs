@@ -539,11 +539,11 @@ fn render_flow_operator_error_keeps_actual_types_out_of_help() {
     assert!(rendered_plain.contains("OP rule: Result<A> |>= (A -> Result<B>) -> Result<B>"));
     assert!(rendered_plain.contains("Step: Int |>= (Int -> Result<Int>) -> Result<Int>"));
     assert!(rendered_plain.contains(
-        "Reason: LHS is Int, but `|>=` requires a Chainable such as Result<A> or List<A>."
+        "Reason: LHS is Int, but `|>=` requires a Chainable such as Result<A>, List<A>, or Option<A>."
     ));
     assert_eq!(
         spec.help.as_deref(),
-        Some("Use `|>` for a plain value, or make the LHS Result/List.")
+        Some("Use `|>` for a plain value, or make the LHS Result/List/Option.")
     );
     assert!(!spec.help.as_deref().unwrap_or("").contains("Int"));
 }

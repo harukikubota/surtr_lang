@@ -2218,6 +2218,8 @@ pub(crate) fn flow_family_from_type(ty: &str) -> Option<&'static str> {
         Some("Result")
     } else if trimmed.starts_with("List<") {
         Some("List")
+    } else if trimmed.starts_with("Option<") {
+        Some("Option")
     } else {
         None
     }
@@ -2235,14 +2237,16 @@ pub(crate) fn flow_operator_rule_display(op: &str, lhs_actual: &str, rhs_actual:
         "|*>" => match flow_family_from_type(lhs_actual) {
             Some("Result") => "Result<A> |*> (A -> B) -> Result<B>".into(),
             Some("List") => "List<A> |*> (A -> B) -> List<B>".into(),
-            _ => "Result/List map".into(),
+            Some("Option") => "Option<A> |*> (A -> B) -> Option<B>".into(),
+            _ => "Result/List/Option map".into(),
         },
         "|>=" => match flow_family_from_type(lhs_actual)
             .or_else(|| flow_family_from_callable_output(rhs_actual))
         {
             Some("Result") => "Result<A> |>= (A -> Result<B>) -> Result<B>".into(),
             Some("List") => "List<A> |>= (A -> List<B>) -> List<B>".into(),
-            _ => "Result/List bind".into(),
+            Some("Option") => "Option<A> |>= (A -> Option<B>) -> Option<B>".into(),
+            _ => "Result/List/Option bind".into(),
         },
         ">*" => match flow_family_from_callable_output(lhs_actual) {
             Some("Result") => "(A -> Result<B>) >* (B -> C) -> (A -> Result<C>)".into(),
@@ -2262,12 +2266,12 @@ pub(crate) fn flow_operator_rule_display(op: &str, lhs_actual: &str, rhs_actual:
 
 pub(crate) fn flow_operator_rule_detail(op: &str, summary: &str) -> Option<String> {
     match (op, summary) {
-        ("|*>", "Result/List map") => Some(
-            "Rule: Result<A> |*> (A -> B) -> Result<B>\n      List<A>   |*> (A -> B) -> List<B>"
+        ("|*>", "Result/List/Option map") => Some(
+            "Rule: Result<A> |*> (A -> B)      -> Result<B>\n      List<A>   |*> (A -> B)      -> List<B>\n      Option<A> |*> (A -> B)      -> Option<B>"
                 .into(),
         ),
-        ("|>=", "Result/List bind") => Some(
-            "Rule: Result<A> |>= (A -> Result<B>) -> Result<B>\n      List<A>   |>= (A -> List<B>)   -> List<B>"
+        ("|>=", "Result/List/Option bind") => Some(
+            "Rule: Result<A> |>= (A -> Result<B>) -> Result<B>\n      List<A>   |>= (A -> List<B>)   -> List<B>\n      Option<A> |>= (A -> Option<B>) -> Option<B>"
                 .into(),
         ),
         (">*", "Result/List lifted compose") => Some(
@@ -2376,6 +2380,8 @@ pub(crate) fn map_container_output_display(container_ty: &str, new_inner: &str) 
         Some(format!("Result<{}>", new_inner))
     } else if container_ty.starts_with("List<") && container_ty.ends_with('>') {
         Some(format!("List<{}>", new_inner))
+    } else if container_ty.starts_with("Option<") && container_ty.ends_with('>') {
+        Some(format!("Option<{}>", new_inner))
     } else {
         None
     }
@@ -2425,7 +2431,7 @@ pub(crate) fn flow_operator_reason(
                 .or_else(|| message.strip_prefix("`|*>` requires Result or List on the left, got "))
             {
                 format!(
-                    "Reason: LHS is {}, but `|*>` maps over a Functor such as Result<A> or List<A>.",
+                    "Reason: LHS is {}, but `|*>` maps over a Functor such as Result<A>, List<A>, or Option<A>.",
                     got
                 )
             } else if let Some((_prefix, got)) = message.split_once(
@@ -2455,7 +2461,7 @@ pub(crate) fn flow_operator_reason(
                 .or_else(|| message.strip_prefix("`|>=` requires Result or List on the left, got "))
             {
                 format!(
-                    "Reason: LHS is {}, but `|>=` requires a Chainable such as Result<A> or List<A>.",
+                    "Reason: LHS is {}, but `|>=` requires a Chainable such as Result<A>, List<A>, or Option<A>.",
                     got
                 )
             } else if let Some(got) =
@@ -2466,10 +2472,19 @@ pub(crate) fn flow_operator_reason(
                 message.strip_prefix("`|>=` requires the right-hand side to return List, got ")
             {
                 format!("Reason: RHS returns {}, but `|>=` requires List<B>.", got)
-            } else if message.contains("cannot mix Result and List context") {
-                let lhs_family = flow_family_from_type(lhs_actual).unwrap_or("Result/List");
+            } else if let Some(got) =
+                message.strip_prefix("`|>=` requires the right-hand side to return Option, got ")
+            {
+                format!("Reason: RHS returns {}, but `|>=` requires Option<B>.", got)
+            } else if message.contains("cannot use Option as a standard failure container for Result bind")
+            {
+                "Reason: LHS is Option, but Result bind in Surtr uses Result as the standard failure container.".into()
+            } else if message.contains("cannot switch from Result into Option bind context") {
+                "Reason: LHS is Result, but the RHS returns Option and `|>=` does not switch failure-container families implicitly.".into()
+            } else if message.contains("cannot mix Result, List, and Option context") {
+                let lhs_family = flow_family_from_type(lhs_actual).unwrap_or("Result/List/Option");
                 let rhs_family =
-                    flow_family_from_callable_output(rhs_actual).unwrap_or("Result/List");
+                    flow_family_from_callable_output(rhs_actual).unwrap_or("Result/List/Option");
                 format!(
                     "Reason: LHS is {}, but RHS returns {}.",
                     lhs_family, rhs_family
@@ -2552,16 +2567,16 @@ pub(crate) fn flow_operator_help(
         "|*>" if message.contains("requires Functor implementation")
             || message.contains("requires Result or List on the left") =>
         {
-            "Use `|>` for a plain value, or make the LHS Result/List.".into()
+            "Use `|>` for a plain value, or make the LHS Result/List/Option.".into()
         }
         "|*>" if message.contains("plain function on the right-hand side") => {
-            "Use `|>=` to bind a function that already returns Result/List.".into()
+            "Use `|>=` to bind a function that already returns Result/List/Option.".into()
         }
-        "|*>" => "Keep the RHS plain, or switch to `|>=` if it already returns Result/List.".into(),
+        "|*>" => "Keep the RHS plain, or switch to `|>=` if it already returns Result/List/Option.".into(),
         "|>=" if message.contains("requires Chainable implementation")
             || message.contains("requires Result or List on the left") =>
         {
-            "Use `|>` for a plain value, or make the LHS Result/List.".into()
+            "Use `|>` for a plain value, or make the LHS Result/List/Option.".into()
         }
         "|>=" if message.contains("right-hand side to return Result") => {
             "Use `|*>` to map over the Result value, or change the RHS to return Result.".into()
@@ -2569,7 +2584,16 @@ pub(crate) fn flow_operator_help(
         "|>=" if message.contains("right-hand side to return List") => {
             "Use `|*>` to map over the List value, or change the RHS to return List.".into()
         }
-        "|>=" if message.contains("cannot mix Result and List context") => {
+        "|>=" if message.contains("right-hand side to return Option") => {
+            "Use `|*>` to map over the Option value, or change the RHS to return Option.".into()
+        }
+        "|>=" if message.contains("cannot use Option as a standard failure container for Result bind") => {
+            "Convert the Option value explicitly with `from(value, Result)` before binding.".into()
+        }
+        "|>=" if message.contains("cannot switch from Result into Option bind context") => {
+            "Wrap the RHS so it converts Option to Result explicitly with `from(value, Result)`.".into()
+        }
+        "|>=" if message.contains("cannot mix Result, List, and Option context") => {
             "Keep the same container family across bind.".into()
         }
         "|>=" => "Make the RHS input and container family match the LHS.".into(),

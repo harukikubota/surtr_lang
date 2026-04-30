@@ -1,4 +1,4 @@
 phase: typecheck
 contains: container context mismatch
-contains: cannot mix Result and List context
-contains: Result and List containers cannot be mixed
+contains: cannot mix Result, List, and Option context
+contains: Result, List, and Option containers cannot be mixed
