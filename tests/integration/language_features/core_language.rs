@@ -320,13 +320,13 @@ printer("hello")"#,
 
 fn const_helper_and_hole_return_surface_work() {
     assert_output(
-        r#"always: (_ -> Int) = const(1)
-print(to_string(always("ignored")))
+        r#"keep_one: (_ -> Int) = always(1)
+print(to_string(keep_one("ignored")))
 
 print(to_string(id("ok")))
 
 def make() -> (_ -> Int) {
-  const(2)
+  always(2)
 }
 
 next = make()
@@ -859,7 +859,7 @@ print("r=#{r}")"#,
 fn function_definition_minimal() {
     assert_output(
         r#"def noop() {()}
-def const() -> Int { 1 }
+def keep_one() -> Int { 1 }
 def do_something(num: Int) -> Unit { () }
 def add_two(num: Int) -> Int { num + 2 }
 def add(x: Int, y: Int) -> Int { x + y }"#,

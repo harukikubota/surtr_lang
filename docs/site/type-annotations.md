@@ -138,7 +138,7 @@ xldr(2)>
 ignored-input callable を表すときは `_` が現れます。
 
 ```surtr
-always: (_ -> Int) = const(1)
+keep_one: (_ -> Int) = always(1)
 ```
 
 この `_` は wildcard ではなく、internal な `Hole` marker の surface 表記です。

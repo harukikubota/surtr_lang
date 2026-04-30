@@ -1,0 +1,4 @@
+def main() -> Int {
+  value @ VALUE = 1
+  value
+}

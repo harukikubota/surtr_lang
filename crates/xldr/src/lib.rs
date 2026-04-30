@@ -647,6 +647,7 @@ pub fn lower_module_source_ast(
 
     let mut lowered = Vec::new();
     let mut shared_global_defs = Vec::new();
+    let mut shared_namespace_consts = Vec::new();
     let mut shared_result_ctor_contracts = Vec::new();
 
     for stmt in ast {
@@ -689,6 +690,9 @@ pub fn lower_module_source_ast(
             spire::ast::Ast::ResultCtorDecl(_, _, _, _, _) => {
                 shared_result_ctor_contracts.push(stmt);
             }
+            spire::ast::Ast::ConstDef(_, _, _, _, _) => {
+                shared_namespace_consts.push(stmt);
+            }
             spire::ast::Ast::StructDef(_, _, _)
             | spire::ast::Ast::RecordDef(_, _, _)
             | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
@@ -706,6 +710,29 @@ pub fn lower_module_source_ast(
                 // Defensive fallback. Parser policy should keep this unreachable for module sources.
                 shared_global_defs.push(stmt);
             }
+        }
+    }
+
+    if !shared_namespace_consts.is_empty() {
+        if lowered.len() == 1 {
+            let insert_at = lowered[0]
+                .ast
+                .iter()
+                .take_while(|stmt| matches!(stmt, spire::ast::Ast::Import(_, _, _)))
+                .count();
+            lowered[0]
+                .ast
+                .splice(insert_at..insert_at, shared_namespace_consts);
+        } else {
+            let mut shared_ast = shared_imports.clone();
+            shared_ast.extend(shared_namespace_consts);
+            lowered.push(LoweredModuleAst {
+                module_path: fallback_module_path.unwrap_or_default().to_string(),
+                ast: shared_ast,
+                declared_span: None,
+                module_doc: None,
+                auto_import: false,
+            });
         }
     }
 
@@ -1177,6 +1204,27 @@ impl Int {
             .ast
             .iter()
             .any(|stmt| matches!(stmt, spire::ast::Ast::BuiltinDecl(_, name, _, _, _) if name == "safe_mod")));
+    }
+
+    #[test]
+    fn lower_module_source_attaches_top_level_consts_to_namespace_module() {
+        let ast = spire::parse_with_context(
+            r#"const APP_NAME = "surtr"
+
+defmod AppConfig {
+  def label() -> String { APP_NAME }
+}"#,
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::module()),
+        )
+        .expect("module source should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("AppConfig"));
+        assert_eq!(lowered.len(), 1);
+        assert_eq!(lowered[0].module_path, "AppConfig");
+        assert!(lowered[0]
+            .ast
+            .iter()
+            .any(|stmt| matches!(stmt, spire::ast::Ast::ConstDef(_, name, _, _, _) if name == "APP_NAME")));
     }
 
     #[test]

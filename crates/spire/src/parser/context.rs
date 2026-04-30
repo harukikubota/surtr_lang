@@ -27,6 +27,7 @@ pub(crate) enum TopLevelDeclKind {
     RecordDef,
     DeferrorDef,
     EnumDef,
+    ConstDef,
     BuiltinDecl,
     BuiltinExtractorDecl,
     BuiltinTypeDecl,
@@ -59,6 +60,7 @@ impl ParseRules {
             allow_top_level_expr: true,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
+                TopLevelDeclKind::ConstDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::Include,
             ]),
@@ -87,6 +89,7 @@ impl ParseRules {
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
+                TopLevelDeclKind::ConstDef,
             ]),
         }
     }
@@ -105,6 +108,7 @@ impl ParseRules {
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
+                TopLevelDeclKind::ConstDef,
                 TopLevelDeclKind::BuiltinDecl,
                 TopLevelDeclKind::BuiltinTypeDecl,
             ]),
@@ -143,6 +147,7 @@ impl ParseRules {
             allow_top_level_expr: true,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
+                TopLevelDeclKind::ConstDef,
                 TopLevelDeclKind::Import,
             ]),
         }
@@ -163,6 +168,7 @@ impl ParseRules {
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
+                TopLevelDeclKind::ConstDef,
             ]),
         }
     }

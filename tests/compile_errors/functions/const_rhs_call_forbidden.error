@@ -1,0 +1,2 @@
+phase: typecheck
+contains: const value must be a primitive literal or a lens path

@@ -9,6 +9,18 @@
 
 ## Open Issues
 
+### OI-000 `const` の将来拡張境界
+
+- 背景:
+  - V1 の `const` は top-level / literal / lens path alias に限定して導入した。
+- 未確定点:
+  - compile-time evaluable な純粋式まで広げるか
+  - associated consts を trait / impl に導入するか
+  - local / `defmod` / `impl` scope const を許可するか
+- 受け入れ条件:
+  - 追加する場合も runtime transport 制約と名前解決規則が崩れない。
+  - 現行 V1 の global const namespace と互換性を保てる。
+
 ### OI-001 宣言インデックス収集の責務境界
 
 - 背景:

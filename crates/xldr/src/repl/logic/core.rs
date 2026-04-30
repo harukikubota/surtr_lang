@@ -1733,7 +1733,23 @@ fn parse_stage_modules_parallel(
                                 span: e.span().clone(),
                             },
                         })?;
-                        Ok(crate::lower_module_source_ast(parsed, None))
+                        let fallback_module_path = if parsed.iter().any(|stmt| {
+                            matches!(stmt, spire::ast::Ast::ConstDef(_, _, _, _, _))
+                        }) && parsed.iter().all(|stmt| {
+                            matches!(
+                                stmt,
+                                spire::ast::Ast::Import(_, _, _)
+                                    | spire::ast::Ast::ConstDef(_, _, _, _, _)
+                            )
+                        }) {
+                            Some(module.module_path.as_str())
+                        } else {
+                            None
+                        };
+                        Ok(crate::lower_module_source_ast(
+                            parsed,
+                            fallback_module_path,
+                        ))
                     })
                     .expect("stage parser worker thread should spawn"),
             );

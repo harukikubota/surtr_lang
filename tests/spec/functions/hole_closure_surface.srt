@@ -1,10 +1,10 @@
-always: (_ -> Int) = const(1)
-print(to_string(always("ignored")))
+keep_one: (_ -> Int) = always(1)
+print(to_string(keep_one("ignored")))
 
 print(to_string(id(7)))
 
 def make() -> (_ -> Int) {
-  const(2)
+  always(2)
 }
 
 next = make()

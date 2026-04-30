@@ -1,0 +1,2 @@
+phase: parse
+contains: Function parameter cannot use CAP_PATTERN names

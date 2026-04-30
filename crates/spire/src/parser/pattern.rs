@@ -139,6 +139,7 @@ impl Parser<'_> {
                     alias_span,
                 ));
             }
+            self.ensure_non_const_identifier(&alias, alias_span.clone(), "Pattern alias")?;
             self.skip_newlines();
             let alias_ty = if matches!(self.peek(), Token::Colon) {
                 self.advance();
@@ -290,6 +291,7 @@ impl Parser<'_> {
                     ));
                 }
 
+                self.ensure_non_const_identifier(&name, sp.clone(), "Pattern binding")?;
                 Ok(AstPattern::Var(sp, name))
             }
             Token::LBrack => self.parse_list_bind_pattern(),

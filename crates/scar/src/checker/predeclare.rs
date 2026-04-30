@@ -10,6 +10,70 @@ impl Checker {
         }
     }
 
+    fn const_surface_is_allowed(&self, value: &Resolved) -> bool {
+        match value {
+            Resolved::Lit(_, _) => true,
+            Resolved::Var(_, id) => !self.consts.contains_key(&id.unique_id),
+            Resolved::FieldAccess(_, inner, _) => self.const_surface_is_allowed(inner),
+            _ => false,
+        }
+    }
+
+    pub(super) fn predeclare_consts(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
+        for stmt in stmts {
+            let Resolved::ConstDef(span, id, ast_ty, value, attrs) = stmt else {
+                continue;
+            };
+
+            if !self.const_surface_is_allowed(value) {
+                return Err(TypeError {
+                    message: "const value must be a primitive literal or a lens path".into(),
+                    span: span.clone(),
+                    hint: Some(
+                        "V1 const supports literal values and type-root lens paths only.".into(),
+                    ),
+                });
+            }
+
+            let expected_ty = ast_ty
+                .as_ref()
+                .map(|ty| self.resolve_ast_ty_in_context(ty, TypeSyntaxContext::BindingAnnotation))
+                .transpose()?;
+            let checked = self.check_node_with_expected(value, expected_ty.as_ref())?;
+            let typed = self.resolve_typed_node(checked);
+
+            let (kind, stored) = match &typed.node {
+                TypedInner::Lit(lit) => (ConstKind::PrimitiveLiteral, StoredConstValue::Literal(lit.clone())),
+                TypedInner::LensPath(path) => {
+                    (ConstKind::LensPath, StoredConstValue::LensPath(path.clone()))
+                }
+                _ => {
+                    return Err(TypeError {
+                        message: "const value must be a primitive literal or a lens path".into(),
+                        span: span.clone(),
+                        hint: Some(
+                            "Use `const NAME = 1` or `const NAME = User.profile.name`.".into(),
+                        ),
+                    })
+                }
+            };
+
+            self.env.bind_var(id.unique_id, typed.ty.clone());
+            self.consts.insert(
+                id.unique_id,
+                ConstMeta {
+                    name: id.name.clone(),
+                    visibility: attrs.visibility,
+                    ty: typed.ty.clone(),
+                    kind,
+                    value: stored,
+                    span: span.clone(),
+                },
+            );
+        }
+        Ok(())
+    }
+
     pub(super) fn predeclare_type_signatures(
         &mut self,
         stmts: &[Resolved],

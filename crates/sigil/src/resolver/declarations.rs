@@ -24,6 +24,7 @@ pub enum DeclarationKind {
     Deferror,
     Enum,
     EnumVariant,
+    Const,
     ResultCtor,
     ImplMethod,
     ImplCtorNew,
@@ -56,7 +57,10 @@ pub(super) fn is_module_visible_declaration(kind: &DeclarationKind) -> bool {
 pub(super) fn is_importable_declaration(kind: &DeclarationKind) -> bool {
     !matches!(
         kind,
-        DeclarationKind::BuiltinType | DeclarationKind::ImplCtorNew | DeclarationKind::Struct
+        DeclarationKind::BuiltinType
+            | DeclarationKind::ImplCtorNew
+            | DeclarationKind::Struct
+            | DeclarationKind::Const
     )
 }
 
@@ -431,6 +435,13 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             Box::new(rewrite_self_ast(*body, target)),
             attrs,
         ),
+        Ast::ConstDef(span, name, ty, value, attrs) => Ast::ConstDef(
+            span,
+            name,
+            ty.map(|ty| rewrite_self_type(ty, target)),
+            Box::new(rewrite_self_ast(*value, target)),
+            attrs,
+        ),
         Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
             Ast::ExtractorDef(
                 span,
@@ -555,6 +566,7 @@ pub fn precollect_declaration_index(
 ) -> Result<DeclarationIndex, ResolveError> {
     let mut index = DeclarationIndex::new();
     let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
+    let mut seen_public_consts: HashMap<String, (usize, String)> = HashMap::new();
     for (stage_index, stage) in module_stages.iter().enumerate() {
         let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
@@ -865,6 +877,12 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Extractor,
                         entry_visibility(attrs),
                     ),
+                    Ast::ConstDef(span, name, _, _, attrs) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::Const,
+                        entry_visibility(attrs),
+                    ),
                     Ast::BuiltinDecl(span, name, _, _, _) => (
                         span,
                         name.as_str(),
@@ -935,7 +953,33 @@ pub fn precollect_declaration_index(
                     });
                 }
 
-                let fq_name = if matches!(
+                let fq_name = if kind == DeclarationKind::Const {
+                    if visibility == Visibility::Public {
+                        if let Some((prev_stage, prev_module)) =
+                            seen_public_consts.get(name).cloned()
+                        {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "Duplicate public const: {} (already declared in stage {} module {})",
+                                    name, prev_stage, prev_module
+                                ),
+                                span: span.clone(),
+                                related_labels: Vec::new(),
+                            });
+                        }
+                        seen_public_consts
+                            .insert(name.to_string(), (stage_index, module.module_path.clone()));
+                        if module.module_path.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{}::{}", module.module_path, name)
+                        }
+                    } else if module.module_path.is_empty() {
+                        format!("__const__::{}", name)
+                    } else {
+                        format!("{}::__const__::{}", module.module_path, name)
+                    }
+                } else if matches!(
                     kind,
                     DeclarationKind::BuiltinType
                         | DeclarationKind::Struct
@@ -1303,6 +1347,42 @@ impl Resolver {
                         .push_back(uid);
                     self.declaration_uid_kinds
                         .insert(uid, DeclarationKind::Extractor);
+                    self.scope.define_with_id(name, uid);
+                }
+                Ast::ConstDef(span, name, _, _, attrs) => {
+                    if !declared_in_batch.insert(name.clone()) {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    let qualified_name = if attrs.visibility == Visibility::Public {
+                        self.qualify_current_declaration_name(name)
+                    } else {
+                        self.qualify_current_declaration_name(&format!("__const__::{}", name))
+                    };
+                    let uid = self
+                        .declaration_uids
+                        .get(&qualified_name)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let fresh = self.scope.reserve_id();
+                            self.declaration_uids.insert(qualified_name.clone(), fresh);
+                            fresh
+                        });
+                    self.predeclared_ids
+                        .entry(name.clone())
+                        .or_default()
+                        .push_back(uid);
+                    self.declaration_uid_kinds.insert(uid, DeclarationKind::Const);
                     self.scope.define_with_id(name, uid);
                 }
                 Ast::TraitDef(span, name, _type_params, methods, _) => {

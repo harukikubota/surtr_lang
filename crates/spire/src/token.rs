@@ -93,6 +93,8 @@ pub enum Token {
     When,
     Cond,
     Private,
+    Public,
+    Const,
     Type,
     Where,
 

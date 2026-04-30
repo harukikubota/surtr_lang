@@ -218,7 +218,7 @@ trait method parameter の中だけで target type witness として使われま
 ignored-input callable を表す `_` も、同じく compiler-special な扱いを持ちます。
 
 ```surtr
-always: (_ -> Int) = const(1)
+keep_one: (_ -> Int) = always(1)
 ```
 
 この `_` は generic wildcard ではなく、internal な `Hole` marker の surface です。  
