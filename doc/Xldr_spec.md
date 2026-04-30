@@ -12,6 +12,8 @@ Xldr は以下を担う。
 - `surtr repl` の実行本体
 - REPL セッション状態の保持
 - 入力ごとの増分コンパイルと増分実行
+- `ReplEngine` が返す structured result の組み立て
+- 対話モード向けの presenter と UI adapter
 - 対話モード向けの表示と診断
 
 Xldr は以下を担わない。
@@ -30,8 +32,10 @@ Xldr は以下を担わない。
 | `surtr run/build/dump` | ○ | × |
 | `surtr repl` のディスパッチ | ○ | × |
 | REPL ループ | × | ○ |
-| セッション状態 | × | ○ |
-| REPL コマンド | × | ○ |
+| REPL セッション状態 | × | ○ |
+| REPL コマンド解決 | × | ○ |
+| REPL result presenter | × | ○ |
+| CLI/TUI adapter | × | ○ |
 | 将来の TUI ステッパー | × | ○ |
 
 ---
@@ -81,6 +85,12 @@ Xldr は対話セッション中に次を保持する。
 
 ## 4. REPL 入出力契約
 
+REPL 実装は次の 3 層に分ける。
+
+- core: `ReplEngine` が入力処理、checkpoint/rollback、command 解決、doc/sig/save を担う
+- presenter: `ReplResult` を CLI/TUI が消費しやすい表示単位へ変換する
+- UI adapter: CLI/TUI が terminal I/O と color on/off、pane state を担当する
+
 ### 4.1 入力源
 
 - TTY 対話入力
@@ -88,7 +98,7 @@ Xldr は対話セッション中に次を保持する。
 
 ### 4.2 プロンプト
 
-- 通常入力: `surtr(N)> `
+- 通常入力: `xldr(N)> `
 - 継続入力: `...(N)> `
 
 `N` は評価行番号であり、空行や継続待機だけでは進まない。
@@ -105,6 +115,8 @@ Xldr は対話セッション中に次を保持する。
 - バインド結果は `> name: Type = value` 形式で表示する
 - 型定義評価は `> TypeName` 形式で表示する
 - 表示対象のない `Unit` は表示しない
+- `:doc` / `:sig` は evaluator result と同じ `> ` プレフィクスを付けず、presenter が専用レイアウトで表示する
+- compile error / runtime diagnostic の人間向け表示は stderr に流し、structured result 側には UI テスト用の rendered lines を保持する
 
 ---
 

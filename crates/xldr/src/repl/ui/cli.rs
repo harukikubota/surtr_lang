@@ -18,9 +18,7 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper};
 
 use crate::repl::logic::core::{xldr_version, ReplEngine};
-use crate::repl::logic::output::ReplOutput;
-use crate::repl::logic::styled;
-use crate::repl::logic::ReplResult;
+use crate::repl::logic::{present_for_cli, styled, ReplResult};
 
 // ── Options ───────────────────────────────────────────────────────────────────
 
@@ -259,65 +257,7 @@ fn print_banner(mode: BannerMode) {
 }
 
 fn print_result(result: &ReplResult, color: bool) {
-    match &result.output {
-        ReplOutput::EvalSuccess { rendered, .. } => {
-            for line in rendered {
-                let rendered = if color {
-                    styled::repl_result_line(line)
-                } else {
-                    line.clone()
-                };
-                println!("> {}", rendered);
-            }
-        }
-        ReplOutput::CommandOutput { rendered } => {
-            for line in rendered {
-                println!("> {}", line);
-            }
-        }
-        ReplOutput::SigResolved { signature } => {
-            let rendered = if color {
-                styled::signature(signature)
-            } else {
-                signature.clone()
-            };
-            println!("{}", rendered);
-        }
-        ReplOutput::DocResolved {
-            symbol,
-            signature,
-            summary,
-            source_snippet,
-        } => {
-            if let Some(sig) = signature {
-                let banner = if color {
-                    styled::doc_signature_banner(symbol, sig)
-                } else {
-                    styled::plain_doc_signature_banner(symbol, sig)
-                };
-                println!("{}", banner);
-            } else {
-                let symbol = if color {
-                    styled::doc_symbol(symbol)
-                } else {
-                    symbol.clone()
-                };
-                println!("{}", symbol);
-            }
-            if let Some(text) = source_snippet.as_ref().or(summary.as_ref()) {
-                let lines: Vec<String> = if color {
-                    styled::doc_body_lines(text)
-                } else {
-                    styled::plain_doc_body_lines(text)
-                };
-                for line in lines {
-                    println!("{}", line);
-                }
-            }
-        }
-        ReplOutput::EvalError { .. } | ReplOutput::StatusMessage(_) => {
-            // Errors already printed to stderr by diagnostics / runtime reporter.
-        }
-        _ => {}
+    for line in present_for_cli(result, color) {
+        println!("{line}");
     }
 }

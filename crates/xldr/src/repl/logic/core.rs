@@ -107,7 +107,7 @@ pub struct ReplEngine {
 }
 
 impl ReplEngine {
-    pub(crate) fn new() -> Result<Self, LoadError> {
+    pub fn new() -> Result<Self, LoadError> {
         let std_module_inputs = collect_additional_default_std_module_inputs()?;
         let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])?;
         let forge_session = forge::ForgeSession::new();
@@ -685,7 +685,7 @@ impl ReplEngine {
         self.symbols.iter().cloned().collect()
     }
 
-    pub(crate) fn prompt(&self) -> String {
+    pub fn prompt(&self) -> String {
         if self.pending.is_empty() {
             format!("xldr({})> ", self.next_line)
         } else {

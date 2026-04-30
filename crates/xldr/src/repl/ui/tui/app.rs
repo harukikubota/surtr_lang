@@ -1,6 +1,8 @@
 //! TUI application state types.
 use std::collections::VecDeque;
 
+use crate::repl::logic::{PresentedDoc, PresentedResultKind};
+
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,14 +16,6 @@ pub(super) enum FocusPane {
 pub(super) enum InputMode {
     Insert,
     Command,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ResultEntryKind {
-    EvalSuccess,
-    EvalError,
-    CommandOutput,
-    Info,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +40,7 @@ pub(super) struct ResultEntry {
     pub(super) idx: usize,
     pub(super) source: String,
     pub(super) rendered_lines: Vec<String>,
-    pub(super) kind: ResultEntryKind,
+    pub(super) kind: PresentedResultKind,
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +48,7 @@ pub(super) struct DocEntry {
     pub(super) idx: usize,
     pub(super) symbol: String,
     pub(super) signature: Option<String>,
-    pub(super) summary: Option<String>,
+    pub(super) body: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -198,7 +192,7 @@ impl App {
         &mut self,
         source: impl Into<String>,
         rendered_lines: Vec<String>,
-        kind: ResultEntryKind,
+        kind: PresentedResultKind,
     ) {
         let idx = self.results.len() + 1;
         self.results.push_back(ResultEntry {
@@ -215,6 +209,17 @@ impl App {
             .map(|e| 3 + e.rendered_lines.len())
             .sum();
         self.results_scroll = total;
+    }
+
+    pub(super) fn push_doc(&mut self, doc: PresentedDoc) {
+        let idx = self.docs.len();
+        self.docs.push_back(DocEntry {
+            idx,
+            symbol: doc.symbol,
+            signature: doc.signature,
+            body: doc.body,
+        });
+        self.selected_doc = Some(idx);
     }
 
     pub(super) fn active_buf(&self) -> &InputBuffer {
