@@ -1312,6 +1312,12 @@ impl Resolver {
                     if name == "or" {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
                     }
+                    if name == "&&" {
+                        return self.resolve_logic_call(span, args, LogicKind::And);
+                    }
+                    if name == "||" {
+                        return self.resolve_logic_call(span, args, LogicKind::Or);
+                    }
                 }
                 if let Ast::Path(_, ref path) = *func {
                     if path.segments.len() == 2

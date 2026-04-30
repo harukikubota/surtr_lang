@@ -239,6 +239,16 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     assert!(alias_doc.contains("trait Add { add(self: Self, rhs: Self) -> Self }"));
     assert!(alias_doc.contains("Standard `Add` operator trait declaration."));
 
+    let and_doc = engine.handle_line(":doc &&");
+    let and_doc = doc_text(&and_doc);
+    assert!(and_doc.contains("Kernel::and"));
+    assert!(and_doc.contains("Logical conjunction with short-circuit evaluation."));
+
+    let or_doc = engine.handle_line(":doc ||");
+    let or_doc = doc_text(&or_doc);
+    assert!(or_doc.contains("Kernel::or"));
+    assert!(or_doc.contains("Logical disjunction with short-circuit evaluation."));
+
     let typed_sig = engine.handle_line(":sig gt(Int, Int)");
     let typed_sig = signature_text(&typed_sig);
     assert!(typed_sig.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"));

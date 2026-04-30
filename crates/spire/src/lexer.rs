@@ -303,6 +303,24 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
         // Two-character operators
         if i + 1 < len {
             let two: String = chars[i..i + 2].iter().collect();
+            if two == "||" && matches!(tokens.last().map(|sp| &sp.token), Some(Token::LBrace)) {
+                tokens.push(Spanned {
+                    token: Token::Pipe,
+                    span: Span {
+                        start: i,
+                        end: i + 1,
+                    },
+                });
+                tokens.push(Spanned {
+                    token: Token::Pipe,
+                    span: Span {
+                        start: i + 1,
+                        end: i + 2,
+                    },
+                });
+                i += 2;
+                continue;
+            }
             let tok = match two.as_str() {
                 "++" => Some(Token::Concat),
                 "=?" => Some(Token::SafeBind),
@@ -310,6 +328,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "!=" => Some(Token::BangEq),
                 "<=" => Some(Token::LtEq),
                 ">=" => Some(Token::GtEq),
+                "&&" => Some(Token::AndAnd),
+                "||" => Some(Token::OrOr),
                 ".." => Some(Token::DotDot),
                 "=>" => Some(Token::FatArrow),
                 "->" => Some(Token::Arrow),
@@ -613,21 +633,33 @@ mod tests {
 
     #[test]
     fn test_two_char_ops() {
-        let tokens = tokenize("++ =? == != <= >= => -> |> >> >* |*> |>= >=>").unwrap();
+        let tokens = tokenize("++ =? == != <= >= && || => -> |> >> >* |*> |>= >=>").unwrap();
         assert!(matches!(tokens[0].token, Token::Concat));
         assert!(matches!(tokens[1].token, Token::SafeBind));
         assert!(matches!(tokens[2].token, Token::EqEq));
         assert!(matches!(tokens[3].token, Token::BangEq));
         assert!(matches!(tokens[4].token, Token::LtEq));
         assert!(matches!(tokens[5].token, Token::GtEq));
-        assert!(matches!(tokens[6].token, Token::FatArrow));
-        assert!(matches!(tokens[7].token, Token::Arrow));
-        assert!(matches!(tokens[8].token, Token::PipeApply));
-        assert!(matches!(tokens[9].token, Token::Compose));
-        assert!(matches!(tokens[10].token, Token::LiftCompose));
-        assert!(matches!(tokens[11].token, Token::PipeMap));
-        assert!(matches!(tokens[12].token, Token::PipeBind));
-        assert!(matches!(tokens[13].token, Token::KleisliCompose));
+        assert!(matches!(tokens[6].token, Token::AndAnd));
+        assert!(matches!(tokens[7].token, Token::OrOr));
+        assert!(matches!(tokens[8].token, Token::FatArrow));
+        assert!(matches!(tokens[9].token, Token::Arrow));
+        assert!(matches!(tokens[10].token, Token::PipeApply));
+        assert!(matches!(tokens[11].token, Token::Compose));
+        assert!(matches!(tokens[12].token, Token::LiftCompose));
+        assert!(matches!(tokens[13].token, Token::PipeMap));
+        assert!(matches!(tokens[14].token, Token::PipeBind));
+        assert!(matches!(tokens[15].token, Token::KleisliCompose));
+    }
+
+    #[test]
+    fn test_zero_arg_closure_double_pipe_is_not_oror() {
+        let tokens = tokenize("{|| 1}").unwrap();
+        assert!(matches!(tokens[0].token, Token::LBrace));
+        assert!(matches!(tokens[1].token, Token::Pipe));
+        assert!(matches!(tokens[2].token, Token::Pipe));
+        assert!(matches!(tokens[3].token, Token::Int(_)));
+        assert!(matches!(tokens[4].token, Token::RBrace));
     }
 
     #[test]

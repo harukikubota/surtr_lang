@@ -1129,6 +1129,55 @@ fn test_func_literal_and_is_lower_precedence_than_comparison_ops() {
 }
 
 #[test]
+fn test_symbolic_and_is_lower_precedence_than_comparison_ops() {
+    let ast = parse("x = 0 < num && num < 10").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(
+                            left,
+                            Ast::BinOp(_, BinOp::Lt, ll, lr)
+                                if matches!(ll.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(0))
+                                    && matches!(lr.as_ref(), Ast::Var(_, name) if name == "num")
+                        ) && matches!(
+                            right,
+                            Ast::BinOp(_, BinOp::Lt, rl, rr)
+                                if matches!(rl.as_ref(), Ast::Var(_, name) if name == "num")
+                                    && matches!(rr.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(10))
+                        )
+                ));
+            }
+            other => panic!("Expected and(...) call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_symbolic_or_lowers_to_call() {
+    let ast = parse("x = left || right").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "or"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "left")
+                            && matches!(right, Ast::Var(_, name) if name == "right")
+                ));
+            }
+            other => panic!("Expected lowered App, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_func_literal_and_or_chain_is_left_associative_with_comparisons() {
     let ast = parse("x = 0 < num `and` num < 10 `or` num == 42").unwrap();
     match &ast[0] {
@@ -2834,9 +2883,11 @@ fn test_impl_accepts_qualified_type_target() {
         ParserContext::module(1, None),
     )
     .expect("qualified impl target should parse");
-    assert!(matches!(ast.as_slice(), [Ast::ImplDef(_, target, methods, _)]
+    assert!(
+        matches!(ast.as_slice(), [Ast::ImplDef(_, target, methods, _)]
         if target == "Auth::User"
-            && matches!(methods.as_slice(), [Ast::Def(_, _, _, _, Some(AstTy::Named(_, ret_ty)), _, _)] if ret_ty == "Auth::User")));
+            && matches!(methods.as_slice(), [Ast::Def(_, _, _, _, Some(AstTy::Named(_, ret_ty)), _, _)] if ret_ty == "Auth::User"))
+    );
 }
 
 #[test]

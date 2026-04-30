@@ -1214,6 +1214,52 @@ x = or(True, rhs())"#,
 }
 
 #[test]
+fn test_symbolic_and_conversion() {
+    let resolved = parse_and_resolve(
+        r#"def rhs() -> Boolean { True }
+x = False && rhs()"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
+                assert!(matches!(
+                    else_branch.as_ref(),
+                    Resolved::Lit(_, Lit::Bool(false))
+                ));
+            }
+            other => panic!("Expected If for &&, got {:?}", other),
+        },
+        _ => panic!("Expected Bind with If"),
+    }
+}
+
+#[test]
+fn test_symbolic_or_conversion() {
+    let resolved = parse_and_resolve(
+        r#"def rhs() -> Boolean { False }
+x = True || rhs()"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                assert!(matches!(
+                    then_branch.as_ref(),
+                    Resolved::Lit(_, Lit::Bool(true))
+                ));
+                assert!(matches!(else_branch.as_ref(), Resolved::App(_, _, _)));
+            }
+            other => panic!("Expected If for ||, got {:?}", other),
+        },
+        _ => panic!("Expected Bind with If"),
+    }
+}
+
+#[test]
 fn test_eq_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
         "Eq",

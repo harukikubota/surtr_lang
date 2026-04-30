@@ -27,6 +27,8 @@ const OPERATOR_DOC_ALIASES: &[(&str, &str)] = &[
     ("+", "Add"),
     ("-", "Sub"),
     ("*", "Mul"),
+    ("&&", "and"),
+    ("||", "or"),
     ("==", "Eq"),
     ("!=", "Neq"),
     ("<", "Lt"),

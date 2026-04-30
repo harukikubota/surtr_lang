@@ -173,6 +173,42 @@ print(to_string(or(False, log_true("or-rhs"))))
 print(to_string(or(True, log_false("or-skip"))))"#,
         &["and-rhs", "False", "False", "or-rhs", "True", "True"],
     );
+
+    assert_output(
+        r#"def log_true(label: String) -> Boolean {
+  print(label)
+  True
+}
+
+def log_false(label: String) -> Boolean {
+  print(label)
+  False
+}
+
+print(to_string(True && log_false("sym-and-rhs")))
+print(to_string(False && log_true("sym-and-skip")))
+print(to_string(False || log_true("sym-or-rhs")))
+print(to_string(True || log_false("sym-or-skip")))"#,
+        &[
+            "sym-and-rhs",
+            "False",
+            "False",
+            "sym-or-rhs",
+            "True",
+            "True",
+        ],
+    );
+}
+
+fn symbolic_boolean_operators_require_boolean_operands() {
+    assert_compile_error(
+        "print(to_string(True || 1))",
+        "if branches have different types",
+    );
+    assert_compile_error(
+        "print(to_string(1 && True))",
+        "if condition must be Boolean, got Int",
+    );
 }
 
 fn kernel_eq_neq_helpers_match_operator_behavior() {
@@ -934,6 +970,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "kernel_and_or_short_circuit",
             kernel_and_or_short_circuit as fn(),
+        ),
+        (
+            "symbolic_boolean_operators_require_boolean_operands",
+            symbolic_boolean_operators_require_boolean_operands as fn(),
         ),
         (
             "kernel_eq_neq_helpers_match_operator_behavior",

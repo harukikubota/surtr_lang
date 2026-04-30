@@ -35,6 +35,8 @@ pub enum Token {
     Gt,     // >
     LtEq,   // <=
     GtEq,   // >=
+    AndAnd, // &&
+    OrOr,   // ||
 
     // ── Assignment ──
     Bind,     // =

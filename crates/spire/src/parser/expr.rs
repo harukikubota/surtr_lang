@@ -156,6 +156,14 @@ impl Parser<'_> {
         }
     }
 
+    pub(super) fn and_or_name(tok: &Token) -> Option<&'static str> {
+        match tok {
+            Token::AndAnd => Some("and"),
+            Token::OrOr => Some("or"),
+            _ => None,
+        }
+    }
+
     pub(super) fn expr_binop_from_func_literal(body: &str) -> Option<BinOp> {
         match body {
             "+" => Some(BinOp::Add),
@@ -312,6 +320,18 @@ impl Parser<'_> {
         let mut left = self.parse_logical_expr()?;
 
         loop {
+            if let Some(name) = Self::and_or_name(self.peek()) {
+                let func_span = self.peek_span();
+                self.advance();
+                let right = self.parse_logical_expr()?;
+                left = Self::lower_func_literal_call(
+                    left,
+                    Ast::Var(func_span, name.to_string()),
+                    right,
+                );
+                continue;
+            }
+
             let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
                 break;
             };
