@@ -2,7 +2,7 @@ use crate::common::{surtr_command, unique_temp_dir};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Output, Stdio};
+use std::process::{Command, Output, Stdio};
 
 fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
     run_repl_session_with_args_in_dir(args, input, None)
@@ -19,16 +19,7 @@ fn run_repl_session_with_args_in_dir(args: &[&str], input: &str, cwd: Option<&Pa
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
-    let mut child = command.spawn().expect("failed to spawn surtr repl");
-
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin pipe is unavailable")
-        .write_all(input.as_bytes())
-        .expect("failed to write repl input");
-
-    child.wait_with_output().expect("failed to wait on repl")
+    run_repl_command(command, input)
 }
 
 fn run_repl_session(input: &str) -> Output {
@@ -43,14 +34,16 @@ fn run_repl_session_with_color(input: &str) -> Output {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().expect("failed to spawn surtr repl");
+    run_repl_command(command, input)
+}
 
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin pipe is unavailable")
+fn run_repl_command(mut command: Command, input: &str) -> Output {
+    let mut child = command.spawn().expect("failed to spawn surtr repl");
+    let mut stdin = child.stdin.take().expect("stdin pipe is unavailable");
+    stdin
         .write_all(input.as_bytes())
         .expect("failed to write repl input");
+    drop(stdin);
 
     child.wait_with_output().expect("failed to wait on repl")
 }
