@@ -220,16 +220,16 @@ defmod Kernel {
   @@doc """
   Return a callable that ignores its input and always yields `value`.
 
-  This is a small pure helper for const-like closure behavior in pipelines and
+  This is a small pure helper for constant-like closure behavior in pipelines and
   composition.
 
   ## REPL
-  xldr(1)> always = const(1)
-  > always: (_ -> Int)
-  xldr(2)> always("ignored")
+  xldr(1)> keep_one = always(1)
+  > keep_one: (_ -> Int)
+  xldr(2)> keep_one("ignored")
   1
   """
-  def const(value: $A) -> (_ -> $A) {
+  def always(value: $A) -> (_ -> $A) {
     {|_| value}
   }
 

@@ -358,6 +358,10 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_fun_params(params, base, offset);
             rebase_resolved_node(body, base, offset);
         }
+        Resolved::ConstDef(_, id, _, value, _) => {
+            rebase_resolved_id(id, base, offset);
+            rebase_resolved_node(value, base, offset);
+        }
         Resolved::ExtractorDef(_, id, type_params, param, _, body, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_type_params(type_params, base, offset);

@@ -1,0 +1,3 @@
+const FIRST: Lens<(Int, Int), Int> = Tuple._0
+
+print(to_string(Lens::view(FIRST, (10, 20))))

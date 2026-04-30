@@ -29,7 +29,8 @@ impl SigilSession {
         for stmt in ast {
             match stmt {
                 Ast::Def(span, name, _, _, _, _, _)
-                | Ast::ExtractorDef(span, name, _, _, _, _, _) => {
+                | Ast::ExtractorDef(span, name, _, _, _, _, _)
+                | Ast::ConstDef(span, name, _, _, _) => {
                     let qualified_name = self.qualify_current_name(name);
                     if matches!(
                         (self.scope.lookup(name), self.declaration_uids.get(&qualified_name)),

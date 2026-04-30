@@ -35,6 +35,11 @@ pub(super) fn build_global_scope(
             continue;
         }
         if let Some(uid) = declaration_uids.get(fq_name) {
+            if entry.kind == DeclarationKind::Const {
+                scope.define_with_id(fq_name, *uid);
+                scope.define_with_id(&entry.name, *uid);
+                continue;
+            }
             scope.define_with_id(fq_name, *uid);
             if matches!(
                 entry.kind,

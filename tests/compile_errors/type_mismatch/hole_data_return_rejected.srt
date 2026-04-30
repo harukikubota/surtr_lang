@@ -1,1 +1,1 @@
-bad: (Int -> _) = const(1)
+bad: (Int -> _) = always(1)

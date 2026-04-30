@@ -58,6 +58,21 @@ impl Checker {
                     });
                 }
 
+                if let Some(const_meta) = self.consts.get(&id.unique_id) {
+                    return Ok(match &const_meta.value {
+                        StoredConstValue::Literal(lit) => TypedNode {
+                            ty: const_meta.ty.clone(),
+                            span: span.clone(),
+                            node: TypedInner::Lit(lit.clone()),
+                        },
+                        StoredConstValue::LensPath(path) => TypedNode {
+                            ty: const_meta.ty.clone(),
+                            span: span.clone(),
+                            node: TypedInner::LensPath(path.clone()),
+                        },
+                    });
+                }
+
                 if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
                     let ty = match &stored_ty {
                         Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
@@ -290,6 +305,11 @@ impl Checker {
             Resolved::Def(span, id, type_params, params, ret_ty, body, attrs) => {
                 self.check_def(span, id, type_params, params, ret_ty, body, attrs)
             }
+            Resolved::ConstDef(span, _id, _ast_ty, _value, _) => Ok(TypedNode {
+                ty: Ty::Unit,
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Unit),
+            }),
             Resolved::ExtractorDef(span, id, type_params, param, ret_ty, body, attrs) => {
                 self.check_extractor_def(span, id, type_params, param, ret_ty, body, attrs)
             }
@@ -698,6 +718,7 @@ impl Checker {
             | Resolved::DeferrorDef(span, _, _, _)
             | Resolved::EnumDef(span, _, _, _)
             | Resolved::Def(span, _, _, _, _, _, _)
+            | Resolved::ConstDef(span, _, _, _, _)
             | Resolved::ExtractorDef(span, _, _, _, _, _, _)
             | Resolved::BuiltinDecl(span, _, _, _, _)
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)

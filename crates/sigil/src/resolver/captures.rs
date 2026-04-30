@@ -48,6 +48,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                             local_bound.insert(param.id.unique_id);
                         }
                     }
+                    Resolved::ConstDef(_, id, _, _, _) => {
+                        local_bound.insert(id.unique_id);
+                    }
                     Resolved::ExtractorDef(_, id, _, param, _, _, _) => {
                         local_bound.insert(id.unique_id);
                         local_bound.insert(param.id.unique_id);
@@ -171,6 +174,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::RecordDef(_, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
         | Resolved::EnumDef(_, _, _, _)
+        | Resolved::ConstDef(_, _, _, _, _)
         | Resolved::TraitDef(_, _, _, _, _)
         | Resolved::TraitImplDef(_, _, _, _, _)
         | Resolved::BuiltinDecl(_, _, _, _, _)

@@ -7,11 +7,57 @@ use super::context::{DeclLevel, TopLevelDeclKind};
 use super::Parser;
 
 impl Parser<'_> {
+    fn is_cap_pattern(name: &str) -> bool {
+        let mut chars = name.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        if !first.is_ascii_uppercase() {
+            return false;
+        }
+        chars.all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+    }
+
+    pub(super) fn ensure_non_const_identifier(
+        &self,
+        name: &str,
+        span: Span,
+        kind: &str,
+    ) -> Result<(), ParseError> {
+        if Self::is_cap_pattern(name) {
+            return Err(ParseError::syntax(
+                format!("{kind} cannot use CAP_PATTERN names; `{name}` is reserved for const"),
+                span,
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_const_name(&self, name: &str, span: Span) -> Result<(), ParseError> {
+        if !Self::is_cap_pattern(name)
+            || name.starts_with('_')
+            || name.ends_with('_')
+            || name.contains("__")
+        {
+            return Err(ParseError::syntax(
+                format!(
+                    "const name must match CAP_PATTERN `[A-Z][A-Z0-9_]*` without leading/trailing/double underscores: {name}"
+                ),
+                span,
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn parse_field_visibility(&mut self) -> Visibility {
         if matches!(self.peek(), Token::Private) {
             self.advance();
             self.skip_newlines();
             Visibility::Private
+        } else if matches!(self.peek(), Token::Public) {
+            self.advance();
+            self.skip_newlines();
+            Visibility::Public
         } else {
             Visibility::Public
         }
@@ -1322,11 +1368,14 @@ impl Parser<'_> {
                 ));
             }
         };
-        let (name, _) = if allow_builtin_keyword_name {
+        let (name, name_span) = if allow_builtin_keyword_name {
             self.expect_builtin_decl_name()?
         } else {
             self.expect_ident()?
         };
+        if !allow_builtin_keyword_name {
+            self.ensure_non_const_identifier(&name, name_span.clone(), "Function name")?;
+        }
         let type_params = self.parse_decl_type_params()?;
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
@@ -1394,6 +1443,9 @@ impl Parser<'_> {
         } else {
             self.expect_ident()?
         };
+        if !allow_builtin_keyword_name {
+            self.ensure_non_const_identifier(&name, name_span.clone(), "Extractor name")?;
+        }
         let type_params = self.parse_decl_type_params()?;
         if Self::is_constructor_style_name(&name) {
             return Err(ParseError::syntax(
@@ -1408,6 +1460,11 @@ impl Parser<'_> {
         self.expect(&Token::LParen)?;
         self.skip_newlines();
         let (param_name, param_span) = self.expect_ident()?;
+        self.ensure_non_const_identifier(
+            &param_name,
+            param_span.clone(),
+            "Extractor parameter",
+        )?;
         self.skip_newlines();
         let param_ty = if matches!(self.peek(), Token::Colon) {
             self.advance();
@@ -1762,6 +1819,51 @@ impl Parser<'_> {
         self.parse_def_with_attrs(DeclAttrs::default(), None)
     }
 
+    pub(super) fn parse_const_def(&mut self) -> Result<Ast, ParseError> {
+        let start = self.peek_span().start;
+        let visibility = match self.peek() {
+            Token::Private => {
+                self.advance();
+                self.skip_newlines();
+                Visibility::Private
+            }
+            Token::Public => {
+                self.advance();
+                self.skip_newlines();
+                Visibility::Public
+            }
+            _ => Visibility::Public,
+        };
+        self.expect(&Token::Const)?;
+        self.skip_newlines();
+        let (name, name_span) = self.expect_ident()?;
+        self.ensure_const_name(&name, name_span)?;
+        self.skip_newlines();
+        let ty = if matches!(self.peek(), Token::Colon) {
+            self.advance();
+            self.skip_newlines();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.skip_newlines();
+        self.expect(&Token::Bind)?;
+        self.skip_newlines();
+        let value = self.parse_expr()?;
+        let mut attrs = DeclAttrs::default();
+        attrs.visibility = visibility;
+        Ok(Ast::ConstDef(
+            Span {
+                start,
+                end: value.span().end,
+            },
+            name,
+            ty,
+            Box::new(value),
+            attrs,
+        ))
+    }
+
     pub(super) fn parse_extractor_def(&mut self) -> Result<Ast, ParseError> {
         self.parse_extractor_def_with_attrs(DeclAttrs::default(), None)
     }
@@ -1926,6 +2028,7 @@ impl Parser<'_> {
                 span,
             ));
         }
+        self.ensure_non_const_identifier(&name, span.clone(), "Function parameter")?;
         self.expect(&Token::Colon)?;
         let ty = self.parse_type()?;
         Ok(FunParam { name, ty, span })

@@ -413,6 +413,28 @@ struct TraitImplInfo {
     methods: HashMap<String, TraitImplMethodInfo>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum ConstKind {
+    PrimitiveLiteral,
+    LensPath,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum StoredConstValue {
+    Literal(Lit),
+    LensPath(TypedLensPath),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConstMeta {
+    name: String,
+    visibility: spire::ast::Visibility,
+    ty: Ty,
+    kind: ConstKind,
+    value: StoredConstValue,
+    span: Span,
+}
+
 /// Type-check the resolved AST, producing a fully typed tree.
 pub fn typecheck(resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
     typecheck_with_context(resolved, TypecheckContext::default())
@@ -730,6 +752,7 @@ type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScarCheckpoint {
     env: TypeEnv,
+    consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -743,6 +766,7 @@ pub struct ScarCheckpoint {
 #[derive(Debug, Clone)]
 pub struct ScarSession {
     env: TypeEnv,
+    consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -755,6 +779,7 @@ pub struct ScarSession {
 
 struct CheckerParts {
     env: TypeEnv,
+    consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -769,6 +794,7 @@ impl ScarSession {
     pub fn new() -> Self {
         Self {
             env: initialize_env(),
+            consts: HashMap::new(),
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
@@ -791,6 +817,7 @@ impl ScarSession {
     ) -> Result<Vec<TypedNode>, TypeError> {
         let mut checker = Checker::with_env_and_params(
             self.env.clone(),
+            self.consts.clone(),
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
@@ -804,6 +831,7 @@ impl ScarSession {
         let typed = checker.check_program(resolved)?;
         let CheckerParts {
             env,
+            consts,
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
@@ -814,6 +842,7 @@ impl ScarSession {
             tyvar_bounds,
         } = checker.into_parts();
         self.env = env;
+        self.consts = consts;
         self.user_func_params = user_func_params;
         self.impl_method_uids = impl_method_uids;
         self.function_ids_by_name = function_ids_by_name;
@@ -828,6 +857,7 @@ impl ScarSession {
     pub fn checkpoint(&self) -> ScarCheckpoint {
         ScarCheckpoint {
             env: self.env.clone(),
+            consts: self.consts.clone(),
             user_func_params: self.user_func_params.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
@@ -841,6 +871,7 @@ impl ScarSession {
 
     pub fn rollback(&mut self, checkpoint: ScarCheckpoint) {
         self.env = checkpoint.env;
+        self.consts = checkpoint.consts;
         self.user_func_params = checkpoint.user_func_params;
         self.impl_method_uids = checkpoint.impl_method_uids;
         self.function_ids_by_name = checkpoint.function_ids_by_name;
@@ -873,6 +904,7 @@ struct Checker {
     in_extractor_body: bool,
     closure_depth: usize,
     lens_bindings: HashMap<u32, TypedLensPath>,
+    consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -899,6 +931,7 @@ impl Checker {
             in_extractor_body: false,
             closure_depth: 0,
             lens_bindings: HashMap::new(),
+            consts: HashMap::new(),
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
@@ -918,6 +951,7 @@ impl Checker {
 
     fn with_env_and_params(
         env: TypeEnv,
+        consts: HashMap<u32, ConstMeta>,
         user_func_params: HashMap<u32, Vec<String>>,
         impl_method_uids: HashMap<String, u32>,
         function_ids_by_name: HashMap<String, ResolvedId>,
@@ -936,6 +970,7 @@ impl Checker {
             in_extractor_body: false,
             closure_depth: 0,
             lens_bindings: HashMap::new(),
+            consts,
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
@@ -957,6 +992,7 @@ impl Checker {
         let profile = self.profiler.start();
         let mut checker = Checker::with_env_and_params(
             env,
+            self.consts.clone(),
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
@@ -1057,6 +1093,7 @@ impl Checker {
     fn into_parts(self) -> CheckerParts {
         CheckerParts {
             env: self.env,
+            consts: self.consts,
             user_func_params: self.user_func_params,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
@@ -1123,6 +1160,8 @@ impl Checker {
                 predeclare_type_signatures_dur = start.elapsed();
             }
 
+            self.predeclare_consts(&stmts)?;
+
             let t = profile_enabled.then(Instant::now);
             self.predeclare_traits(&stmts)?;
             if let Some(start) = t {
@@ -1147,6 +1186,9 @@ impl Checker {
                 stmt_count += 1;
                 let stmt_label = profile_enabled.then(|| Self::profile_stmt_label(&stmt));
                 let stmt_start = profile_enabled.then(Instant::now);
+                if let Resolved::ConstDef(..) = &stmt {
+                    continue;
+                }
                 if let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) =
                     &stmt
                 {
@@ -1255,6 +1297,7 @@ impl Checker {
         match stmt {
             Resolved::Def(_, id, ..) => format!("Def {}", id.name),
             Resolved::ExtractorDef(_, id, ..) => format!("ExtractorDef {}", id.name),
+            Resolved::ConstDef(_, id, ..) => format!("ConstDef {}", id.name),
             Resolved::TraitDef(_, id, ..) => format!("TraitDef {}", id.name),
             Resolved::TraitImplDef(_, id, ..) => format!("TraitImplDef {}", id.name),
             Resolved::BuiltinDecl(_, id, ..) => format!("BuiltinDecl {}", id.name),
@@ -1285,6 +1328,7 @@ impl Checker {
         match stmt {
             Resolved::Def(..) => "Def",
             Resolved::ExtractorDef(..) => "ExtractorDef",
+            Resolved::ConstDef(..) => "ConstDef",
             Resolved::TraitDef(..) => "TraitDef",
             Resolved::TraitImplDef(..) => "TraitImplDef",
             Resolved::BuiltinDecl(..) => "BuiltinDecl",

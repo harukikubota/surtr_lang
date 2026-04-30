@@ -98,6 +98,20 @@ impl Parser<'_> {
     }
 
     pub(super) fn stmt_has_top_level_assignment_from(&self, start: usize) -> bool {
+        self.stmt_has_top_level_token_from(start, |token| {
+            matches!(token, Token::Bind | Token::SafeBind)
+        })
+    }
+
+    pub(super) fn stmt_has_top_level_at_from(&self, start: usize) -> bool {
+        self.stmt_has_top_level_token_from(start, |token| matches!(token, Token::At))
+    }
+
+    fn stmt_has_top_level_token_from(
+        &self,
+        start: usize,
+        predicate: impl Fn(&Token) -> bool,
+    ) -> bool {
         let mut paren_depth = 0usize;
         let mut bracket_depth = 0usize;
         let mut brace_depth = 0usize;
@@ -120,8 +134,10 @@ impl Parser<'_> {
                 {
                     break;
                 }
-                Token::Bind | Token::SafeBind
-                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
+                _ if paren_depth == 0
+                    && bracket_depth == 0
+                    && brace_depth == 0
+                    && predicate(token) =>
                 {
                     return true;
                 }

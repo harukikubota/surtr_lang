@@ -822,6 +822,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*body, delta)),
             shift_decl_attrs(attrs),
         ),
+        Ast::ConstDef(span, name, ty, value, attrs) => Ast::ConstDef(
+            shift_span(span, delta),
+            name,
+            ty.map(|ty| shift_ast_ty(ty, delta)),
+            Box::new(shift_ast_span(*value, delta)),
+            shift_decl_attrs(attrs),
+        ),
         Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
             Ast::ExtractorDef(
                 shift_span(span, delta),
@@ -1008,6 +1015,7 @@ impl Ast {
             | Ast::DeferrorDef(s, _, _, _, _)
             | Ast::EnumDef(s, _, _, _, _)
             | Ast::Def(s, _, _, _, _, _, _)
+            | Ast::ConstDef(s, _, _, _, _)
             | Ast::ExtractorDef(s, _, _, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _, _)
             | Ast::BuiltinExtractorDecl(s, _, _, _, _)

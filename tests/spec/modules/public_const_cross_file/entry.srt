@@ -1,0 +1,2 @@
+print(APP_NAME)
+print(AppConfig::APP_NAME)

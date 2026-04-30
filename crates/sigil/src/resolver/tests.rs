@@ -2967,6 +2967,32 @@ fn test_build_scope_for_module_includes_prior_stage_declarations() {
 }
 
 #[test]
+fn test_build_scope_for_module_includes_qualified_public_const() {
+    let module_stages = vec![
+        vec![staged_module(
+            "AppConfig",
+            parse_module_ast(r#"const APP_NAME = "surtr""#, "AppConfig"),
+        )],
+        vec![staged_module(
+            "App",
+            parse_module_ast(r#"def main() -> Int { 0 }"#, "App"),
+        )],
+    ];
+
+    let scope = build_scope_for_module(&module_stages, Some("App"), 1)
+        .expect("build_scope_for_module should succeed");
+
+    assert!(
+        scope.lookup("AppConfig::APP_NAME").is_some(),
+        "AppConfig::APP_NAME should be accessible by qualified name in App's scope"
+    );
+    assert!(
+        scope.lookup("APP_NAME").is_some(),
+        "APP_NAME should remain accessible by bare public-const name"
+    );
+}
+
+#[test]
 fn test_pipeline_rhs_desugars_partial_special_forms_into_closures() {
     let resolved = parse_and_resolve(
         r#"deferror GuardError { "guard" }

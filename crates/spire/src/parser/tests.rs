@@ -40,6 +40,26 @@ fn test_defp_marks_definition_private() {
 }
 
 #[test]
+fn test_const_definition_surface() {
+    let ast = parse("public const APP_NAME: String = \"surtr\"").unwrap();
+    match &ast[0] {
+        Ast::ConstDef(_, name, Some(AstTy::Named(_, ty)), rhs, attrs) => {
+            assert_eq!(name, "APP_NAME");
+            assert_eq!(ty, "String");
+            assert_eq!(attrs.visibility, Visibility::Public);
+            assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Str(value)) if value == "surtr"));
+        }
+        _ => panic!("Expected ConstDef"),
+    }
+}
+
+#[test]
+fn test_const_name_requires_cap_pattern() {
+    let err = parse("const app_name = \"surtr\"").expect_err("expected parse error");
+    assert!(err.message().contains("const name must match CAP_PATTERN"));
+}
+
+#[test]
 fn test_private_field_modifier_is_preserved() {
     let ast = parse_with_context(
         "defstruct User { private password: String, name: String }",

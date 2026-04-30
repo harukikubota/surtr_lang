@@ -266,6 +266,8 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "when" => Token::When,
                 "cond" => Token::Cond,
                 "private" => Token::Private,
+                "public" => Token::Public,
+                "const" => Token::Const,
                 "type" => Token::Type,
                 "where" => Token::Where,
                 _ => Token::Ident(text),
@@ -669,6 +671,13 @@ mod tests {
     fn test_type_keyword() {
         let tokens = tokenize("type Int").unwrap();
         assert!(matches!(tokens[0].token, Token::Type));
+    }
+
+    #[test]
+    fn test_const_keywords() {
+        let tokens = tokenize("public const APP_NAME = \"surtr\"").unwrap();
+        assert!(matches!(tokens[0].token, Token::Public));
+        assert!(matches!(tokens[1].token, Token::Const));
     }
 
     #[test]

@@ -20,6 +20,9 @@ impl Parser<'_> {
                     | Token::Impl
                     | Token::Import
                     | Token::Include
+                    | Token::Private
+                    | Token::Public
+                    | Token::Const
                     | Token::Defstruct
                     | Token::Defrecord
                     | Token::Deferror
@@ -42,6 +45,7 @@ impl Parser<'_> {
             Token::Impl => self.parse_impl_def()?,
             Token::Import => self.parse_import()?,
             Token::Include => self.parse_include()?,
+            Token::Private | Token::Public | Token::Const => self.parse_const_def()?,
             Token::Defstruct => self.parse_struct_def()?,
             Token::Defrecord => self.parse_record_def()?,
             Token::Deferror => self.parse_deferror_def()?,
@@ -69,8 +73,12 @@ impl Parser<'_> {
                             let looks_like_bind = matches!(
                                 self.tokens.get(save).map(|sp| &sp.token),
                                 Some(Token::LParen | Token::LBrack)
-                            ) && self
-                                .stmt_has_top_level_assignment_from(save);
+                            ) && self.stmt_has_top_level_assignment_from(save)
+                                || matches!(
+                                self.tokens.get(save).map(|sp| &sp.token),
+                                Some(Token::Ident(_))
+                            ) && self.stmt_has_top_level_assignment_from(save)
+                                && self.stmt_has_top_level_at_from(save);
                             self.pos = save;
                             if looks_like_bind {
                                 return Err(err);

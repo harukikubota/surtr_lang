@@ -1,0 +1,1 @@
+public const APP_NAME = "other"

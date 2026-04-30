@@ -113,10 +113,10 @@ user-facing surface では `Hole` という名前を直接使うのではなく�
 代表例:
 
 ```surtr
-always: (_ -> Int) = const(1)
+keep_one: (_ -> Int) = always(1)
 
 def make() -> (_ -> Int) {
-  const(2)
+  always(2)
 }
 ```
 
@@ -130,14 +130,14 @@ def make() -> (_ -> Int) {
 
 ### どういう問題を解決するのか
 
-`const(1)` の本質は、任意の入力を受けても `1` を返す callable です。  
+`always(1)` の本質は、任意の入力を受けても `1` を返す callable です。  
 これを内部型変数のまま見せると、REPL や docs に `$B` のような実装都合の型変数が
 漏れやすくなります。
 
 `Hole` はその未観測入力を「ignored-input marker」として閉じるための型です。
 
 ```surtr
-always = const(1)
+always = always(1)
 ```
 
 REPL では次のように見えます。
@@ -159,9 +159,9 @@ always: (_ -> Int)
 許可はかなり限定されています。
 
 - 変数の callable type annotation
-  - `always: (_ -> Int) = const(1)`
+  - `keep_one: (_ -> Int) = always(1)`
 - 関数戻り値の中に現れる callable type
-  - `def make() -> (_ -> Int) { const(1) }`
+  - `def make() -> (_ -> Int) { always(1) }`
 - ignored parameter を持つ closure literal の surface / 表示
   - `{|_| 10}`
 
@@ -225,7 +225,7 @@ compiler-special type contract の一部だからです。
 
 - `Unit` は普通に使ってよい
 - `TypeRef<$T>` は `from(value, TargetTy)` / `try_from(value, TargetTy)` の背後にあるものと考える
-- `Hole` は `const(1)` や `{|_| ...}` が `(_ -> T)` と見える理由だと考える
+- `Hole` は `always(1)` や `{|_| ...}` が `(_ -> T)` と見える理由だと考える
 
 直接書く必要があるときは、次の感覚で十分です。
 
@@ -235,6 +235,6 @@ compiler-special type contract の一部だからです。
 ## 関連ページ
 
 - target-oriented conversion surface は `./type-annotations.md`
-- `Kernel::const` と ignored-input callable は `./kernel.md`
+- `Kernel::always` と ignored-input callable は `./kernel.md`
 - 標準モジュール全体の配置は `./standard-library.md`
 - language-wide ルール一覧は `./language-reference.md`

@@ -323,6 +323,9 @@ pub enum Ast {
         DeclAttrs,
     ),
 
+    /// Top-level constant definition: `const APP_NAME = "surtr"`
+    ConstDef(Span, Symbol, Option<AstTy>, Box<Ast>, DeclAttrs),
+
     ExtractorDef(
         Span,
         Symbol,

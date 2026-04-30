@@ -58,14 +58,14 @@ xldr(2)> print(inspect(pair))
 xldr(3)>
 ```
 
-## `const`
+## `always`
 
-`const(value)` は ignored-input callable を返します。
+`always(value)` は ignored-input callable を返します。
 
 ```text
-xldr(1)> always = const(1)
+xldr(1)> always = always(1)
 > always: (_ -> Int)
-xldr(2)> print(to_string(always("ignored")))
+xldr(2)> print(to_string(keep_one("ignored")))
 1
 xldr(3)>
 ```

@@ -333,6 +333,7 @@ impl Resolver {
             | Ast::DeferrorDef(_, _, _, _, _)
             | Ast::EnumDef(_, _, _, _, _)
             | Ast::Def(_, _, _, _, _, _, _)
+            | Ast::ConstDef(_, _, _, _, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
             | Ast::BuiltinDecl(_, _, _, _, _)
             | Ast::BuiltinExtractorDecl(_, _, _, _, _)
@@ -1697,6 +1698,35 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
+            Ast::ConstDef(span, name, ty, value, attrs) => {
+                let uid = self
+                    .take_predeclared_id(&name)
+                    .or_else(|| self.scope.lookup(&name))
+                    .unwrap_or_else(|| self.scope.reserve_id());
+                let resolved_value = self.resolve_node(*value)?;
+                self.scope.define_with_id(&name, uid);
+                let qualified_name = if attrs.visibility == Visibility::Public {
+                    Some(self.qualify_current_declaration_name(&name))
+                } else {
+                    Some(self.qualify_current_declaration_name(&format!(
+                        "__const__::{}",
+                        name
+                    )))
+                };
+                let rid = ResolvedId {
+                    name,
+                    qualified_name,
+                    unique_id: uid,
+                    span: span.clone(),
+                };
+                Ok(Resolved::ConstDef(
+                    span,
+                    rid,
+                    ty.map(|ty| self.resolve_type_annotation(ty)).transpose()?,
+                    Box::new(resolved_value),
+                    resolve_decl_attrs(&attrs),
+                ))
+            }
             Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
                 let fun_uid = self
                     .take_predeclared_id(&name)
@@ -2174,6 +2204,40 @@ impl Resolver {
                         type_name
                     }
                 };
+                if let Some(uid) = self.scope.lookup(&normalized_name) {
+                    if self
+                        .declaration_uid_kinds
+                        .get(&uid)
+                        .is_some_and(|kind| matches!(kind, DeclarationKind::Const))
+                    {
+                        let qualified_name = self.declaration_fq_name_for_uid(uid);
+                        let rid = ResolvedId {
+                            name: normalized_name,
+                            qualified_name,
+                            unique_id: uid,
+                            span: span.clone(),
+                        };
+                        if args.is_empty() {
+                            return Ok(Resolved::Var(span, rid));
+                        }
+                        let resolved_args = args
+                            .into_iter()
+                            .map(|arg| match arg {
+                                spire::ast::RecordLitArg::Positional(e) => {
+                                    Ok(ResolvedRecordLitArg::Positional(self.resolve_node(e)?))
+                                }
+                                spire::ast::RecordLitArg::Named(name, e) => Ok(
+                                    ResolvedRecordLitArg::Named(name, self.resolve_node(e)?),
+                                ),
+                            })
+                            .collect::<Result<Vec<_>, ResolveError>>()?;
+                        return Ok(Resolved::App(
+                            span.clone(),
+                            Box::new(Resolved::Var(span, rid)),
+                            resolved_args,
+                        ));
+                    }
+                }
                 let uid = self
                     .scope
                     .lookup(&normalized_name)

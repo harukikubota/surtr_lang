@@ -68,7 +68,7 @@ pub enum OperatorTraitOp {
     KleisliCompose,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedLensSegment {
     Field {
         field_name: String,
@@ -87,7 +87,7 @@ pub enum TypedLensSegment {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedLensPath {
     pub source_ty: Ty,
     pub focus_ty: Ty,
