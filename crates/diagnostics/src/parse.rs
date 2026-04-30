@@ -127,5 +127,22 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
         }
     }
 
+    if message
+        == "Immediate calls on anonymous callable expressions are not supported; bind the callable to a name and call it as `fn(args)`"
+    {
+        spec.help = Some(
+            "Bind the callable to a name before calling it. For example:\n\n  f = &add(&1, 10)\n  f(4)\n\n  f = {|x| x + 1}\n  f(4)\n\n  tmp = make()\n  tmp(4)"
+                .into(),
+        );
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: "anonymous callable is followed by an immediate call".into(),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
     spec
 }

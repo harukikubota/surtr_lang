@@ -204,6 +204,28 @@ fn core_result_error_reports_diagnostic_without_exiting() {
 }
 
 #[test]
+fn core_immediate_anonymous_callable_calls_show_binding_hint() {
+    let mut engine = engine();
+
+    for source in [
+        "&add(&1, 10)(4)",
+        "(&add(&1, 10))(4)",
+        "({|x| x + 1})(4)",
+        "(make())(4)",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(!result.should_exit);
+        assert!(matches!(result.output, ReplOutput::EvalError { .. }));
+        let text = rendered_text(&result);
+        assert!(text.contains(
+            "Immediate calls on anonymous callable expressions are not supported"
+        ));
+        assert!(text.contains("f = &add(&1, 10)"));
+        assert!(text.contains("tmp = make()"));
+    }
+}
+
+#[test]
 fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let mut engine = engine();
 

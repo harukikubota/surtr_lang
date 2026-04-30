@@ -51,6 +51,27 @@ fn parse_error_spec_rewrites_anonymous_capture_to_named_helper_shape() {
 }
 
 #[test]
+fn parse_error_spec_explains_immediate_anonymous_callable_calls() {
+    let source = "f = &add(&1, 10)(4)";
+    let spec = parse_error_spec(
+        source,
+        "Immediate calls on anonymous callable expressions are not supported; bind the callable to a name and call it as `fn(args)`",
+        Span { start: 17, end: 18 },
+    );
+
+    assert!(spec.labels.iter().any(|label| {
+        label.message == "anonymous callable is followed by an immediate call"
+            && label.color == Some(Color::Red)
+    }));
+    assert_eq!(
+        spec.help.as_deref(),
+        Some(
+            "Bind the callable to a name before calling it. For example:\n\n  f = &add(&1, 10)\n  f(4)\n\n  f = {|x| x + 1}\n  f(4)\n\n  tmp = make()\n  tmp(4)"
+        )
+    );
+}
+
+#[test]
 fn type_error_spec_labels_extractor_pattern_for_safebind_rhs() {
     let source = "uncons(head, tail) =? True";
     let err = TypeError {

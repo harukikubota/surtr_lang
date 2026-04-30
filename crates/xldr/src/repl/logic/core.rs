@@ -1256,7 +1256,7 @@ impl ReplEngine {
             }
             Err(e) => {
                 let message = e.message();
-                let spec = diagnostics::simple_error("ParseError", message, e.span().clone(), None);
+                let spec = diagnostics::parse_error_spec(&self.pending, message, e.span().clone());
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,

@@ -1525,6 +1525,23 @@ g = &(print("Hello"))"#,
 }
 
 #[test]
+fn test_immediate_anonymous_callable_calls_report_dedicated_error() {
+    for source in [
+        "f = &add(&1, 10)(4)",
+        "f = (&add(&1, 10))(4)",
+        "f = ({|x| x + 1})(4)",
+        "f = (make())(4)",
+        "f = (&noop)()",
+    ] {
+        let err = parse(source).expect_err("immediate anonymous callable call must fail");
+        assert_eq!(
+            err.message(),
+            "Immediate calls on anonymous callable expressions are not supported; bind the callable to a name and call it as `fn(args)`"
+        );
+    }
+}
+
+#[test]
 fn test_qualified_capture_and_flow_parse() {
     let ast = parse("reader = &User::get_name\nout = value |> trim() |*> normalize()").unwrap();
     match &ast[0] {

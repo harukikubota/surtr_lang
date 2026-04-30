@@ -354,9 +354,37 @@ impl<'a> Parser<'a> {
         matches!(stmt, Ast::Semi(_, _))
     }
 
+    fn anonymous_callable_call_target(stmt: &Ast) -> Option<&Ast> {
+        match stmt {
+            Ast::Bind(_, _, rhs) | Ast::SafeBind(_, _, rhs) | Ast::Semi(_, rhs) => {
+                Self::anonymous_callable_call_target(rhs)
+            }
+            Ast::Capture(_, _, _)
+            | Ast::Closure(_, _, _)
+            | Ast::Grouped(_, _)
+            | Ast::App(_, _, _) => Some(stmt),
+            _ => None,
+        }
+    }
+
+    fn starts_immediate_anonymous_callable_call(&self, stmt: &Ast) -> bool {
+        let next_starts_call = matches!(self.peek(), Token::LParen | Token::Unit);
+        if !next_starts_call {
+            return false;
+        }
+
+        Self::anonymous_callable_call_target(stmt).is_some()
+    }
+
     fn ensure_stmt_boundary(&self, stmt: &Ast, allow_rbrace: bool) -> Result<(), ParseError> {
         if Self::stmt_has_explicit_separator(stmt) {
             return Ok(());
+        }
+        if self.starts_immediate_anonymous_callable_call(stmt) {
+            return Err(ParseError::syntax(
+                "Immediate calls on anonymous callable expressions are not supported; bind the callable to a name and call it as `fn(args)`",
+                self.peek_span(),
+            ));
         }
         let ok = matches!(self.peek(), Token::Newline | Token::Eof)
             || (allow_rbrace && matches!(self.peek(), Token::RBrace));
