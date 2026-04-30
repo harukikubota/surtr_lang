@@ -1889,7 +1889,8 @@ impl Checker {
                     || (matches!(lhs_ctx, Ty::List(_))
                         && (matches!(rhs_ctx, Ty::Result(_, _)) || is_option_ctx(&rhs_ctx)))
                     || (is_option_ctx(lhs_ctx)
-                        && (matches!(rhs_ctx, Ty::Result(_, _)) || matches!(rhs_ctx, Ty::List(_)))) =>
+                        && (matches!(rhs_ctx, Ty::Result(_, _))
+                            || matches!(rhs_ctx, Ty::List(_)))) =>
             {
                 return Err(TypeError {
                 message: "`|>=` container context mismatch: cannot mix Result, List, and Option context"

@@ -2476,7 +2476,8 @@ pub(crate) fn flow_operator_reason(
                 message.strip_prefix("`|>=` requires the right-hand side to return Option, got ")
             {
                 format!("Reason: RHS returns {}, but `|>=` requires Option<B>.", got)
-            } else if message.contains("cannot use Option as a standard failure container for Result bind")
+            } else if message
+                .contains("cannot use Option as a standard failure container for Result bind")
             {
                 "Reason: LHS is Option, but Result bind in Surtr uses Result as the standard failure container.".into()
             } else if message.contains("cannot switch from Result into Option bind context") {
