@@ -741,7 +741,7 @@ Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, C
   - `Int` や `String` のような型ごとの helper と説明
   - その型自身の `@@builtin type` 宣言
 
-auto import されるのは `Bootstrap` と `Kernel` だけです。  
+auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@@autoimport` が付いた標準 trait です。  
 他の type module も標準モジュールとして一緒にロードされますが、名前空間としては別レイヤーで保ちます。
 
 ## 13. `@@doc` と source ドキュメント

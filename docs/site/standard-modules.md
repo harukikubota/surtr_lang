@@ -29,7 +29,7 @@ Surtr の標準モジュールは language surface の一部です。
 
 ## auto import されるもの
 
-auto import されるのは `Bootstrap` と `Kernel` だけです。  
+auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@@autoimport` が付いた標準 trait です。  
 それ以外の標準モジュールは同梱されますが、名前空間としては明示 import 前提です。
 
 ## REPL で見える最小例
@@ -40,7 +40,7 @@ hello
 xldr(2)>
 ```
 
-`print` が import なしで使えるのは `Kernel` が auto import されるためです。
+`print` が import なしで使えるのは `Kernel` が auto import されるためです。`Ok` / `Err` が bare 名で使えるのは `Result` が auto import されるためです。
 
 ## 次に読むページ
 
@@ -58,5 +58,5 @@ xldr(2)>
 
 ## 躓きやすいポイント
 
-- auto import されるのは `Bootstrap` と `Kernel` だけで、他の標準モジュールは明示 `import` 前提です。
+- auto import されるのは `Bootstrap`, `Kernel`, `Result` と `@@autoimport` 付き標準 trait だけで、他の標準モジュールは明示 `import` 前提です。
 - `Lens` は標準モジュールに見えても runtime value ではなく、compile-time only capability です。

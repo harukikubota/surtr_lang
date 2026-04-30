@@ -127,6 +127,18 @@ Forge は `GetField(idx)` を emit するだけでよい。
 - ユーザ定義型の tag は出現順で連番割り当て
 - runtime tag は user-visible `Int` と分離する
 
+### `import` と型名解決の注意
+
+- `import` は Elixir 風に、module の public な import 可能 member を現在 file scope へ unqualified 名で入れる仕組みとして扱う
+- 主対象は関数名・trait helper・module member であり、型名そのものを import する仕組みではない
+- `import Mod`, `import Mod::name`, `import Mod::{name1, name2}` を受理する
+- `Bootstrap` / `Kernel` / `Result` と、`@@autoimport` 付き標準 trait は auto import 対象として扱う
+- 明示 `import` は同じ file 内の auto-import 名を shadow してよい
+- 明示 `import` 同士、および auto-import 同士の同名衝突は compile error とする
+- `new` と構造体名そのものは import 対象外。`import User` は無効、`User` は型/構造体 head としてそのまま解決する
+- 型名は `Mod::Type` ではなく bare identifier / generic で解決する
+- 型名は flat type namespace で扱う。「どの file からも同じ見え方で使う」前提でよいが、同一可視圏で同名型が複数見える場合は compile error とする
+
 ---
 
 ## Current Focus

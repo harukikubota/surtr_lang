@@ -20,7 +20,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
 ```
 
-このうち auto import されるのは `Bootstrap` と `Kernel` だけです。  
+このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@@autoimport` が付いた標準 trait です。  
 他の標準モジュールは標準モジュールとして同梱されますが、名前空間としては明示 import 前提です。
 
 ## 2. 各モジュールの役割
