@@ -68,6 +68,105 @@ fn strip_ansi(input: &str) -> String {
     out
 }
 
+struct SharedReplCase {
+    name: &'static str,
+    input: &'static str,
+    assert_output: fn(&SharedReplCaseOutput<'_>),
+}
+
+struct SharedReplCaseOutput<'a> {
+    stdout: &'a str,
+    stderr: &'a str,
+}
+
+fn run_shared_repl_cases(cases: &[SharedReplCase]) {
+    let output = run_repl_session(&build_shared_repl_input(cases));
+    assert!(
+        output.status.success(),
+        "shared repl session failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.trim().is_empty(),
+        "shared repl cases produced unexpected stderr\nstdout:\n{}\nstderr:\n{}",
+        stdout,
+        stderr
+    );
+
+    for case in cases {
+        let stdout_segment = extract_shared_repl_segment(
+            &stdout,
+            &shared_repl_marker(case.name, "start"),
+            &shared_repl_marker(case.name, "end"),
+        );
+        (case.assert_output)(&SharedReplCaseOutput {
+            stdout: stdout_segment,
+            stderr: "",
+        });
+    }
+}
+
+fn build_shared_repl_input(cases: &[SharedReplCase]) -> String {
+    let mut input = String::new();
+
+    for case in cases {
+        input.push_str(&format!(
+            "print(\"{}\")\n",
+            shared_repl_marker(case.name, "start")
+        ));
+        input.push_str(case.input);
+        if !case.input.ends_with('\n') {
+            input.push('\n');
+        }
+        input.push_str(&format!(
+            "print(\"{}\")\n",
+            shared_repl_marker(case.name, "end")
+        ));
+    }
+
+    input.push_str(":quit\n");
+    input
+}
+
+fn shared_repl_marker(case_name: &str, edge: &str) -> String {
+    format!("__surtr_repl_case__{edge}__{case_name}__")
+}
+
+fn extract_shared_repl_segment<'a>(text: &'a str, start_marker: &str, end_marker: &str) -> &'a str {
+    let start = text
+        .find(start_marker)
+        .unwrap_or_else(|| panic!("missing shared REPL start marker `{start_marker}`"))
+        + start_marker.len();
+    let tail = &text[start..];
+    let end = tail
+        .find(end_marker)
+        .unwrap_or_else(|| panic!("missing shared REPL end marker `{end_marker}`"));
+    &tail[..end]
+}
+
+fn extract_prompt_numbers(stdout: &str) -> Vec<u32> {
+    let mut numbers = Vec::new();
+    let mut remaining = stdout;
+
+    while let Some(prompt_start) = remaining.find("xldr(") {
+        let digits = &remaining[prompt_start + 5..];
+        let Some(prompt_end) = digits.find(")>") else {
+            break;
+        };
+        let number = &digits[..prompt_end];
+        if let Ok(value) = number.parse::<u32>() {
+            numbers.push(value);
+        }
+        remaining = &digits[prompt_end + 2..];
+    }
+
+    numbers
+}
+
 #[test]
 fn repl_quit_exits_cleanly() {
     let output = run_repl_session(":quit\n");
@@ -189,126 +288,196 @@ fn repl_version_prints_version_and_exits() {
 }
 
 #[test]
-fn repl_keeps_bindings_between_inputs() {
-    let output = run_repl_session("x = 42\nx\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("x: Int = 42"),
-        "expected bind echo in repl output, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("42"),
-        "expected expression result in repl output, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_echoes_bindings_even_with_trailing_semicolons() {
-    let output = run_repl_session("n = 1;w = 2; r = 3;\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("n: Int = 1"),
-        "expected semicolon-terminated binding n to be echoed, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("w: Int = 2"),
-        "expected semicolon-terminated binding w to be echoed, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("r: Int = 3"),
-        "expected semicolon-terminated binding r to be echoed, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_infers_closure_argument_type_from_add_constraint() {
-    let output = run_repl_session("fun = {|num| num + 5}\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("fun: (Int -> Int)"),
-        "expected closure argument type to infer as Int, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_displays_const_helper_with_hole_callable_surface() {
-    let output = run_repl_session("always = const(1)\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("always: (_ -> Int)"),
-        "expected const helper to display Hole callable surface, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_auto_imports_concat_trait_helper() {
-    let output = run_repl_session("concat(\"q\", \"q\")\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("qq"),
-        "expected concat helper result in repl output, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_accepts_top_level_function_definition() {
-    let output = run_repl_session("def add(x: Int, y: Int) -> Int { x + y }\nadd(1, 2)\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("3"),
-        "expected function call result in repl output, got:\n{}",
-        stdout
-    );
+fn repl_shared_success_cases_cover_bindings_and_pure_eval() {
+    run_shared_repl_cases(&[
+        SharedReplCase {
+            name: "keeps_bindings_between_inputs",
+            input: "x = 42\nx\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("x: Int = 42"),
+                    "expected bind echo in repl output, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("> 42"),
+                    "expected expression result in repl output, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "echoes_bindings_even_with_trailing_semicolons",
+            input: "n = 1;w = 2; r = 3;\n",
+            assert_output: |output| {
+                for expected in ["n: Int = 1", "w: Int = 2", "r: Int = 3"] {
+                    assert!(
+                        output.stdout.contains(expected),
+                        "expected semicolon-terminated binding `{}` to be echoed, got:\n{}",
+                        expected,
+                        output.stdout
+                    );
+                }
+            },
+        },
+        SharedReplCase {
+            name: "infers_closure_argument_type_from_add_constraint",
+            input: "fun = {|num| num + 5}\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("fun: (Int -> Int)"),
+                    "expected closure argument type to infer as Int, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "displays_const_helper_with_hole_callable_surface",
+            input: "always = const(1)\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("always: (_ -> Int)"),
+                    "expected const helper to display Hole callable surface, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "auto_imports_concat_trait_helper",
+            input: "concat(\"q\", \"q\")\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("qq"),
+                    "expected concat helper result in repl output, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "accepts_top_level_function_definition",
+            input: "def add_shared_bucket_basic(x: Int, y: Int) -> Int { x + y }\nadd_shared_bucket_basic(1, 2)\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("> 3"),
+                    "expected function call result in repl output, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "ok_defaults_result_error_type_to_error",
+            input: "ret = Ok(10)\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("ret: Result<Int, Error> = Ok(10)"),
+                    "expected Ok binding to default err side to Error, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "hides_internal_type_var_ids_in_result_display",
+            input: "ret_e = Err(NoneError)\n",
+            assert_output: |output| {
+                assert!(
+                    output
+                        .stdout
+                        .contains("ret_e: Result<_, Error> = Err(NoneError(\"None Value.\"))"),
+                    "expected Result type vars to be hidden in repl output, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "safebind_constructor_pattern_echoes_binding",
+            input: "ret = Ok(1)\nrr = Ok(ret)\nOk(num) =? rr\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("num: Int = 1"),
+                    "expected constructor-pattern safebind to echo num binding, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "safebind_list_pattern_echoes_all_bindings",
+            input: "rv: Result<List<Int>> = Ok([1, 2, 3])\n[h, ..t] =? rv\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("h: Int = 1"),
+                    "expected list-pattern safebind to echo h binding, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("t: List<Int> = [2, 3]"),
+                    "expected list-pattern safebind to echo t binding, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "safebind_list_pattern_accepts_plain_list_rhs",
+            input: "li = [1, 2, 3]\n[h, ..t] =? li\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("h: Int = 1"),
+                    "expected list-pattern safebind on plain list rhs to echo h binding, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("t: List<Int> = [2, 3]"),
+                    "expected list-pattern safebind on plain list rhs to echo t binding, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "safebind_list_pattern_accepts_nested_constructor_literals",
+            input: "lr = [Ok(1), Ok(2), Ok(3)]\n[Ok(1), Ok(2), _] =? lr\n",
+            assert_output: |output| {
+                assert!(
+                    output.stderr.is_empty(),
+                    "expected no parse error for nested constructor list pattern, got:\n{}",
+                    output.stderr
+                );
+            },
+        },
+        SharedReplCase {
+            name: "safebind_list_pattern_accepts_nested_constructor_with_tail",
+            input: "lr = [Ok(1), Ok(2), Ok(3)]\n[Ok(1), ..tail] =? lr\n",
+            assert_output: |output| {
+                assert!(
+                    output
+                        .stdout
+                        .contains("tail: List<Result<Int, Error>> = [Ok(2), Ok(3)]"),
+                    "expected nested constructor with tail to bind tail, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "safe_xxx_zero_uses_zero_division_error",
+            input: "print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))\n",
+            assert_output: |output| {
+                assert!(
+                    output
+                        .stdout
+                        .contains("Err(ZeroDivisionError(\"division by zero\"))"),
+                    "expected ZeroDivisionError display in repl output, got:\n{}",
+                    output.stdout
+                );
+                assert_eq!(
+                    output
+                        .stdout
+                        .matches("Err(ZeroDivisionError(\"division by zero\"))")
+                        .count(),
+                    2,
+                    "expected both safe_div and safe_mod to use ZeroDivisionError, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+    ]);
 }
 
 #[test]
@@ -355,6 +524,313 @@ fn repl_compile_error_does_not_break_session_state() {
 }
 
 #[test]
+fn repl_shared_success_cases_cover_reference_commands() {
+    run_shared_repl_cases(&[
+        SharedReplCase {
+            name: "doc_command_shows_builtin_docs",
+            input: ":doc print\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("Kernel::print"),
+                    "expected :doc to resolve the builtin symbol, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("Kernel::print(a: String) -> Unit"),
+                    "expected :doc to print the builtin signature banner, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("Print a string to stdout."),
+                    "expected :doc to print the builtin summary, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "sig_command_shows_builtin_and_local_function_signatures",
+            input: ":sig print\ndef add_shared_bucket_sig(x: Int, y: Int) -> Int { x + y }\n:sig add_shared_bucket_sig\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("Kernel::print(a: String) -> Unit"),
+                    "expected :sig to print the builtin signature, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("__Repl::Session::add_shared_bucket_sig(x: Int, y: Int) -> Int"),
+                    "expected :sig to print the REPL function signature, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "help_command_lists_available_commands",
+            input: ":help\n",
+            assert_output: |output| {
+                for expected in [
+                    "REPL commands:",
+                    ":help, :h [command]",
+                    ":quit, :exit",
+                    ":doc <symbol>",
+                    ":sig <symbol>",
+                    ":error [full|summary]",
+                    ":save <path.eldr>",
+                    ":v <line>",
+                ] {
+                    assert!(
+                        output.stdout.contains(expected),
+                        "expected help output to contain `{}`, got:\n{}",
+                        expected,
+                        output.stdout
+                    );
+                }
+            },
+        },
+        SharedReplCase {
+            name: "help_sig_topic_shows_sig_usage",
+            input: ":h sig\n:h :sig\n:sig\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.matches("Usage: :sig <function>").count() >= 3,
+                    "expected sig help forms to show sig usage, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("Examples: :sig print, :sig Kernel::if, :sig add"),
+                    "expected sig help examples, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "help_doc_topic_shows_doc_usage",
+            input: ":h doc\n:h :doc\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.matches("Usage: :doc <symbol>").count() >= 2,
+                    "expected both doc help forms to show doc usage, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("Examples: :doc print, :doc Kernel::if, :doc Add, :doc +"),
+                    "expected doc help examples, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "doc_without_symbol_shows_doc_help",
+            input: ":doc\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("Usage: :doc <symbol>"),
+                    "expected :doc without a symbol to show doc help, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("Examples: :doc print, :doc Kernel::if, :doc Add, :doc +"),
+                    "expected :doc help examples, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "unknown_command_suggests_help_and_keeps_session_alive",
+            input: ":nope\n1\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("Unknown REPL command: :nope"),
+                    "expected unknown command message, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("Type :help for available REPL commands."),
+                    "expected help suggestion, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("> 1"),
+                    "expected session to continue after unknown command, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "doc_command_resolves_operator_trait_aliases",
+            input: ":doc Add\n:doc +\n:doc |*>\n:doc |>=\n",
+            assert_output: |output| {
+                assert!(
+                    output
+                        .stdout
+                        .matches("trait Add { add(self: Self, rhs: Self) -> Self }")
+                        .count()
+                        >= 2,
+                    "expected both :doc Add and :doc + to render Add docs, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .matches("Standard `Add` operator trait declaration.")
+                        .count()
+                        >= 2,
+                    "expected both doc lookups to print the Add summary, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("Standard `Functor` trait declaration."),
+                    "expected :doc |*> to render Functor docs from source, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("Standard `Chainable` trait declaration."),
+                    "expected :doc |>= to render Chainable docs from source, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "doc_command_lists_ambiguous_trait_method_candidates",
+            input: ":doc gt\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("gt has multiple docs:"),
+                    "expected :doc gt to show candidates, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("impl Gt for Int::gt")
+                        && output.stdout.contains("impl Gt for Float::gt"),
+                    "expected Int and Float gt candidates, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "doc_typed_call_resolves_trait_impl_docs_without_evaluation",
+            input: ":doc gt(3, 2)\n:doc gt(2.0, 1.5)\n",
+            assert_output: |output| {
+                assert!(
+                    output
+                        .stdout
+                        .contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"),
+                    "expected Int gt impl docs, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("impl Gt for Float::gt(self: Self, rhs: Self) -> Boolean"),
+                    "expected Float gt impl docs, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "doc_typed_call_accepts_type_placeholders_and_rejects_calls",
+            input: ":doc gt(_ : Float, _ : Float)\n:doc gt(Float, Float)\n:doc gt(make_value(), 1)\n",
+            assert_output: |output| {
+                assert!(
+                    output
+                        .stdout
+                        .matches("impl Gt for Float::gt(self: Self, rhs: Self) -> Boolean")
+                        .count()
+                        >= 2,
+                    "expected Float gt impl docs, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("Unsupported typed call query argument `make_value()`"),
+                    "expected non-evaluating query rejection, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "doc_and_sig_render_without_result_prefix_and_dedent_doc_body",
+            input: ":sig gt(Int, Int)\n:doc gt(Int, Int)\n",
+            assert_output: |output| {
+                assert!(
+                    !output.stdout.contains("\n> defined:")
+                        && !output.stdout.contains("\n> specialized:")
+                        && !output.stdout.contains("\n> Return `True`"),
+                    "expected :doc/:sig output without result prefix, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("\ndefined:\n  impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean")
+                        || output.stdout.contains(
+                            "> defined:\n  impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"
+                        ),
+                    "expected defined signature block, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains(
+                        "\nReturn `True` when the left integer is strictly greater than the right integer."
+                    ),
+                    "expected doc body to be dedented, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    !output.stdout.contains(
+                        "\n  Return `True` when the left integer is strictly greater than the right integer."
+                    ),
+                    "expected doc body not to keep source indentation, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "doc_command_resolves_flow_operator_trait_aliases",
+            input: ":doc |>\n:doc >>\n:doc >*\n:doc >=>\n",
+            assert_output: |output| {
+                assert!(
+                    output
+                        .stdout
+                        .contains("Standard `PipeApply` flow operator trait declaration."),
+                    "expected :doc |> to render PipeApply docs from source, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("Standard `Composable` flow operator trait declaration."),
+                    "expected :doc >> to render Composable docs from source, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("Standard `LiftComposable` flow operator trait declaration."),
+                    "expected :doc >* to render LiftComposable docs from source, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output
+                        .stdout
+                        .contains("Standard `KleisliComposable` flow operator trait declaration."),
+                    "expected :doc >=> to render KleisliComposable docs from source, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+    ]);
+}
+
+#[test]
 fn repl_value_recall_by_line_number() {
     let output = run_repl_session("5\n:v 1\n:quit\n");
     assert!(
@@ -365,14 +841,10 @@ fn repl_value_recall_by_line_number() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let prompt_numbers = extract_prompt_numbers(&stdout);
     assert!(
-        stdout.contains("xldr(1)>"),
-        "expected numbered prompt for first line, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("xldr(2)>"),
-        "expected numbered prompt for second line, got:\n{}",
+        prompt_numbers.starts_with(&[1, 2]),
+        "expected numbered prompts for the first two inputs, got:\n{}",
         stdout
     );
 
@@ -380,58 +852,6 @@ fn repl_value_recall_by_line_number() {
     assert!(
         fives >= 2,
         "expected original value and :v recall output, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_doc_command_shows_builtin_docs() {
-    let output = run_repl_session(":doc print\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Kernel::print"),
-        "expected :doc to resolve the builtin symbol, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Kernel::print(a: String) -> Unit"),
-        "expected :doc to print the builtin signature banner, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Print a string to stdout."),
-        "expected :doc to print the builtin summary, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_sig_command_shows_builtin_and_local_function_signatures() {
-    let output =
-        run_repl_session(":sig print\ndef add(x: Int, y: Int) -> Int { x + y }\n:sig add\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Kernel::print(a: String) -> Unit"),
-        "expected :sig to print the builtin signature, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("__Repl::Session::add(x: Int, y: Int) -> Int"),
-        "expected :sig to print the REPL function signature, got:\n{}",
         stdout
     );
 }
@@ -466,322 +886,6 @@ fn repl_colorizes_sig_command_signature() {
     assert!(
         strip_ansi(&stdout).contains("Kernel::print(a: String) -> Unit"),
         "expected styled :sig output to preserve plain text, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_help_command_lists_available_commands() {
-    let output = run_repl_session(":help\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for expected in [
-        "REPL commands:",
-        ":help, :h [command]",
-        ":quit, :exit",
-        ":doc <symbol>",
-        ":sig <symbol>",
-        ":error [full|summary]",
-        ":save <path.eldr>",
-        ":v <line>",
-    ] {
-        assert!(
-            stdout.contains(expected),
-            "expected help output to contain `{}`, got:\n{}",
-            expected,
-            stdout
-        );
-    }
-}
-
-#[test]
-fn repl_help_sig_topic_shows_sig_usage() {
-    let output = run_repl_session(":h sig\n:h :sig\n:sig\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let usage_hits = stdout.matches("Usage: :sig <function>").count();
-    assert!(
-        usage_hits >= 3,
-        "expected sig help forms to show sig usage, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Examples: :sig print, :sig Kernel::if, :sig add"),
-        "expected sig help examples, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_help_doc_topic_shows_doc_usage() {
-    let output = run_repl_session(":h doc\n:h :doc\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let usage_hits = stdout.matches("Usage: :doc <symbol>").count();
-    assert!(
-        usage_hits >= 2,
-        "expected both doc help forms to show doc usage, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Examples: :doc print, :doc Kernel::if, :doc Add, :doc +"),
-        "expected doc help examples, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_doc_without_symbol_shows_doc_help() {
-    let output = run_repl_session(":doc\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Usage: :doc <symbol>"),
-        "expected :doc without a symbol to show doc help, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Examples: :doc print, :doc Kernel::if, :doc Add, :doc +"),
-        "expected :doc help examples, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_unknown_command_suggests_help_and_keeps_session_alive() {
-    let output = run_repl_session(":nope\n1\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Unknown REPL command: :nope"),
-        "expected unknown command message, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Type :help for available REPL commands."),
-        "expected help suggestion, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("> 1"),
-        "expected session to continue after unknown command, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_doc_command_resolves_operator_trait_aliases() {
-    let output = run_repl_session(":doc Add\n:doc +\n:doc |*>\n:doc |>=\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let add_hits = stdout
-        .matches("trait Add { add(self: Self, rhs: Self) -> Self }")
-        .count();
-    assert!(
-        add_hits >= 2,
-        "expected both :doc Add and :doc + to render Add docs, got:\n{}",
-        stdout
-    );
-    let summary_hits = stdout
-        .matches("Standard `Add` operator trait declaration.")
-        .count();
-    assert!(
-        summary_hits >= 2,
-        "expected both doc lookups to print the Add summary, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Standard `Functor` trait declaration."),
-        "expected :doc |*> to render Functor docs from source, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Standard `Chainable` trait declaration."),
-        "expected :doc |>= to render Chainable docs from source, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_doc_command_lists_ambiguous_trait_method_candidates() {
-    let output = run_repl_session(":doc gt\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("gt has multiple docs:"),
-        "expected :doc gt to show candidates, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("impl Gt for Int::gt") && stdout.contains("impl Gt for Float::gt"),
-        "expected Int and Float gt candidates, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_doc_typed_call_resolves_trait_impl_docs_without_evaluation() {
-    let output = run_repl_session(":doc gt(3, 2)\n:doc gt(2.0, 1.5)\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"),
-        "expected Int gt impl docs, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("impl Gt for Float::gt(self: Self, rhs: Self) -> Boolean"),
-        "expected Float gt impl docs, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_doc_typed_call_accepts_type_placeholders_and_rejects_calls() {
-    let output = run_repl_session(
-        ":doc gt(_ : Float, _ : Float)\n:doc gt(Float, Float)\n:doc gt(make_value(), 1)\n:quit\n",
-    );
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout
-            .matches("impl Gt for Float::gt(self: Self, rhs: Self) -> Boolean")
-            .count()
-            >= 2,
-        "expected Float gt impl docs, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Unsupported typed call query argument `make_value()`"),
-        "expected non-evaluating query rejection, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_doc_and_sig_render_without_result_prefix_and_dedent_doc_body() {
-    let output = run_repl_session(":sig gt(Int, Int)\n:doc gt(Int, Int)\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !stdout.contains("\n> defined:")
-            && !stdout.contains("\n> specialized:")
-            && !stdout.contains("\n> Return `True`"),
-        "expected :doc/:sig output without result prefix, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("\ndefined:\n  impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean")
-            || stdout
-                .contains("> defined:\n  impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"),
-        "expected defined signature block, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains(
-            "\nReturn `True` when the left integer is strictly greater than the right integer."
-        ),
-        "expected doc body to be dedented, got:\n{}",
-        stdout
-    );
-    assert!(
-        !stdout.contains(
-            "\n  Return `True` when the left integer is strictly greater than the right integer."
-        ),
-        "expected doc body not to keep source indentation, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_doc_command_resolves_flow_operator_trait_aliases() {
-    let output = run_repl_session(":doc |>\n:doc >>\n:doc >*\n:doc >=>\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Standard `PipeApply` flow operator trait declaration."),
-        "expected :doc |> to render PipeApply docs from source, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Standard `Composable` flow operator trait declaration."),
-        "expected :doc >> to render Composable docs from source, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Standard `LiftComposable` flow operator trait declaration."),
-        "expected :doc >* to render LiftComposable docs from source, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("Standard `KleisliComposable` flow operator trait declaration."),
-        "expected :doc >=> to render KleisliComposable docs from source, got:\n{}",
         stdout
     );
 }
@@ -845,26 +949,91 @@ fn repl_colorizes_doc_for_qualified_kernel_if() {
 }
 
 #[test]
-fn repl_error_command_switches_display_mode() {
-    let output = run_repl_session(":error\n:error summary\n:error\n:error full\n:error\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("> error display mode: full"),
-        "expected default error display mode to be full, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("> error display mode: summary"),
-        "expected :error summary to update mode, got:\n{}",
-        stdout
-    );
+fn repl_shared_success_cases_cover_callable_and_auxiliary_views() {
+    run_shared_repl_cases(&[
+        SharedReplCase {
+            name: "error_command_switches_display_mode",
+            input: ":error\n:error summary\n:error\n:error full\n:error\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("> error display mode: full"),
+                    "expected default error display mode to be full, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains("> error display mode: summary"),
+                    "expected :error summary to update mode, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "displays_bare_std_callable_refs_with_named_inspect_format",
+            input: "&Int::shr\n&Boolean::xor\nprint(inspect(&Boolean::xor))\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains(
+                        "FnCapture(module: Int, name: shr, signature: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
+                    ),
+                    "expected builtin callable inspect format, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains(
+                        "FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)"
+                    ),
+                    "expected function callable inspect format, got:\n{}",
+                    output.stdout
+                );
+                assert_eq!(
+                    output
+                        .stdout
+                        .matches(
+                            "FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)"
+                        )
+                        .count(),
+                    2,
+                    "expected bare display and inspect(...) to agree for Boolean::xor, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "concat_helper_works_inside_annotated_closure",
+            input: "f = {|x: String, y: String| concat(x,y)}\nf(\"a\",\"b\")\n",
+            assert_output: |output| {
+                let stdout = strip_ansi(output.stdout);
+                assert!(
+                    stdout.contains("f: (String, String -> String)"),
+                    "expected closure to infer String concat signature, got:\n{}",
+                    stdout
+                );
+                assert!(
+                    stdout.contains("> \"ab\"") || stdout.contains("> ab"),
+                    "expected closure call to concatenate strings, got:\n{}",
+                    stdout
+                );
+            },
+        },
+        SharedReplCase {
+            name: "displays_local_function_refs_with_named_inspect_format",
+            input: "def add_shared_bucket_local_ref(x: Int, y: Int) -> Int { x + y }\n&add_shared_bucket_local_ref\nprint(inspect(&add_shared_bucket_local_ref))\n",
+            assert_output: |output| {
+                assert!(
+                    output.stdout.contains("FnCapture(module:"),
+                    "expected named callable inspect output, got:\n{}",
+                    output.stdout
+                );
+                assert!(
+                    output.stdout.contains(
+                        "name: add_shared_bucket_local_ref, signature: add_shared_bucket_local_ref(x: Int, y: Int) -> Int)"
+                    ),
+                    "expected local function signature in inspect output, got:\n{}",
+                    output.stdout
+                );
+            },
+        },
+    ]);
 }
 
 #[test]
@@ -904,44 +1073,6 @@ fn repl_error_summary_then_full_changes_diagnostic_detail() {
 }
 
 #[test]
-fn repl_displays_bare_std_callable_refs_with_named_inspect_format() {
-    let output =
-        run_repl_session("&Int::shr\n&Boolean::xor\nprint(inspect(&Boolean::xor))\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains(
-            "FnCapture(module: Int, name: shr, signature: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
-        ),
-        "expected builtin callable inspect format, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains(
-            "FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)"
-        ),
-        "expected function callable inspect format, got:\n{}",
-        stdout
-    );
-    assert_eq!(
-        stdout
-            .matches(
-                "FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)"
-            )
-            .count(),
-        2,
-        "expected bare display and inspect(...) to agree for Boolean::xor, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
 fn repl_rejects_bare_trait_helper_callable_refs() {
     let output = run_repl_session("&concat\n:quit\n");
     assert!(
@@ -966,55 +1097,6 @@ fn repl_rejects_bare_trait_helper_callable_refs() {
         !combined.contains("FnCapture(module: Result, name: chain"),
         "bare trait helper ref must not reuse an unrelated function id, got:\n{}",
         combined
-    );
-}
-
-#[test]
-fn repl_concat_helper_works_inside_annotated_closure() {
-    let output =
-        run_repl_session("f = {|x: String, y: String| concat(x,y)}\nf(\"a\",\"b\")\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(
-        stdout.contains("f: (String, String -> String)"),
-        "expected closure to infer String concat signature, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("> \"ab\"") || stdout.contains("> ab"),
-        "expected closure call to concatenate strings, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_displays_local_function_refs_with_named_inspect_format() {
-    let output = run_repl_session(
-        "def add(x: Int, y: Int) -> Int { x + y }\n&add\nprint(inspect(&add))\n:quit\n",
-    );
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("FnCapture(module:"),
-        "expected named callable inspect output, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("name: add, signature: add(x: Int, y: Int) -> Int)"),
-        "expected local function signature in inspect output, got:\n{}",
-        stdout
     );
 }
 
@@ -1064,42 +1146,6 @@ fn repl_rejects_top_level_deferror_definition() {
 }
 
 #[test]
-fn repl_ok_defaults_result_error_type_to_error() {
-    let output = run_repl_session("ret = Ok(10)\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("ret: Result<Int, Error> = Ok(10)"),
-        "expected Ok binding to default err side to Error, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_hides_internal_type_var_ids_in_result_display() {
-    let output = run_repl_session("ret_e = Err(NoneError)\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("ret_e: Result<_, Error> = Err(NoneError(\"None Value.\"))"),
-        "expected Result type vars to be hidden in repl output, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
 fn repl_evaluates_main_result_err_immediately() {
     let output = run_repl_session("Err(NoneError)\n:quit\n");
     assert!(
@@ -1121,70 +1167,6 @@ fn repl_evaluates_main_result_err_immediately() {
         stderr.contains("NoneError"),
         "expected evaluated Err to be reported in stderr, got:\n{}",
         stderr
-    );
-}
-
-#[test]
-fn repl_safebind_constructor_pattern_echoes_binding() {
-    let output = run_repl_session("ret = Ok(1)\nrr = Ok(ret)\nOk(num) =? rr\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("num: Int = 1"),
-        "expected constructor-pattern safebind to echo num binding, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_safebind_list_pattern_echoes_all_bindings() {
-    let output = run_repl_session("rv: Result<List<Int>> = Ok([1, 2, 3])\n[h, ..t] =? rv\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("h: Int = 1"),
-        "expected list-pattern safebind to echo h binding, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("t: List<Int> = [2, 3]"),
-        "expected list-pattern safebind to echo t binding, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_safebind_list_pattern_accepts_plain_list_rhs() {
-    let output = run_repl_session("li = [1, 2, 3]\n[h, ..t] =? li\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("h: Int = 1"),
-        "expected list-pattern safebind on plain list rhs to echo h binding, got:\n{}",
-        stdout
-    );
-    assert!(
-        stdout.contains("t: List<Int> = [2, 3]"),
-        "expected list-pattern safebind on plain list rhs to echo t binding, got:\n{}",
-        stdout
     );
 }
 
@@ -1237,69 +1219,6 @@ fn repl_colorizes_constructor_return_without_type_style_bleed() {
     assert!(
         !stdout.contains("\u{1b}[96mOk(1)\u{1b}[0m"),
         "expected Ok(1) not to be styled as a type definition line, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_safebind_list_pattern_accepts_nested_constructor_literals() {
-    let output = run_repl_session("lr = [Ok(1), Ok(2), Ok(3)]\n[Ok(1), Ok(2), _] =? lr\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("ParseError"),
-        "expected no parse error for nested constructor list pattern, got:\n{}",
-        stderr
-    );
-}
-
-#[test]
-fn repl_safebind_list_pattern_accepts_nested_constructor_with_tail() {
-    let output = run_repl_session("lr = [Ok(1), Ok(2), Ok(3)]\n[Ok(1), ..tail] =? lr\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("tail: List<Result<Int, Error>> = [Ok(2), Ok(3)]"),
-        "expected nested constructor with tail to bind tail, got:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn repl_safe_xxx_zero_uses_zero_division_error() {
-    let output =
-        run_repl_session("print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))\n:quit\n");
-    assert!(
-        output.status.success(),
-        "repl failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Err(ZeroDivisionError(\"division by zero\"))"),
-        "expected ZeroDivisionError display in repl output, got:\n{}",
-        stdout
-    );
-    assert_eq!(
-        stdout
-            .matches("Err(ZeroDivisionError(\"division by zero\"))")
-            .count(),
-        2,
-        "expected both safe_div and safe_mod to use ZeroDivisionError, got:\n{}",
         stdout
     );
 }
