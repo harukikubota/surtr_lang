@@ -74,6 +74,8 @@ fn runtime_error_spec_splits_builtin_runtime_error() {
         .any(|label| label.message == "expected rule: List as first argument"));
 }
 
+use super::test_support::*;
+
 #[test]
 fn runtime_error_spec_splits_builtin_out_of_range_rule() {
     let spec = runtime_error_spec(

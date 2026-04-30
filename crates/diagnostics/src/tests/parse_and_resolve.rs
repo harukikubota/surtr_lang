@@ -1,3 +1,5 @@
+use super::test_support::*;
+
 #[test]
 fn parse_error_spec_adds_unexpected_token_help() {
     let spec = parse_error_spec(
@@ -385,4 +387,3 @@ fn resolve_error_spec_uses_closure_fallback_for_deep_context_bind_rewrite() {
             )
         );
 }
-

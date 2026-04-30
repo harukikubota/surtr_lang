@@ -1,3 +1,5 @@
+use super::test_support::*;
+
 #[test]
 fn fallback_diagnostic_preserves_core_fields() {
     let spec = DiagnosticSpec {
@@ -164,4 +166,3 @@ fn surtr_assert_eq_template_renders_terms_through_ariadne() {
     assert!(rendered.contains("RHS term: \"bad\""));
     assert!(rendered.contains("assert_eq failed: expected \"tes\", got \"bad\""));
 }
-

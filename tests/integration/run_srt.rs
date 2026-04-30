@@ -9,6 +9,22 @@ use crate::common::{
 };
 use crate::support;
 
+const SPEC_FIXTURE_BUCKETS: usize = 4;
+const COMPILE_ERROR_FIXTURE_BUCKETS: usize = 4;
+
+fn stable_bucket(key: &str, bucket_count: usize) -> usize {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET;
+    for byte in key.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    (hash as usize) % bucket_count
+}
+
 fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
     support::compile_script("fixture.srt", source)
 }
@@ -65,9 +81,9 @@ fn print_timing_breakdown(
 fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
     let sources = spec_fixtures()
         .into_iter()
-        .enumerate()
-        .filter(|(index, _)| index % bucket_count == bucket)
-        .map(|(_, fixture)| fixture)
+        .filter(|fixture| {
+            stable_bucket(&fixture.source_path.to_string_lossy(), bucket_count) == bucket
+        })
         .collect::<Vec<_>>();
     assert!(
         !sources.is_empty(),
@@ -97,30 +113,30 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
 
 #[test]
 fn spec_fixtures_bucket_0() {
-    run_spec_fixture_bucket(0, 4);
+    run_spec_fixture_bucket(0, SPEC_FIXTURE_BUCKETS);
 }
 
 #[test]
 fn spec_fixtures_bucket_1() {
-    run_spec_fixture_bucket(1, 4);
+    run_spec_fixture_bucket(1, SPEC_FIXTURE_BUCKETS);
 }
 
 #[test]
 fn spec_fixtures_bucket_2() {
-    run_spec_fixture_bucket(2, 4);
+    run_spec_fixture_bucket(2, SPEC_FIXTURE_BUCKETS);
 }
 
 #[test]
 fn spec_fixtures_bucket_3() {
-    run_spec_fixture_bucket(3, 4);
+    run_spec_fixture_bucket(3, SPEC_FIXTURE_BUCKETS);
 }
 
 fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
     let sources = compile_error_fixtures()
         .into_iter()
-        .enumerate()
-        .filter(|(index, _)| index % bucket_count == bucket)
-        .map(|(_, fixture)| fixture)
+        .filter(|fixture| {
+            stable_bucket(&fixture.source_path.to_string_lossy(), bucket_count) == bucket
+        })
         .collect::<Vec<_>>();
     assert!(
         !sources.is_empty(),
@@ -193,20 +209,20 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
 
 #[test]
 fn compile_error_fixtures_bucket_0() {
-    run_compile_error_fixture_bucket(0, 4);
+    run_compile_error_fixture_bucket(0, COMPILE_ERROR_FIXTURE_BUCKETS);
 }
 
 #[test]
 fn compile_error_fixtures_bucket_1() {
-    run_compile_error_fixture_bucket(1, 4);
+    run_compile_error_fixture_bucket(1, COMPILE_ERROR_FIXTURE_BUCKETS);
 }
 
 #[test]
 fn compile_error_fixtures_bucket_2() {
-    run_compile_error_fixture_bucket(2, 4);
+    run_compile_error_fixture_bucket(2, COMPILE_ERROR_FIXTURE_BUCKETS);
 }
 
 #[test]
 fn compile_error_fixtures_bucket_3() {
-    run_compile_error_fixture_bucket(3, 4);
+    run_compile_error_fixture_bucket(3, COMPILE_ERROR_FIXTURE_BUCKETS);
 }

@@ -146,15 +146,18 @@ fn check_source_phase(
             Ok(())
         }
         CompileFailurePhase::Resolve => {
-            let compile_sources = super::sources::collect_script_compile_sources(source_name, source)?;
+            let compile_sources =
+                super::sources::collect_script_compile_sources(source_name, source)?;
             resolve_sources_with_mode(&compile_sources, mode)
         }
         CompileFailurePhase::Typecheck => {
-            let compile_sources = super::sources::collect_script_compile_sources(source_name, source)?;
+            let compile_sources =
+                super::sources::collect_script_compile_sources(source_name, source)?;
             typecheck_sources_with_mode(&compile_sources, mode)
         }
         CompileFailurePhase::Codegen => {
-            let compile_sources = super::sources::collect_script_compile_sources(source_name, source)?;
+            let compile_sources =
+                super::sources::collect_script_compile_sources(source_name, source)?;
             compile_sources_with_mode(&compile_sources, mode).map(|_| ())
         }
     }
@@ -183,6 +186,8 @@ fn check_sources_phase(
         }
         CompileFailurePhase::Resolve => resolve_sources_in_compile_order(compile_sources, mode),
         CompileFailurePhase::Typecheck => typecheck_sources_in_compile_order(compile_sources, mode),
-        CompileFailurePhase::Codegen => compile_sources_with_mode(compile_sources, mode).map(|_| ()),
+        CompileFailurePhase::Codegen => {
+            compile_sources_with_mode(compile_sources, mode).map(|_| ())
+        }
     }
 }

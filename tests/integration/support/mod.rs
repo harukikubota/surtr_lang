@@ -10,9 +10,7 @@ pub use compile::{
     compile_project_script, compile_project_sources, compile_script, compile_script_sources,
 };
 #[allow(unused_imports)]
-pub use phase::{
-    check_project_phase, check_script_phase, check_script_sources_phase,
-};
+pub use phase::{check_project_phase, check_script_phase, check_script_sources_phase};
 #[allow(unused_imports)]
 pub use run::{
     run_project_script, run_project_script_with_input, run_project_script_with_stderr, run_script,

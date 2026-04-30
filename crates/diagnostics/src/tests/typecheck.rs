@@ -502,6 +502,8 @@ impl Summable for Int {
     );
 }
 
+use super::test_support::*;
+
 #[test]
 fn collect_match_arm_body_spans_ignores_literals() {
     let source = r#"match value { Left("=>") => "a,b", Right(x) => x }"#;
@@ -633,4 +635,3 @@ fn source_signature_caption_handles_defmod_and_impls() {
         Some("impl From<String> for Int { def from(self: Self, to: TypeRef<String>) -> String }")
     );
 }
-
