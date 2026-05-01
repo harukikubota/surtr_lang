@@ -1221,10 +1221,9 @@ defmod AppConfig {
         let lowered = lower_module_source_ast(ast, Some("AppConfig"));
         assert_eq!(lowered.len(), 1);
         assert_eq!(lowered[0].module_path, "AppConfig");
-        assert!(lowered[0]
-            .ast
-            .iter()
-            .any(|stmt| matches!(stmt, spire::ast::Ast::ConstDef(_, name, _, _, _) if name == "APP_NAME")));
+        assert!(lowered[0].ast.iter().any(
+            |stmt| matches!(stmt, spire::ast::Ast::ConstDef(_, name, _, _, _) if name == "APP_NAME")
+        ));
     }
 
     #[test]

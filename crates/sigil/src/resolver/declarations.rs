@@ -1382,7 +1382,8 @@ impl Resolver {
                         .entry(name.clone())
                         .or_default()
                         .push_back(uid);
-                    self.declaration_uid_kinds.insert(uid, DeclarationKind::Const);
+                    self.declaration_uid_kinds
+                        .insert(uid, DeclarationKind::Const);
                     self.scope.define_with_id(name, uid);
                 }
                 Ast::TraitDef(span, name, _type_params, methods, _) => {

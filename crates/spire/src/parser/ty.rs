@@ -126,10 +126,10 @@ impl Parser<'_> {
         if matches!(self.peek(), Token::Impl) {
             self.advance();
             self.skip_newlines();
-        let (trait_name, trait_span) = self.expect_qualified_ident(2, "trait")?;
-        return Ok(AstTy::ImplTrait(
-            Span {
-                start: sp.start,
+            let (trait_name, trait_span) = self.expect_qualified_ident(2, "trait")?;
+            return Ok(AstTy::ImplTrait(
+                Span {
+                    start: sp.start,
                     end: trait_span.end,
                 },
                 trait_name,

@@ -1062,7 +1062,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::Namespace(span, name, body) => Ast::Namespace(
             shift_span(span, delta),
             name,
-            body.into_iter().map(|stmt| shift_ast_span(stmt, delta)).collect(),
+            body.into_iter()
+                .map(|stmt| shift_ast_span(stmt, delta))
+                .collect(),
         ),
         Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
             shift_span(span, delta),

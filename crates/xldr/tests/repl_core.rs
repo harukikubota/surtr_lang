@@ -217,9 +217,9 @@ fn core_immediate_anonymous_callable_calls_show_binding_hint() {
         assert!(!result.should_exit);
         assert!(matches!(result.output, ReplOutput::EvalError { .. }));
         let text = rendered_text(&result);
-        assert!(text.contains(
-            "Immediate calls on anonymous callable expressions are not supported"
-        ));
+        assert!(
+            text.contains("Immediate calls on anonymous callable expressions are not supported")
+        );
         assert!(text.contains("f = &add(&1, 10)"));
         assert!(text.contains("tmp = make()"));
     }

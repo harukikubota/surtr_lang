@@ -1715,10 +1715,7 @@ impl Resolver {
                 let qualified_name = if attrs.visibility == Visibility::Public {
                     Some(self.qualify_current_declaration_name(&name))
                 } else {
-                    Some(self.qualify_current_declaration_name(&format!(
-                        "__const__::{}",
-                        name
-                    )))
+                    Some(self.qualify_current_declaration_name(&format!("__const__::{}", name)))
                 };
                 let rid = ResolvedId {
                     name,
@@ -2233,9 +2230,9 @@ impl Resolver {
                                 spire::ast::RecordLitArg::Positional(e) => {
                                     Ok(ResolvedRecordLitArg::Positional(self.resolve_node(e)?))
                                 }
-                                spire::ast::RecordLitArg::Named(name, e) => Ok(
-                                    ResolvedRecordLitArg::Named(name, self.resolve_node(e)?),
-                                ),
+                                spire::ast::RecordLitArg::Named(name, e) => {
+                                    Ok(ResolvedRecordLitArg::Named(name, self.resolve_node(e)?))
+                                }
                             })
                             .collect::<Result<Vec<_>, ResolveError>>()?;
                         return Ok(Resolved::App(

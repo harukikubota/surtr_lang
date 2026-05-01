@@ -134,7 +134,13 @@ pub enum Resolved {
     ),
 
     /// Top-level constant definition.
-    ConstDef(Span, ResolvedId, Option<AstTy>, Box<Resolved>, ResolvedDeclAttrs),
+    ConstDef(
+        Span,
+        ResolvedId,
+        Option<AstTy>,
+        Box<Resolved>,
+        ResolvedDeclAttrs,
+    ),
 
     ExtractorDef(
         Span,

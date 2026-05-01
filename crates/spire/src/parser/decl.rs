@@ -1478,11 +1478,7 @@ impl Parser<'_> {
         self.expect(&Token::LParen)?;
         self.skip_newlines();
         let (param_name, param_span) = self.expect_ident()?;
-        self.ensure_non_const_identifier(
-            &param_name,
-            param_span.clone(),
-            "Extractor parameter",
-        )?;
+        self.ensure_non_const_identifier(&param_name, param_span.clone(), "Extractor parameter")?;
         self.skip_newlines();
         let param_ty = if matches!(self.peek(), Token::Colon) {
             self.advance();

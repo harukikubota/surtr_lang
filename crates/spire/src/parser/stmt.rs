@@ -75,12 +75,13 @@ impl Parser<'_> {
                             let looks_like_bind = matches!(
                                 self.tokens.get(save).map(|sp| &sp.token),
                                 Some(Token::LParen | Token::LBrack)
-                            ) && self.stmt_has_top_level_assignment_from(save)
+                            ) && self
+                                .stmt_has_top_level_assignment_from(save)
                                 || matches!(
-                                self.tokens.get(save).map(|sp| &sp.token),
-                                Some(Token::Ident(_))
-                            ) && self.stmt_has_top_level_assignment_from(save)
-                                && self.stmt_has_top_level_at_from(save);
+                                    self.tokens.get(save).map(|sp| &sp.token),
+                                    Some(Token::Ident(_))
+                                ) && self.stmt_has_top_level_assignment_from(save)
+                                    && self.stmt_has_top_level_at_from(save);
                             self.pos = save;
                             if looks_like_bind {
                                 return Err(err);
