@@ -25,7 +25,9 @@ pub fn render_debug_report(
         return render_fallback(file_name, kind, message, span_start, span_end, labels);
     }
 
-    let report = build_report(file_name, source, kind, message, span_start, span_end, labels);
+    let report = build_report(
+        file_name, source, kind, message, span_start, span_end, labels,
+    );
     let mut buf = Vec::new();
     let cache = ariadne::sources([(file_name.to_string(), source.to_string())]);
     if let Err(err) = report.write(cache, &mut buf) {

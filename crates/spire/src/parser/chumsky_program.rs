@@ -59,8 +59,8 @@ fn program_parser<'src>(
                 }
                 _ => {
                     let base_span: SimpleSpan<usize> = inp.span_since(&before);
-                    let (stmt, consumed) =
-                        parse_stmt_prefix(source, remaining, context.clone()).map_err(|err| {
+                    let (stmt, consumed) = parse_stmt_prefix(source, remaining, context.clone())
+                        .map_err(|err| {
                             Rich::custom(
                                 token_span_for_parse_error(base_span.start, remaining, err.span()),
                                 err.message(),

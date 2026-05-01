@@ -14,8 +14,8 @@ mod typecheck;
 #[cfg(test)]
 mod tests;
 
-pub use parse::parse_error_spec;
 pub use debug_render::{render_debug_report, DebugLabel};
+pub use parse::parse_error_spec;
 pub use render::{
     render_error, render_error_by_id, report_error, report_error_by_id,
     serializable_diagnostic_by_id, serializable_report_by_id,
