@@ -1,3 +1,5 @@
+use crate::names::{builtin_type_name, TypeName};
+
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
 ///
 /// Surtr source files under `lib/*.srt` may declare these builtins with
@@ -531,71 +533,71 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
 /// including generic parameter names such as `List<$A>` and `Result<$T>`.
 pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     BuiltinTypeMeta {
-        name: "Int",
+        name: TypeName::Int.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Float",
+        name: TypeName::Float.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "String",
+        name: TypeName::String.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Boolean",
+        name: TypeName::Boolean.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Unit",
+        name: TypeName::Unit.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Error",
+        name: TypeName::Error.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Regex",
+        name: TypeName::Regex.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "RegexCaptures",
+        name: TypeName::RegexCaptures.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "RegexMatch",
+        name: TypeName::RegexMatch.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "RandomGenerator",
+        name: TypeName::RandomGenerator.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "List",
+        name: TypeName::List.as_str(),
         params: &["$A"],
     },
     BuiltinTypeMeta {
-        name: "HashMap",
+        name: TypeName::HashMap.as_str(),
         params: &["$V"],
     },
     BuiltinTypeMeta {
-        name: "Generator",
+        name: TypeName::Generator.as_str(),
         params: &["$State", "$Item"],
     },
     BuiltinTypeMeta {
-        name: "Result",
+        name: TypeName::Result.as_str(),
         params: &["$T"],
     },
     BuiltinTypeMeta {
-        name: "TypeRef",
+        name: TypeName::TypeRef.as_str(),
         params: &["$T"],
     },
     BuiltinTypeMeta {
-        name: "Hole",
+        name: TypeName::Hole.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Lens",
+        name: TypeName::Lens.as_str(),
         params: &["$S", "$A"],
     },
 ];
@@ -635,24 +637,7 @@ pub fn builtin_type_meta_by_name(name: &str) -> Option<&'static BuiltinTypeMeta>
 }
 
 pub fn builtin_type_supports_inherent_impl(name: &str) -> bool {
-    matches!(
-        name,
-        "Int"
-            | "Float"
-            | "String"
-            | "Boolean"
-            | "Unit"
-            | "Error"
-            | "Regex"
-            | "RegexCaptures"
-            | "RegexMatch"
-            | "RandomGenerator"
-            | "List"
-            | "HashMap"
-            | "Generator"
-            | "Result"
-            | "Lens"
-    )
+    builtin_type_name(name).is_some_and(TypeName::supports_inherent_impl)
 }
 
 pub fn builtin_uid(builtin_id: u16) -> u32 {

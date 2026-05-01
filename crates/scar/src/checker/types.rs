@@ -1,4 +1,5 @@
 use super::*;
+use sindr::names::{builtin_type_name, TypeName};
 
 impl Checker {
     fn match_result_not_allowed_error(&self, span: &Span) -> TypeError {
@@ -266,55 +267,78 @@ impl Checker {
             AstTy::Named(span, name) => match Self::surface_type_name(name) {
                 "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
                 "Seq" => Err(self.seq_not_allowed_error(span)),
-                "Int" => Ok(Ty::Int),
-                "Float" => Ok(Ty::Float),
-                "String" => Ok(Ty::Str),
-                "Boolean" => Ok(Ty::Bool),
-                "Unit" => Ok(Ty::Unit),
-                "Error" => Ok(Ty::Error),
-                "Regex" => Ok(Ty::Enum("Regex".into(), Vec::new())),
-                "RegexCaptures" => Ok(Ty::Enum("RegexCaptures".into(), Vec::new())),
-                "RegexMatch" => Ok(Ty::Enum("RegexMatch".into(), Vec::new())),
-                "RandomGenerator" => Ok(Ty::Enum("RandomGenerator".into(), Vec::new())),
-                _ => {
-                    if let Some(def) = self.env.lookup_type_def(name) {
-                        match &def.kind {
-                            crate::env::TypeKind::Struct => {
-                                Ok(Ty::Struct(def.name.clone(), def.fields.clone()))
-                            }
-                            crate::env::TypeKind::Record => {
-                                Ok(Ty::Record(def.name.clone(), def.fields.clone()))
-                            }
-                            crate::env::TypeKind::Error => Ok(Ty::Error),
-                            crate::env::TypeKind::Enum => {
-                                if def.type_params.is_empty() {
-                                    Ok(Ty::Enum(def.name.clone(), Vec::new()))
-                                } else {
-                                    Err(TypeError {
-                                        message: format!(
-                                            "Type {} requires {} type argument(s)",
-                                            name,
-                                            def.type_params.len()
-                                        ),
-                                        span: span.clone(),
-                                        hint: None,
-                                    })
+                builtin_name => match builtin_type_name(builtin_name) {
+                    Some(TypeName::Int) => Ok(Ty::Int),
+                    Some(TypeName::Float) => Ok(Ty::Float),
+                    Some(TypeName::String) => Ok(Ty::Str),
+                    Some(TypeName::Boolean) => Ok(Ty::Bool),
+                    Some(TypeName::Unit) => Ok(Ty::Unit),
+                    Some(TypeName::Error) => Ok(Ty::Error),
+                    Some(TypeName::Regex) => {
+                        Ok(Ty::Enum(TypeName::Regex.as_str().into(), Vec::new()))
+                    }
+                    Some(TypeName::RegexCaptures) => Ok(Ty::Enum(
+                        TypeName::RegexCaptures.as_str().into(),
+                        Vec::new(),
+                    )),
+                    Some(TypeName::RegexMatch) => {
+                        Ok(Ty::Enum(TypeName::RegexMatch.as_str().into(), Vec::new()))
+                    }
+                    Some(TypeName::RandomGenerator) => Ok(Ty::Enum(
+                        TypeName::RandomGenerator.as_str().into(),
+                        Vec::new(),
+                    )),
+                    Some(
+                        TypeName::List
+                        | TypeName::HashMap
+                        | TypeName::Generator
+                        | TypeName::Result
+                        | TypeName::TypeRef
+                        | TypeName::Hole
+                        | TypeName::Lens,
+                    )
+                    | None => {
+                        if let Some(def) = self.env.lookup_type_def(name) {
+                            match &def.kind {
+                                crate::env::TypeKind::Struct => {
+                                    Ok(Ty::Struct(def.name.clone(), def.fields.clone()))
+                                }
+                                crate::env::TypeKind::Record => {
+                                    Ok(Ty::Record(def.name.clone(), def.fields.clone()))
+                                }
+                                crate::env::TypeKind::ConcreteError => Ok(Ty::Error),
+                                crate::env::TypeKind::Enum => {
+                                    if def.type_params.is_empty() {
+                                        Ok(Ty::Enum(def.name.clone(), Vec::new()))
+                                    } else {
+                                        Err(TypeError {
+                                            message: format!(
+                                                "Type {} requires {} type argument(s)",
+                                                name,
+                                                def.type_params.len()
+                                            ),
+                                            span: span.clone(),
+                                            hint: None,
+                                        })
+                                    }
                                 }
                             }
+                        } else {
+                            Err(TypeError {
+                                message: format!("Unknown type: {}", name),
+                                span: span.clone(),
+                                hint: None,
+                            })
                         }
-                    } else {
-                        Err(TypeError {
-                            message: format!("Unknown type: {}", name),
-                            span: span.clone(),
-                            hint: None,
-                        })
                     }
-                }
+                },
             },
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
             AstTy::Generic(span, name, args) => match Self::surface_type_name(name) {
                 "MatchResult" => {
                     if !self.match_result_type_allowed(context) {
@@ -534,9 +558,7 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Named(span, name)
-                if matches!(Self::surface_type_name(name), "_" | "Hole") =>
-            {
+            AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
                 self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
@@ -561,7 +583,9 @@ impl Checker {
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
             }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
@@ -826,9 +850,7 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Named(span, name)
-                if matches!(Self::surface_type_name(name), "_" | "Hole") =>
-            {
+            AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
                 self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
@@ -845,7 +867,9 @@ impl Checker {
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
             }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
@@ -1106,9 +1130,7 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Named(span, name)
-                if matches!(Self::surface_type_name(name), "_" | "Hole") =>
-            {
+            AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
                 self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
@@ -1117,7 +1139,9 @@ impl Checker {
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => Err(self.seq_not_allowed_error(span)),
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
             AstTy::Generic(span, name, args) => match Self::surface_type_name(name) {
                 "MatchResult" => {
                     if !self.match_result_type_allowed(context) {
@@ -1325,7 +1349,7 @@ impl Checker {
         });
 
         if let Ok(def) = def {
-            if def.kind != crate::env::TypeKind::Error {
+            if def.kind != crate::env::TypeKind::ConcreteError {
                 return Err(TypeError {
                     message: "The error marker E in Result<T, E> must be a deferror-defined type."
                         .into(),

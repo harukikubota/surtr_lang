@@ -43,10 +43,14 @@ impl Checker {
             let typed = self.resolve_typed_node(checked);
 
             let (kind, stored) = match &typed.node {
-                TypedInner::Lit(lit) => (ConstKind::PrimitiveLiteral, StoredConstValue::Literal(lit.clone())),
-                TypedInner::LensPath(path) => {
-                    (ConstKind::LensPath, StoredConstValue::LensPath(path.clone()))
-                }
+                TypedInner::Lit(lit) => (
+                    ConstKind::PrimitiveLiteral,
+                    StoredConstValue::Literal(lit.clone()),
+                ),
+                TypedInner::LensPath(path) => (
+                    ConstKind::LensPath,
+                    StoredConstValue::LensPath(path.clone()),
+                ),
                 _ => {
                     return Err(TypeError {
                         message: "const value must be a primitive literal or a lens path".into(),
@@ -89,7 +93,7 @@ impl Checker {
                     Some((&id.name, &id.span, TypeKind::Record, Vec::new()))
                 }
                 Resolved::DeferrorDef(_, id, _, _) => {
-                    Some((&id.name, &id.span, TypeKind::Error, Vec::new()))
+                    Some((&id.name, &id.span, TypeKind::ConcreteError, Vec::new()))
                 }
                 Resolved::EnumDef(_, id, type_params, _) => Some((
                     &id.name,
@@ -463,7 +467,7 @@ impl Checker {
         match def.kind {
             TypeKind::Struct => Some(Ty::Struct(def.name.clone(), def.fields.clone())),
             TypeKind::Enum => Some(Ty::Enum(def.name.clone(), Vec::new())),
-            TypeKind::Record | TypeKind::Error => None,
+            TypeKind::Record | TypeKind::ConcreteError => None,
         }
     }
 

@@ -1652,7 +1652,7 @@ impl Checker {
 
         if !matches!(
             def.kind,
-            crate::env::TypeKind::Record | crate::env::TypeKind::Error
+            crate::env::TypeKind::Record | crate::env::TypeKind::ConcreteError
         ) {
             return Err(TypeError {
                 message: format!("{} is not a constructor-call type", id.name),
@@ -1780,7 +1780,7 @@ impl Checker {
 
         let result_ty = match def.kind {
             crate::env::TypeKind::Record => Ty::Record(id.name.clone(), def.fields.clone()),
-            crate::env::TypeKind::Error => Ty::Error,
+            crate::env::TypeKind::ConcreteError => Ty::Error,
             crate::env::TypeKind::Struct | crate::env::TypeKind::Enum => {
                 unreachable!("validated above")
             }

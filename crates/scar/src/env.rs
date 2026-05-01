@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+use sindr::names::TypeIdentity;
 use sindr::primitives::SurtrInt;
 use spire::ast::Symbol;
 
@@ -37,8 +38,19 @@ fn type_lookup_candidates(name: &str) -> Vec<String> {
 pub enum TypeKind {
     Struct,
     Record,
-    Error,
+    ConcreteError,
     Enum,
+}
+
+impl TypeKind {
+    pub const fn identity(self) -> TypeIdentity {
+        match self {
+            Self::Struct => TypeIdentity::Struct,
+            Self::Record => TypeIdentity::Record,
+            Self::ConcreteError => TypeIdentity::ConcreteError,
+            Self::Enum => TypeIdentity::Enum,
+        }
+    }
 }
 
 /// Metadata for a user-defined type (struct, record, error).
@@ -351,7 +363,7 @@ mod tests {
     #[test]
     fn resolve_type_def_signature_finalizes_predeclared_entry() {
         let mut env = TypeEnv::new();
-        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::Error, Vec::new());
+        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::ConcreteError, Vec::new());
 
         let before = env.lookup_type_def("ApiError").expect("must exist");
         assert_eq!(before.state, TypeDefState::Declared);
