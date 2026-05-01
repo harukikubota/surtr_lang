@@ -206,6 +206,25 @@ fn repl_colorizes_sig_command_signature() {
 }
 
 #[test]
+fn repl_sig_expression_query_flows_through_cli_presentation() {
+    let output = run_repl_session(
+        "ret = Ok(\"3\")\nup = {|term: String| try_from(term, Int)}\n:sig ret |>= up\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("defined:"));
+    assert!(stdout.contains("Chainable::chain("));
+    assert!(stdout.contains("specialized:"));
+    assert!(stdout.contains("ret |>= up: Result<Int, Error>"));
+}
+
+#[test]
 fn repl_colorizes_doc_for_qualified_kernel_if() {
     let output = run_repl_session_with_color(":doc Kernel::if\n:quit\n");
     assert!(

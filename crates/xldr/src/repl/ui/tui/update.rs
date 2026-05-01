@@ -58,7 +58,7 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("help", ":help  — show help"),
     ("doc", ":doc <symbol>  — show docs"),
     ("error", ":error [full|summary]  — set error display mode"),
-    ("sig", ":sig <symbol>  — show signature"),
+    ("sig", ":sig <symbol|expr>  — show signature"),
     ("type", ":type <expr>  — infer type"),
     ("save", ":save <path>  — save session to .eldr"),
 ];
@@ -239,7 +239,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             app.push_result(
                 ":help",
                 vec![
-                    ":q :help :doc <sym> :error [full|summary] :sig <sym> :type <expr> :save <path> :v <idx> :j <idx>"
+                    ":q :help :doc <sym> :error [full|summary] :sig <sym|expr> :type <expr> :save <path> :v <idx> :j <idx>"
                         .to_string(),
                 ],
                 PresentedResultKind::Info,
@@ -301,7 +301,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             if arg.is_empty() {
                 app.push_result(
                     ":sig",
-                    vec!["Usage: :sig <function>".to_string()],
+                    vec!["Usage: :sig <function|expr>".to_string()],
                     PresentedResultKind::EvalError,
                 );
             } else {

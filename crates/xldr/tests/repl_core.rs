@@ -162,7 +162,7 @@ fn core_help_and_error_commands_return_structured_command_output() {
     assert!(help_text.contains(":save <path.eldr>"));
 
     let sig_help = engine.handle_line(":h sig");
-    assert!(rendered_text(&sig_help).contains("Usage: :sig <function>"));
+    assert!(rendered_text(&sig_help).contains("Usage: :sig <function|expr>"));
 
     let error_default = engine.handle_line(":error");
     assert!(rendered_text(&error_default).contains("error display mode: full"));
@@ -272,6 +272,107 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let unsupported = engine.handle_line(":doc gt(make_value(), 1)");
     assert!(rendered_text(&unsupported)
         .contains("Unsupported typed call query argument `make_value()`"));
+}
+
+#[test]
+fn core_sig_expression_queries_support_operator_forms() {
+    let mut engine = engine();
+
+    assert!(rendered_text(&engine.handle_line("ret = Ok(\"3\")"))
+        .contains("ret: Result<String, Error> = Ok(\"3\")"));
+    assert!(
+        rendered_text(&engine.handle_line("up = {|term: String| try_from(term, Int)}"))
+            .contains("up: (String -> Result<Int, Error>)")
+    );
+
+    let bind_sig = engine.handle_line(":sig ret |>= up");
+    let bind_sig = signature_text(&bind_sig);
+    assert!(
+        bind_sig.contains("defined:\n  Chainable::chain("),
+        "{bind_sig}"
+    );
+    assert!(
+        bind_sig.contains("lhs: Result<String, Error>"),
+        "{bind_sig}"
+    );
+    assert!(
+        bind_sig.contains("rhs: (String -> Result<Int, Error>)"),
+        "{bind_sig}"
+    );
+    assert!(
+        bind_sig.contains("specialized:\n  ret |>= up: Result<Int, Error>"),
+        "{bind_sig}"
+    );
+
+    assert!(rendered_text(&engine.handle_line("value = 3")).contains("value: Int = 3"));
+    assert!(
+        rendered_text(&engine.handle_line("inc = {|n: Int| n + 1}")).contains("inc: (Int -> Int)")
+    );
+
+    let pipe_sig = engine.handle_line(":sig value |> inc");
+    let pipe_sig = signature_text(&pipe_sig);
+    assert!(
+        pipe_sig.contains("defined:\n  PipeApply::pipe_apply("),
+        "{pipe_sig}"
+    );
+    assert!(
+        pipe_sig.contains("specialized:\n  value |> inc: Int"),
+        "{pipe_sig}"
+    );
+
+    assert!(
+        rendered_text(&engine.handle_line("inc_ok = {|n: Int| Ok(n + 1)}"))
+            .contains("inc_ok: (Int -> Result<Int, Error>)")
+    );
+    let compose_sig = engine.handle_line(":sig up >=> inc_ok");
+    let compose_sig = signature_text(&compose_sig);
+    assert!(
+        compose_sig.contains("defined:\n  KleisliComposable::kleisli_compose("),
+        "{compose_sig}"
+    );
+    assert!(
+        compose_sig.contains("specialized:\n  up >=> inc_ok: (String -> Result<Int, Error>)"),
+        "{compose_sig}"
+    );
+}
+
+#[test]
+fn core_sig_expression_queries_reject_non_expressions() {
+    let mut engine = engine();
+
+    for source in [":sig a = 1", ":sig import Kernel", ":sig 1\n2"] {
+        let result = engine.handle_line(source);
+        assert!(!result.should_exit);
+        let text = rendered_text(&result);
+        assert!(
+            text.contains("`:sig` only accepts a single expression query")
+                || text.contains("`:sig` expects a single REPL expression query."),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn core_sig_typed_operator_queries_accept_function_types_and_reject_explicit_result_error() {
+    let mut engine = engine();
+
+    assert!(rendered_text(&engine.handle_line("num = 3")).contains("num: Int = 3"));
+
+    let sig = engine.handle_line(":sig num |> (Int -> String)");
+    let sig = signature_text(&sig);
+    assert!(sig.contains("defined:\n  PipeApply::pipe_apply("), "{sig}");
+    assert!(sig.contains("rhs: (Int -> String)"), "{sig}");
+    assert!(
+        sig.contains("specialized:\n  num |> (Int -> String): String"),
+        "{sig}"
+    );
+
+    let invalid = engine.handle_line(":sig num |> (Int -> Result<String, Error>)");
+    let invalid = rendered_text(&invalid);
+    assert!(
+        invalid.contains("Typed query `Result` should be written as `Result<T>`"),
+        "{invalid}"
+    );
 }
 
 #[test]

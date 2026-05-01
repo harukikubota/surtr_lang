@@ -130,7 +130,7 @@ REPL 実装は次の 3 層に分ける。
 | `:quit`, `:exit` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する |
 | `:doc <symbol>` | 現在セッションで見える symbol の doc を表示する。operator trait は `:doc Add` / `:doc +` のように trait 名と演算子 alias の両方を受け付ける。関数演算子は `:doc |*>` / `:doc |>=` を標準 trait source doc に解決し、`:doc |>`, `:doc >>`, `:doc >*`, `:doc >=>` は compiler-generated operator doc を表示する |
-| `:sig <function>` | 現在セッションで見える関数の signature を表示する。doc metadata がある標準関数と、REPL セッション内で定義された関数の両方を対象にする |
+| `:sig <function|expr>` | 現在セッションで見える関数の signature を表示する。doc metadata がある標準関数と、REPL セッション内で定義された関数の両方を対象にし、`gt(Int, Int)` のような typed-call 擬似 query と `ret |>= up` のような単一式 query も受け付ける |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 
 ### 5.2 予約済み
