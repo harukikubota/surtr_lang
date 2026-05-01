@@ -1,7 +1,5 @@
 use spire::ast::{Ast, AstPattern, AstTy, Span};
 
-use crate::{derive_parse_rules, SourceKind};
-
 const QUERY_OPERATORS: &[&str] = &["|>=", "|*>", "|>", ">=>", ">*", ">>"];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,7 +64,7 @@ impl ReplQueryParseError {
     }
 }
 
-pub fn parse_repl_query(input: &str) -> Result<ReplQuery, ReplQueryParseError> {
+pub(crate) fn parse_repl_query(input: &str) -> Result<ReplQuery, ReplQueryParseError> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(ReplQueryParseError::new("REPL query cannot be empty."));
@@ -288,7 +286,7 @@ fn parse_query_type(input: &str) -> Option<AstTy> {
     let source = format!("__query__: {input} = ()");
     let ast = spire::parse_with_context(
         &source,
-        spire::ParserContext::repl(0).with_rules(derive_parse_rules(SourceKind::ReplChunk)),
+        spire::ParserContext::repl(0).with_rules(spire::ParseRules::repl_chunk()),
     )
     .ok()?;
     match ast.as_slice() {
@@ -297,11 +295,11 @@ fn parse_query_type(input: &str) -> Option<AstTy> {
     }
 }
 
-pub fn parse_signature_type(input: &str) -> Option<AstTy> {
+pub(crate) fn parse_signature_type(input: &str) -> Option<AstTy> {
     parse_query_type(input)
 }
 
-pub fn parse_user_query_type(input: &str) -> Result<AstTy, String> {
+pub(crate) fn parse_user_query_type(input: &str) -> Result<AstTy, String> {
     let ty = parse_query_type(input).ok_or_else(|| {
         format!("Unsupported query type `{input}`. Use a valid Surtr type expression.")
     })?;
@@ -309,7 +307,7 @@ pub fn parse_user_query_type(input: &str) -> Result<AstTy, String> {
     Ok(ty)
 }
 
-pub fn parse_user_query_type_loose(input: &str) -> Result<Option<AstTy>, String> {
+pub(crate) fn parse_user_query_type_loose(input: &str) -> Result<Option<AstTy>, String> {
     let Some(ty) = parse_query_type(input) else {
         return Ok(None);
     };
@@ -317,7 +315,7 @@ pub fn parse_user_query_type_loose(input: &str) -> Result<Option<AstTy>, String>
     Ok(Some(ty))
 }
 
-pub fn parse_binding_query_type(input: &str) -> Option<AstTy> {
+pub(crate) fn parse_binding_query_type(input: &str) -> Option<AstTy> {
     parse_query_type(input).map(|ty| normalize_binding_query_type(&ty))
 }
 
@@ -368,7 +366,7 @@ fn normalize_binding_query_type(ty: &AstTy) -> AstTy {
     }
 }
 
-pub fn format_query_ty(ty: &AstTy) -> String {
+pub(crate) fn format_query_ty(ty: &AstTy) -> String {
     match ty {
         AstTy::Named(_, name) => name.clone(),
         AstTy::ImplTrait(_, name) => format!("impl {name}"),
@@ -406,7 +404,7 @@ pub fn format_query_ty(ty: &AstTy) -> String {
     }
 }
 
-pub fn ast_ty_from_query_arg(arg: &QueryArg) -> Option<AstTy> {
+pub(crate) fn ast_ty_from_query_arg(arg: &QueryArg) -> Option<AstTy> {
     match &arg.kind {
         QueryArgKind::Literal(QueryLiteral::Unit) => {
             Some(AstTy::Named(Span { start: 0, end: 0 }, "Unit".to_string()))
