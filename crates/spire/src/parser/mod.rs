@@ -45,7 +45,7 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
 pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
     reject_excessive_delimiter_nesting(&tokens)?;
-    let ast = chumsky_program::parse_program_with_chumsky(&tokens, context)?;
+    let ast = chumsky_program::parse_program_with_chumsky(source, &tokens, context)?;
     lower_namespaces(ast)
 }
 
@@ -56,7 +56,7 @@ pub fn parse_with_context_diagnostic(
 ) -> Result<Vec<Ast>, ParseDiagnostic> {
     let tokens = tokenize(source).map_err(ParseDiagnostic::from)?;
     reject_excessive_delimiter_nesting(&tokens).map_err(ParseDiagnostic::from)?;
-    let ast = chumsky_program::parse_program_with_chumsky_diagnostic(&tokens, context)
+    let ast = chumsky_program::parse_program_with_chumsky_diagnostic(source, &tokens, context)
         .map_err(ParseDiagnostic::from)?;
     lower_namespaces(ast).map_err(ParseDiagnostic::from)
 }
@@ -173,6 +173,7 @@ pub fn collect_entrypoint_annotations(
 }
 
 struct Parser<'a> {
+    source: &'a str,
     tokens: &'a [Spanned<Token>],
     synthetic_tokens: VecDeque<Spanned<Token>>,
     pos: usize,
@@ -183,8 +184,9 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(tokens: &'a [Spanned<Token>], context: ParserContext) -> Self {
+    fn new(source: &'a str, tokens: &'a [Spanned<Token>], context: ParserContext) -> Self {
         Self {
+            source,
             tokens,
             synthetic_tokens: VecDeque::new(),
             pos: 0,
@@ -335,6 +337,14 @@ impl<'a> Parser<'a> {
         while matches!(self.peek(), Token::Newline) {
             self.advance();
         }
+    }
+
+    fn source_text_for_span(&self, span: &Span) -> String {
+        self.source
+            .chars()
+            .skip(span.start)
+            .take(span.end.saturating_sub(span.start))
+            .collect()
     }
 
     fn with_parse_nesting<T>(

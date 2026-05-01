@@ -963,12 +963,6 @@ impl ReplEngine {
                     .iter()
                     .filter(|entry| entry.kind == DocKind::Function)
                     .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == "dbg!")
-                    .filter(|entry| {
-                        entry.signature.as_deref().is_some_and(|sig| {
-                            Self::signature_matches_callee(sig, "dbg!")
-                                && Self::signature_accepts_arg_types(sig, &query.arg_types)
-                        })
-                    })
                     .collect::<Vec<_>>();
                 matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
                 Some(matches)
@@ -1130,12 +1124,16 @@ impl ReplEngine {
                     .signature
                     .clone()
                     .unwrap_or_else(|| entry.qualified_name.clone());
-                let rendered = format!(
-                    "defined:\n  {defined}\n\nspecialized:\n  {}({}) -> {}",
-                    query.callee,
-                    query.arg_types.join(", "),
-                    signature_return_type(&defined).unwrap_or("_")
-                );
+                let rendered = if query.callee == "dbg!" {
+                    defined
+                } else {
+                    format!(
+                        "defined:\n  {defined}\n\nspecialized:\n  {}({}) -> {}",
+                        query.callee,
+                        query.arg_types.join(", "),
+                        signature_return_type(&defined).unwrap_or("_")
+                    )
+                };
                 ReplResult::ok(ReplOutput::SigResolved {
                     signature: rendered,
                 })

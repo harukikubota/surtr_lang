@@ -1532,6 +1532,7 @@ impl Parser<'_> {
         let mut saw_builtin = false;
         let mut saw_intrinsic = false;
         let mut start_span: Option<Span> = None;
+        let mut intrinsic_start_span: Option<Span> = None;
 
         while let Token::Annotator(name) = self.peek().clone() {
             let annotator_span = self.peek_span();
@@ -1564,6 +1565,7 @@ impl Parser<'_> {
                         ));
                     }
                     saw_intrinsic = true;
+                    intrinsic_start_span = Some(annotator_span);
                 }
                 "doc" => {
                     if attrs.doc.is_some() {
@@ -1619,8 +1621,12 @@ impl Parser<'_> {
             .unwrap_or_else(|| self.peek_span().start);
 
         if saw_intrinsic {
+            let intrinsic_start = intrinsic_start_span
+                .as_ref()
+                .map(|span| span.start)
+                .unwrap_or(start);
             match self.peek() {
-                Token::Def => self.parse_intrinsic_decl(start, attrs),
+                Token::Def => self.parse_intrinsic_decl(intrinsic_start, attrs),
                 _ => Err(ParseError::syntax(
                     "Expected `def` after @@intrinsic",
                     self.peek_span(),
@@ -1668,7 +1674,7 @@ impl Parser<'_> {
             base_name
         };
 
-        let generic_name = if matches!(self.peek(), Token::Lt) {
+        let _generic_name = if matches!(self.peek(), Token::Lt) {
             self.advance();
             self.expect(&Token::Dollar)?;
             let (generic_name, _) = self.expect_ident()?;
@@ -1679,7 +1685,7 @@ impl Parser<'_> {
         };
 
         self.expect(&Token::LParen)?;
-        let (param_name, _) = self.expect_ident()?;
+        let (_param_name, _) = self.expect_ident()?;
         self.expect(&Token::Colon)?;
         if !matches!(self.peek(), Token::Star) {
             return Err(ParseError::syntax(
@@ -1689,10 +1695,10 @@ impl Parser<'_> {
         }
         self.advance();
         self.expect(&Token::Dollar)?;
-        let (param_ty_name, _) = self.expect_ident()?;
+        let (_param_ty_name, _) = self.expect_ident()?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::Arrow)?;
-        let (ret_ty_name, _) = self.expect_ident()?;
+        let (_ret_ty_name, _) = self.expect_ident()?;
 
         let mut lookahead = self.pos;
         while matches!(
@@ -1716,14 +1722,7 @@ impl Parser<'_> {
         } else {
             start
         };
-        let generic_display = generic_name
-            .as_ref()
-            .or(Some(&param_ty_name))
-            .map(|name| format!("<${name}>"))
-            .unwrap_or_default();
-        let signature = format!(
-            "@@intrinsic def {name}{generic_display}({param_name}: *${param_ty_name}) -> {ret_ty_name}"
-        );
+        let signature = self.source_text_for_span(&Span { start, end });
 
         Ok(Ast::IntrinsicDecl(
             Span { start, end },

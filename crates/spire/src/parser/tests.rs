@@ -106,7 +106,7 @@ fn test_intrinsic_dbg_decl_parses_in_std_module() {
   @@doc """
   Debug special form.
   """
-  @@intrinsic def dbg!<$A>(values: *$A) -> Unit
+  @@intrinsic def dbg!(values: *$A) -> Unit
 }"#,
         context,
     )
@@ -118,7 +118,7 @@ fn test_intrinsic_dbg_decl_parses_in_std_module() {
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "dbg!");
-                    assert_eq!(signature, "@@intrinsic def dbg!<$A>(values: *$A) -> Unit");
+                    assert_eq!(signature, "@@intrinsic def dbg!(values: *$A) -> Unit");
                     assert!(attrs
                         .doc
                         .as_deref()
@@ -127,6 +127,32 @@ fn test_intrinsic_dbg_decl_parses_in_std_module() {
                 other => panic!("Expected IntrinsicDecl, got {other:?}"),
             }
         }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_intrinsic_decl_preserves_source_text_verbatim() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @@doc """
+  Debug special form.
+  """
+  @@intrinsic def dbg!<$A>(values: *$A) -> Unit
+}"#,
+        context,
+    )
+    .expect("intrinsic decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, _, body, _) => match &body[0] {
+            Ast::IntrinsicDecl(_, _, signature, _) => {
+                assert_eq!(signature, "@@intrinsic def dbg!<$A>(values: *$A) -> Unit");
+            }
+            other => panic!("Expected IntrinsicDecl, got {other:?}"),
+        },
         other => panic!("Expected Defmod, got {other:?}"),
     }
 }

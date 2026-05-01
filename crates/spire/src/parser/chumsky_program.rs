@@ -13,23 +13,26 @@ use super::{Parser, ParserContext};
 type ProgramExtra<'src> = extra::Err<Rich<'src, Spanned<Token>>>;
 
 pub(super) fn parse_program_with_chumsky(
+    source: &str,
     tokens: &[Spanned<Token>],
     context: ParserContext,
 ) -> Result<Vec<Ast>, ParseError> {
-    parse_program_with_chumsky_diagnostic(tokens, context).map_err(|diag| diag.error)
+    parse_program_with_chumsky_diagnostic(source, tokens, context).map_err(|diag| diag.error)
 }
 
 pub(super) fn parse_program_with_chumsky_diagnostic(
+    source: &str,
     tokens: &[Spanned<Token>],
     context: ParserContext,
 ) -> Result<Vec<Ast>, ParseErrorDiagnostic> {
-    program_parser(context)
+    program_parser(source, context)
         .parse(tokens)
         .into_result()
         .map_err(|errs| error_map::map_chumsky_error_with_diagnostic(tokens, errs))
 }
 
 fn program_parser<'src>(
+    source: &'src str,
     context: ParserContext,
 ) -> impl ChumskyParser<'src, &'src [Spanned<Token>], Vec<Ast>, ProgramExtra<'src>> {
     custom(move |inp| {
@@ -57,7 +60,7 @@ fn program_parser<'src>(
                 _ => {
                     let base_span: SimpleSpan<usize> = inp.span_since(&before);
                     let (stmt, consumed) =
-                        parse_stmt_prefix(remaining, context.clone()).map_err(|err| {
+                        parse_stmt_prefix(source, remaining, context.clone()).map_err(|err| {
                             Rich::custom(
                                 token_span_for_parse_error(base_span.start, remaining, err.span()),
                                 err.message(),
@@ -85,10 +88,11 @@ fn program_parser<'src>(
 }
 
 fn parse_stmt_prefix(
+    source: &str,
     tokens: &[Spanned<Token>],
     context: ParserContext,
 ) -> Result<(Ast, usize), ParseError> {
-    let mut parser = Parser::new(tokens, context);
+    let mut parser = Parser::new(source, tokens, context);
     let stmt = parser.parse_stmt()?;
     parser.ensure_stmt_boundary(&stmt, false)?;
     Ok((stmt, parser.pos))
@@ -135,6 +139,7 @@ mod tests {
     #[test]
     fn unexpected_token_error_uses_offending_token_span() {
         let err = parse_program_with_chumsky(
+            "x = )",
             &tokenize("x = )").expect("source should tokenize"),
             ParserContext::default(),
         )

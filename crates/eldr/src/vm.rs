@@ -2486,8 +2486,9 @@ mod tests {
         vm.run().expect("run should succeed");
         assert_eq!(vm.last_value(), Some(&Value::Unit));
         let stderr = vm.take_stderr().join("\n");
-        assert!(!stderr.contains("dbg!: sample.srt:1:1"), "{stderr}");
-        assert!(stderr.contains("dbg!"), "{stderr}");
+        assert!(stderr.contains("Debug:"), "{stderr}");
+        assert!(stderr.contains("inspect values."), "{stderr}");
+        assert!(stderr.contains("sample.srt:1:1"), "{stderr}");
         assert!(stderr.contains("Int: 42"));
     }
 

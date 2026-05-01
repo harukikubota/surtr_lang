@@ -1324,7 +1324,7 @@ deferror NoneError { "None Value." }"#,
         let ast = spire::parse_with_context(
             r#"defmod Bootstrap {
   @@doc """Debug special form."""
-  @@intrinsic def dbg!<$A>(values: *$A) -> Unit
+  @@intrinsic def dbg!(values: *$A) -> Unit
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
@@ -1349,7 +1349,7 @@ deferror NoneError { "None Value." }"#,
         assert_eq!(dbg_docs.len(), 1, "{dbg_docs:?}");
         assert_eq!(
             dbg_docs[0].signature.as_deref(),
-            Some("@@intrinsic def dbg!<$A>(values: *$A) -> Unit")
+            Some("@@intrinsic def dbg!(values: *$A) -> Unit")
         );
     }
 
