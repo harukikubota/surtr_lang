@@ -31,6 +31,7 @@ pub enum Token {
     // ── Comparison / equality ──
     EqEq,   // ==
     BangEq, // !=
+    Bang,   // !
     Lt,     // <
     Gt,     // >
     LtEq,   // <=

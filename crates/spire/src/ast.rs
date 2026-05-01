@@ -182,6 +182,12 @@ pub struct ClosureParam {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DbgArg {
+    pub span: Span,
+    pub expr: Ast,
+}
+
 /// Record literal argument — positional or named.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecordLitArg {
@@ -288,6 +294,9 @@ pub enum Ast {
     /// Interpolated string: `"hi #{name}"`
     InterpolatedStr(Span, Vec<InterpolatedPart>),
 
+    /// Debug special form: `dbg!(expr1, expr2, ...)`
+    Dbg(Span, Vec<DbgArg>),
+
     /// Match expression
     Match(Span, Box<Ast>, Vec<AstMatchArm>),
 
@@ -338,6 +347,9 @@ pub enum Ast {
 
     /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
+
+    /// Display-only intrinsic declaration: `@@intrinsic def dbg!<$A>(values: *$A) -> Unit`
+    IntrinsicDecl(Span, Symbol, String, DeclAttrs),
 
     BuiltinExtractorDecl(Span, Symbol, ExtractorParam, AstTy, DeclAttrs),
 

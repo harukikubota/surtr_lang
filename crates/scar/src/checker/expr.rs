@@ -252,6 +252,7 @@ impl Checker {
             }
 
             Resolved::InterpolatedStr(span, parts) => self.check_interpolated_str(span, parts),
+            Resolved::Dbg(span, args) => self.check_dbg(span, args),
 
             Resolved::If(span, cond, then, else_opt) => self.check_if(span, cond, then, else_opt),
             Resolved::Assert(span, cond, err) => self.check_assert(span, cond, err),
@@ -704,6 +705,7 @@ impl Checker {
             | Resolved::TupleLiteral(span, _)
             | Resolved::Grouped(span, _)
             | Resolved::InterpolatedStr(span, _)
+            | Resolved::Dbg(span, _)
             | Resolved::If(span, _, _, _)
             | Resolved::Assert(span, _, _)
             | Resolved::Ensure(span, _, _, _)
@@ -3994,6 +3996,30 @@ impl Checker {
                 node: TypedInner::If(Box::new(typed_cond), Box::new(typed_then), None),
             }),
         }
+    }
+
+    pub(super) fn check_dbg(
+        &mut self,
+        span: &Span,
+        args: &[Resolved],
+    ) -> Result<TypedNode, TypeError> {
+        let typed_args = args
+            .iter()
+            .map(|arg| {
+                let expr = self.check_node(arg)?;
+                Ok(TypedDbgArg {
+                    span: expr.span.clone(),
+                    ty_name: self.ty_name(&expr.ty),
+                    expr,
+                })
+            })
+            .collect::<Result<Vec<_>, TypeError>>()?;
+
+        Ok(TypedNode {
+            ty: Ty::Unit,
+            span: span.clone(),
+            node: TypedInner::Dbg(typed_args),
+        })
     }
 
     pub(super) fn check_assert(

@@ -94,6 +94,10 @@ pub enum Opcode {
     },
     GetTag,
     EqTag,
+    Dbg {
+        template_id: u32,
+        arg_count: u8,
+    },
 
     // Built-in function call
     CallBuiltin {
@@ -194,6 +198,7 @@ impl Opcode {
             Self::GetField { .. } => "GetField",
             Self::GetTag => "GetTag",
             Self::EqTag => "EqTag",
+            Self::Dbg { .. } => "Dbg",
             Self::CallBuiltin { .. } => "CallBuiltin",
             Self::Call { .. } => "Call",
             Self::CaptureClosure(..) => "CaptureClosure",
@@ -373,6 +378,8 @@ pub struct Bytecode {
     pub num_locals: usize,
     pub type_registry: TypeRegistry,
     pub error_templates: Vec<ErrTemplate>,
+    #[serde(default)]
+    pub dbg_templates: Vec<DbgTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub source_map: Option<SourceMap>,
     /// Symbol-level documentation carried from `@@doc` through `.eldr`.
@@ -406,6 +413,7 @@ impl Default for Bytecode {
             num_locals: 0,
             type_registry: TypeRegistry::new(),
             error_templates: Vec::new(),
+            dbg_templates: Vec::new(),
             functions: Vec::new(),
             source_map: None,
             docs: Vec::new(),
@@ -435,6 +443,9 @@ pub struct BytecodeChunk {
     /// Base offset of error templates in the VM-wide pool when this chunk is produced.
     pub error_template_base: u32,
     pub error_templates: Vec<ErrTemplate>,
+    /// Base offset of dbg templates in the VM-wide pool when this chunk is produced.
+    pub dbg_template_base: u32,
+    pub dbg_templates: Vec<DbgTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub docs: Vec<DocEntry>,
 }
@@ -500,6 +511,23 @@ pub struct ErrTemplate {
     pub num_params: u8,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbgArgTemplate {
+    pub span_start: u32,
+    pub span_end: u32,
+    pub ty_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbgTemplate {
+    pub id: u32,
+    pub span_start: u32,
+    pub span_end: u32,
+    #[serde(default)]
+    pub source_name: Option<String>,
+    pub args: Vec<DbgArgTemplate>,
+}
+
 pub fn populate_error_template_lines(error_templates: &mut [ErrTemplate], source: &str) {
     for template in error_templates {
         let (line, column) = line_column_for_offset(source, template.span_start as usize);
@@ -541,12 +569,19 @@ pub fn synthesize_source_map(
     opcodes: &[Opcode],
     functions: &[FunctionEntry],
     error_templates: &[ErrTemplate],
+    dbg_templates: &[DbgTemplate],
     source: &str,
     source_name: Option<&str>,
 ) -> Option<SourceMap> {
     let mut entries = Vec::new();
     for (opcode_index, opcode) in opcodes.iter().enumerate() {
-        let span = opcode_span(opcode, functions, error_templates, opcode_index as u32)?;
+        let span = opcode_span(
+            opcode,
+            functions,
+            error_templates,
+            dbg_templates,
+            opcode_index as u32,
+        )?;
         let (line, column) = line_column_for_offset(source, span.0 as usize);
         entries.push(OpcodeSource {
             opcode_index: opcode_index as u32,
@@ -653,6 +688,7 @@ impl Bytecode {
     const CHUNK_FUNCS: [u8; 4] = *b"Func";
     const CHUNK_TYPES: [u8; 4] = *b"Type";
     const CHUNK_ERRORS: [u8; 4] = *b"ErrT";
+    const CHUNK_DBGS: [u8; 4] = *b"DbgT";
     const CHUNK_COMPILE_INFO: [u8; 4] = *b"CInf";
     const CHUNK_LABELS: [u8; 4] = *b"LblT";
     const CHUNK_IMPORTS: [u8; 4] = *b"ImpT";
@@ -698,6 +734,7 @@ impl Bytecode {
                 Self::CHUNK_ERRORS,
                 serialize_chunk(&bytecode.error_templates)?,
             ),
+            (Self::CHUNK_DBGS, serialize_chunk(&bytecode.dbg_templates)?),
             (
                 Self::CHUNK_COMPILE_INFO,
                 serialize_chunk(&bytecode.compile_info)?,
@@ -766,6 +803,8 @@ fn decode_payloads(
     let functions = deserialize_required::<Vec<FunctionEntry>>(payloads, "Func")?;
     let type_registry = deserialize_required::<TypeRegistry>(payloads, "Type")?;
     let error_templates = deserialize_required::<Vec<ErrTemplate>>(payloads, "ErrT")?;
+    let dbg_templates =
+        deserialize_optional::<Vec<DbgTemplate>>(payloads, "DbgT")?.unwrap_or_default();
     let compile_info = deserialize_required::<CompileInfo>(payloads, "CInf")?;
     let labels = deserialize_required::<Vec<LabelEntry>>(payloads, "LblT")?;
     let imports = deserialize_required::<Vec<ImportEntry>>(payloads, "ImpT")?;
@@ -783,6 +822,7 @@ fn decode_payloads(
         num_locals: compile_info.num_locals,
         type_registry,
         error_templates,
+        dbg_templates,
         functions,
         source_map: rebuild_source_map(&spans, &pc_spans),
         docs,
@@ -934,6 +974,7 @@ fn is_known_chunk_tag(tag: &str) -> bool {
             | "Func"
             | "Type"
             | "ErrT"
+            | "DbgT"
             | "CInf"
             | "LblT"
             | "ImpT"
@@ -1211,6 +1252,7 @@ fn opcode_span(
     opcode: &Opcode,
     functions: &[FunctionEntry],
     error_templates: &[ErrTemplate],
+    dbg_templates: &[DbgTemplate],
     opcode_index: u32,
 ) -> Option<(u32, u32)> {
     match opcode {
@@ -1230,6 +1272,15 @@ fn opcode_span(
             ..
         } => Some((*span_start, (*span_end).max(*span_start + 1))),
         Opcode::MakeError { template_id } => error_templates
+            .iter()
+            .find(|template| template.id == *template_id)
+            .map(|template| {
+                (
+                    template.span_start,
+                    template.span_end.max(template.span_start + 1),
+                )
+            }),
+        Opcode::Dbg { template_id, .. } => dbg_templates
             .iter()
             .find(|template| template.id == *template_id)
             .map(|template| {
@@ -1299,6 +1350,7 @@ mod tests {
                 format: "bad".to_string(),
                 num_params: 0,
             }],
+            dbg_templates: Vec::new(),
             functions: vec![FunctionEntry {
                 fun_idx: 0,
                 entry_pc: 1,

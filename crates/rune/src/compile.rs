@@ -635,6 +635,7 @@ pub(crate) fn compile_source(
             &bytecode.opcodes,
             &bytecode.functions,
             &bytecode.error_templates,
+            &bytecode.dbg_templates,
             user_source,
             Some(
                 compile_sources

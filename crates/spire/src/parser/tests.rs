@@ -79,6 +79,59 @@ fn test_private_field_modifier_is_preserved() {
 }
 
 #[test]
+fn test_dbg_special_form_parses() {
+    let ast = parse("dbg!(x, y)").unwrap();
+    match &ast[0] {
+        Ast::Dbg(_, args) => {
+            assert_eq!(args.len(), 2);
+            assert!(matches!(args[0].expr, Ast::Var(_, ref name) if name == "x"));
+            assert!(matches!(args[1].expr, Ast::Var(_, ref name) if name == "y"));
+        }
+        other => panic!("Expected Dbg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_dbg_zero_arg_is_rejected() {
+    let err = parse("dbg!()").expect_err("dbg!() should fail");
+    assert!(err.message().contains("at least one argument"));
+}
+
+#[test]
+fn test_intrinsic_dbg_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @@doc """
+  Debug special form.
+  """
+  @@intrinsic def dbg!<$A>(values: *$A) -> Unit
+}"#,
+        context,
+    )
+    .expect("intrinsic decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "dbg!");
+                    assert_eq!(signature, "@@intrinsic def dbg!<$A>(values: *$A) -> Unit");
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("Debug special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_safebind() {
     let ast = parse("num =? gen()").unwrap();
     match &ast[0] {

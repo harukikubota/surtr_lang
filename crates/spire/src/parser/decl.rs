@@ -1530,6 +1530,7 @@ impl Parser<'_> {
     pub(super) fn parse_annotated_decl(&mut self) -> Result<Ast, ParseError> {
         let mut attrs = DeclAttrs::default();
         let mut saw_builtin = false;
+        let mut saw_intrinsic = false;
         let mut start_span: Option<Span> = None;
 
         while let Token::Annotator(name) = self.peek().clone() {
@@ -1548,6 +1549,21 @@ impl Parser<'_> {
                         ));
                     }
                     saw_builtin = true;
+                }
+                "intrinsic" => {
+                    if saw_intrinsic {
+                        return Err(ParseError::syntax(
+                            "@@intrinsic may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    if saw_builtin {
+                        return Err(ParseError::syntax(
+                            "@@builtin and @@intrinsic cannot be combined",
+                            annotator_span,
+                        ));
+                    }
+                    saw_intrinsic = true;
                 }
                 "doc" => {
                     if attrs.doc.is_some() {
@@ -1602,7 +1618,15 @@ impl Parser<'_> {
             .map(|span| span.start)
             .unwrap_or_else(|| self.peek_span().start);
 
-        if saw_builtin {
+        if saw_intrinsic {
+            match self.peek() {
+                Token::Def => self.parse_intrinsic_decl(start, attrs),
+                _ => Err(ParseError::syntax(
+                    "Expected `def` after @@intrinsic",
+                    self.peek_span(),
+                )),
+            }
+        } else if saw_builtin {
             match self.peek() {
                 Token::Def => self.parse_builtin_decl(start, attrs),
                 Token::Defextractor => self.parse_builtin_extractor_decl(start, attrs),
@@ -1623,11 +1647,90 @@ impl Parser<'_> {
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
-                    "@@doc / @@autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `deferror`, `defenum`, `defextractor`, or `@@builtin type/def/defextractor`",
+                    "@@doc / @@autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `deferror`, `defenum`, `defextractor`, `@@builtin type/def/defextractor`, or `@@intrinsic def`",
                     self.peek_span(),
                 )),
             }
         }
+    }
+
+    pub(super) fn parse_intrinsic_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Def)?;
+        let (base_name, _) = self.expect_ident()?;
+        let name = if matches!(self.peek(), Token::Bang) {
+            self.advance();
+            format!("{base_name}!")
+        } else {
+            base_name
+        };
+
+        let generic_name = if matches!(self.peek(), Token::Lt) {
+            self.advance();
+            self.expect(&Token::Dollar)?;
+            let (generic_name, _) = self.expect_ident()?;
+            self.expect(&Token::Gt)?;
+            Some(generic_name)
+        } else {
+            None
+        };
+
+        self.expect(&Token::LParen)?;
+        let (param_name, _) = self.expect_ident()?;
+        self.expect(&Token::Colon)?;
+        if !matches!(self.peek(), Token::Star) {
+            return Err(ParseError::syntax(
+                "@@intrinsic parameters currently require variadic `*` surface syntax",
+                self.peek_span(),
+            ));
+        }
+        self.advance();
+        self.expect(&Token::Dollar)?;
+        let (param_ty_name, _) = self.expect_ident()?;
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::Arrow)?;
+        let (ret_ty_name, _) = self.expect_ident()?;
+
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::Newline)
+        ) {
+            lookahead += 1;
+        }
+        if matches!(
+            self.tokens.get(lookahead).map(|sp| &sp.token),
+            Some(Token::LBrace)
+        ) {
+            return Err(ParseError::syntax(
+                "@@intrinsic declaration must not have a function body",
+                self.tokens[lookahead].span.clone(),
+            ));
+        }
+
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+        let generic_display = generic_name
+            .as_ref()
+            .or(Some(&param_ty_name))
+            .map(|name| format!("<${name}>"))
+            .unwrap_or_default();
+        let signature = format!(
+            "@@intrinsic def {name}{generic_display}({param_name}: *${param_ty_name}) -> {ret_ty_name}"
+        );
+
+        Ok(Ast::IntrinsicDecl(
+            Span { start, end },
+            name,
+            signature,
+            attrs,
+        ))
     }
 
     pub(super) fn parse_builtin_decl(

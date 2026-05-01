@@ -910,6 +910,10 @@ impl ReplEngine {
     }
 
     fn match_typed_call_docs<'a>(&'a self, query: &TypedCallQuery) -> Vec<&'a DocEntry> {
+        if let Some(matches) = self.match_special_form_typed_call_docs(query) {
+            return matches;
+        }
+
         let Some(receiver_ty) = query.arg_types.first() else {
             return Vec::new();
         };
@@ -926,8 +930,7 @@ impl ReplEngine {
                     if sig.starts_with("impl ") {
                         return sig.contains(&format!(" for {receiver_ty}::{}", query.callee));
                     }
-                    sig.starts_with(&format!("{}(", query.callee))
-                        || sig.contains(&format!("::{}(", query.callee))
+                    Self::signature_matches_callee(sig, &query.callee)
                 })
             })
             .filter(|entry| {
@@ -949,6 +952,42 @@ impl ReplEngine {
         matches
     }
 
+    fn match_special_form_typed_call_docs<'a>(
+        &'a self,
+        query: &TypedCallQuery,
+    ) -> Option<Vec<&'a DocEntry>> {
+        match query.callee.as_str() {
+            "dbg!" => {
+                let mut matches = self
+                    .docs
+                    .iter()
+                    .filter(|entry| entry.kind == DocKind::Function)
+                    .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == "dbg!")
+                    .filter(|entry| {
+                        entry.signature.as_deref().is_some_and(|sig| {
+                            Self::signature_matches_callee(sig, "dbg!")
+                                && Self::signature_accepts_arg_types(sig, &query.arg_types)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+                Some(matches)
+            }
+            _ => None,
+        }
+    }
+
+    fn signature_matches_callee(signature: &str, callee: &str) -> bool {
+        signature.starts_with(&format!("{callee}("))
+            || signature.contains(&format!("::{callee}("))
+            || signature.starts_with(&format!("@@intrinsic def {callee}<"))
+            || signature.starts_with(&format!("@@intrinsic def {callee}("))
+    }
+
+    fn parameter_type_accepts_arg_type(param: &str, arg: &str) -> bool {
+        param == arg || param == "Self" || param.starts_with('$')
+    }
+
     fn signature_accepts_arg_types(signature: &str, arg_types: &[String]) -> bool {
         let Some(params) = signature
             .split_once('(')
@@ -960,13 +999,37 @@ impl ReplEngine {
             .into_iter()
             .filter_map(|param| param.split_once(':').map(|(_, ty)| ty.trim().to_string()))
             .collect::<Vec<_>>();
-        if param_types.len() != arg_types.len() {
-            return false;
+        let variadic_index = param_types.iter().position(|param| param.starts_with('*'));
+
+        match variadic_index {
+            Some(index) => {
+                if index != param_types.len().saturating_sub(1) || arg_types.len() < index + 1 {
+                    return false;
+                }
+
+                let fixed_match = param_types[..index]
+                    .iter()
+                    .zip(&arg_types[..index])
+                    .all(|(param, arg)| Self::parameter_type_accepts_arg_type(param, arg));
+                if !fixed_match {
+                    return false;
+                }
+
+                let variadic_param = param_types[index].trim_start_matches('*').trim();
+                arg_types[index..]
+                    .iter()
+                    .all(|arg| Self::parameter_type_accepts_arg_type(variadic_param, arg))
+            }
+            None => {
+                if param_types.len() != arg_types.len() {
+                    return false;
+                }
+                param_types
+                    .iter()
+                    .zip(arg_types)
+                    .all(|(param, arg)| Self::parameter_type_accepts_arg_type(param, arg))
+            }
         }
-        param_types
-            .iter()
-            .zip(arg_types)
-            .all(|(param, arg)| param == arg || param == "Self")
     }
 
     fn find_signature(&self, symbol: &str) -> Option<(String, String)> {
@@ -1967,6 +2030,8 @@ mod tests {
                 constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
                 new_locals: 0,
                 type_entries: Vec::new(),
+                dbg_template_base: 0,
+                dbg_templates: Vec::new(),
                 error_template_base: 0,
                 error_templates: Vec::new(),
                 functions: Vec::new(),

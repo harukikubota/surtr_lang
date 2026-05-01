@@ -1895,6 +1895,15 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::Dbg(args) => TypedInner::Dbg(
+                args.into_iter()
+                    .map(|arg| TypedDbgArg {
+                        span: arg.span,
+                        ty_name: arg.ty_name,
+                        expr: self.resolve_typed_node(arg.expr),
+                    })
+                    .collect(),
+            ),
             TypedInner::If(cond, then, else_opt) => TypedInner::If(
                 Box::new(self.resolve_typed_node(*cond)),
                 Box::new(self.resolve_typed_node(*then)),

@@ -120,6 +120,11 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 }
             }
         }
+        Resolved::Dbg(_, args) => {
+            for arg in args {
+                collect_captures_inner(arg, bound, free);
+            }
+        }
         Resolved::If(_, cond, then, else_opt) => {
             collect_captures_inner(cond, bound, free);
             collect_captures_inner(then, bound, free);

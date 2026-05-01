@@ -347,6 +347,43 @@ fn core_quit_command_sets_exit_without_ui_work() {
     assert_eq!(status_text(&result), "quit");
 }
 
+#[test]
+fn core_dbg_docs_and_signatures_resolve_from_bootstrap_source() {
+    let mut engine = engine();
+
+    let doc = engine.handle_line(":doc dbg!");
+    let doc = doc_text(&doc);
+    assert!(doc.contains("Bootstrap::dbg!"), "{doc}");
+    assert!(doc.contains("Debug special form."), "{doc}");
+
+    let sig = engine.handle_line(":sig dbg!");
+    let rendered = signature_text(&sig);
+    assert!(
+        rendered.contains("@@intrinsic def dbg!<$A>(values: *$A) -> Unit"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn core_dbg_typed_call_queries_use_special_form_pseudo_application() {
+    let mut engine = engine();
+
+    let doc = engine.handle_line(":doc dbg!(1)");
+    let doc = doc_text(&doc);
+    assert!(doc.contains("Bootstrap::dbg!"), "{doc}");
+    assert!(doc.contains("inspect"), "{doc}");
+
+    let sig = engine.handle_line(":sig dbg!(1, \"x\")");
+    let sig = signature_text(&sig);
+    assert!(sig.contains("defined:"), "{sig}");
+    assert!(
+        sig.contains("@@intrinsic def dbg!<$A>(values: *$A) -> Unit"),
+        "{sig}"
+    );
+    assert!(sig.contains("specialized:"), "{sig}");
+    assert!(sig.contains("dbg!(Int, String) -> Unit"), "{sig}");
+}
+
 fn tempfile_dir(prefix: &str) -> std::path::PathBuf {
     let mut dir = std::env::temp_dir();
     dir.push(format!(

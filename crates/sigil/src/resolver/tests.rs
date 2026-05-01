@@ -22,6 +22,29 @@ fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
     resolve(ast)
 }
 
+#[test]
+fn test_dbg_special_form_resolves_without_name_lookup() {
+    let resolved = parse_and_resolve(
+        r#"dbg = {|x| x}
+value = dbg!(dbg(1), 2)"#,
+    )
+    .expect("dbg special form should resolve");
+
+    let dbg_node = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Dbg(_, args) => Some(args),
+                _ => None,
+            },
+            Resolved::Dbg(_, args) => Some(args),
+            _ => None,
+        })
+        .expect("expected resolved dbg node");
+
+    assert_eq!(dbg_node.len(), 2);
+}
+
 fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
     StagedModuleAst {
         module_path: module_path.to_string(),

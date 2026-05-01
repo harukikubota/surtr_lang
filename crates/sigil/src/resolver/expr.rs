@@ -6,7 +6,7 @@ use super::scope_init::{
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
-use spire::ast::{BinOp, InterpolatedPart};
+use spire::ast::{BinOp, DbgArg, InterpolatedPart};
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 
@@ -247,6 +247,17 @@ impl Resolver {
                 }
                 Ok(())
             }
+            Ast::Dbg(_, args) => {
+                for arg in args {
+                    self.collect_capture_placeholders(
+                        &arg.expr,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
             Ast::Match(_, scrutinee, arms) => {
                 self.collect_capture_placeholders(
                     scrutinee,
@@ -336,6 +347,7 @@ impl Resolver {
             | Ast::ConstDef(_, _, _, _, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
             | Ast::BuiltinDecl(_, _, _, _, _)
+            | Ast::IntrinsicDecl(_, _, _, _)
             | Ast::BuiltinExtractorDecl(_, _, _, _, _)
             | Ast::BuiltinTypeDecl(_, _, _)
             | Ast::ResultCtorDecl(_, _, _, _, _)
@@ -609,6 +621,23 @@ impl Resolver {
                         ))),
                     })
                     .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Ast::Dbg(span, args) => Ok(Ast::Dbg(
+                span,
+                args.into_iter()
+                    .map(|arg| {
+                        let expr = self.rewrite_capture_placeholders(
+                            arg.expr,
+                            capture_span,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                        )?;
+                        Ok(DbgArg {
+                            span: expr.span().clone(),
+                            expr,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
             )),
             Ast::Match(span, scrutinee, arms) => Ok(Ast::Match(
                 span,
@@ -1160,6 +1189,7 @@ impl Resolver {
         let mut resolved = Vec::new();
         for stmt in stmts {
             if matches!(stmt, Ast::Import(_, _, _))
+                || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
                 || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
             {
                 // `import` declarations are consumed by resolver-side module/import handling.
@@ -1491,6 +1521,12 @@ impl Resolver {
                 }
                 Ok(Resolved::InterpolatedStr(span, resolved_parts))
             }
+            Ast::Dbg(span, args) => Ok(Resolved::Dbg(
+                span,
+                args.into_iter()
+                    .map(|arg| self.resolve_node(arg.expr))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
 
             Ast::FieldAccess(span, expr, field) => {
                 let resolved_expr = self.resolve_node(*expr)?;
@@ -2035,6 +2071,13 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
+            Ast::IntrinsicDecl(span, name, _, _) => Err(ResolveError {
+                message: format!(
+                    "Intrinsic declaration `{name}` is docs-only and should not reach resolution"
+                ),
+                span,
+                related_labels: Vec::new(),
+            }),
             Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)

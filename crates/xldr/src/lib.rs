@@ -292,6 +292,17 @@ fn collect_doc_entries_for_ast(
                     });
                 }
             }
+            spire::ast::Ast::IntrinsicDecl(_, name, signature, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, name),
+                        kind: DocKind::Function,
+                        module_path: module_path.to_string(),
+                        signature: Some(signature.clone()),
+                        doc: doc.clone(),
+                    });
+                }
+            }
             spire::ast::Ast::TraitDef(_, name, _type_params, methods, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
@@ -698,6 +709,7 @@ pub fn lower_module_source_ast(
             | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
             | spire::ast::Ast::EnumDef(_, _, _, _, _)
             | spire::ast::Ast::BuiltinDecl(_, _, _, _, _)
+            | spire::ast::Ast::IntrinsicDecl(_, _, _, _)
             | spire::ast::Ast::BuiltinTypeDecl(_, _, _) => {
                 // Std-module files are allowed to carry top-level declarations
                 // alongside their `defmod`. We deliberately keep these in the
@@ -1305,6 +1317,40 @@ deferror NoneError { "None Value." }"#,
                 && entry.signature.as_deref() == Some("import() -> Unit")
                 && entry.doc == "Language-provided import macro function."
         }));
+    }
+
+    #[test]
+    fn collect_doc_entries_keeps_single_bootstrap_dbg_intrinsic_doc() {
+        let ast = spire::parse_with_context(
+            r#"defmod Bootstrap {
+  @@doc """Debug special form."""
+  @@intrinsic def dbg!<$A>(values: *$A) -> Unit
+}"#,
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .expect("std module source should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Bootstrap"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        let dbg_docs = docs
+            .iter()
+            .filter(|entry| entry.qualified_name == "Bootstrap::dbg!")
+            .collect::<Vec<_>>();
+        assert_eq!(dbg_docs.len(), 1, "{dbg_docs:?}");
+        assert_eq!(
+            dbg_docs[0].signature.as_deref(),
+            Some("@@intrinsic def dbg!<$A>(values: *$A) -> Unit")
+        );
     }
 
     #[test]

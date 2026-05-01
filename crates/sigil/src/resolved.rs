@@ -77,6 +77,9 @@ pub enum Resolved {
     /// Interpolated string
     InterpolatedStr(Span, Vec<ResolvedInterpolatedPart>),
 
+    /// `dbg!(expr1, expr2, ...)` special form
+    Dbg(Span, Vec<Resolved>),
+
     /// `if(flag, then, else)` / `if_then(flag, then)` special form
     If(Span, Box<Resolved>, Box<Resolved>, Option<Box<Resolved>>),
 

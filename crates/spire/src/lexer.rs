@@ -359,6 +359,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             '+' => Token::Plus,
             '-' => Token::Minus,
             '*' => Token::Star,
+            '!' => Token::Bang,
             '=' => Token::Bind,
             '<' => Token::Lt,
             '>' => Token::Gt,
@@ -652,6 +653,16 @@ mod tests {
         assert!(matches!(tokens[13].token, Token::PipeMap));
         assert!(matches!(tokens[14].token, Token::PipeBind));
         assert!(matches!(tokens[15].token, Token::KleisliCompose));
+    }
+
+    #[test]
+    fn test_dbg_bang_tokens() {
+        let tokens = tokenize("dbg!(x)").unwrap();
+        assert!(matches!(tokens[0].token, Token::Ident(ref s) if s == "dbg"));
+        assert!(matches!(tokens[1].token, Token::Bang));
+        assert!(matches!(tokens[2].token, Token::LParen));
+        assert!(matches!(tokens[3].token, Token::Ident(ref s) if s == "x"));
+        assert!(matches!(tokens[4].token, Token::RParen));
     }
 
     #[test]

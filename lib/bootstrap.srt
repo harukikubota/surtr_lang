@@ -17,6 +17,48 @@ type itself lives in `error.srt`.
 # Bootstrap is the first auto-imported standard module and acts as the fixed
 # stage-0 anchor for the loader.
 defmod Bootstrap {
+  @@doc """
+  Debug special form.
+
+  `dbg!` is a language-provided special form for observing intermediate values.
+  It evaluates each argument from left to right, writes one debug diagnostic to
+  stderr, and returns `Unit`.
+
+  Each argument is type-checked independently.
+  The argument list is not collected into `List` or `Tuple`; each expression is
+  evaluated as its own input slot and rendered in left-to-right order.
+  Rendered values use `inspect`, so strings keep quotes and composite values
+  retain their structural shape.
+
+  ## Examples
+  dbg!(value)
+  dbg!(count, label, make_user(name))
+
+  def main() -> Unit {
+    num = 2
+    term = "hoge"
+    dbg!(num, term)
+    print("ok")
+  }
+
+  ## REPL
+  xldr(1)> num = 1
+  > num: Int = 1
+  xldr(2)> dbg!(num)
+  Debug: inspect values.
+     ╭─[ REPL:1:1 ]
+     │ 
+   1 │ dbg!(num)
+     │      ─┬─  
+     │       ╰─── Int: 1
+  ───╯
+  ## Notes
+  - `dbg!` returns `()`
+  - `x = dbg!(value)` binds `x: Unit = ()`
+  - `dbg!()` is invalid
+  """
+  @@intrinsic def dbg!<$A>(values: *$A) -> Unit
+
   # `def` introduces a named function declaration.
   # `dummy` exists only to keep the module non-empty and to leave a minimal
   # function-shaped example in the first standard source file.

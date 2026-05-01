@@ -48,6 +48,7 @@ fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         Ast::EnumDef(_, _, _, _, _) => Some(TopLevelDeclKind::EnumDef),
         Ast::ConstDef(_, _, _, _, _) => Some(TopLevelDeclKind::ConstDef),
         Ast::BuiltinDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
+        Ast::IntrinsicDecl(_, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
         Ast::BuiltinExtractorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinExtractorDecl),
         Ast::BuiltinTypeDecl(_, _, _) => Some(TopLevelDeclKind::BuiltinTypeDecl),
         Ast::ResultCtorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),

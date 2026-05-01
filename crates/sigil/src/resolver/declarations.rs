@@ -471,6 +471,9 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             ret_ty.map(|ret| rewrite_self_type(ret, target)),
             attrs,
         ),
+        Ast::IntrinsicDecl(span, name, signature, attrs) => {
+            Ast::IntrinsicDecl(span, name, signature, attrs)
+        }
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
             span,
             name,
@@ -889,6 +892,7 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Def,
                         Visibility::Public,
                     ),
+                    Ast::IntrinsicDecl(_, _, _, _) => continue,
                     Ast::BuiltinExtractorDecl(span, name, _, _, _) => (
                         span,
                         name.as_str(),
@@ -1490,6 +1494,7 @@ impl Resolver {
                     self.declaration_uid_kinds.insert(uid, DeclarationKind::Def);
                     self.scope.define_with_id(name, uid);
                 }
+                Ast::IntrinsicDecl(_, _, _, _) => continue,
                 Ast::BuiltinExtractorDecl(_, name, _, _, _) => {
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {

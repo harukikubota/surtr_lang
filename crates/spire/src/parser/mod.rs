@@ -895,6 +895,15 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 })
                 .collect(),
         ),
+        Ast::Dbg(span, args) => Ast::Dbg(
+            shift_span(span, delta),
+            args.into_iter()
+                .map(|arg| DbgArg {
+                    span: shift_span(arg.span, delta),
+                    expr: shift_ast_span(arg.expr, delta),
+                })
+                .collect(),
+        ),
         Ast::Match(span, expr, arms) => Ast::Match(
             shift_span(span, delta),
             Box::new(shift_ast_span(*expr, delta)),
@@ -1045,6 +1054,12 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|p| shift_fun_param(p, delta))
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::IntrinsicDecl(span, name, signature, attrs) => Ast::IntrinsicDecl(
+            shift_span(span, delta),
+            name,
+            signature,
             shift_decl_attrs(attrs),
         ),
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
@@ -1203,6 +1218,7 @@ impl Ast {
             | Ast::TupleLiteral(s, _)
             | Ast::Grouped(s, _)
             | Ast::InterpolatedStr(s, _)
+            | Ast::Dbg(s, _)
             | Ast::Match(s, _, _)
             | Ast::FieldAccess(s, _, _)
             | Ast::StructDef(s, _, _)
@@ -1215,6 +1231,7 @@ impl Ast {
             | Ast::ConstDef(s, _, _, _, _)
             | Ast::ExtractorDef(s, _, _, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _, _)
+            | Ast::IntrinsicDecl(s, _, _, _)
             | Ast::BuiltinExtractorDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)
             | Ast::Namespace(s, _, _)

@@ -162,6 +162,10 @@ pub enum OpcodeView {
     },
     GetTag,
     EqTag,
+    Dbg {
+        template_id: u32,
+        arg_count: u8,
+    },
     CallBuiltin {
         builtin_id: u16,
         builtin: String,
@@ -467,6 +471,13 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         },
         Opcode::GetTag => OpcodeView::GetTag,
         Opcode::EqTag => OpcodeView::EqTag,
+        Opcode::Dbg {
+            template_id,
+            arg_count,
+        } => OpcodeView::Dbg {
+            template_id: *template_id,
+            arg_count: *arg_count,
+        },
         Opcode::CallBuiltin {
             builtin_id,
             arity,
@@ -653,6 +664,7 @@ mod tests {
                 format: "sample".into(),
                 num_params: 0,
             }],
+            dbg_templates: Vec::new(),
             functions: vec![FunctionEntry {
                 fun_idx: 0,
                 entry_pc: 0,

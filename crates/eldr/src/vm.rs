@@ -10,6 +10,7 @@ use sindr::runtime::{
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::builtin::call_builtin;
+use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
 use std::io::{self, Write};
 
@@ -839,12 +840,15 @@ impl VM {
             type_entries,
             error_template_base: chunk_error_template_base,
             error_templates,
+            dbg_template_base: chunk_dbg_template_base,
+            dbg_templates,
             functions,
             docs,
         } = chunk;
         let code_base = self.bytecode.opcodes.len();
         let const_base = self.bytecode.constants.len();
         let error_template_base = self.bytecode.error_templates.len();
+        let dbg_template_base = self.bytecode.dbg_templates.len();
         if chunk_const_base as usize != const_base {
             return Err(RuntimeError::new(format!(
                 "Chunk constant base mismatch: chunk={}, vm={}",
@@ -857,16 +861,24 @@ impl VM {
                 chunk_error_template_base, error_template_base
             )));
         }
+        if chunk_dbg_template_base as usize != dbg_template_base {
+            return Err(RuntimeError::new(format!(
+                "Chunk dbg template base mismatch: chunk={}, vm={}",
+                chunk_dbg_template_base, dbg_template_base
+            )));
+        }
         let mut chunk_opcodes = opcodes;
         Self::relocate_chunk_indices(
             &mut chunk_opcodes,
             code_base,
             const_base,
             error_template_base,
+            dbg_template_base,
         )?;
         self.bytecode.constants.extend(constants);
         self.bytecode.type_registry.entries.extend(type_entries);
         self.bytecode.error_templates.extend(error_templates);
+        self.bytecode.dbg_templates.extend(dbg_templates);
         self.extend_docs_unique(docs);
         self.bytecode.opcodes.extend(chunk_opcodes);
         self.relocate_and_extend_source_map(source_map, code_base)?;
@@ -1351,6 +1363,7 @@ impl VM {
         code_base: usize,
         const_base: usize,
         error_template_base: usize,
+        dbg_template_base: usize,
     ) -> Result<(), RuntimeError> {
         let code_base = u32::try_from(code_base).map_err(|_| {
             RuntimeError::new(format!(
@@ -1368,6 +1381,12 @@ impl VM {
             RuntimeError::new(format!(
                 "Error template base too large for relocation: {}",
                 error_template_base
+            ))
+        })?;
+        let dbg_template_base = u32::try_from(dbg_template_base).map_err(|_| {
+            RuntimeError::new(format!(
+                "Dbg template base too large for relocation: {}",
+                dbg_template_base
             ))
         })?;
 
@@ -1400,10 +1419,62 @@ impl VM {
                                 ))
                             })?;
                 }
+                Opcode::Dbg { template_id, .. } => {
+                    *template_id = template_id.checked_add(dbg_template_base).ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "Dbg template relocation overflow: id {} + base {}",
+                            *template_id, dbg_template_base
+                        ))
+                    })?;
+                }
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    fn render_dbg_output(
+        &self,
+        template_id: u32,
+        values: &[Value],
+    ) -> Result<String, RuntimeError> {
+        let template = self
+            .bytecode
+            .dbg_templates
+            .iter()
+            .find(|template| template.id == template_id)
+            .ok_or_else(|| RuntimeError::new(format!("dbg template {} not found", template_id)))?;
+
+        if template.args.len() != values.len() {
+            return Err(RuntimeError::new(format!(
+                "dbg arg count mismatch: template has {}, runtime has {}",
+                template.args.len(),
+                values.len()
+            )));
+        }
+
+        let file = template
+            .source_name
+            .clone()
+            .or_else(|| self.source_file.clone())
+            .unwrap_or_else(|| "<unknown>".into());
+        let source = self.source.as_deref().unwrap_or_default();
+        let args = template
+            .args
+            .iter()
+            .zip(values)
+            .map(|(arg, value)| DbgRenderArg {
+                span_start: arg.span_start,
+                span_end: arg.span_end,
+                label: format!(
+                    "{}: {}",
+                    arg.ty_name,
+                    crate::builtin::inspect_value(self, value)
+                ),
+            })
+            .collect::<Vec<_>>();
+
+        Ok(render_dbg_report(&file, source, template, &args))
     }
 
     fn execute_opcode(&mut self, op: Opcode, pc: &mut usize) -> Result<bool, RuntimeError> {
@@ -1724,6 +1795,21 @@ impl VM {
                 let b = self.pop_tag()?;
                 let a = self.pop_tag()?;
                 self.stack.push(Value::Bool(a == b));
+            }
+            Opcode::Dbg {
+                template_id,
+                arg_count,
+            } => {
+                let mut values = Vec::with_capacity(arg_count as usize);
+                for _ in 0..arg_count {
+                    values.push(self.pop_stack()?);
+                }
+                values.reverse();
+                let rendered = self.render_dbg_output(template_id, &values)?;
+                for line in rendered.lines() {
+                    self.emit_stderr_line(line.to_string());
+                }
+                self.stack.push(Value::Unit);
             }
 
             // Built-in function call
@@ -2372,6 +2458,83 @@ mod tests {
     }
 
     #[test]
+    fn dbg_opcode_writes_to_stderr_and_returns_unit() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::Dbg {
+                template_id: 0,
+                arg_count: 1,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(42))];
+        bytecode.dbg_templates = vec![sindr::ir::DbgTemplate {
+            id: 0,
+            span_start: 0,
+            span_end: 7,
+            source_name: Some("sample.srt".into()),
+            args: vec![sindr::ir::DbgArgTemplate {
+                span_start: 5,
+                span_end: 6,
+                ty_name: "Int".into(),
+            }],
+        }];
+
+        let mut vm = VM::new(bytecode)
+            .with_source("dbg!(42)".into(), "sample.srt".into())
+            .with_error_capture();
+        vm.run().expect("run should succeed");
+        assert_eq!(vm.last_value(), Some(&Value::Unit));
+        let stderr = vm.take_stderr().join("\n");
+        assert!(!stderr.contains("dbg!: sample.srt:1:1"), "{stderr}");
+        assert!(stderr.contains("dbg!"), "{stderr}");
+        assert!(stderr.contains("Int: 42"));
+    }
+
+    #[test]
+    fn dbg_opcode_renders_argument_labels_left_to_right() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::Dbg {
+                template_id: 0,
+                arg_count: 2,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(2)), Constant::Str("hoge".into())];
+        bytecode.dbg_templates = vec![sindr::ir::DbgTemplate {
+            id: 0,
+            span_start: 0,
+            span_end: 15,
+            source_name: Some("sample.srt".into()),
+            args: vec![
+                sindr::ir::DbgArgTemplate {
+                    span_start: 5,
+                    span_end: 8,
+                    ty_name: "Int".into(),
+                },
+                sindr::ir::DbgArgTemplate {
+                    span_start: 10,
+                    span_end: 14,
+                    ty_name: "String".into(),
+                },
+            ],
+        }];
+
+        let mut vm = VM::new(bytecode)
+            .with_source("dbg!(num, term)".into(), "sample.srt".into())
+            .with_error_capture();
+        vm.run().expect("run should succeed");
+        let stderr = vm.take_stderr().join("\n");
+        let int_idx = stderr.find("Int: 2").expect("Int label should render");
+        let string_idx = stderr
+            .find("String: \"hoge\"")
+            .expect("String label should render");
+        assert!(int_idx < string_idx, "{stderr}");
+    }
+
+    #[test]
     fn function_table_mismatch_is_runtime_error() {
         let mut bytecode = base_bytecode(vec![
             Opcode::Call {
@@ -2406,6 +2569,8 @@ mod tests {
             constants: vec![Constant::Int(int(99)), Constant::Int(int(7))],
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -2429,6 +2594,8 @@ mod tests {
             constants: vec![Constant::Int(int(42))],
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -2465,6 +2632,8 @@ mod tests {
             constants: vec![Constant::Str("new message".into())],
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 1,
             error_templates: vec![ErrTemplate {
                 id: 0,
@@ -2510,6 +2679,8 @@ mod tests {
                 constants: vec![Constant::Str("boom".into())],
                 new_locals: 0,
                 type_entries: Vec::new(),
+                dbg_template_base: 0,
+                dbg_templates: Vec::new(),
                 error_template_base: 0,
                 error_templates: vec![ErrTemplate {
                     id: 0,
@@ -2581,6 +2752,8 @@ mod tests {
             constants: Vec::new(),
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -2604,6 +2777,8 @@ mod tests {
             constants: Vec::new(),
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -2631,6 +2806,8 @@ mod tests {
             constants: Vec::new(),
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: vec![function_entry(0, 2, 1, 0, Some("new"))],
@@ -2668,6 +2845,8 @@ mod tests {
             constants: vec![Constant::Str("hello".into())],
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -2692,6 +2871,8 @@ mod tests {
             constants: vec![Constant::Int(int(1))],
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -2724,6 +2905,8 @@ mod tests {
             constants: Vec::new(),
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -2763,6 +2946,8 @@ mod tests {
             constants: Vec::new(),
             new_locals: 0,
             type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -2887,6 +3072,8 @@ mod tests {
                 field_names: vec![],
                 private_flags: vec![],
             }],
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -2922,6 +3109,8 @@ mod tests {
                 field_names: vec![],
                 private_flags: vec![],
             }],
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),

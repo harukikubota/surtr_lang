@@ -71,6 +71,22 @@ fn safebind_total_pattern_accepts_plain_rhs() {
 }
 
 #[test]
+fn dbg_special_form_typechecks_to_unit() {
+    let resolved = resolve_with_builtin_prelude("x = dbg!(1, \"ok\")");
+    let typed = typecheck(resolved).expect("typecheck should succeed");
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("expected binding");
+
+    assert_eq!(rhs.ty, Ty::Unit);
+    assert!(matches!(rhs.node, TypedInner::Dbg(_)));
+}
+
+#[test]
 fn safebind_function_requires_result_return_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"def bad() -> Int {
@@ -2165,6 +2181,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
                 scar::typed::TypedInterpolatedPart::Text(_) => false,
                 scar::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
             }),
+            TypedInner::Dbg(args) => args.iter().any(|arg| has_pending_trait_call(&arg.expr)),
             TypedInner::Def(_, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),

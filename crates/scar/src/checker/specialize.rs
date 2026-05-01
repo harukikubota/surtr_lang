@@ -377,6 +377,24 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
+            TypedInner::Dbg(args) => TypedInner::Dbg(
+                args.into_iter()
+                    .map(|arg| {
+                        Ok(TypedDbgArg {
+                            span: arg.span,
+                            ty_name: arg.ty_name,
+                            expr: self.rewrite_specializations_in_node(
+                                arg.expr,
+                                defs_by_fun_idx,
+                                bound_tyvars_by_fun_idx,
+                                needs_specialization,
+                                specialization_fun_idxs,
+                                generated_defs,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
                 Box::new(self.rewrite_specializations_in_node(
                     *cond,
@@ -990,6 +1008,11 @@ impl Checker {
                     }
                 }
             }
+            TypedInner::Dbg(args) => {
+                for arg in args {
+                    self.collect_bound_tyvars_in_node(&arg.expr, ordered, seen);
+                }
+            }
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_bound_tyvars_in_node(cond, ordered, seen);
                 self.collect_bound_tyvars_in_node(then_branch, ordered, seen);
@@ -1219,6 +1242,15 @@ impl Checker {
                         TypedInterpolatedPart::Expr(expr) => TypedInterpolatedPart::Expr(Box::new(
                             self.substitute_typed_node_with_mapping(*expr, mapping),
                         )),
+                    })
+                    .collect(),
+            ),
+            TypedInner::Dbg(args) => TypedInner::Dbg(
+                args.into_iter()
+                    .map(|arg| TypedDbgArg {
+                        span: arg.span,
+                        ty_name: arg.ty_name,
+                        expr: self.substitute_typed_node_with_mapping(arg.expr, mapping),
                     })
                     .collect(),
             ),
@@ -1705,6 +1737,9 @@ impl Checker {
                 TypedInterpolatedPart::Text(_) => false,
                 TypedInterpolatedPart::Expr(expr) => Self::typed_node_has_pending_trait_call(expr),
             }),
+            TypedInner::Dbg(args) => args
+                .iter()
+                .any(|arg| Self::typed_node_has_pending_trait_call(&arg.expr)),
             TypedInner::If(cond, then_branch, else_branch) => {
                 Self::typed_node_has_pending_trait_call(cond)
                     || Self::typed_node_has_pending_trait_call(then_branch)

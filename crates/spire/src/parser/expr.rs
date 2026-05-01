@@ -576,6 +576,10 @@ impl Parser<'_> {
         name: Symbol,
         name_span: Span,
     ) -> Result<Ast, ParseError> {
+        if name == "dbg" && matches!(self.peek(), Token::Bang) {
+            return self.parse_dbg_special_form(name_span);
+        }
+
         if name == "self" && self.impl_target_stack.is_empty() {
             return Err(ParseError::syntax(
                 "`self` can only be used inside impl methods",
@@ -850,6 +854,67 @@ impl Parser<'_> {
 
         // Just a variable
         Ok(Ast::Var(name_span, name))
+    }
+
+    fn parse_dbg_special_form(&mut self, name_span: Span) -> Result<Ast, ParseError> {
+        let bang_span = self.advance().span.clone();
+        if matches!(self.peek(), Token::Unit) {
+            let unit_span = self.advance().span.clone();
+            return Err(ParseError::syntax(
+                "`dbg!` expects at least one argument",
+                Span {
+                    start: name_span.start,
+                    end: unit_span.end,
+                },
+            ));
+        }
+        if !matches!(self.peek(), Token::LParen) {
+            return Err(ParseError::syntax(
+                "Expected `(` after `dbg!`",
+                Span {
+                    start: name_span.start,
+                    end: bang_span.end,
+                },
+            ));
+        }
+
+        self.advance();
+        self.skip_newlines();
+        if matches!(self.peek(), Token::RParen) {
+            return Err(ParseError::syntax(
+                "`dbg!` expects at least one argument",
+                self.peek_span(),
+            ));
+        }
+
+        let mut args = Vec::new();
+        loop {
+            let expr = self.parse_non_assignment_expr()?;
+            args.push(DbgArg {
+                span: expr.span().clone(),
+                expr,
+            });
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                if matches!(self.peek(), Token::RParen) {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+
+        self.skip_newlines();
+        let end_span = self.expect(&Token::RParen)?;
+        Ok(Ast::Dbg(
+            Span {
+                start: name_span.start,
+                end: end_span.end,
+            },
+            args,
+        ))
     }
 
     /// `=` / `=?` are non-associative in a single statement.

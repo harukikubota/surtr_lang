@@ -4,7 +4,7 @@ use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
-use sindr::ir::{CompileInfo, DocEntry, FunctionFlags};
+use sindr::ir::{CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags};
 use sindr::primitives::int;
 use spire::ast::{BinOp, Lit, Span, Visibility};
 
@@ -24,6 +24,7 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         num_locals: state.next_slot as usize,
         type_registry: state.type_registry,
         error_templates: state.error_templates,
+        dbg_templates: state.dbg_templates,
         functions: state.functions,
         source_map: None,
         docs: Vec::new(),
@@ -69,6 +70,7 @@ pub fn compose_bytecode_with_chunk(
 
     let const_base = base.constants.len();
     let error_template_base = base.error_templates.len();
+    let dbg_template_base = base.dbg_templates.len();
     if chunk.const_base as usize != const_base {
         return Err(CodegenError {
             message: format!(
@@ -83,6 +85,15 @@ pub fn compose_bytecode_with_chunk(
             message: format!(
                 "chunk error template base mismatch: chunk={}, base={}",
                 chunk.error_template_base, error_template_base
+            ),
+            span: Span { start: 0, end: 0 },
+        });
+    }
+    if chunk.dbg_template_base as usize != dbg_template_base {
+        return Err(CodegenError {
+            message: format!(
+                "chunk dbg template base mismatch: chunk={}, base={}",
+                chunk.dbg_template_base, dbg_template_base
             ),
             span: Span { start: 0, end: 0 },
         });
@@ -106,6 +117,7 @@ pub fn compose_bytecode_with_chunk(
         chunk_func_base,
         const_base,
         error_template_base,
+        dbg_template_base,
     )?;
 
     let mut opcodes = Vec::with_capacity(base_ops.len() + chunk_ops.len().saturating_sub(1));
@@ -147,6 +159,7 @@ pub fn compose_bytecode_with_chunk(
     base.constants.extend(chunk.constants);
     base.type_registry.entries.extend(chunk.type_entries);
     base.error_templates.extend(chunk.error_templates);
+    base.dbg_templates.extend(chunk.dbg_templates);
     base.num_locals = base.num_locals.saturating_add(chunk.new_locals);
     base.functions = functions;
     base.source_map = None;
@@ -197,6 +210,7 @@ fn relocate_chunk_ops_for_artifact(
     chunk_func_base: usize,
     const_base: usize,
     error_template_base: usize,
+    dbg_template_base: usize,
 ) -> Result<(), CodegenError> {
     let const_base = u32::try_from(const_base).map_err(|_| CodegenError {
         message: "constant base exceeds u32".into(),
@@ -204,6 +218,10 @@ fn relocate_chunk_ops_for_artifact(
     })?;
     let error_template_base = u32::try_from(error_template_base).map_err(|_| CodegenError {
         message: "error template base exceeds u32".into(),
+        span: Span { start: 0, end: 0 },
+    })?;
+    let dbg_template_base = u32::try_from(dbg_template_base).map_err(|_| CodegenError {
+        message: "dbg template base exceeds u32".into(),
         span: Span { start: 0, end: 0 },
     })?;
     for op in opcodes {
@@ -224,6 +242,15 @@ fn relocate_chunk_ops_for_artifact(
                         message: "chunk error template relocation overflow".into(),
                         span: Span { start: 0, end: 0 },
                     })?;
+            }
+            Opcode::Dbg { template_id, .. } => {
+                *template_id =
+                    template_id
+                        .checked_add(dbg_template_base)
+                        .ok_or_else(|| CodegenError {
+                            message: "chunk dbg template relocation overflow".into(),
+                            span: Span { start: 0, end: 0 },
+                        })?;
             }
             Opcode::MakeErrorLiteral {
                 kind_const_idx,
@@ -330,6 +357,7 @@ struct CodegenState {
     next_fun_idx: u32,
     type_registry: TypeRegistry,
     error_templates: Vec<ErrTemplate>,
+    dbg_templates: Vec<DbgTemplate>,
     functions: Vec<FunctionEntry>,
     error_ctor_funs: HashMap<String, (u32, u8)>, // error kind -> (fun_idx, arity)
 }
@@ -343,6 +371,7 @@ impl CodegenState {
             next_fun_idx: 0,
             type_registry: TypeRegistry::new(),
             error_templates: Vec::new(),
+            dbg_templates: Vec::new(),
             functions: Vec::new(),
             error_ctor_funs: HashMap::new(),
         }
@@ -419,6 +448,7 @@ impl ForgeSession {
                 next_fun_idx,
                 type_registry: bytecode.type_registry.clone(),
                 error_templates: bytecode.error_templates.clone(),
+                dbg_templates: bytecode.dbg_templates.clone(),
                 functions: bytecode.functions.clone(),
                 error_ctor_funs,
             },
@@ -448,19 +478,26 @@ impl ForgeSession {
         let typed_for_meta = typed.clone();
         let const_base = before.constants.len();
         let error_template_base = before.error_templates.len();
+        let dbg_template_base = before.dbg_templates.len();
 
         let mut gene = Codegen::from_state(before.clone());
         gene.set_chunk_constant_dedup_start(const_base);
         gene.set_top_level_returns_result(top_level_returns_result);
         gene.emit_program_chunk(typed)?;
         let (mut opcodes, after) = gene.finalize()?;
-        localize_chunk_indices(&mut opcodes, const_base, error_template_base)?;
+        localize_chunk_indices(
+            &mut opcodes,
+            const_base,
+            error_template_base,
+            dbg_template_base,
+        )?;
 
         let new_constants = after.constants[before.constants.len()..].to_vec();
         let new_locals = after.next_slot.saturating_sub(before.next_slot) as usize;
         let type_entries =
             after.type_registry.entries[before.type_registry.entries.len()..].to_vec();
         let error_templates = after.error_templates[before.error_templates.len()..].to_vec();
+        let dbg_templates = after.dbg_templates[before.dbg_templates.len()..].to_vec();
         let meta = collect_chunk_meta(&typed_for_meta, &after.slot_map);
         let functions = after.functions[before.functions.len()..].to_vec();
 
@@ -474,6 +511,10 @@ impl ForgeSession {
             message: "error template base exceeds u32".into(),
             span: Span { start: 0, end: 0 },
         })?;
+        let dbg_template_base = u32::try_from(dbg_template_base).map_err(|_| CodegenError {
+            message: "dbg template base exceeds u32".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
 
         Ok((
             BytecodeChunk {
@@ -485,6 +526,8 @@ impl ForgeSession {
                 type_entries,
                 error_template_base,
                 error_templates,
+                dbg_template_base,
+                dbg_templates,
                 functions,
                 docs: Vec::new(),
             },
@@ -497,6 +540,7 @@ fn localize_chunk_indices(
     opcodes: &mut [Opcode],
     const_base: usize,
     error_template_base: usize,
+    dbg_template_base: usize,
 ) -> Result<(), CodegenError> {
     for op in opcodes.iter_mut() {
         match op {
@@ -525,6 +569,19 @@ fn localize_chunk_indices(
                     });
                 }
                 *template_id = (id_usize - error_template_base) as u32;
+            }
+            Opcode::Dbg { template_id, .. } => {
+                let id_usize = *template_id as usize;
+                if id_usize < dbg_template_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk dbg template index {} is below base {}",
+                            id_usize, dbg_template_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                *template_id = (id_usize - dbg_template_base) as u32;
             }
             Opcode::MakeErrorLiteral {
                 kind_const_idx,
@@ -563,7 +620,7 @@ fn localize_chunk_indices(
 mod tests {
     use super::Codegen;
     use crate::opcode::Opcode;
-    use scar::typed::{TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode};
+    use scar::typed::{TypedDbgArg, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode};
     use scar::types::Ty;
     use spire::ast::{BinOp, Lit, Span};
 
@@ -728,6 +785,36 @@ mod tests {
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
+    }
+
+    #[test]
+    fn emit_dbg_uses_dedicated_opcode() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 11),
+            node: TypedInner::Dbg(vec![
+                TypedDbgArg {
+                    span: span(6, 7),
+                    ty_name: "Int".into(),
+                    expr: lit_node(Ty::Int, Lit::Int(1.into()), span(6, 7)),
+                },
+                TypedDbgArg {
+                    span: span(9, 10),
+                    ty_name: "Int".into(),
+                    expr: lit_node(Ty::Int, Lit::Int(2.into()), span(9, 10)),
+                },
+            ]),
+        };
+
+        gene.emit_node(&node).expect("dbg emission should succeed");
+        let (opcodes, state) = gene.finalize().expect("finalize should succeed");
+
+        assert!(matches!(
+            opcodes.last(),
+            Some(Opcode::Dbg { arg_count: 2, .. })
+        ));
+        assert_eq!(state.dbg_templates.len(), 1);
     }
 }
 
@@ -1400,6 +1487,25 @@ impl Codegen {
         idx
     }
 
+    fn add_dbg_template(&mut self, span: Span, args: &[TypedDbgArg]) -> u32 {
+        let id = self.state.dbg_templates.len() as u32;
+        self.state.dbg_templates.push(DbgTemplate {
+            id,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+            source_name: None,
+            args: args
+                .iter()
+                .map(|arg| DbgArgTemplate {
+                    span_start: arg.span.start as u32,
+                    span_end: arg.span.end as u32,
+                    ty_name: arg.ty_name.clone(),
+                })
+                .collect(),
+        });
+        id
+    }
+
     fn emit(&mut self, op: Opcode) {
         self.ir.push(IrOp::Op(op));
     }
@@ -1903,6 +2009,17 @@ impl Codegen {
 
             TypedInner::InterpolatedStr(parts) => {
                 self.emit_interpolated_str(parts)?;
+            }
+
+            TypedInner::Dbg(args) => {
+                for arg in args {
+                    self.emit_node(&arg.expr)?;
+                }
+                let template_id = self.add_dbg_template(node.span.clone(), args);
+                self.emit(Opcode::Dbg {
+                    template_id,
+                    arg_count: args.len() as u8,
+                });
             }
 
             TypedInner::If(cond, then, else_opt) => {

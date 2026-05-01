@@ -13,6 +13,13 @@ pub struct TypedNode {
     pub node: TypedInner,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedDbgArg {
+    pub span: Span,
+    pub ty_name: String,
+    pub expr: TypedNode,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListHelperRef {
     Builtin(u16),
@@ -122,6 +129,7 @@ pub enum TypedInner {
     ListLiteral(Vec<TypedNode>),
     TupleLiteral(Vec<TypedNode>),
     InterpolatedStr(Vec<TypedInterpolatedPart>),
+    Dbg(Vec<TypedDbgArg>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Assert(Box<TypedNode>, Box<TypedNode>),
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
