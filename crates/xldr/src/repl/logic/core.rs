@@ -12,10 +12,14 @@ use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
 use sindr::ir::{DocEntry, DocKind};
 use sindr::policy::CompileUnitKind;
-use spire::ast::{Ast, AstPattern, AstTy, ImportSpec, Span};
+use spire::ast::{Ast, AstTy, ImportSpec, Span};
 
 use super::command::{parse_repl_command, ReplCommand};
 use super::output::{ReplOutput, ReplResult};
+use super::query::{
+    ast_ty_from_query_arg, format_query_ty, parse_binding_query_type, parse_repl_query,
+    parse_signature_type, QueryArg, QueryArgKind, ReplQuery, TypedCallQuery, TypedOperatorQuery,
+};
 use super::render;
 use crate::loader::{self, StagedModule};
 use crate::ErrorDisplayMode;
@@ -58,21 +62,6 @@ const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("concat", "Concat"),
 ];
 const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TypedCallQuery {
-    callee: String,
-    arg_types: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct TypedOperatorQuery {
-    lhs_source: String,
-    rhs_source: String,
-    lhs_ty: AstTy,
-    rhs_ty: AstTy,
-    operator: &'static str,
-}
 
 /// Error returned when loading a `.eldr` file into a REPL engine.
 #[derive(Debug)]
@@ -807,43 +796,73 @@ impl ReplEngine {
                 rendered: Self::doc_help_lines(),
             });
         }
-        if let Some(query) = self.parse_typed_call_query(trimmed) {
-            return match query {
-                Ok(query) => self.handle_doc_typed_call(trimmed, &query),
-                Err(message) => ReplResult::ok(ReplOutput::CommandOutput {
-                    rendered: vec![message],
-                }),
-            };
-        }
-        if trimmed.split_whitespace().count() != 1 {
-            return ReplResult::ok(ReplOutput::CommandOutput {
+        match parse_repl_query(trimmed) {
+            Ok(ReplQuery::Symbol(symbol)) => self.handle_doc_symbol(trimmed, &symbol),
+            Ok(ReplQuery::TypedCall(query)) => self.handle_doc_typed_call(trimmed, &query),
+            Ok(ReplQuery::TypedOperator(query)) => self.handle_doc_typed_operator(trimmed, &query),
+            Ok(ReplQuery::Expr(_)) => ReplResult::ok(ReplOutput::CommandOutput {
                 rendered: Self::doc_help_lines(),
-            });
-        }
-
-        let canonical = OPERATOR_DOC_ALIASES
-            .iter()
-            .find_map(|(alias, trait_name)| (*alias == trimmed).then_some(*trait_name))
-            .unwrap_or(trimmed);
-
-        let matches = self.matching_doc_entries(canonical, None);
-
-        match matches.as_slice() {
-            [] => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![format!("No docs found for {}", trimmed)],
             }),
-            [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
-            entries => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: Self::ambiguous_doc_lines(trimmed, entries),
+            Err(err) => ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: vec![err.message().to_string()],
             }),
         }
     }
 
-    fn canonical_doc_symbol(symbol: &str) -> &str {
+    fn handle_doc_symbol(&self, source_symbol: &str, symbol: &str) -> ReplResult {
+        let canonical = Self::canonical_symbol(symbol);
+        let preferred_kind = Self::definition_doc_kind(canonical);
+        let matches = self.matching_doc_entries(canonical, preferred_kind);
+
+        match matches.as_slice() {
+            [] => ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: vec![format!("No docs found for {}", source_symbol)],
+            }),
+            [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
+            entries => ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: Self::ambiguous_doc_lines(source_symbol, entries),
+            }),
+        }
+    }
+
+    fn handle_doc_typed_operator(
+        &self,
+        source_query: &str,
+        query: &TypedOperatorQuery,
+    ) -> ReplResult {
+        let synthetic = TypedCallQuery {
+            callee: Self::canonical_symbol(query.operator).to_string(),
+            args: vec![query.lhs.clone(), query.rhs.clone()],
+        };
+        self.handle_doc_typed_call(source_query, &synthetic)
+    }
+
+    fn canonical_symbol(symbol: &str) -> &str {
         OPERATOR_DOC_ALIASES
             .iter()
             .find_map(|(alias, trait_name)| (*alias == symbol).then_some(*trait_name))
+            .or_else(|| {
+                METHOD_DOC_TRAIT_ALIASES
+                    .iter()
+                    .find_map(|(alias, trait_name)| (*alias == symbol).then_some(*trait_name))
+            })
             .unwrap_or(symbol)
+    }
+
+    fn definition_doc_kind(symbol: &str) -> Option<DocKind> {
+        if symbol != "and"
+            && symbol != "or"
+            && (OPERATOR_DOC_ALIASES
+                .iter()
+                .any(|(_, trait_name)| *trait_name == symbol)
+                || METHOD_DOC_TRAIT_ALIASES
+                    .iter()
+                    .any(|(_, trait_name)| *trait_name == symbol))
+        {
+            Some(DocKind::Type)
+        } else {
+            None
+        }
     }
 
     fn symbol_matches(qualified_name: &str, symbol: &str) -> bool {
@@ -909,6 +928,11 @@ impl ReplEngine {
     }
 
     fn handle_doc_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
+        if let Err(message) = self.query_arg_types(query.args.as_slice()) {
+            return ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: vec![message],
+            });
+        }
         let matches = self.match_typed_call_docs(query);
         match matches.as_slice() {
             [] => ReplResult::ok(ReplOutput::CommandOutput {
@@ -926,12 +950,20 @@ impl ReplEngine {
             return matches;
         }
 
-        let Some(receiver_ty) = query.arg_types.first() else {
+        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
+            return Vec::new();
+        };
+        let Some(receiver_ty) = arg_types.first() else {
             return Vec::new();
         };
         let preferred_trait = METHOD_DOC_TRAIT_ALIASES
             .iter()
-            .find_map(|(method, trait_name)| (*method == query.callee).then_some(*trait_name));
+            .find_map(|(method, trait_name)| (*method == query.callee).then_some(*trait_name))
+            .or_else(|| {
+                OPERATOR_DOC_ALIASES
+                    .iter()
+                    .find_map(|(alias, trait_name)| (*alias == query.callee).then_some(*trait_name))
+            });
         let mut matches = self
             .docs
             .iter()
@@ -957,7 +989,7 @@ impl ReplEngine {
                 entry
                     .signature
                     .as_deref()
-                    .is_none_or(|sig| Self::signature_accepts_arg_types(sig, &query.arg_types))
+                    .is_none_or(|sig| self.signature_accepts_arg_types(sig, &arg_types))
             })
             .collect::<Vec<_>>();
         matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
@@ -990,56 +1022,8 @@ impl ReplEngine {
             || signature.starts_with(&format!("@@intrinsic def {callee}("))
     }
 
-    fn parameter_type_accepts_arg_type(param: &str, arg: &str) -> bool {
-        param == arg || param == "Self" || param.starts_with('$')
-    }
-
-    fn signature_accepts_arg_types(signature: &str, arg_types: &[String]) -> bool {
-        let Some(params) = signature
-            .split_once('(')
-            .and_then(|(_, rest)| rest.rsplit_once(')').map(|(params, _)| params))
-        else {
-            return false;
-        };
-        let param_types = split_top_level_commas(params)
-            .into_iter()
-            .filter_map(|param| param.split_once(':').map(|(_, ty)| ty.trim().to_string()))
-            .collect::<Vec<_>>();
-        let variadic_index = param_types.iter().position(|param| param.starts_with('*'));
-
-        match variadic_index {
-            Some(index) => {
-                if index != param_types.len().saturating_sub(1) || arg_types.len() < index + 1 {
-                    return false;
-                }
-
-                let fixed_match = param_types[..index]
-                    .iter()
-                    .zip(&arg_types[..index])
-                    .all(|(param, arg)| Self::parameter_type_accepts_arg_type(param, arg));
-                if !fixed_match {
-                    return false;
-                }
-
-                let variadic_param = param_types[index].trim_start_matches('*').trim();
-                arg_types[index..]
-                    .iter()
-                    .all(|arg| Self::parameter_type_accepts_arg_type(variadic_param, arg))
-            }
-            None => {
-                if param_types.len() != arg_types.len() {
-                    return false;
-                }
-                param_types
-                    .iter()
-                    .zip(arg_types)
-                    .all(|(param, arg)| Self::parameter_type_accepts_arg_type(param, arg))
-            }
-        }
-    }
-
     fn find_signature(&self, symbol: &str) -> Option<(String, String)> {
-        let canonical = Self::canonical_doc_symbol(symbol);
+        let canonical = Self::canonical_symbol(symbol);
 
         if canonical == symbol {
             if let Some(found) = self
@@ -1065,23 +1049,34 @@ impl ReplEngine {
             .docs
             .iter()
             .rev()
-            .find(|entry| entry.kind == DocKind::Function && entry.qualified_name == canonical)
+            .find(|entry| entry.qualified_name == canonical)
         {
             if let Some(signature) = entry.signature.clone() {
                 return Some((entry.qualified_name.clone(), signature));
             }
         }
 
-        if let Some(entry) = self.docs.iter().rev().find(|entry| {
-            entry.kind == DocKind::Function
-                && Self::symbol_matches(&entry.qualified_name, canonical)
-        }) {
+        if let Some(entry) = self
+            .docs
+            .iter()
+            .rev()
+            .find(|entry| Self::symbol_matches(&entry.qualified_name, canonical))
+        {
             if let Some(signature) = entry.signature.clone() {
                 return Some((entry.qualified_name.clone(), signature));
             }
         }
 
         None
+    }
+
+    fn render_signature_with_qualified_name(qualified_name: &str, signature: String) -> String {
+        if let Some((module, tail)) = qualified_name.rsplit_once("::") {
+            if signature == tail || signature.starts_with(&format!("{tail}(")) {
+                return format!("{module}::{signature}");
+            }
+        }
+        signature
     }
 
     fn handle_sig(&mut self, symbol: &str) -> ReplResult {
@@ -1091,45 +1086,39 @@ impl ReplEngine {
                 rendered: Self::sig_help_lines(),
             });
         }
-        if let Some(query) = self.parse_typed_operator_query(trimmed) {
-            return match query {
-                Ok(query) => self.handle_sig_typed_operator(trimmed, &query),
-                Err(message) => ReplResult::ok(ReplOutput::CommandOutput {
-                    rendered: vec![message],
+        match parse_repl_query(trimmed) {
+            Ok(ReplQuery::Symbol(symbol)) => match self.find_signature(&symbol) {
+                Some((qualified_name, signature)) => {
+                    let rendered =
+                        Self::render_signature_with_qualified_name(&qualified_name, signature);
+                    ReplResult::ok(ReplOutput::SigResolved {
+                        signature: rendered,
+                    })
+                }
+                None => ReplResult::ok(ReplOutput::CommandOutput {
+                    rendered: vec![
+                        format!("No signature found for {}", trimmed),
+                        "Try `:sig <expr>` for an expression query or `:doc <symbol>` for docs."
+                            .to_string(),
+                    ],
                 }),
-            };
-        }
-        if let Some(query) = self.parse_typed_call_query(trimmed) {
-            return match query {
-                Ok(query) => self.handle_sig_typed_call(trimmed, &query),
-                Err(message) => ReplResult::ok(ReplOutput::CommandOutput {
-                    rendered: vec![message],
-                }),
-            };
-        }
-        if trimmed.split_whitespace().count() != 1 {
-            return self.handle_sig_expression(trimmed);
-        }
-
-        match self.find_signature(trimmed) {
-            Some((qualified_name, signature)) => {
-                let rendered = if let Some((module, tail)) = qualified_name.rsplit_once("::") {
-                    if signature == tail || signature.starts_with(&format!("{tail}(")) {
-                        format!("{module}::{signature}")
-                    } else {
-                        signature
-                    }
+            },
+            Ok(ReplQuery::TypedCall(query)) => self.handle_sig_typed_call(trimmed, &query),
+            Ok(ReplQuery::TypedOperator(query)) => {
+                if query.lhs.source.is_empty() || query.rhs.source.is_empty() {
+                    ReplResult::ok(ReplOutput::CommandOutput {
+                        rendered: vec![format!(
+                            "Invalid operator query: `{}` requires both left and right operands.",
+                            query.operator
+                        )],
+                    })
                 } else {
-                    signature
-                };
-                ReplResult::ok(ReplOutput::SigResolved {
-                    signature: rendered,
-                })
+                    self.handle_sig_typed_operator(trimmed, &query)
+                }
             }
-            None => ReplResult::ok(ReplOutput::EvalError {
-                idx: self.results.len(),
-                source: format!(":sig {trimmed}"),
-                rendered: vec![format!("No signature found for {}", trimmed)],
+            Ok(ReplQuery::Expr(expr)) => self.handle_sig_expression(&expr),
+            Err(err) => ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: vec![err.message().to_string()],
             }),
         }
     }
@@ -1465,18 +1454,39 @@ impl ReplEngine {
         let matches = self.match_typed_call_docs(query);
         match matches.as_slice() {
             [entry] => {
-                let defined = entry
-                    .signature
-                    .clone()
-                    .unwrap_or_else(|| entry.qualified_name.clone());
+                let defined = Self::render_signature_with_qualified_name(
+                    &entry.qualified_name,
+                    entry
+                        .signature
+                        .clone()
+                        .unwrap_or_else(|| entry.qualified_name.clone()),
+                );
+                let arg_types = match self.query_arg_ast_types(query.args.as_slice()) {
+                    Ok(arg_types) => arg_types,
+                    Err(message) => {
+                        return ReplResult::ok(ReplOutput::CommandOutput {
+                            rendered: vec![message],
+                        });
+                    }
+                };
                 let rendered = if query.callee == "dbg!" {
                     defined
                 } else {
+                    let specialized_return = self
+                        .specialize_signature_return(&defined, &arg_types)
+                        .map(|ty| format_query_ty(&ty))
+                        .unwrap_or_else(|| {
+                            signature_return_type(&defined).unwrap_or("_").to_string()
+                        });
                     format!(
                         "defined:\n  {defined}\n\nspecialized:\n  {}({}) -> {}",
                         query.callee,
-                        query.arg_types.join(", "),
-                        signature_return_type(&defined).unwrap_or("_")
+                        arg_types
+                            .iter()
+                            .map(format_query_ty)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        specialized_return
                     )
                 };
                 ReplResult::ok(ReplOutput::SigResolved {
@@ -1497,11 +1507,11 @@ impl ReplEngine {
         source_query: &str,
         query: &TypedOperatorQuery,
     ) -> ReplResult {
-        match Self::typed_operator_signature(query) {
+        match self.typed_operator_signature(query) {
             Ok((defined, result_ty)) => ReplResult::ok(ReplOutput::SigResolved {
                 signature: format!(
                     "defined:\n  {defined}\n\nspecialized:\n  {source_query}: {}",
-                    Self::format_query_ty(&result_ty)
+                    format_query_ty(&result_ty)
                 ),
             }),
             Err(message) => ReplResult::ok(ReplOutput::CommandOutput {
@@ -1510,338 +1520,103 @@ impl ReplEngine {
         }
     }
 
-    fn parse_typed_call_query(&self, input: &str) -> Option<Result<TypedCallQuery, String>> {
-        let open = input.find('(')?;
-        if !input.ends_with(')') {
-            return Some(Err(
-                "Invalid typed call query: missing closing `)`.".to_string()
-            ));
-        }
-        let callee = input[..open].trim();
-        if callee.is_empty() || callee.chars().any(char::is_whitespace) {
-            return Some(Err("Invalid typed call query: missing callee.".to_string()));
-        }
-        let args_src = &input[open + 1..input.len() - 1];
-        let args = split_top_level_commas(args_src);
-        let mut arg_types = Vec::with_capacity(args.len());
-        for arg in args {
-            let arg = arg.trim();
-            if arg.is_empty() {
-                return Some(Err("Invalid typed call query: empty argument.".to_string()));
+    fn query_arg_type(&self, arg: &QueryArg) -> Result<String, String> {
+        self.query_arg_ast_ty(arg).map(|ty| format_query_ty(&ty))
+    }
+
+    fn query_arg_types(&self, args: &[QueryArg]) -> Result<Vec<String>, String> {
+        args.iter().map(|arg| self.query_arg_type(arg)).collect()
+    }
+
+    fn query_arg_ast_types(&self, args: &[QueryArg]) -> Result<Vec<AstTy>, String> {
+        args.iter().map(|arg| self.query_arg_ast_ty(arg)).collect()
+    }
+
+    fn query_arg_ast_ty(&self, arg: &QueryArg) -> Result<AstTy, String> {
+        match &arg.kind {
+            QueryArgKind::Binding(name) => {
+                let Some(ty) = self.binding_type(name) else {
+                    return Err(format!("Unknown query binding `{name}`."));
+                };
+                parse_binding_query_type(&ty)
+                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))
             }
-            let ty = match self.query_arg_type(arg) {
-                Ok(ty) => ty,
-                Err(message) => return Some(Err(message)),
-            };
-            arg_types.push(ty);
-        }
-        Some(Ok(TypedCallQuery {
-            callee: Self::canonical_doc_symbol(callee).to_string(),
-            arg_types,
-        }))
-    }
-
-    fn parse_typed_operator_query(
-        &self,
-        input: &str,
-    ) -> Option<Result<TypedOperatorQuery, String>> {
-        let (lhs, operator, rhs) = split_top_level_operator_query(input)?;
-        let lhs = lhs.trim();
-        let rhs = rhs.trim();
-        if lhs.is_empty() || rhs.is_empty() {
-            return Some(Err(format!(
-                "Invalid operator query: `{operator}` requires both left and right operands."
-            )));
-        }
-        if !Self::looks_like_typed_operator_operand(lhs)
-            && !Self::looks_like_typed_operator_operand(rhs)
-        {
-            return None;
-        }
-        let lhs_ty = match self.query_arg_ast_ty(lhs) {
-            Ok(ty) => ty,
-            Err(_) => return None,
-        };
-        let rhs_ty = match self.query_arg_ast_ty(rhs) {
-            Ok(ty) => ty,
-            Err(message) => return Some(Err(message)),
-        };
-        Some(Ok(TypedOperatorQuery {
-            lhs_source: lhs.to_string(),
-            rhs_source: rhs.to_string(),
-            lhs_ty,
-            rhs_ty,
-            operator,
-        }))
-    }
-
-    fn query_arg_type(&self, arg: &str) -> Result<String, String> {
-        if let Some(ty) = split_type_annotation(arg) {
-            return Self::parse_user_query_type(ty).map(|ty| Self::format_query_ty(&ty));
-        }
-        if arg == "()" {
-            return Ok("Unit".to_string());
-        }
-        if matches!(arg, "True" | "False") {
-            return Ok("Boolean".to_string());
-        }
-        if is_string_literal(arg) {
-            return Ok("String".to_string());
-        }
-        if is_float_literal(arg) {
-            return Ok("Float".to_string());
-        }
-        if is_int_literal(arg) {
-            return Ok("Int".to_string());
-        }
-        if is_simple_name(arg) {
-            if let Some(ty) = self.binding_type(arg) {
-                if let Some(ty) = Self::parse_binding_query_type(&ty) {
-                    return Ok(Self::format_query_ty(&ty));
-                }
-                return Ok(ty);
-            }
-        }
-        if let Some(ty) = Self::parse_user_query_type_loose(arg)? {
-            return Ok(Self::format_query_ty(&ty));
-        }
-        if is_bare_type_query(arg) {
-            return Ok(arg.to_string());
-        }
-        if is_simple_name(arg) {
-            return Err(format!("Unknown query binding `{arg}`."));
-        }
-        Err(format!(
-            "Unsupported typed call query argument `{arg}`. Use literals, existing bindings, or `_ : Type`."
-        ))
-    }
-
-    fn query_arg_ast_ty(&self, arg: &str) -> Result<AstTy, String> {
-        if let Some(ty) = split_type_annotation(arg) {
-            return Self::parse_user_query_type(ty);
-        }
-        if arg == "()" {
-            return Ok(AstTy::Named(Span { start: 0, end: 0 }, "Unit".to_string()));
-        }
-        if matches!(arg, "True" | "False") {
-            return Ok(AstTy::Named(
-                Span { start: 0, end: 0 },
-                "Boolean".to_string(),
-            ));
-        }
-        if is_string_literal(arg) {
-            return Ok(AstTy::Named(
-                Span { start: 0, end: 0 },
-                "String".to_string(),
-            ));
-        }
-        if is_float_literal(arg) {
-            return Ok(AstTy::Named(Span { start: 0, end: 0 }, "Float".to_string()));
-        }
-        if is_int_literal(arg) {
-            return Ok(AstTy::Named(Span { start: 0, end: 0 }, "Int".to_string()));
-        }
-        if is_simple_name(arg) {
-            if let Some(ty) = self.binding_type(arg) {
-                return Self::parse_binding_query_type(&ty)
-                    .ok_or_else(|| format!("Binding `{arg}` has unsupported query type `{ty}`."));
-            }
-        }
-        if let Some(ty) = Self::parse_user_query_type_loose(arg)? {
-            return Ok(ty);
-        }
-        if is_simple_name(arg) {
-            return Err(format!("Unknown query binding `{arg}`."));
-        }
-        Err(format!(
-            "Unsupported typed operator query operand `{arg}`. Use literals, existing bindings, or a type such as `(Int -> String)`."
-        ))
-    }
-
-    fn parse_query_type(input: &str) -> Option<AstTy> {
-        let source = format!("__query__: {input} = ()");
-        let ast = spire::parse_with_context(
-            &source,
-            spire::ParserContext::repl(0).with_rules(derive_parse_rules(SourceKind::ReplChunk)),
-        )
-        .ok()?;
-        match ast.as_slice() {
-            [Ast::Bind(_, AstPattern::Annotated(_, _, ty), _)] => Some(ty.clone()),
-            _ => None,
-        }
-    }
-
-    fn parse_user_query_type(input: &str) -> Result<AstTy, String> {
-        let ty = Self::parse_query_type(input).ok_or_else(|| {
-            format!("Unsupported query type `{input}`. Use a valid Surtr type expression.")
-        })?;
-        Self::validate_user_query_type(&ty)?;
-        Ok(ty)
-    }
-
-    fn parse_user_query_type_loose(input: &str) -> Result<Option<AstTy>, String> {
-        let Some(ty) = Self::parse_query_type(input) else {
-            return Ok(None);
-        };
-        Self::validate_user_query_type(&ty)?;
-        Ok(Some(ty))
-    }
-
-    fn parse_binding_query_type(input: &str) -> Option<AstTy> {
-        Self::parse_query_type(input).map(|ty| Self::normalize_binding_query_type(&ty))
-    }
-
-    fn validate_user_query_type(ty: &AstTy) -> Result<(), String> {
-        match ty {
-            AstTy::Generic(_, name, args) if name == "Result" && args.len() == 2 => Err(
-                "Typed query `Result` should be written as `Result<T>`; do not specify the `Error` parameter."
-                    .to_string(),
-            ),
-            AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => {
-                for arg in args {
-                    Self::validate_user_query_type(arg)?;
-                }
-                Ok(())
-            }
-            AstTy::Func(_, params, ret) => {
-                for param in params {
-                    Self::validate_user_query_type(param)?;
-                }
-                Self::validate_user_query_type(ret)
-            }
-            _ => Ok(()),
-        }
-    }
-
-    fn normalize_binding_query_type(ty: &AstTy) -> AstTy {
-        match ty {
-            AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => ty.clone(),
-            AstTy::Generic(span, name, args) if name == "Result" && args.len() == 2 => {
-                AstTy::Generic(
-                    span.clone(),
-                    name.clone(),
-                    vec![Self::normalize_binding_query_type(&args[0])],
+            QueryArgKind::Expr => Err(format!(
+                "Unsupported typed call query argument `{}`. Use literals, existing bindings, or `_ : Type`.",
+                arg.source
+            )),
+            QueryArgKind::Literal(_)
+            | QueryArgKind::AnnotatedHole(_)
+            | QueryArgKind::TypeExpr(_) => ast_ty_from_query_arg(arg).ok_or_else(|| {
+                format!(
+                    "Unsupported typed operator query operand `{}`. Use literals, existing bindings, or a type such as `(Int -> String)`.",
+                    arg.source
                 )
-            }
-            AstTy::Generic(span, name, args) => AstTy::Generic(
-                span.clone(),
-                name.clone(),
-                args.iter()
-                    .map(Self::normalize_binding_query_type)
-                    .collect(),
-            ),
-            AstTy::Tuple(span, items) => AstTy::Tuple(
-                span.clone(),
-                items
-                    .iter()
-                    .map(Self::normalize_binding_query_type)
-                    .collect(),
-            ),
-            AstTy::Func(span, params, ret) => AstTy::Func(
-                span.clone(),
-                params
-                    .iter()
-                    .map(Self::normalize_binding_query_type)
-                    .collect(),
-                Box::new(Self::normalize_binding_query_type(ret)),
-            ),
+            }),
         }
     }
 
-    fn looks_like_typed_operator_operand(input: &str) -> bool {
-        input.contains("->")
-            || input.contains('<')
-            || input.starts_with('(')
-            || input.starts_with("impl ")
-            || input.starts_with('$')
-            || split_type_annotation(input).is_some()
-    }
-
-    fn format_query_ty(ty: &AstTy) -> String {
-        match ty {
-            AstTy::Named(_, name) => name.clone(),
-            AstTy::ImplTrait(_, name) => format!("impl {name}"),
-            AstTy::Generic(_, name, args) => {
-                let args = args
-                    .iter()
-                    .map(Self::format_query_ty)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{name}<{args}>")
-            }
-            AstTy::Tuple(_, items) => format!(
-                "({})",
-                items
-                    .iter()
-                    .map(Self::format_query_ty)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            AstTy::Func(_, params, ret) => {
-                if params.is_empty() {
-                    format!("(-> {})", Self::format_query_ty(ret))
-                } else {
-                    format!(
-                        "({} -> {})",
-                        params
-                            .iter()
-                            .map(Self::format_query_ty)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        Self::format_query_ty(ret)
-                    )
-                }
-            }
-        }
-    }
-
-    fn typed_operator_signature(query: &TypedOperatorQuery) -> Result<(String, AstTy), String> {
+    fn typed_operator_signature(
+        &self,
+        query: &TypedOperatorQuery,
+    ) -> Result<(String, AstTy), String> {
+        let lhs_ty = self.query_arg_ast_ty(&query.lhs).map_err(|_| {
+            format!(
+                "Unsupported typed operator query operand `{}`. Use literals, existing bindings, or a type such as `(Int -> String)`.",
+                query.lhs.source
+            )
+        })?;
+        let rhs_ty = self.query_arg_ast_ty(&query.rhs).map_err(|_| {
+            format!(
+                "Unsupported typed operator query operand `{}`. Use literals, existing bindings, or a type such as `(Int -> String)`.",
+                query.rhs.source
+            )
+        })?;
         match query.operator {
             "|>" => {
-                let (params, ret) = Self::query_unary_func_parts(&query.rhs_ty, "|>")?;
+                let (params, ret) = Self::query_unary_func_parts(&rhs_ty, "|>")?;
                 Self::ensure_query_type_matches(
-                    &query.lhs_ty,
+                    &lhs_ty,
                     &params[0],
                     "`|>` requires the left operand to match the function input type",
                 )?;
                 Ok((
                     format!(
                         "PipeApply::pipe_apply(lhs: {}, rhs: {}) -> {}",
-                        Self::format_query_ty(&query.lhs_ty),
-                        Self::format_query_ty(&query.rhs_ty),
-                        Self::format_query_ty(&ret)
+                        format_query_ty(&lhs_ty),
+                        format_query_ty(&rhs_ty),
+                        format_query_ty(&ret)
                     ),
                     ret,
                 ))
             }
             "|*>" => {
-                let (ctx_arg, _inner_ty, result_ty) =
-                    Self::query_map_result(&query.lhs_ty, &query.rhs_ty)?;
+                let (ctx_arg, _inner_ty, result_ty) = Self::query_map_result(&lhs_ty, &rhs_ty)?;
                 Ok((
                     format!(
                         "Functor::map(lhs: {}, rhs: {}) -> {}",
-                        Self::format_query_ty(&ctx_arg),
-                        Self::format_query_ty(&query.rhs_ty),
-                        Self::format_query_ty(&result_ty)
+                        format_query_ty(&ctx_arg),
+                        format_query_ty(&rhs_ty),
+                        format_query_ty(&result_ty)
                     ),
                     result_ty,
                 ))
             }
             "|>=" => {
-                let result_ty = Self::query_bind_result(&query.lhs_ty, &query.rhs_ty)?;
+                let result_ty = Self::query_bind_result(&lhs_ty, &rhs_ty)?;
                 Ok((
                     format!(
                         "Chainable::chain(lhs: {}, rhs: {}) -> {}",
-                        Self::format_query_ty(&query.lhs_ty),
-                        Self::format_query_ty(&query.rhs_ty),
-                        Self::format_query_ty(&result_ty)
+                        format_query_ty(&lhs_ty),
+                        format_query_ty(&rhs_ty),
+                        format_query_ty(&result_ty)
                     ),
                     result_ty,
                 ))
             }
             ">>" => {
-                let (left_params, left_ret) = Self::query_unary_func_parts(&query.lhs_ty, ">>")?;
-                let (right_params, right_ret) = Self::query_unary_func_parts(&query.rhs_ty, ">>")?;
+                let (left_params, left_ret) = Self::query_unary_func_parts(&lhs_ty, ">>")?;
+                let (right_params, right_ret) = Self::query_unary_func_parts(&rhs_ty, ">>")?;
                 Self::ensure_query_type_matches(
                     &left_ret,
                     &right_params[0],
@@ -1855,16 +1630,16 @@ impl ReplEngine {
                 Ok((
                     format!(
                         "Composable::compose(lhs: {}, rhs: {}) -> {}",
-                        Self::format_query_ty(&query.lhs_ty),
-                        Self::format_query_ty(&query.rhs_ty),
-                        Self::format_query_ty(&result_ty)
+                        format_query_ty(&lhs_ty),
+                        format_query_ty(&rhs_ty),
+                        format_query_ty(&result_ty)
                     ),
                     result_ty,
                 ))
             }
             ">*" => {
-                let (left_params, left_ret) = Self::query_unary_func_parts(&query.lhs_ty, ">*")?;
-                let (right_params, right_ret) = Self::query_unary_func_parts(&query.rhs_ty, ">*")?;
+                let (left_params, left_ret) = Self::query_unary_func_parts(&lhs_ty, ">*")?;
+                let (right_params, right_ret) = Self::query_unary_func_parts(&rhs_ty, ">*")?;
                 let result_inner = match &left_ret {
                     AstTy::Generic(_, name, args) if name == "Result" && args.len() == 1 => {
                         Self::ensure_query_type_matches(
@@ -1893,7 +1668,7 @@ impl ReplEngine {
                     other => {
                         return Err(format!(
                             "`>*` requires a contextual left output, got {}.",
-                            Self::format_query_ty(other)
+                            format_query_ty(other)
                         ));
                     }
                 };
@@ -1905,16 +1680,16 @@ impl ReplEngine {
                 Ok((
                     format!(
                         "LiftComposable::lift_compose(lhs: {}, rhs: {}) -> {}",
-                        Self::format_query_ty(&query.lhs_ty),
-                        Self::format_query_ty(&query.rhs_ty),
-                        Self::format_query_ty(&result_ty)
+                        format_query_ty(&lhs_ty),
+                        format_query_ty(&rhs_ty),
+                        format_query_ty(&result_ty)
                     ),
                     result_ty,
                 ))
             }
             ">=>" => {
-                let (left_params, left_ret) = Self::query_unary_func_parts(&query.lhs_ty, ">=>")?;
-                let (right_params, right_ret) = Self::query_unary_func_parts(&query.rhs_ty, ">=>")?;
+                let (left_params, left_ret) = Self::query_unary_func_parts(&lhs_ty, ">=>")?;
+                let (right_params, right_ret) = Self::query_unary_func_parts(&rhs_ty, ">=>")?;
                 let result_inner = match (&left_ret, &right_ret) {
                     (
                         AstTy::Generic(_, left_name, left_args),
@@ -1969,14 +1744,205 @@ impl ReplEngine {
                 Ok((
                     format!(
                         "KleisliComposable::kleisli_compose(lhs: {}, rhs: {}) -> {}",
-                        Self::format_query_ty(&query.lhs_ty),
-                        Self::format_query_ty(&query.rhs_ty),
-                        Self::format_query_ty(&result_ty)
+                        format_query_ty(&lhs_ty),
+                        format_query_ty(&rhs_ty),
+                        format_query_ty(&result_ty)
                     ),
                     result_ty,
                 ))
             }
             other => Err(format!("Unsupported operator query `{other}`.")),
+        }
+    }
+
+    fn signature_accepts_arg_types(&self, signature: &str, arg_types: &[String]) -> bool {
+        let Some(param_types) = Self::signature_param_types(signature) else {
+            return false;
+        };
+        let variadic_index = param_types.iter().position(|param| param.starts_with('*'));
+
+        match variadic_index {
+            Some(index) => {
+                if index != param_types.len().saturating_sub(1) || arg_types.len() < index + 1 {
+                    return false;
+                }
+
+                let fixed_match = param_types[..index]
+                    .iter()
+                    .zip(&arg_types[..index])
+                    .all(|(param, arg)| Self::parameter_type_accepts_arg_type(param, arg));
+                if !fixed_match {
+                    return false;
+                }
+
+                let variadic_param = param_types[index].trim_start_matches('*').trim();
+                arg_types[index..]
+                    .iter()
+                    .all(|arg| Self::parameter_type_accepts_arg_type(variadic_param, arg))
+            }
+            None => {
+                if param_types.len() != arg_types.len() {
+                    return false;
+                }
+                param_types
+                    .iter()
+                    .zip(arg_types)
+                    .all(|(param, arg)| Self::parameter_type_accepts_arg_type(param, arg))
+            }
+        }
+    }
+
+    fn signature_param_types(signature: &str) -> Option<Vec<String>> {
+        signature
+            .split_once('(')
+            .and_then(|(_, rest)| rest.rsplit_once(')').map(|(params, _)| params))
+            .map(|params| {
+                split_top_level_commas(params)
+                    .into_iter()
+                    .filter_map(|param| param.split_once(':').map(|(_, ty)| ty.trim().to_string()))
+                    .collect()
+            })
+    }
+
+    fn parameter_type_accepts_arg_type(param: &str, arg: &str) -> bool {
+        if param == arg || param == "Self" || param.starts_with('$') {
+            return true;
+        }
+        if param.starts_with("TypeRef<") && param.ends_with('>') {
+            let inner = &param["TypeRef<".len()..param.len() - 1];
+            return inner == arg || inner.starts_with('$');
+        }
+        false
+    }
+
+    fn specialize_signature_return(&self, signature: &str, arg_types: &[AstTy]) -> Option<AstTy> {
+        let (param_types, return_ty) = Self::signature_param_asts_and_return(signature)?;
+        let self_ty = Self::self_type_from_signature(signature);
+        let substitutions =
+            Self::build_type_substitutions(&param_types, arg_types, self_ty.as_ref())?;
+        Some(Self::substitute_query_ty(
+            &return_ty,
+            &substitutions,
+            self_ty.as_ref(),
+        ))
+    }
+
+    fn signature_param_asts_and_return(signature: &str) -> Option<(Vec<AstTy>, AstTy)> {
+        let params = Self::signature_param_types(signature)?
+            .into_iter()
+            .filter_map(|ty| parse_signature_type(&ty))
+            .collect::<Vec<_>>();
+        let return_ty = signature_return_type(signature).and_then(parse_signature_type)?;
+        Some((params, return_ty))
+    }
+
+    fn self_type_from_signature(signature: &str) -> Option<AstTy> {
+        let for_pos = signature.find(" for ")?;
+        let after_for = &signature[for_pos + " for ".len()..];
+        let method_sep = after_for.find("::")?;
+        parse_signature_type(after_for[..method_sep].trim())
+    }
+
+    fn build_type_substitutions(
+        params: &[AstTy],
+        args: &[AstTy],
+        self_ty: Option<&AstTy>,
+    ) -> Option<HashMap<String, AstTy>> {
+        if params.len() != args.len() {
+            return None;
+        }
+        let mut substitutions = HashMap::new();
+        for (param, arg) in params.iter().zip(args) {
+            if !Self::unify_query_ty(param, arg, &mut substitutions, self_ty) {
+                return None;
+            }
+        }
+        Some(substitutions)
+    }
+
+    fn unify_query_ty(
+        param: &AstTy,
+        arg: &AstTy,
+        substitutions: &mut HashMap<String, AstTy>,
+        self_ty: Option<&AstTy>,
+    ) -> bool {
+        match param {
+            AstTy::Named(_, name) if name == "Self" => self_ty.is_none_or(|ty| ty == arg),
+            AstTy::Named(_, name) if name.starts_with('$') => {
+                if let Some(existing) = substitutions.get(name) {
+                    existing == arg
+                } else {
+                    substitutions.insert(name.clone(), arg.clone());
+                    true
+                }
+            }
+            AstTy::Named(_, name) => matches!(arg, AstTy::Named(_, other) if other == name),
+            AstTy::ImplTrait(_, name) => matches!(arg, AstTy::ImplTrait(_, other) if other == name),
+            AstTy::Generic(_, name, params) if name == "TypeRef" && params.len() == 1 => {
+                Self::unify_query_ty(&params[0], arg, substitutions, self_ty)
+            }
+            AstTy::Generic(_, name, params) => match arg {
+                AstTy::Generic(_, other, args) if name == other && params.len() == args.len() => {
+                    params.iter().zip(args).all(|(param, arg)| {
+                        Self::unify_query_ty(param, arg, substitutions, self_ty)
+                    })
+                }
+                _ => false,
+            },
+            AstTy::Tuple(_, items) => match arg {
+                AstTy::Tuple(_, other) if items.len() == other.len() => items
+                    .iter()
+                    .zip(other)
+                    .all(|(param, arg)| Self::unify_query_ty(param, arg, substitutions, self_ty)),
+                _ => false,
+            },
+            AstTy::Func(_, params, ret) => match arg {
+                AstTy::Func(_, other_params, other_ret) if params.len() == other_params.len() => {
+                    params.iter().zip(other_params).all(|(param, arg)| {
+                        Self::unify_query_ty(param, arg, substitutions, self_ty)
+                    }) && Self::unify_query_ty(ret, other_ret, substitutions, self_ty)
+                }
+                _ => false,
+            },
+        }
+    }
+
+    fn substitute_query_ty(
+        ty: &AstTy,
+        substitutions: &HashMap<String, AstTy>,
+        self_ty: Option<&AstTy>,
+    ) -> AstTy {
+        match ty {
+            AstTy::Named(_, name) if name == "Self" => {
+                self_ty.cloned().unwrap_or_else(|| ty.clone())
+            }
+            AstTy::Named(_, name) if name.starts_with('$') => substitutions
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| ty.clone()),
+            AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => ty.clone(),
+            AstTy::Generic(span, name, args) => AstTy::Generic(
+                span.clone(),
+                name.clone(),
+                args.iter()
+                    .map(|arg| Self::substitute_query_ty(arg, substitutions, self_ty))
+                    .collect(),
+            ),
+            AstTy::Tuple(span, items) => AstTy::Tuple(
+                span.clone(),
+                items
+                    .iter()
+                    .map(|item| Self::substitute_query_ty(item, substitutions, self_ty))
+                    .collect(),
+            ),
+            AstTy::Func(span, params, ret) => AstTy::Func(
+                span.clone(),
+                params
+                    .iter()
+                    .map(|param| Self::substitute_query_ty(param, substitutions, self_ty))
+                    .collect(),
+                Box::new(Self::substitute_query_ty(ret, substitutions, self_ty)),
+            ),
         }
     }
 
@@ -1991,19 +1957,19 @@ impl ReplEngine {
             )),
             _ => Err(format!(
                 "`{operator}` expects a function type, got {}.",
-                Self::format_query_ty(ty)
+                format_query_ty(ty)
             )),
         }
     }
 
     fn ensure_query_type_matches(lhs: &AstTy, rhs: &AstTy, message: &str) -> Result<(), String> {
-        if Self::format_query_ty(lhs) == Self::format_query_ty(rhs) {
+        if format_query_ty(lhs) == format_query_ty(rhs) {
             Ok(())
         } else {
             Err(format!(
                 "{message}: left is {}, right is {}.",
-                Self::format_query_ty(lhs),
-                Self::format_query_ty(rhs)
+                format_query_ty(lhs),
+                format_query_ty(rhs)
             ))
         }
     }
@@ -2041,7 +2007,7 @@ impl ReplEngine {
             }
             other => Err(format!(
                 "`|*>` requires Result or List on the left, got {}.",
-                Self::format_query_ty(other)
+                format_query_ty(other)
             )),
         }
     }
@@ -2081,8 +2047,8 @@ impl ReplEngine {
             }
             (other, _) => Err(format!(
                 "`|>=` requires matching contextual types on both sides; left is {}, right is {}.",
-                Self::format_query_ty(other),
-                Self::format_query_ty(&rhs_ret)
+                format_query_ty(other),
+                format_query_ty(&rhs_ret)
             )),
         }
     }
@@ -2743,94 +2709,6 @@ fn split_top_level_commas(input: &str) -> Vec<&str> {
         parts.push(tail);
     }
     parts
-}
-
-fn split_top_level_operator_query(input: &str) -> Option<(&str, &'static str, &str)> {
-    const OPERATORS: &[&str] = &["|>=", "|*>", "|>", ">=>", ">*", ">>"];
-
-    let mut paren_depth = 0usize;
-    let mut angle_depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-
-    for (idx, ch) in input.char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' => in_string = true,
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '<' => angle_depth += 1,
-            '>' => angle_depth = angle_depth.saturating_sub(1),
-            _ if paren_depth == 0 && angle_depth == 0 => {
-                for operator in OPERATORS {
-                    if input[idx..].starts_with(operator) {
-                        let lhs = &input[..idx];
-                        let rhs = &input[idx + operator.len()..];
-                        return Some((lhs, *operator, rhs));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    None
-}
-
-fn split_type_annotation(input: &str) -> Option<&str> {
-    let (name, ty) = input.split_once(':')?;
-    let name = name.trim();
-    let ty = ty.trim();
-    if ty.is_empty() || !(name == "_" || is_simple_name(name)) {
-        return None;
-    }
-    Some(ty)
-}
-
-fn is_simple_name(input: &str) -> bool {
-    let mut chars = input.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-}
-
-fn is_bare_type_query(input: &str) -> bool {
-    input
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_uppercase())
-}
-
-fn is_string_literal(input: &str) -> bool {
-    input.len() >= 2 && input.starts_with('"') && input.ends_with('"')
-}
-
-fn is_int_literal(input: &str) -> bool {
-    let digits = input.strip_prefix('-').unwrap_or(input);
-    !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit())
-}
-
-fn is_float_literal(input: &str) -> bool {
-    let digits = input.strip_prefix('-').unwrap_or(input);
-    let Some((lhs, rhs)) = digits.split_once('.') else {
-        return false;
-    };
-    !lhs.is_empty()
-        && !rhs.is_empty()
-        && lhs.chars().all(|ch| ch.is_ascii_digit())
-        && rhs.chars().all(|ch| ch.is_ascii_digit())
 }
 
 fn signature_return_type(signature: &str) -> Option<&str> {

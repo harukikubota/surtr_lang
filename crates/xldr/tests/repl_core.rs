@@ -147,6 +147,11 @@ fn core_commands_do_not_require_a_cli_process() {
     let sig = engine.handle_line(":sig print");
     assert!(signature_text(&sig).contains("Kernel::print(a: String) -> Unit"));
 
+    let missing_sig = engine.handle_line(":sig a");
+    let missing_sig = rendered_text(&missing_sig);
+    assert!(missing_sig.contains("No signature found for a"));
+    assert!(missing_sig.contains(":sig <expr>"));
+
     let unknown = engine.handle_line(":nope");
     assert!(!unknown.should_exit);
     assert!(rendered_text(&unknown).contains("Unknown REPL command: :nope"));
@@ -253,6 +258,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_sig = signature_text(&typed_sig);
     assert!(typed_sig.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"));
 
+    let operator_sig = engine.handle_line(":sig |>");
+    let operator_sig = signature_text(&operator_sig);
+    assert!(operator_sig.contains("trait PipeApply { pipe_apply(self: Self, value: $A) -> $B }"));
+
+    let helper_sig = engine.handle_line(":sig gt");
+    let helper_sig = signature_text(&helper_sig);
+    assert!(helper_sig.contains("trait Gt { gt(self: Self, rhs: Self) -> Boolean }"));
+
     let typed_doc = engine.handle_line(":doc gt(Int, Int)");
     let typed_doc = doc_text(&typed_doc);
     assert!(typed_doc.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"));
@@ -263,11 +276,9 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "\n  Return `True` when the left integer is strictly greater than the right integer."
     ));
 
-    let ambiguous = engine.handle_line(":doc gt");
-    let ambiguous = rendered_text(&ambiguous);
-    assert!(ambiguous.contains("gt has multiple docs:"));
-    assert!(ambiguous.contains("impl Gt for Int::gt"));
-    assert!(ambiguous.contains("impl Gt for Float::gt"));
+    let helper_doc = engine.handle_line(":doc gt");
+    let helper_doc = doc_text(&helper_doc);
+    assert!(helper_doc.contains("trait Gt { gt(self: Self, rhs: Self) -> Boolean }"));
 
     let unsupported = engine.handle_line(":doc gt(make_value(), 1)");
     assert!(rendered_text(&unsupported)
@@ -291,16 +302,13 @@ fn core_sig_expression_queries_support_operator_forms() {
         bind_sig.contains("defined:\n  Chainable::chain("),
         "{bind_sig}"
     );
+    assert!(bind_sig.contains("lhs: Result<String>"), "{bind_sig}");
     assert!(
-        bind_sig.contains("lhs: Result<String, Error>"),
+        bind_sig.contains("rhs: (String -> Result<Int>)"),
         "{bind_sig}"
     );
     assert!(
-        bind_sig.contains("rhs: (String -> Result<Int, Error>)"),
-        "{bind_sig}"
-    );
-    assert!(
-        bind_sig.contains("specialized:\n  ret |>= up: Result<Int, Error>"),
+        bind_sig.contains("specialized:\n  ret |>= up: Result<Int>"),
         "{bind_sig}"
     );
 
@@ -373,6 +381,19 @@ fn core_sig_typed_operator_queries_accept_function_types_and_reject_explicit_res
         invalid.contains("Typed query `Result` should be written as `Result<T>`"),
         "{invalid}"
     );
+}
+
+#[test]
+fn core_sig_typed_call_queries_specialize_polymorphic_returns() {
+    let mut engine = engine();
+
+    let sig = engine.handle_line(":sig id(1)");
+    let sig = signature_text(&sig);
+    assert!(
+        sig.contains("defined:\n  Kernel::id(value: $A) -> $A"),
+        "{sig}"
+    );
+    assert!(sig.contains("specialized:\n  id(Int) -> Int"), "{sig}");
 }
 
 #[test]

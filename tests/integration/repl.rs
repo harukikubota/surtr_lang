@@ -221,7 +221,38 @@ fn repl_sig_expression_query_flows_through_cli_presentation() {
     assert!(stdout.contains("defined:"));
     assert!(stdout.contains("Chainable::chain("));
     assert!(stdout.contains("specialized:"));
-    assert!(stdout.contains("ret |>= up: Result<Int, Error>"));
+    assert!(stdout.contains("ret |>= up: Result<Int>"));
+}
+
+#[test]
+fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
+    let output = run_repl_session(":sig |>\n:sig id(1)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("trait PipeApply { pipe_apply(self: Self, value: $A) -> $B }"));
+    assert!(stdout.contains("specialized:"));
+    assert!(stdout.contains("id(Int) -> Int"));
+}
+
+#[test]
+fn repl_sig_missing_symbol_prints_guidance() {
+    let output = run_repl_session(":sig a\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("No signature found for a"));
+    assert!(stdout.contains(":sig <expr>"));
 }
 
 #[test]

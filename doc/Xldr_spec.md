@@ -129,9 +129,16 @@ REPL 実装は次の 3 層に分ける。
 | `:help`, `:h [command]` | REPL コマンド一覧、または指定コマンドのヘルプを表示する |
 | `:quit`, `:exit` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する |
-| `:doc <symbol>` | 現在セッションで見える symbol の doc を表示する。operator trait は `:doc Add` / `:doc +` のように trait 名と演算子 alias の両方を受け付ける。関数演算子は `:doc |*>` / `:doc |>=` を標準 trait source doc に解決し、`:doc |>`, `:doc >>`, `:doc >*`, `:doc >=>` は compiler-generated operator doc を表示する |
-| `:sig <function|expr>` | 現在セッションで見える関数の signature を表示する。doc metadata がある標準関数と、REPL セッション内で定義された関数の両方を対象にし、`gt(Int, Int)` のような typed-call 擬似 query と `ret |>= up` のような単一式 query も受け付ける |
+| `:doc <symbol|query>` | 現在セッションで見える symbol の doc を表示する。名前だけなら定義 doc を返し、typed query (`gt(Int, Int)`, `ret |>= up`, `num |> (Int -> String)`) を与えたときは impl / 特化先 doc を返す。operator / helper alias は `:doc Add`, `:doc +`, `:doc gt`, `:doc |>` のように trait 定義へ正規化する |
+| `:sig <symbol|query|expr>` | 現在セッションで見える関数の signature を表示する。名前だけなら定義 signature を返し、typed query を与えたときは specialized 表示を返す。trait / operator は「型なしなら定義、型ありなら実装」とし、`gt(Int, Int)`, `ret |>= up`, `:sig |>`, `:sig id(1)` のような query を受け付ける |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
+
+REPL query grammar は `symbol | typed-call | typed-operator | expr` の共有 parser で扱う。
+
+- `typed-call`: `callee(arg1, arg2, ...)`
+- `typed-operator`: `lhs OP rhs` (`|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`)
+- query operand は既存 binding、literal、`_ : Type`、型式 (`Int`, `Result<Int>`, `(Int -> String)`) を受け付ける
+- 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で型変数を置換した結果を表示する
 
 ### 5.2 予約済み
 
