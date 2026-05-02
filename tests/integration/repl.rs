@@ -337,6 +337,42 @@ fn repl_human_diagnostic_stays_on_stderr() {
 }
 
 #[test]
+fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
+    let output = run_repl_session(
+        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\n:sig pair._1\n:sig Lens::view(Tuple._1, pair)\n:sig Lens::set(Tuple._1, pair, 3)\n:sig Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)})\n:sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("Tuple._0"), "{stdout}");
+    assert!(stdout.contains("Tuple._1"), "{stdout}");
+    assert!(stdout.contains("Lens::view(Tuple._1, pair)"), "{stdout}");
+    assert!(stdout.contains("No signature found for Tuple"), "{stdout}");
+    assert!(stdout.contains("defstruct Config"), "{stdout}");
+    assert!(stdout.contains("defrecord StyledDocStyle"), "{stdout}");
+    assert!(stdout.contains("No docs found for add"), "{stdout}");
+    assert!(stdout.contains("Imported Add::add"), "{stdout}");
+    assert!(stdout.contains("Add::add"), "{stdout}");
+    assert!(stdout.contains("pair._1: Int"), "{stdout}");
+    assert!(
+        stdout.contains("Lens::set(Tuple._1, pair, 3): Result<(String, Int), Error>"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)}): Result<(String, Int), Error>"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Lens::compose("), "{stdout}");
+}
+
+#[test]
 fn repl_eprint_reports_generation_site_line() {
     let output = run_repl_session(
         "err_result: Result<Int> = Err(NoneError)\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",

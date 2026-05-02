@@ -339,8 +339,8 @@ impl Resolver {
             | Ast::Path(_, _)
             | Ast::FuncLiteralRef(_, _)
             | Ast::ListNil(_)
-            | Ast::StructDef(_, _, _)
-            | Ast::RecordDef(_, _, _)
+            | Ast::StructDef(..)
+            | Ast::RecordDef(..)
             | Ast::DeferrorDef(_, _, _, _, _)
             | Ast::EnumDef(_, _, _, _, _)
             | Ast::Def(_, _, _, _, _, _, _)
@@ -1549,7 +1549,7 @@ impl Resolver {
             }
 
             // Struct/Record/Deferror definitions — reuse predeclared IDs
-            Ast::StructDef(span, name, fields) => {
+            Ast::StructDef(span, name, fields, _) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -1577,7 +1577,7 @@ impl Resolver {
                 Ok(Resolved::StructDef(span, rid, rfields))
             }
 
-            Ast::RecordDef(span, name, fields) => {
+            Ast::RecordDef(span, name, fields, _) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))

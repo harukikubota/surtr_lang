@@ -161,9 +161,9 @@ pub(super) fn collect_stage_impl_target_resolutions(
     for module in stage {
         for stmt in &module.ast {
             let (name, kind) = match stmt {
-                Ast::StructDef(_, name, _) => (name, DeclarationKind::Struct),
+                Ast::StructDef(_, name, _, _) => (name, DeclarationKind::Struct),
                 Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
-                Ast::RecordDef(_, name, _) => (name, DeclarationKind::Record),
+                Ast::RecordDef(_, name, _, _) => (name, DeclarationKind::Record),
                 Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
                 _ => continue,
             };
@@ -914,13 +914,13 @@ pub fn precollect_declaration_index(
                         DeclarationKind::BuiltinType,
                         Visibility::Public,
                     ),
-                    Ast::StructDef(span, name, _) => (
+                    Ast::StructDef(span, name, _, _) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Struct,
                         Visibility::Public,
                     ),
-                    Ast::RecordDef(span, name, _) => (
+                    Ast::RecordDef(span, name, _, _) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Record,
@@ -942,8 +942,8 @@ pub fn precollect_declaration_index(
 
                 if matches!(
                     stmt,
-                    Ast::StructDef(_, name, _)
-                        | Ast::RecordDef(_, name, _)
+                    Ast::StructDef(_, name, _, _)
+                        | Ast::RecordDef(_, name, _, _)
                         | Ast::DeferrorDef(_, name, _, _, _)
                         if builtin_type_meta_by_name(name).is_some()
                 ) {
@@ -1043,9 +1043,9 @@ impl Resolver {
             let mut local_targets = HashMap::new();
             for stmt in &stmts {
                 let (name, kind) = match stmt {
-                    Ast::StructDef(_, name, _) => (name, DeclarationKind::Struct),
+                    Ast::StructDef(_, name, _, _) => (name, DeclarationKind::Struct),
                     Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
-                    Ast::RecordDef(_, name, _) => (name, DeclarationKind::Record),
+                    Ast::RecordDef(_, name, _, _) => (name, DeclarationKind::Record),
                     Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
                     _ => continue,
                 };
@@ -1573,8 +1573,8 @@ impl Resolver {
                     self.declaration_uid_kinds
                         .insert(uid, DeclarationKind::BuiltinType);
                 }
-                Ast::StructDef(span, name, _)
-                | Ast::RecordDef(span, name, _)
+                Ast::StructDef(span, name, _, _)
+                | Ast::RecordDef(span, name, _, _)
                 | Ast::DeferrorDef(span, name, _, _, _) => {
                     if builtin_type_meta_by_name(name).is_some() {
                         return Err(ResolveError {
@@ -1615,8 +1615,8 @@ impl Resolver {
                         .or_default()
                         .push_back(uid);
                     let kind = match stmt {
-                        Ast::StructDef(_, _, _) => DeclarationKind::Struct,
-                        Ast::RecordDef(_, _, _) => DeclarationKind::Record,
+                        Ast::StructDef(..) => DeclarationKind::Struct,
+                        Ast::RecordDef(..) => DeclarationKind::Record,
                         Ast::DeferrorDef(_, _, _, _, _) => DeclarationKind::Deferror,
                         _ => unreachable!(),
                     };

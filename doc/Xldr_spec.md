@@ -129,8 +129,8 @@ REPL 実装は次の 3 層に分ける。
 | `:help`, `:h [command]` | REPL コマンド一覧、または指定コマンドのヘルプを表示する |
 | `:quit`, `:exit` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する |
-| `:doc <symbol|query>` | 現在セッションで見える symbol の doc を表示する。名前だけなら定義 doc を返し、typed query (`gt(Int, Int)`, `ret |>= up`, `num |> (Int -> String)`) を与えたときは impl / 特化先 doc を返す。operator / helper alias は `:doc Add`, `:doc +`, `:doc gt`, `:doc |>` のように trait 定義へ正規化する。callable binding を与えた場合、capture は capture 元の doc を返し、匿名 closure は `Closure` type doc を返したうえで binding ごとの signature / captures / provenance を補足表示する。` :doc Ty` は type-bound doc を返す規約を維持し、`Closure` もこの経路で表示できる。 |
-| `:sig <symbol|query|expr>` | 現在セッションで見える関数の signature を表示する。名前だけなら定義 signature を返し、typed query を与えたときは specialized 表示を返す。trait / operator は「型なしなら定義、型ありなら実装」とし、`gt(Int, Int)`, `ret |>= up`, `:sig |>`, `:sig id(1)` のような query を受け付ける |
+| `:doc <symbol|query>` | 現在セッションで見える symbol の doc を表示する。名前だけなら定義 doc を返し、typed query (`gt(Int, Int)`, `ret |>= up`, `num |> (Int -> String)`) を与えたときは impl / 特化先 doc を返す。operator alias (`+`, `|>` など) は trait 定義 surface へ正規化する。helper 名は current scope に従って解決し、auto-import helper の bare 名は trait 定義 surface を返してよいが、auto-import されない helper は qualified path か明示 import 後の short name でしか見えない。callable binding を与えた場合、capture は capture 元の doc を返し、匿名 closure は `Closure` type doc を返したうえで binding ごとの signature / captures / provenance を補足表示する。` :doc Ty` は type-bound doc を返す規約を維持し、`Closure` もこの経路で表示できる。`Tuple` は doc 専用 surface とし、tuple shape、`Tuple._N` LensPath、`t._1` の値アクセス説明をまとめて返す。symbol が現在セッションで見えていても doc entry が無い場合は not found ではなく undocumented guidance を返す。bare symbol は current scope に従って解決し、auto-import されない helper は qualified path か明示 import 後のみ有効とする。 |
+| `:sig <symbol|query|expr>` | 現在セッションで見える関数の signature を表示する。名前だけなら定義 signature を返し、typed query を与えたときは specialized 表示を返す。trait / operator は「型なしなら定義、型ありなら実装」とし、`gt(Int, Int)`, `ret |>= up`, `:sig |>`, `:sig id(1)` のような query を受け付ける。operator alias は trait surface へ正規化し、helper 名は current scope に従って解決する。auto-import されない helper は qualified path か明示 import 後のみ bare 名で有効とする。`Tuple` は doc 専用 surface なので `:sig Tuple` は無効とする。`pair._1` のような field access sugar は `Lens::view` へ展開した expression query として扱い、他の `Lens::view` / `Lens::set` / `Lens::over` / `Lens::compose` は通常の関数 query と同じ defined / specialized 表示を返す。 |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 
 REPL query grammar は `symbol | typed-call | typed-operator | expr` の共有 parser で扱う。
@@ -139,6 +139,7 @@ REPL query grammar は `symbol | typed-call | typed-operator | expr` の共有 p
 - `typed-operator`: `lhs OP rhs` (`|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`)
 - query operand は既存 binding、literal、`_ : Type`、型式 (`Int`, `Result<Int>`, `(Int -> String)`) を受け付ける
 - 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で型変数を置換した結果を表示する
+- `:sig pair._1` は `Lens::view(Tuple._1, pair)` 相当の sugar 展開として表示してよい
 
 ### 5.2 予約済み
 

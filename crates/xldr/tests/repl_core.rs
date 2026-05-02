@@ -64,6 +64,9 @@ fn signature_text(result: &ReplResult) -> String {
     match &result.output {
         ReplOutput::SigResolved { signature } => signature.clone(),
         ReplOutput::CommandOutput { rendered } => rendered.join("\n"),
+        ReplOutput::EvalError { rendered, .. } => {
+            panic!("expected signature output, got EvalError:\n{}", rendered.join("\n"))
+        }
         other => panic!("expected signature output, got {}", output_kind(other)),
     }
 }
@@ -591,7 +594,7 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
 
     let builtin_ref = engine.handle_line("&Int::shr");
     assert!(rendered_text(&builtin_ref).contains(
-        "FnCapture(module: Int, name: shr, sig: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
+        "FnCapture(module: Int, name: shr, sig: Int::shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
     ));
 
     let trait_helper = engine.handle_line("&concat");
@@ -687,6 +690,132 @@ fn core_dbg_typed_call_queries_use_special_form_pseudo_application() {
     let sig = engine.handle_line(":sig dbg!(1, \"x\")");
     let sig = signature_text(&sig);
     assert_eq!(sig.trim(), "@@intrinsic def dbg!(values: *$A) -> Unit");
+}
+
+#[test]
+fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
+    let mut engine = engine();
+
+    let tuple_doc = engine.handle_line(":doc Tuple");
+    let tuple_doc = doc_text(&tuple_doc);
+    assert!(tuple_doc.contains("Tuple"), "{tuple_doc}");
+    assert!(tuple_doc.contains("Tuple._0"), "{tuple_doc}");
+    assert!(tuple_doc.contains("Tuple._1"), "{tuple_doc}");
+    assert!(tuple_doc.contains("pair._1"), "{tuple_doc}");
+    assert!(
+        tuple_doc.contains("Lens::view(Tuple._1, pair)"),
+        "{tuple_doc}"
+    );
+    assert!(
+        tuple_doc.contains("Lens::set(Tuple._1, pair, 3)"),
+        "{tuple_doc}"
+    );
+
+    let tuple_sig = engine.handle_line(":sig Tuple");
+    let tuple_sig = rendered_text(&tuple_sig);
+    assert!(
+        tuple_sig.contains("No signature found for Tuple"),
+        "{tuple_sig}"
+    );
+
+    let config_doc = engine.handle_line(":doc Config");
+    let config_doc = doc_text(&config_doc);
+    assert!(config_doc.contains("Config"), "{config_doc}");
+    assert!(config_doc.contains("defstruct Config"), "{config_doc}");
+    assert!(config_doc.contains("undocumented"), "{config_doc}");
+    assert!(config_doc.contains("@@doc"), "{config_doc}");
+
+    let style_doc = engine.handle_line(":doc StyledDocStyle");
+    let style_doc = doc_text(&style_doc);
+    assert!(style_doc.contains("StyledDocStyle"), "{style_doc}");
+    assert!(
+        style_doc.contains("defrecord StyledDocStyle"),
+        "{style_doc}"
+    );
+    assert!(style_doc.contains("undocumented"), "{style_doc}");
+
+    let helper_before_import = engine.handle_line(":doc add");
+    let helper_before_import = rendered_text(&helper_before_import);
+    assert!(
+        helper_before_import.contains("No docs found for add"),
+        "{helper_before_import}"
+    );
+
+    let import_add = engine.handle_line("import Add::add");
+    let import_add_text = rendered_text(&import_add);
+    assert!(
+        import_add_text.contains("Imported Add::add"),
+        "{import_add_text}"
+    );
+
+    let helper_after_import = engine.handle_line(":doc add");
+    let helper_after_import = doc_text(&helper_after_import);
+    assert!(
+        helper_after_import.contains("Add::add"),
+        "{helper_after_import}"
+    );
+
+    let if_doc = engine.handle_line(":doc if");
+    let if_doc = doc_text(&if_doc);
+    assert!(if_doc.contains("Kernel::if"), "{if_doc}");
+}
+
+#[test]
+fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
+    let mut engine = engine();
+
+    let pair = engine.handle_line("pair = (\"alice\", 2)");
+    let pair_text = rendered_text(&pair);
+    assert!(pair_text.contains("pair: (String, Int)"), "{pair_text}");
+
+    let field_sig = engine.handle_line(":sig pair._1");
+    let field_sig = signature_text(&field_sig);
+    assert!(field_sig.contains("defined:"), "{field_sig}");
+    assert!(
+        field_sig.contains("Lens::view(Tuple._1, pair)"),
+        "{field_sig}"
+    );
+    assert!(field_sig.contains("specialized:"), "{field_sig}");
+    assert!(field_sig.contains("pair._1: Int"), "{field_sig}");
+
+    let view_sig = engine.handle_line(":sig Lens::view(Tuple._1, pair)");
+    let view_sig = signature_text(&view_sig);
+    assert!(view_sig.contains("defined:"), "{view_sig}");
+    assert!(view_sig.contains("Lens::view("), "{view_sig}");
+    assert!(view_sig.contains("specialized:"), "{view_sig}");
+    assert!(
+        view_sig.contains("Lens::view(Tuple._1, pair): Int"),
+        "{view_sig}"
+    );
+
+    let set_sig = engine.handle_line(":sig Lens::set(Tuple._1, pair, 3)");
+    let set_sig = signature_text(&set_sig);
+    assert!(set_sig.contains("defined:"), "{set_sig}");
+    assert!(set_sig.contains("Lens::set("), "{set_sig}");
+    assert!(set_sig.contains("specialized:"), "{set_sig}");
+    assert!(
+        set_sig.contains("Lens::set(Tuple._1, pair, 3): Result<(String, Int), Error>"),
+        "{set_sig}"
+    );
+
+    let over_sig = engine.handle_line(":sig Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)})");
+    let over_sig = signature_text(&over_sig);
+    assert!(over_sig.contains("defined:"), "{over_sig}");
+    assert!(over_sig.contains("Lens::over("), "{over_sig}");
+    assert!(over_sig.contains("specialized:"), "{over_sig}");
+    assert!(
+        over_sig.contains(
+            "Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)}): Result<(String, Int), Error>"
+        ),
+        "{over_sig}"
+    );
+
+    let compose_sig =
+        engine.handle_line(":sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)");
+    let compose_sig = signature_text(&compose_sig);
+    assert!(compose_sig.contains("defined:"), "{compose_sig}");
+    assert!(compose_sig.contains("Lens::compose("), "{compose_sig}");
+    assert!(compose_sig.contains("specialized:"), "{compose_sig}");
 }
 
 fn tempfile_dir(prefix: &str) -> std::path::PathBuf {

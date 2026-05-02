@@ -67,15 +67,94 @@ fn test_private_field_modifier_is_preserved() {
     )
     .unwrap();
     match &ast[0] {
-        Ast::StructDef(_, name, fields) => {
+        Ast::StructDef(_, name, fields, attrs) => {
             assert_eq!(name, "User");
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, Visibility::Private);
             assert_eq!(fields[1].name, "name");
             assert_eq!(fields[1].visibility, Visibility::Public);
+            assert_eq!(attrs, &DeclAttrs::default());
         }
         _ => panic!("Expected StructDef"),
     }
+}
+
+#[test]
+fn test_doc_attributes_parse_for_struct_and_record_decls() {
+    let ast = parse_with_context(
+        r#"@@doc """User docs."""
+defstruct User {
+  name: String,
+}
+
+@@doc """Point docs."""
+defrecord Point(x: Float, y: Float)"#,
+        ParserContext::module(1, None),
+    )
+    .expect("annotated struct and record should parse");
+
+    match &ast[0] {
+        Ast::StructDef(_, name, fields, attrs) => {
+            assert_eq!(name, "User");
+            assert_eq!(fields.len(), 1);
+            assert_eq!(attrs.doc.as_deref(), Some("User docs."));
+        }
+        other => panic!("Expected StructDef, got {other:?}"),
+    }
+
+    match &ast[1] {
+        Ast::RecordDef(_, name, fields, attrs) => {
+            assert_eq!(name, "Point");
+            assert_eq!(fields.len(), 2);
+            assert_eq!(attrs.doc.as_deref(), Some("Point docs."));
+        }
+        other => panic!("Expected RecordDef, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_duplicate_doc_annotation_reports_later_span_for_struct_decl() {
+    let src = r#"@@doc """first"""
+@@doc """second"""
+defstruct User {
+  name: String,
+}"#;
+    let err = parse_with_context(src, ParserContext::module(1, None))
+        .expect_err("duplicate struct doc annotation should fail");
+    assert!(err
+        .message()
+        .contains("@@doc may only appear once before a declaration"));
+
+    let duplicate_offset = src.find(r#"@@doc """second""""#).expect("second @@doc");
+    assert_eq!(
+        err.span(),
+        &Span {
+            start: duplicate_offset,
+            end: duplicate_offset + "@@doc".len(),
+        }
+    );
+}
+
+#[test]
+fn test_impl_member_rejects_autoimport_annotation() {
+    let err = parse_with_context(
+        r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  @@autoimport
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@@autoimport impl member should be rejected");
+
+    assert!(err
+        .message()
+        .contains("Only @@doc / @@builtin are allowed before impl members"));
 }
 
 #[test]
@@ -2958,7 +3037,7 @@ fn test_namespace_block_lowers_type_and_module_heads() {
 
     assert!(matches!(
         ast.as_slice(),
-        [Ast::RecordDef(_, name, _), Ast::Defmod(_, module_name, _, _)]
+        [Ast::RecordDef(_, name, _, _), Ast::Defmod(_, module_name, _, _)]
             if name == "Auth::User" && module_name == "Auth::Repo"
     ));
 }

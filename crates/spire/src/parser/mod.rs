@@ -524,15 +524,17 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
                 attrs,
             ))
         }
-        Ast::StructDef(span, name, fields) => Ok(Ast::StructDef(
+        Ast::StructDef(span, name, fields, attrs) => Ok(Ast::StructDef(
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "type")?,
             fields,
+            attrs,
         )),
-        Ast::RecordDef(span, name, fields) => Ok(Ast::RecordDef(
+        Ast::RecordDef(span, name, fields, attrs) => Ok(Ast::RecordDef(
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "type")?,
             fields,
+            attrs,
         )),
         Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ok(Ast::DeferrorDef(
             span.clone(),
@@ -930,7 +932,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*expr, delta)),
             field,
         ),
-        Ast::StructDef(span, name, fields) => Ast::StructDef(
+        Ast::StructDef(span, name, fields, attrs) => Ast::StructDef(
             shift_span(span, delta),
             name,
             fields
@@ -942,8 +944,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     visibility: f.visibility,
                 })
                 .collect(),
+            shift_decl_attrs(attrs),
         ),
-        Ast::RecordDef(span, name, fields) => Ast::RecordDef(
+        Ast::RecordDef(span, name, fields, attrs) => Ast::RecordDef(
             shift_span(span, delta),
             name,
             fields
@@ -955,6 +958,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     visibility: f.visibility,
                 })
                 .collect(),
+            shift_decl_attrs(attrs),
         ),
         Ast::StructLit(span, name, fields) => Ast::StructLit(
             shift_span(span, delta),
@@ -1231,8 +1235,8 @@ impl Ast {
             | Ast::Dbg(s, _)
             | Ast::Match(s, _, _)
             | Ast::FieldAccess(s, _, _)
-            | Ast::StructDef(s, _, _)
-            | Ast::RecordDef(s, _, _)
+            | Ast::StructDef(s, _, _, _)
+            | Ast::RecordDef(s, _, _, _)
             | Ast::StructLit(s, _, _)
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _, _)

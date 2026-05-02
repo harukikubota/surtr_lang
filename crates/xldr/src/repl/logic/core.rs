@@ -6,13 +6,13 @@ use diagnostics::{SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
-use scar::typed::{TraitCallOrigin, TypedInner, TypedNode};
+use scar::typed::{TraitCallOrigin, TypedInner, TypedLensPath, TypedLensSegment, TypedNode};
 use scar::types::Ty;
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
 use sindr::ir::{DocEntry, DocKind};
 use sindr::policy::CompileUnitKind;
-use spire::ast::{Ast, AstTy, ImportSpec, Span};
+use spire::ast::{Ast, AstTy, ImportSpec, RecordLitArg, Span};
 
 use super::command::{parse_repl_command, ReplCommand};
 use super::output::{ReplOutput, ReplResult};
@@ -821,17 +821,63 @@ impl ReplEngine {
     }
 
     fn handle_doc_symbol(&self, source_symbol: &str, symbol: &str) -> ReplResult {
+        if symbol == "Tuple" {
+            return ReplResult::ok(Self::tuple_doc_output());
+        }
+        if symbol == "Closure" {
+            if let Some(entry) = self.closure_doc_entry() {
+                return ReplResult::ok(Self::doc_resolved_output(entry));
+            }
+        }
+        if symbol == "dbg!" {
+            if let Some(entry) = self
+                .docs
+                .iter()
+                .find(|entry| entry.kind == DocKind::Function && entry.qualified_name == "Bootstrap::dbg!")
+            {
+                return ReplResult::ok(Self::doc_resolved_output(entry));
+            }
+        }
         if let Some(binding_doc) = self.handle_doc_binding(symbol) {
             return binding_doc;
         }
-        let canonical = Self::canonical_symbol(symbol);
-        let preferred_kind = Self::definition_doc_kind(canonical);
-        let matches = self.matching_doc_entries(canonical, preferred_kind);
+        let canonical = self
+            .visible_helper_trait_alias(symbol)
+            .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
+        let matches = if canonical != symbol || Self::definition_doc_kind(&canonical).is_some() {
+            let preferred_kind = Self::definition_doc_kind(&canonical);
+            self.visible_doc_entries(&canonical, preferred_kind)
+        } else if let Some(decl) = self.visible_declaration(symbol) {
+            let expected_signature = self.declaration_signature(decl);
+            let mut matches = self.docs
+                .iter()
+                .filter(|entry| entry.qualified_name == decl.fq_name)
+                .filter(|entry| {
+                    expected_signature.as_ref().is_none_or(|signature| {
+                        entry.signature.as_ref().is_some_and(|entry_sig| entry_sig == signature)
+                    })
+                })
+                .collect::<Vec<_>>();
+            matches.dedup_by(|a, b| {
+                a.qualified_name == b.qualified_name
+                    && a.kind == b.kind
+                    && a.signature == b.signature
+                    && a.doc == b.doc
+            });
+            matches
+        } else {
+            Vec::new()
+        };
 
         match matches.as_slice() {
-            [] => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![format!("No docs found for {}", source_symbol)],
-            }),
+            [] => self
+                .undocumented_doc_output(&canonical)
+                .map(|output| ReplResult::ok(output))
+                .unwrap_or_else(|| {
+                    ReplResult::ok(ReplOutput::CommandOutput {
+                        rendered: vec![format!("No docs found for {}", source_symbol)],
+                    })
+                }),
             [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
             entries => ReplResult::ok(ReplOutput::CommandOutput {
                 rendered: Self::ambiguous_doc_lines(source_symbol, entries),
@@ -855,23 +901,15 @@ impl ReplEngine {
         OPERATOR_DOC_ALIASES
             .iter()
             .find_map(|(alias, trait_name)| (*alias == symbol).then_some(*trait_name))
-            .or_else(|| {
-                METHOD_DOC_TRAIT_ALIASES
-                    .iter()
-                    .find_map(|(alias, trait_name)| (*alias == symbol).then_some(*trait_name))
-            })
             .unwrap_or(symbol)
     }
 
     fn definition_doc_kind(symbol: &str) -> Option<DocKind> {
         if symbol != "and"
             && symbol != "or"
-            && (OPERATOR_DOC_ALIASES
+            && OPERATOR_DOC_ALIASES
                 .iter()
                 .any(|(_, trait_name)| *trait_name == symbol)
-                || METHOD_DOC_TRAIT_ALIASES
-                    .iter()
-                    .any(|(_, trait_name)| *trait_name == symbol))
         {
             Some(DocKind::Type)
         } else {
@@ -885,6 +923,130 @@ impl ReplEngine {
                 .rsplit("::")
                 .next()
                 .is_some_and(|tail| tail == symbol)
+    }
+
+    fn is_qualified_symbol(symbol: &str) -> bool {
+        symbol.contains("::")
+    }
+
+    fn visible_doc_entries<'a>(&'a self, symbol: &str, kind: Option<DocKind>) -> Vec<&'a DocEntry> {
+        let mut matches = self
+            .docs
+            .iter()
+            .filter(|entry| kind.as_ref().is_none_or(|kind| &entry.kind == kind))
+            .filter(|entry| self.doc_entry_matches_visible_symbol(entry, symbol))
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        matches.dedup_by(|a, b| {
+            a.qualified_name == b.qualified_name
+                && a.kind == b.kind
+                && a.signature == b.signature
+                && a.doc == b.doc
+        });
+        matches
+    }
+
+    fn doc_entry_matches_visible_symbol(&self, entry: &DocEntry, symbol: &str) -> bool {
+        if !Self::symbol_matches(&entry.qualified_name, symbol) {
+            return false;
+        }
+        if Self::is_qualified_symbol(symbol) {
+            return entry.qualified_name == symbol;
+        }
+        self.visible_uid_matches(symbol, &entry.qualified_name)
+    }
+
+    fn visible_uid_matches(&self, visible_name: &str, qualified_name: &str) -> bool {
+        match (
+            self.sigil_session.lookup_uid(visible_name),
+            self.sigil_session.lookup_uid(qualified_name),
+        ) {
+            (Some(visible_uid), Some(qualified_uid)) => visible_uid == qualified_uid,
+            _ => false,
+        }
+    }
+
+    fn tuple_doc_output() -> ReplOutput {
+        ReplOutput::DocResolved {
+            symbol: "Tuple".to_string(),
+            signature: None,
+            summary: Some("Tuple doc surface for tuple values and Lens paths.".to_string()),
+            source_snippet: Some(
+                "Tuple is the doc surface for tuple values and `Tuple._N` lens roots.\nValues use `pair._0`, `pair._1`, ... and lens paths use `Tuple._0`, `Tuple._1`, ...\nExamples:\n- pair: (String, Int)\n- pair._0\n- pair._1\n- Lens::view(Tuple._0, pair)\n- Lens::view(Tuple._1, pair)\n- Lens::set(Tuple._1, pair, 3)"
+                    .to_string(),
+            ),
+            details: Vec::new(),
+        }
+    }
+
+    fn undocumented_doc_output(&self, symbol: &str) -> Option<ReplOutput> {
+        let decl = self.visible_declaration(symbol)?;
+        let signature = self.declaration_signature(decl);
+        let source_snippet = if let Some(signature) = &signature {
+            format!(
+                "`{}` resolves in the current scope, but it does not have an `@@doc` entry yet.\nAdd `@@doc` immediately before the declaration.\nExample:\n@@doc \"\"\"\nDescribe `{}` here.\n\"\"\"\n{}",
+                decl.fq_name, decl.name, signature
+            )
+        } else {
+            format!(
+                "`{}` resolves in the current scope, but it does not have an `@@doc` entry yet.\nAdd `@@doc` at the declaration site.\nExample:\n@@doc \"\"\"\nDescribe `{}` here.\n\"\"\"",
+                decl.fq_name, decl.name
+            )
+        };
+        Some(ReplOutput::DocResolved {
+            symbol: decl.fq_name.clone(),
+            signature,
+            summary: Some(format!("`{}` is currently undocumented.", decl.name)),
+            source_snippet: Some(source_snippet),
+            details: vec!["status: undocumented".to_string()],
+        })
+    }
+
+    fn method_trait_alias(symbol: &str) -> Option<&'static str> {
+        METHOD_DOC_TRAIT_ALIASES
+            .iter()
+            .find_map(|(method, trait_name)| (*method == symbol).then_some(*trait_name))
+    }
+
+    fn visible_helper_trait_alias(&self, symbol: &str) -> Option<String> {
+        let trait_name = Self::method_trait_alias(symbol)?;
+        let decl = self.visible_declaration(symbol)?;
+        if decl.kind != sigil::DeclarationKind::TraitMethod {
+            return None;
+        }
+        let (owner_fq_name, _) = decl.fq_name.rsplit_once("::")?;
+        let owner = self.declaration_index.get(owner_fq_name)?;
+        (owner.kind == sigil::DeclarationKind::Trait
+            && owner.auto_import
+            && owner.name == trait_name)
+            .then(|| trait_name.to_string())
+    }
+
+    fn visible_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
+        if Self::is_qualified_symbol(symbol) {
+            return self.declaration_index.get(symbol);
+        }
+        let visible_uid = self.sigil_session.lookup_uid(symbol)?;
+        self.declaration_index.values().find(|entry| {
+            (entry.name == symbol
+                || entry
+                    .name
+                    .rsplit("::")
+                    .next()
+                    .is_some_and(|tail| tail == symbol))
+                && self.sigil_session.lookup_uid(&entry.fq_name) == Some(visible_uid)
+        })
+    }
+
+    fn declaration_signature(&self, decl: &sigil::DeclarationEntry) -> Option<String> {
+        match decl.kind {
+            sigil::DeclarationKind::Struct => Some(crate::format_struct_signature(&decl.name)),
+            sigil::DeclarationKind::Record => Some(crate::format_record_signature(&decl.name)),
+            sigil::DeclarationKind::Deferror => Some(format!("deferror {}", decl.name)),
+            sigil::DeclarationKind::Enum => Some(format!("defenum {}", decl.name)),
+            sigil::DeclarationKind::BuiltinType => Some(format!("type {}", decl.name)),
+            _ => self.find_signature(&decl.fq_name).map(|(_, signature)| signature),
+        }
     }
 
     fn doc_resolved_output(entry: &DocEntry) -> ReplOutput {
@@ -1139,7 +1301,28 @@ impl ReplEngine {
     }
 
     fn find_signature(&self, symbol: &str) -> Option<(String, String)> {
-        let canonical = Self::canonical_symbol(symbol);
+        if symbol == "Tuple" {
+            return None;
+        }
+        if symbol == "dbg!" {
+            return self
+                .docs
+                .iter()
+                .find(|entry| entry.qualified_name == "Bootstrap::dbg!")
+                .and_then(|entry| {
+                    entry
+                        .signature
+                        .clone()
+                        .map(|signature| (entry.qualified_name.clone(), signature))
+                });
+        }
+        let canonical = self
+            .visible_helper_trait_alias(symbol)
+            .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
+        let qualified_lookup = Self::is_qualified_symbol(&canonical);
+        let visible_uid = (!qualified_lookup)
+            .then(|| self.sigil_session.lookup_uid(&canonical))
+            .flatten();
 
         if canonical == symbol {
             if let Some(found) = self
@@ -1150,7 +1333,18 @@ impl ReplEngine {
                 .filter(|entry| !entry.flags.generated)
                 .find_map(|entry| {
                     let qualified_name = entry.qualified_name.as_ref()?;
-                    if !Self::symbol_matches(qualified_name, canonical) {
+                    if !Self::symbol_matches(qualified_name, &canonical) {
+                        return None;
+                    }
+                    if qualified_lookup {
+                        if qualified_name != &canonical {
+                            return None;
+                        }
+                    } else if let Some(uid) = visible_uid {
+                        if self.sigil_session.lookup_uid(qualified_name) != Some(uid) {
+                            return None;
+                        }
+                    } else {
                         return None;
                     }
                     let signature = entry.signature.clone()?;
@@ -1165,19 +1359,25 @@ impl ReplEngine {
             .docs
             .iter()
             .rev()
-            .find(|entry| entry.qualified_name == canonical)
+            .find(|entry| qualified_lookup && entry.qualified_name == canonical)
         {
             if let Some(signature) = entry.signature.clone() {
                 return Some((entry.qualified_name.clone(), signature));
             }
         }
 
-        if let Some(entry) = self
-            .docs
-            .iter()
-            .rev()
-            .find(|entry| Self::symbol_matches(&entry.qualified_name, canonical))
-        {
+        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+            if !Self::symbol_matches(&entry.qualified_name, &canonical) {
+                return false;
+            }
+            if qualified_lookup {
+                entry.qualified_name == canonical
+            } else if let Some(uid) = visible_uid {
+                self.sigil_session.lookup_uid(&entry.qualified_name) == Some(uid)
+            } else {
+                false
+            }
+        }) {
             if let Some(signature) = entry.signature.clone() {
                 return Some((entry.qualified_name.clone(), signature));
             }
@@ -1204,6 +1404,9 @@ impl ReplEngine {
         }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => {
+                if matches!(self.parse_sig_symbol_as_expression(&symbol), Some(_)) {
+                    return self.handle_sig_expression(trimmed);
+                }
                 if let Some(rendered) = self.binding_callable_sig_summary(&symbol) {
                     return ReplResult::ok(ReplOutput::SigResolved {
                         signature: rendered,
@@ -1227,7 +1430,7 @@ impl ReplEngine {
                 }
             }
             Ok(ReplQuery::TypedCall(query)) => {
-                if query.callee.starts_with('&') {
+                if query.callee.starts_with('&') || query.callee.starts_with("Lens::") {
                     self.handle_sig_expression(trimmed)
                 } else {
                     self.handle_sig_typed_call(trimmed, &query)
@@ -1472,6 +1675,48 @@ impl ReplEngine {
 
     fn defined_signature_for_expr(expr: &Ast, typed: &TypedNode) -> String {
         match &typed.node {
+            TypedInner::FieldAccess(source, idx) => format!(
+                "Lens::view({}, {})",
+                Self::tuple_lens_segment(*idx),
+                Self::typed_source_expr_name(source)
+                    .unwrap_or_else(|| Self::field_access_source(expr))
+            ),
+            TypedInner::LensView { source, path, .. } => format!(
+                "Lens::view({}, {})",
+                Self::render_typed_lens_path(path),
+                Self::typed_source_expr_name(source).unwrap_or("<source>".to_string())
+            ),
+            TypedInner::LensSet {
+                source,
+                path,
+                value,
+                ..
+            } => format!(
+                "Lens::set({}, {}, {})",
+                Self::render_typed_lens_path(path),
+                Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
+                Self::typed_source_expr_name(value).unwrap_or("value".to_string())
+            ),
+            TypedInner::LensOver {
+                source,
+                path,
+                update_fun,
+                ..
+            } => format!(
+                "Lens::over({}, {}, {})",
+                Self::render_typed_lens_path(path),
+                Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
+                Self::typed_source_expr_name(update_fun).unwrap_or("<update>".to_string())
+            ),
+            TypedInner::LensPath(path) => {
+                let rendered = Self::render_typed_lens_path(path);
+                format!(
+                    "Lens::compose({}, {}) -> {}",
+                    rendered,
+                    rendered,
+                    Self::ty_to_string(&typed.ty)
+                )
+            }
             TypedInner::TraitCall {
                 trait_name,
                 method_name,
@@ -1561,6 +1806,110 @@ impl ReplEngine {
             Ast::Grouped(_, inner) | Ast::Semi(_, inner) => Self::expr_head_name(inner),
             _ => None,
         }
+    }
+
+    fn field_access_source(expr: &Ast) -> String {
+        match expr {
+            Ast::FieldAccess(_, source, _) => Self::source_expr_string(source),
+            _ => "<source>".to_string(),
+        }
+    }
+
+    fn source_expr_string(expr: &Ast) -> String {
+        match expr {
+            Ast::Var(_, name) => name.clone(),
+            Ast::Path(_, path) => path.segments.join("::"),
+            Ast::FieldAccess(_, source, field) => {
+                format!("{}.{}", Self::source_expr_string(source), field)
+            }
+            Ast::App(_, func, args) => format!(
+                "{}({})",
+                Self::source_expr_string(func),
+                args.iter()
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(expr) => Self::source_expr_string(expr),
+                        RecordLitArg::Named(name, expr) => {
+                            format!("{name}: {}", Self::source_expr_string(expr))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Ast::Closure(..) => "<closure>".to_string(),
+            _ => "<expr>".to_string(),
+        }
+    }
+
+    fn typed_source_expr_name(node: &TypedNode) -> Option<String> {
+        match &node.node {
+            TypedInner::Var(id) => Some(id.name.clone()),
+            TypedInner::FieldAccess(source, idx) => Some(format!(
+                "{}._{}",
+                Self::typed_source_expr_name(source)?,
+                idx
+            )),
+            TypedInner::LensPath(path) => Some(Self::render_typed_lens_path(path)),
+            TypedInner::Closure(..) => Some("{|...| ...}".to_string()),
+            TypedInner::Lit(lit) => Some(Self::literal_source(lit)),
+            _ => None,
+        }
+    }
+
+    fn literal_source(lit: &spire::ast::Lit) -> String {
+        match lit {
+            spire::ast::Lit::Int(value) => value.to_string(),
+            spire::ast::Lit::Float(value) => value.to_string(),
+            spire::ast::Lit::Str(value) => format!("{value:?}"),
+            spire::ast::Lit::Bool(value) => {
+                if *value {
+                    "True".to_string()
+                } else {
+                    "False".to_string()
+                }
+            }
+            spire::ast::Lit::Unit => "()".to_string(),
+        }
+    }
+
+    fn render_typed_lens_path(path: &TypedLensPath) -> String {
+        let mut rendered = String::new();
+        for segment in &path.segments {
+            match segment {
+                TypedLensSegment::Tuple { field_index, .. } => {
+                    if rendered.is_empty() {
+                        rendered.push_str("Tuple");
+                    }
+                    rendered.push_str(&format!("._{field_index}"));
+                }
+                TypedLensSegment::Field { field_name, .. } => {
+                    if rendered.is_empty() {
+                        rendered.push_str("<field>");
+                    }
+                    rendered.push('.');
+                    rendered.push_str(field_name);
+                }
+                TypedLensSegment::Variant { variant_name, .. } => {
+                    if rendered.is_empty() {
+                        rendered.push_str("<variant>");
+                    }
+                    rendered.push('.');
+                    rendered.push_str(variant_name);
+                }
+            }
+        }
+        if rendered.is_empty() {
+            "<lens>".to_string()
+        } else {
+            rendered
+        }
+    }
+
+    fn tuple_lens_segment(index: u32) -> String {
+        format!("Tuple._{index}")
+    }
+
+    fn parse_sig_symbol_as_expression<'a>(&self, symbol: &'a str) -> Option<&'a str> {
+        symbol.contains("._").then_some(symbol)
     }
 
     fn ty_to_string(ty: &Ty) -> String {
@@ -2757,7 +3106,7 @@ impl ReplEngine {
                 let mut all_rendered = rendered;
                 if import_only {
                     for label in &import_result.success_labels {
-                        all_rendered.push(format!("imported {}", label));
+                        all_rendered.push(format!("Imported {}", label));
                     }
                 }
                 for imported in &import_result.imported_symbols {

@@ -304,10 +304,10 @@ pub enum Ast {
     FieldAccess(Span, Box<Ast>, Symbol),
 
     /// Struct definition: `defstruct User { name: String, age: Int }`
-    StructDef(Span, Symbol, Vec<StructField>),
+    StructDef(Span, Symbol, Vec<StructField>, DeclAttrs),
 
     /// Record definition: `defrecord Point(x: Float, y: Float)`
-    RecordDef(Span, Symbol, Vec<RecordField>),
+    RecordDef(Span, Symbol, Vec<RecordField>, DeclAttrs),
 
     /// Struct literal: `User { name: "alice", age: 30 }`
     StructLit(Span, Symbol, Vec<(Symbol, Ast)>),

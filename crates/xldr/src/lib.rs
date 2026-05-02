@@ -205,6 +205,14 @@ fn format_defenum_signature(name: &str, variants: &[spire::ast::EnumVariant]) ->
     format!("defenum {name} {{ {variants} }}")
 }
 
+fn format_struct_signature(name: &str) -> String {
+    format!("defstruct {name}")
+}
+
+fn format_record_signature(name: &str) -> String {
+    format!("defrecord {name}")
+}
+
 fn format_impl_signature(target: &str) -> String {
     format!("impl {target}")
 }
@@ -330,6 +338,28 @@ fn collect_doc_entries_for_ast(
                     });
                 }
             }
+            spire::ast::Ast::StructDef(_, name, _, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, name),
+                        kind: DocKind::Type,
+                        module_path: module_path.to_string(),
+                        signature: Some(format_struct_signature(name)),
+                        doc: doc.clone(),
+                    });
+                }
+            }
+            spire::ast::Ast::RecordDef(_, name, _, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, name),
+                        kind: DocKind::Type,
+                        module_path: module_path.to_string(),
+                        signature: Some(format_record_signature(name)),
+                        doc: doc.clone(),
+                    });
+                }
+            }
             spire::ast::Ast::ImplDef(_, target, methods, attrs) => {
                 let impl_doc_name = if module_path == target {
                     target.clone()
@@ -380,7 +410,8 @@ fn collect_doc_entries_for_ast(
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
                                     module_path: module_path.to_string(),
-                                    signature: Some(format_fun_signature(
+                                    signature: Some(format_impl_method_signature(
+                                        target,
                                         name,
                                         &[],
                                         params,
@@ -704,8 +735,8 @@ pub fn lower_module_source_ast(
             spire::ast::Ast::ConstDef(_, _, _, _, _) => {
                 shared_namespace_consts.push(stmt);
             }
-            spire::ast::Ast::StructDef(_, _, _)
-            | spire::ast::Ast::RecordDef(_, _, _)
+            spire::ast::Ast::StructDef(..)
+            | spire::ast::Ast::RecordDef(..)
             | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
             | spire::ast::Ast::EnumDef(_, _, _, _, _)
             | spire::ast::Ast::BuiltinDecl(_, _, _, _, _)
@@ -1134,7 +1165,7 @@ defmod B {
         assert!(lowered[2]
             .ast
             .iter()
-            .any(|stmt| matches!(stmt, spire::ast::Ast::RecordDef(_, _, _))));
+            .any(|stmt| matches!(stmt, spire::ast::Ast::RecordDef(..))));
     }
 
     #[test]
@@ -1490,6 +1521,81 @@ impl Show for Int {
                 && entry.signature.as_deref()
                     == Some("impl Show for Int::to_string(self: Self) -> String")
                 && entry.doc == "Render `Int` through the standard display surface."
+        }));
+    }
+
+    #[test]
+    fn collect_doc_entries_include_struct_and_record_docs_with_head_only_signatures() {
+        let ast = spire::parse_with_context(
+            r#"@@doc """User docs."""
+defstruct User {
+  name: String,
+}
+
+@@doc """Point docs."""
+defrecord Point(x: Float, y: Float)"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("annotated struct and record docs should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Sample"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::User"
+                && entry.kind == DocKind::Type
+                && entry.signature.as_deref() == Some("defstruct User")
+                && entry.doc == "User docs."
+        }));
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::Point"
+                && entry.kind == DocKind::Type
+                && entry.signature.as_deref() == Some("defrecord Point")
+                && entry.doc == "Point docs."
+        }));
+    }
+
+    #[test]
+    fn collect_doc_entries_qualify_builtin_impl_method_signatures() {
+        let ast = spire::parse_with_context(
+            r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  @@doc """Builtin helper doc."""
+  @@builtin def inspect_name(user: User) -> String
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("annotated builtin impl method docs should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Sample"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "User::inspect_name"
+                && entry.kind == DocKind::Function
+                && entry.signature.as_deref() == Some("User::inspect_name(user: User) -> String")
+                && entry.doc == "Builtin helper doc."
         }));
     }
 

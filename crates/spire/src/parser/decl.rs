@@ -722,7 +722,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParseError::syntax(
-                        "Only @@doc is allowed before impl members",
+                        "Only @@doc / @@builtin are allowed before impl members",
                         annotator_span,
                     ));
                 }
@@ -993,6 +993,14 @@ impl Parser<'_> {
 
     /// `defstruct Name { field: Type, ... }`
     pub(super) fn parse_struct_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_struct_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    pub(super) fn parse_struct_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        start_override: Option<usize>,
+    ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defstruct)?;
         let (name, _) = self.expect_ident()?;
@@ -1025,16 +1033,25 @@ impl Parser<'_> {
         let end = self.expect(&Token::RBrace)?;
         Ok(Ast::StructDef(
             Span {
-                start: sp.start,
+                start: start_override.unwrap_or(sp.start),
                 end: end.end,
             },
             name,
             fields,
+            attrs,
         ))
     }
 
     /// `defrecord Name(field: Type, ...)`
     pub(super) fn parse_record_def(&mut self) -> Result<Ast, ParseError> {
+        self.parse_record_def_with_attrs(DeclAttrs::default(), None)
+    }
+
+    pub(super) fn parse_record_def_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        start_override: Option<usize>,
+    ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defrecord)?;
         let (name, _) = self.expect_ident()?;
@@ -1073,11 +1090,12 @@ impl Parser<'_> {
         let end = self.expect(&Token::RParen)?;
         Ok(Ast::RecordDef(
             Span {
-                start: sp.start,
+                start: start_override.unwrap_or(sp.start),
                 end: end.end,
             },
             name,
             fields,
+            attrs,
         ))
     }
 
@@ -1648,12 +1666,14 @@ impl Parser<'_> {
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deftrait => self.parse_trait_def_with_attrs(attrs, Some(start)),
                 Token::Impl => self.parse_impl_def_with_attrs(attrs, Some(start)),
+                Token::Defstruct => self.parse_struct_def_with_attrs(attrs, Some(start)),
+                Token::Defrecord => self.parse_record_def_with_attrs(attrs, Some(start)),
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
                 Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
-                    "@@doc / @@autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `deferror`, `defenum`, `defextractor`, `@@builtin type/def/defextractor`, or `@@intrinsic def`",
+                    "@@doc / @@autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defextractor`, `@@builtin type/def/defextractor`, or `@@intrinsic def`",
                     self.peek_span(),
                 )),
             }
