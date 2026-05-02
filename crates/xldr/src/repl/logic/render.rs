@@ -35,12 +35,7 @@ pub fn format_result_lines(
                             )
                         },
                     );
-                    Some(format!(
-                        "{}: {} = {}",
-                        b.name,
-                        b.ty,
-                        displayed
-                    ))
+                    Some(format!("{}: {} = {}", b.name, b.ty, displayed))
                 })
                 .collect();
         }

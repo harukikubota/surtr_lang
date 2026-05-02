@@ -2108,8 +2108,8 @@ impl VM {
                 let callable = match target {
                     Value::Callable(mut callable) => {
                         callable.lexical_captures.extend(lexical_captures);
-                        callable.metadata =
-                            self.promote_partial_apply_metadata(&callable, &callable.lexical_captures);
+                        callable.metadata = self
+                            .promote_partial_apply_metadata(&callable, &callable.lexical_captures);
                         callable
                     }
                     _ => {
@@ -2433,7 +2433,10 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
             (Some(module.to_string()), Some(name.to_string()))
         }
         _ if qualified_name.is_empty() => (None, None),
-        _ => (Some("<local>".to_string()), Some(qualified_name.to_string())),
+        _ => (
+            Some("<local>".to_string()),
+            Some(qualified_name.to_string()),
+        ),
     }
 }
 

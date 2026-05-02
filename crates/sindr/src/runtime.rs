@@ -605,8 +605,8 @@ pub struct Location {
 #[cfg(test)]
 mod tests {
     use super::{
-        Callable, CallableMetadata, CallableTarget, HashMapHandle, ListHandle, Location,
-        RichError, TypeEntry, TypeKind, TypeRegistry, Value,
+        Callable, CallableMetadata, CallableTarget, HashMapHandle, ListHandle, Location, RichError,
+        TypeEntry, TypeKind, TypeRegistry, Value,
     };
     use crate::primitives::int;
 

@@ -326,7 +326,9 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             } else {
                 app.push_result(
                     format!(":type {arg}"),
-                    vec![format!("Type lookup is handled by the REPL core for `{arg}`.")],
+                    vec![format!(
+                        "Type lookup is handled by the REPL core for `{arg}`."
+                    )],
                     PresentedResultKind::Info,
                 );
             }

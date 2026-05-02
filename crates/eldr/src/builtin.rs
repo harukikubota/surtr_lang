@@ -1790,7 +1790,8 @@ fn callable_signature_parts(signature: &str) -> Option<(Vec<String>, String)> {
     let param_types = split_top_level_commas(params_str)
         .into_iter()
         .map(|param| {
-            param.rsplit_once(':')
+            param
+                .rsplit_once(':')
                 .map(|(_, ty)| ty.trim().to_string())
                 .unwrap_or_else(|| param.trim().to_string())
         })
