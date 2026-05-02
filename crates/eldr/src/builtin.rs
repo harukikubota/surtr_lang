@@ -1,6 +1,6 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
-use crate::vm::VM;
+use crate::vm::{TaskMode, VM};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
@@ -563,30 +563,31 @@ fn builtin_process_store(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
 }
 
 fn builtin_task_call(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    invoke_task_body(vm, &args[0], "__task_call")
+    invoke_task_body(vm, &args[0], "__task_call", TaskMode::Call)
 }
 
 fn builtin_task_async(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    invoke_task_body(vm, &args[0], "__task_async")
+    invoke_task_body(vm, &args[0], "__task_async", TaskMode::Async)
 }
 
 fn builtin_task_launch(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    invoke_task_body(vm, &args[0], "__task_launch")
+    invoke_task_body(vm, &args[0], "__task_launch", TaskMode::Launch)
 }
 
 fn builtin_task_cast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let Value::Callable(body) = args[0].clone() else {
-        return Err(RuntimeError::new("__task_cast expects callable body"));
-    };
-    let _ = vm.invoke_callable_sync(body, Vec::new())?;
-    Ok(ok_result(Value::Unit))
+    invoke_task_body(vm, &args[0], "__task_cast", TaskMode::Cast)
 }
 
-fn invoke_task_body(vm: &mut VM, value: &Value, name: &str) -> Result<Value, RuntimeError> {
+fn invoke_task_body(
+    vm: &mut VM,
+    value: &Value,
+    name: &str,
+    mode: TaskMode,
+) -> Result<Value, RuntimeError> {
     let Value::Callable(body) = value.clone() else {
         return Err(RuntimeError::new(format!("{name} expects callable body")));
     };
-    vm.invoke_callable_sync(body, Vec::new())
+    vm.invoke_task(body, mode)
 }
 
 fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

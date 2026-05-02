@@ -310,6 +310,14 @@ enum OpcodeControl {
     Pending(FutureId),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskMode {
+    Call,
+    Async,
+    Launch,
+    Cast,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 enum FutureState {
@@ -1706,6 +1714,70 @@ impl VM {
             }
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("callable execution did not finish")),
+        }
+    }
+
+    fn ready_future_value(&self, future_id: FutureId) -> Option<Value> {
+        self.process_runtime
+            .futures
+            .get(&future_id)
+            .and_then(|future| match &future.state {
+                FutureState::Ready(value) | FutureState::Cancelled(value) => Some(value.clone()),
+                FutureState::Running => None,
+            })
+    }
+
+    fn await_task_completion(
+        &mut self,
+        future_id: FutureId,
+        mut outcome: StepOutcome,
+    ) -> Result<Value, RuntimeError> {
+        loop {
+            match outcome {
+                StepOutcome::Halt(value) => {
+                    self.process_runtime.resolve_future(future_id, value.clone());
+                    return self.ready_future_value(future_id).ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "task completion future {} did not resolve",
+                            future_id
+                        ))
+                    });
+                }
+                StepOutcome::Pending {
+                    future_id: awaited_future,
+                    resume,
+                } => {
+                    if self.ready_future_value(awaited_future).is_none() {
+                        return Err(RuntimeError::new(format!(
+                            "task suspended on unresolved future {}",
+                            awaited_future
+                        )));
+                    }
+                    outcome = self.resume_execution(resume);
+                }
+                StepOutcome::RuntimeError(err) => return Err(err),
+                StepOutcome::Continue => {
+                    return Err(RuntimeError::new("task execution did not finish"));
+                }
+            }
+        }
+    }
+
+    pub(crate) fn invoke_task(&mut self, callable: Callable, mode: TaskMode) -> Result<Value, RuntimeError> {
+        match mode {
+            TaskMode::Call | TaskMode::Async => {
+                let completion_future = self.process_runtime.allocate_future(None, None, false);
+                let outcome = self.invoke_callable_step(callable, Vec::new());
+                self.await_task_completion(completion_future, outcome)
+            }
+            TaskMode::Launch => {
+                let _ = self.invoke_callable_sync(callable, Vec::new())?;
+                Ok(ok_vm_result(Value::Unit))
+            }
+            TaskMode::Cast => {
+                let _ = self.invoke_callable_sync(callable, Vec::new())?;
+                Ok(ok_vm_result(Value::Unit))
+            }
         }
     }
 

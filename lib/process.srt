@@ -11,21 +11,21 @@ defmod Task {
   }
 
   @@doc """
-  Initial synchronous form of Task.async.
+  Run a zero-argument task body through the task runtime and return its Result.
   """
   def async(body: (-> Result<$A>)) -> Result<$A> {
     __task_async(body)
   }
 
   @@doc """
-  Initial synchronous form of Task.launch.
+  Start a detached task body and return Ok(()) after the runtime accepts it.
   """
   def launch(body: (-> Result<Unit>)) -> Result<Unit> {
     __task_launch(body)
   }
 
   @@doc """
-  Initial synchronous fire-and-forget form.
+  Schedule a fire-and-forget task body and return Ok(()) after acceptance.
   """
   def cast(body: (-> Unit)) -> Result<Unit> {
     __task_cast(body)
