@@ -26,11 +26,20 @@ pub fn format_result_lines(
                 .iter()
                 .filter_map(|b| {
                     let val = vm.get_local(b.slot_id)?;
+                    let displayed = b.callable_display.as_ref().map_or_else(
+                        || inspect_value(vm, &val),
+                        |display| {
+                            format!(
+                                "FnCapture(module: {}, name: {}, sig: {})",
+                                display.module, display.name, display.sig
+                            )
+                        },
+                    );
                     Some(format!(
                         "{}: {} = {}",
                         b.name,
                         b.ty,
-                        inspect_value(vm, &val)
+                        displayed
                     ))
                 })
                 .collect();

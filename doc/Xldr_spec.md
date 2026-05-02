@@ -144,7 +144,7 @@ REPL query grammar は `symbol | typed-call | typed-operator | expr` の共有 p
 
 | コマンド | 説明 |
 |---|---|
-| `:type <expr>` | 式の型のみ表示する |
+| `:type <binding>` | 現在見えている binding の型と TypeIdentity を表示する |
 | `:env` | 現在の束縛一覧を表示する |
 | `:reset` | セッションを初期化する |
 | `:step [expr]` | ステッパーを起動する |

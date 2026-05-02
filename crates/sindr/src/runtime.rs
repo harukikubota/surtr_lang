@@ -116,6 +116,7 @@ pub enum ListNode {
 pub struct Callable {
     pub target: CallableTarget,
     pub lexical_captures: Vec<Value>,
+    pub metadata: CallableMetadata,
 }
 
 /// Callable target reference.
@@ -123,6 +124,34 @@ pub struct Callable {
 pub enum CallableTarget {
     Builtin(BuiltinId),
     Function(FunctionId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallableMetadata {
+    pub origin: CallableOrigin,
+    pub module: Option<String>,
+    pub name: Option<String>,
+    pub full_signature: Option<String>,
+    pub applied_args: usize,
+}
+
+impl Default for CallableMetadata {
+    fn default() -> Self {
+        Self {
+            origin: CallableOrigin::Unknown,
+            module: None,
+            name: None,
+            full_signature: None,
+            applied_args: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallableOrigin {
+    Unknown,
+    Closure,
+    Capture,
 }
 
 impl Value {
@@ -576,8 +605,8 @@ pub struct Location {
 #[cfg(test)]
 mod tests {
     use super::{
-        Callable, CallableTarget, HashMapHandle, ListHandle, Location, RichError, TypeEntry,
-        TypeKind, TypeRegistry, Value,
+        Callable, CallableMetadata, CallableTarget, HashMapHandle, ListHandle, Location,
+        RichError, TypeEntry, TypeKind, TypeRegistry, Value,
     };
     use crate::primitives::int;
 
@@ -781,10 +810,12 @@ mod tests {
         let builtin = Value::Callable(Callable {
             target: CallableTarget::Builtin(3),
             lexical_captures: Vec::new(),
+            metadata: CallableMetadata::default(),
         });
         let function = Value::Callable(Callable {
             target: CallableTarget::Function(7),
             lexical_captures: vec![Value::Unit],
+            metadata: CallableMetadata::default(),
         });
         assert_eq!(builtin.to_display_string(&registry), "<builtin:3>");
         assert_eq!(

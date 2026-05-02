@@ -138,6 +138,7 @@ fn core_commands_do_not_require_a_cli_process() {
 
     let help = engine.handle_line(":help");
     assert!(rendered_text(&help).contains("REPL commands:"));
+    assert!(rendered_text(&help).contains(":type <binding>"));
 
     let doc = engine.handle_line(":doc print");
     let doc = doc_text(&doc);
@@ -155,6 +156,74 @@ fn core_commands_do_not_require_a_cli_process() {
     let unknown = engine.handle_line(":nope");
     assert!(!unknown.should_exit);
     assert!(rendered_text(&unknown).contains("Unknown REPL command: :nope"));
+}
+
+#[test]
+fn core_type_command_looks_up_visible_bindings_only() {
+    let mut engine = engine();
+
+    let list = engine.handle_line("list: List<Int> = [1, 2, 3]");
+    let list_text = rendered_text(&list);
+    assert!(list_text.contains("list: List<Int> = [1, 2, 3]"), "{list_text}");
+
+    let list_type = engine.handle_line(":type list");
+    let list_type_text = rendered_text(&list_type);
+    assert_eq!(list_type_text, "List<Int> :: TypeIdentity::Type");
+
+    let closure = engine.handle_line("captured = 1");
+    assert!(rendered_text(&closure).contains("captured: Int = 1"));
+
+    let closure_fun = engine.handle_line("pure = {|n: Int| n + 1}");
+    let closure_fun_text = rendered_text(&closure_fun);
+    assert!(closure_fun_text.contains("pure: (Int -> Int)"), "{closure_fun_text}");
+
+    let closure_fun_type = engine.handle_line(":type pure");
+    let closure_fun_type_text = rendered_text(&closure_fun_type);
+    assert_eq!(closure_fun_type_text, "(Int -> Int) :: TypeIdentity::Closure");
+
+    let capture_fun = engine.handle_line("inc = {|n: Int| n + captured}");
+    let capture_fun_text = rendered_text(&capture_fun);
+    assert!(capture_fun_text.contains("inc: (Int -> Int)"), "{capture_fun_text}");
+
+    let capture_fun_type = engine.handle_line(":type inc");
+    let capture_fun_type_text = rendered_text(&capture_fun_type);
+    assert_eq!(capture_fun_type_text, "(Int -> Int) :: TypeIdentity::Closure");
+
+    let builtin_capture = engine.handle_line("p = &print");
+    let builtin_capture_text = rendered_text(&builtin_capture);
+    assert!(
+        builtin_capture_text.contains(
+            "FnCapture(module: Kernel, name: print, sig: print(a: String) -> Unit)"
+        ),
+        "{builtin_capture_text}"
+    );
+
+    let builtin_capture_type = engine.handle_line(":type p");
+    let builtin_capture_type_text = rendered_text(&builtin_capture_type);
+    assert_eq!(
+        builtin_capture_type_text,
+        "(String -> Unit) :: TypeIdentity::Capture"
+    );
+
+    let partial_capture = engine.handle_line("f = &Add::add(&1, 4)");
+    let partial_capture_text = rendered_text(&partial_capture);
+    assert!(
+        partial_capture_text.contains("FnCapture(module: Add, name: add, sig: (Int -> Int))"),
+        "{partial_capture_text}"
+    );
+
+    let partial_capture_type = engine.handle_line(":type f");
+    let partial_capture_type_text = rendered_text(&partial_capture_type);
+    assert_eq!(
+        partial_capture_type_text,
+        "(Int -> Int) :: TypeIdentity::Capture"
+    );
+
+    for invalid in [":type if", ":type String::is_empty()"] {
+        let result = engine.handle_line(invalid);
+        let text = rendered_text(&result);
+        assert!(text.contains("Usage: :type <binding>"), "{text}");
+    }
 }
 
 #[test]
@@ -397,12 +466,48 @@ fn core_sig_typed_call_queries_specialize_polymorphic_returns() {
 }
 
 #[test]
+fn core_sig_supports_closure_bindings_recapture_and_application() {
+    let mut engine = engine();
+
+    let closure = engine.handle_line("a = {|n: Int, m: Int| n + m}");
+    let closure_text = rendered_text(&closure);
+    assert!(closure_text.contains("a: (Int, Int -> Int)"), "{closure_text}");
+
+    let closure_sig = engine.handle_line(":sig a");
+    assert_eq!(signature_text(&closure_sig), "a: (Int, Int -> Int) :: Closure");
+
+    let arity_error = engine.handle_line(":sig a(1)");
+    let arity_text = rendered_text(&arity_error);
+    assert!(arity_text.contains("function expects 2 argument(s), got 1"), "{arity_text}");
+    assert!(
+        arity_text.contains("Callable type signature: (Int, Int -> Int)"),
+        "{arity_text}"
+    );
+
+    let applied = engine.handle_line(":sig a(1, 2)");
+    assert_eq!(signature_text(&applied), "a(Int, Int) -> Int");
+
+    let recaptured = engine.handle_line("b = &a(1, &1)");
+    let recaptured_text = rendered_text(&recaptured);
+    assert!(recaptured_text.contains("b: (Int -> Int)"), "{recaptured_text}");
+
+    let recaptured_sig = engine.handle_line(":sig b");
+    assert_eq!(signature_text(&recaptured_sig), "b: (Int -> Int) :: Capture");
+
+    let recapture_query = engine.handle_line(":sig &a(1, &1)");
+    assert_eq!(
+        signature_text(&recapture_query),
+        "&a(1, &1): (Int -> Int) :: Capture"
+    );
+}
+
+#[test]
 fn core_callable_refs_and_signature_errors_are_ui_independent() {
     let mut engine = engine();
 
     let builtin_ref = engine.handle_line("&Int::shr");
     assert!(rendered_text(&builtin_ref).contains(
-        "FnCapture(module: Int, name: shr, signature: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
+        "FnCapture(module: Int, name: shr, sig: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
     ));
 
     let trait_helper = engine.handle_line("&concat");

@@ -327,11 +327,26 @@ pub enum ReplTypeKind {
     Enum,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplCallableKind {
+    Closure,
+    Capture,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingInfo {
     pub name: String,
     pub ty: String,
     pub slot_id: u32,
+    pub callable_kind: Option<ReplCallableKind>,
+    pub callable_display: Option<ReplCallableDisplay>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplCallableDisplay {
+    pub module: String,
+    pub name: String,
+    pub sig: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -856,7 +871,17 @@ fn collect_stmt_meta(
 ) {
     match &stmt.node {
         TypedInner::Bind(pat, _) | TypedInner::SafeBind(pat, _) => {
-            collect_pattern_binding_infos(pat, slot_map, bindings);
+            let rhs = match &stmt.node {
+                TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) => rhs.as_ref(),
+                _ => unreachable!(),
+            };
+            collect_pattern_binding_infos(
+                pat,
+                slot_map,
+                bindings,
+                callable_kind_for_node(rhs),
+                callable_display_for_node(rhs),
+            );
         }
         TypedInner::StructDef(_, name, field_names, _) => {
             type_defs.push(TypeDefDisplay {
@@ -915,6 +940,8 @@ fn collect_pattern_binding_infos(
     pat: &TypedPattern,
     slot_map: &HashMap<u32, u32>,
     out: &mut Vec<BindingInfo>,
+    callable_kind: Option<ReplCallableKind>,
+    callable_display: Option<ReplCallableDisplay>,
 ) {
     match pat {
         TypedPattern::Var(ty, id) => {
@@ -923,6 +950,8 @@ fn collect_pattern_binding_infos(
                     name: id.name.clone(),
                     ty: ty_to_string(ty),
                     slot_id: *slot_id,
+                    callable_kind,
+                    callable_display: callable_display.clone(),
                 });
             }
         }
@@ -932,9 +961,11 @@ fn collect_pattern_binding_infos(
                     name: id.name.clone(),
                     ty: ty_to_string(ty),
                     slot_id: *slot_id,
+                    callable_kind,
+                    callable_display: callable_display.clone(),
                 });
             }
-            collect_pattern_binding_infos(inner, slot_map, out);
+            collect_pattern_binding_infos(inner, slot_map, out, callable_kind, callable_display);
         }
         TypedPattern::Wildcard(_)
         | TypedPattern::ListNil(_)
@@ -943,22 +974,118 @@ fn collect_pattern_binding_infos(
         | TypedPattern::BoolLit(_, _) => {}
         TypedPattern::Tuple(_, items) => {
             for item in items {
-                collect_pattern_binding_infos(item, slot_map, out);
+                collect_pattern_binding_infos(
+                    item,
+                    slot_map,
+                    out,
+                    callable_kind,
+                    callable_display.clone(),
+                );
             }
         }
         TypedPattern::ListCons(_, head, tail) => {
-            collect_pattern_binding_infos(head, slot_map, out);
-            collect_pattern_binding_infos(tail, slot_map, out);
+            collect_pattern_binding_infos(
+                head,
+                slot_map,
+                out,
+                callable_kind,
+                callable_display.clone(),
+            );
+            collect_pattern_binding_infos(tail, slot_map, out, callable_kind, callable_display);
         }
         TypedPattern::ResultOk(_, inner) => {
-            collect_pattern_binding_infos(inner, slot_map, out);
+            collect_pattern_binding_infos(inner, slot_map, out, callable_kind, callable_display);
         }
         TypedPattern::Extractor { items, .. } => {
             for item in items {
-                collect_pattern_binding_infos(item, slot_map, out);
+                collect_pattern_binding_infos(
+                    item,
+                    slot_map,
+                    out,
+                    callable_kind,
+                    callable_display.clone(),
+                );
             }
         }
     }
+}
+
+fn callable_kind_for_node(node: &TypedNode) -> Option<ReplCallableKind> {
+    match &node.node {
+        TypedInner::Closure(params, _, _)
+            if params
+                .iter()
+                .all(|param| param.id.name.starts_with("__cap_")) =>
+        {
+            Some(ReplCallableKind::Capture)
+        }
+        TypedInner::Closure(..) => Some(ReplCallableKind::Closure),
+        TypedInner::Capture(..) | TypedInner::InjectCall(..) => Some(ReplCallableKind::Capture),
+        TypedInner::Semi(inner) => callable_kind_for_node(inner),
+        _ => None,
+    }
+}
+
+fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
+    match &node.node {
+        TypedInner::InjectCall(func, _) => {
+            let (module, name) = callable_head_for_node(func.as_ref())?;
+            Some(ReplCallableDisplay {
+                module,
+                name,
+                sig: ty_to_string(&node.ty),
+            })
+        }
+        TypedInner::Closure(params, _, body)
+            if params
+                .iter()
+                .all(|param| param.id.name.starts_with("__cap_")) =>
+        {
+            let (module, name) = callable_head_for_invocation(body.as_ref())?;
+            Some(ReplCallableDisplay {
+                module,
+                name,
+                sig: ty_to_string(&node.ty),
+            })
+        }
+        TypedInner::Semi(inner) => callable_display_for_node(inner),
+        _ => None,
+    }
+}
+
+fn callable_head_for_node(node: &TypedNode) -> Option<(String, String)> {
+    match &node.node {
+        TypedInner::Var(id) => {
+            let qualified = id
+                .qualified_name
+                .as_deref()
+                .unwrap_or(id.name.as_str());
+            let (module, name) = qualified.rsplit_once("::")?;
+            Some((module.to_string(), name.to_string()))
+        }
+        _ => None,
+    }
+}
+
+fn callable_head_for_invocation(node: &TypedNode) -> Option<(String, String)> {
+    match &node.node {
+        TypedInner::App(func, _) => callable_head_for_node(func),
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            origin: TraitCallOrigin::Explicit,
+            ..
+        } => Some((trait_short_name(trait_name).to_string(), method_name.clone())),
+        _ => None,
+    }
+}
+
+fn trait_short_name(trait_name: &str) -> &str {
+    trait_name
+        .split_once('<')
+        .map(|(name, _)| name)
+        .or_else(|| trait_name.split_once(" for ").map(|(name, _)| name))
+        .unwrap_or(trait_name)
 }
 
 fn ty_to_string(ty: &Ty) -> String {
@@ -1219,6 +1346,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: false,
                 closure: true,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: true,
@@ -1375,6 +1503,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: false,
                 closure: false,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: true,
@@ -1430,6 +1559,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: false,
                 closure: false,
+                partial_apply_wrapper: true,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: true,
@@ -1666,6 +1796,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: *visibility == Visibility::Public,
                 closure: false,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: false,
@@ -1738,6 +1869,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: true,
                 closure: false,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: false,
@@ -1805,6 +1937,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: *visibility == Visibility::Public,
                 closure: false,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: false,

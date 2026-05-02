@@ -6,7 +6,7 @@ pub mod registry;
 
 pub use codegen::{
     codegen, compose_bytecode_with_chunk, BindingInfo, ChunkMeta, ForgeCheckpoint, ForgeSession,
-    ReplTypeKind, TypeDefDisplay,
+    ReplCallableDisplay, ReplCallableKind, ReplTypeKind, TypeDefDisplay,
 };
 
 #[cfg(test)]

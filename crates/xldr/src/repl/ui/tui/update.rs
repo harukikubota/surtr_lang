@@ -59,7 +59,7 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("doc", ":doc <symbol>  — show docs"),
     ("error", ":error [full|summary]  — set error display mode"),
     ("sig", ":sig <symbol|expr>  — show signature"),
-    ("type", ":type <expr>  — infer type"),
+    ("type", ":type <binding>  — lookup binding type"),
     ("save", ":save <path>  — save session to .eldr"),
 ];
 
@@ -239,7 +239,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             app.push_result(
                 ":help",
                 vec![
-                    ":q :help :doc <sym> :error [full|summary] :sig <sym|expr> :type <expr> :save <path> :v <idx> :j <idx>"
+                    ":q :help :doc <sym> :error [full|summary] :sig <sym|expr> :type <binding> :save <path> :v <idx> :j <idx>"
                         .to_string(),
                 ],
                 PresentedResultKind::Info,
@@ -320,13 +320,13 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             if arg.is_empty() {
                 app.push_result(
                     ":type",
-                    vec!["Usage: :type <expr>".to_string()],
+                    vec!["Usage: :type <binding>".to_string()],
                     PresentedResultKind::EvalError,
                 );
             } else {
                 app.push_result(
                     format!(":type {arg}"),
-                    vec![format!("type({arg}): (not yet implemented)")],
+                    vec![format!("Type lookup is handled by the REPL core for `{arg}`.")],
                     PresentedResultKind::Info,
                 );
             }

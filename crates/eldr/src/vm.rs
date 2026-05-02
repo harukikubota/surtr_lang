@@ -5,7 +5,8 @@ use sindr::ir::{
 };
 use sindr::primitives::SurtrInt;
 use sindr::runtime::{
-    Callable, CallableTarget, ListHandle, Location, RichError, TypeRegistry, Value,
+    Callable, CallableMetadata, CallableOrigin, CallableTarget, ListHandle, Location, RichError,
+    TypeRegistry, Value,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -337,6 +338,95 @@ impl VM {
 
     pub fn function_entries(&self) -> &[FunctionEntry] {
         &self.bytecode.functions
+    }
+
+    fn callable_metadata_for_builtin(&self, builtin_id: u16) -> CallableMetadata {
+        let Some(meta) = builtin_meta_by_id(builtin_id) else {
+            return CallableMetadata::default();
+        };
+        let doc = self.bytecode.docs.iter().rev().find(|doc| {
+            doc.qualified_name.rsplit("::").next() == Some(meta.name)
+                && matches!(doc.kind, sindr::ir::DocKind::Function)
+        });
+
+        CallableMetadata {
+            origin: CallableOrigin::Capture,
+            module: doc.map(|doc| doc.module_path.clone()),
+            name: Some(meta.name.to_string()),
+            full_signature: doc
+                .and_then(|doc| doc.signature.clone())
+                .or_else(|| Some(meta.sig_str.to_string())),
+            applied_args: 0,
+        }
+    }
+
+    fn callable_metadata_for_function(&self, fun_idx: u32) -> CallableMetadata {
+        let Some(entry) = self.bytecode.functions.get(fun_idx as usize) else {
+            return CallableMetadata::default();
+        };
+        if entry.flags.closure {
+            return CallableMetadata {
+                origin: CallableOrigin::Closure,
+                ..CallableMetadata::default()
+            };
+        }
+
+        let qualified_name = entry.qualified_name.as_deref();
+        let signature = entry.signature.clone().or_else(|| {
+            qualified_name.and_then(|qualified_name| {
+                self.bytecode
+                    .docs
+                    .iter()
+                    .rev()
+                    .find(|doc| {
+                        matches!(doc.kind, sindr::ir::DocKind::Function)
+                            && doc.qualified_name == qualified_name
+                    })
+                    .and_then(|doc| doc.signature.clone())
+            })
+        });
+        let (module, name) = qualified_name
+            .map(split_qualified_name_owned)
+            .unwrap_or((None, None));
+
+        CallableMetadata {
+            origin: if signature.is_some() {
+                CallableOrigin::Capture
+            } else {
+                CallableOrigin::Unknown
+            },
+            module,
+            name,
+            full_signature: signature,
+            applied_args: 0,
+        }
+    }
+
+    fn promote_partial_apply_metadata(
+        &self,
+        target: &Callable,
+        lexical_captures: &[Value],
+    ) -> CallableMetadata {
+        let CallableTarget::Function(fun_idx) = target.target else {
+            return target.metadata.clone();
+        };
+        let Some(entry) = self.bytecode.functions.get(fun_idx as usize) else {
+            return target.metadata.clone();
+        };
+        if !entry.flags.partial_apply_wrapper {
+            return target.metadata.clone();
+        }
+
+        let Some(Value::Callable(original)) = lexical_captures.first() else {
+            return target.metadata.clone();
+        };
+        if original.metadata.origin != CallableOrigin::Capture {
+            return target.metadata.clone();
+        }
+
+        let mut metadata = original.metadata.clone();
+        metadata.applied_args += lexical_captures.len().saturating_sub(1);
+        metadata
     }
 
     pub fn runtime_error_location(&self) -> Option<Location> {
@@ -1500,6 +1590,7 @@ impl VM {
                 self.stack.push(Value::Callable(Callable {
                     target: CallableTarget::Builtin(builtin_id),
                     lexical_captures: Vec::new(),
+                    metadata: self.callable_metadata_for_builtin(builtin_id),
                 }));
             }
 
@@ -1507,6 +1598,7 @@ impl VM {
                 self.stack.push(Value::Callable(Callable {
                     target: CallableTarget::Function(fun_idx),
                     lexical_captures: Vec::new(),
+                    metadata: self.callable_metadata_for_function(fun_idx),
                 }));
             }
 
@@ -2016,6 +2108,8 @@ impl VM {
                 let callable = match target {
                     Value::Callable(mut callable) => {
                         callable.lexical_captures.extend(lexical_captures);
+                        callable.metadata =
+                            self.promote_partial_apply_metadata(&callable, &callable.lexical_captures);
                         callable
                     }
                     _ => {
@@ -2330,6 +2424,16 @@ impl VM {
         let a = self.pop_float()?;
         self.stack.push(f(a, b));
         Ok(())
+    }
+}
+
+fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<String>) {
+    match qualified_name.rsplit_once("::") {
+        Some((module, name)) if !module.is_empty() => {
+            (Some(module.to_string()), Some(name.to_string()))
+        }
+        _ if qualified_name.is_empty() => (None, None),
+        _ => (Some("<local>".to_string()), Some(qualified_name.to_string())),
     }
 }
 

@@ -275,7 +275,7 @@
   - source 操作 API、runner DSL、init command を別途仕様化する。
   - compile unit / source rules との責務分離を崩さないことを前提にする。
 - REPL command 拡張
-  - `:doc` は実装済み前提とし、その先の `:type`, `:browse`, file ingest UX、補完改善を整理対象にする。
+  - `:doc` は実装済み前提とし、その先の `:browse`, file ingest UX、補完改善を整理対象にする。
 - closure の `expected=None` 推論強化
   - 期待型なしクロージャをどこまで多相的に扱うかを、let-generalization なしの baseline と矛盾しない範囲で再検討する。
   - 退避ケース:

@@ -240,6 +240,8 @@ pub struct FunctionFlags {
     #[serde(default)]
     pub closure: bool,
     #[serde(default)]
+    pub partial_apply_wrapper: bool,
+    #[serde(default)]
     pub builtin_wrapper: bool,
     #[serde(default)]
     pub tail_entry: bool,
@@ -1364,6 +1366,7 @@ mod tests {
                 flags: FunctionFlags {
                     public: true,
                     closure: false,
+                    partial_apply_wrapper: false,
                     builtin_wrapper: false,
                     tail_entry: false,
                     generated: false,

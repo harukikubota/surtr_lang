@@ -4,11 +4,10 @@ use crate::vm::VM;
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
-use sindr::ir::DocKind;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
-    Callable, CallableTarget, HashMapHandle, ListHandle, Location, RandomGeneratorHandle,
-    RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
+    Callable, HashMapHandle, ListHandle, Location, RandomGeneratorHandle, RegexCapturesHandle,
+    RegexHandle, RegexMatchHandle, RichError,
 };
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Read};
@@ -1748,52 +1747,123 @@ fn quote_surtr_string_literal(input: &str) -> String {
     out
 }
 
-fn inspect_callable(vm: &VM, callable: &Callable) -> Option<String> {
-    if !callable.lexical_captures.is_empty() {
+fn inspect_callable(_vm: &VM, callable: &Callable) -> Option<String> {
+    if callable.metadata.origin != sindr::runtime::CallableOrigin::Capture {
         return None;
     }
 
-    match callable.target {
-        CallableTarget::Builtin(id) => {
-            let meta = builtin_meta_by_id(id)?;
-            let doc = vm.bytecode().docs.iter().rev().find(|doc| {
-                matches!(doc.kind, DocKind::Function)
-                    && doc.qualified_name.rsplit("::").next() == Some(meta.name)
-            })?;
-            let signature = doc.signature.as_deref()?;
-            Some(format!(
-                "FnCapture(module: {}, name: {}, signature: {})",
-                doc.module_path, meta.name, signature
-            ))
-        }
-        CallableTarget::Function(fun_idx) => {
-            let entry = vm.bytecode().functions.get(fun_idx as usize)?;
-            let qualified_name = entry.qualified_name.as_deref()?;
-            let signature = entry.signature.as_deref().or_else(|| {
-                vm.bytecode()
-                    .docs
-                    .iter()
-                    .rev()
-                    .find(|doc| {
-                        matches!(doc.kind, DocKind::Function)
-                            && doc.qualified_name == qualified_name
-                    })
-                    .and_then(|doc| doc.signature.as_deref())
-            })?;
-            let (module, name) = split_qualified_name(qualified_name);
-            Some(format!(
-                "FnCapture(module: {}, name: {}, signature: {})",
-                module, name, signature
-            ))
-        }
+    let module = callable.metadata.module.as_deref()?;
+    let name = callable.metadata.name.as_deref()?;
+    let full_signature = callable.metadata.full_signature.as_deref()?;
+    let sig = if callable.metadata.applied_args == 0 {
+        full_signature.to_string()
+    } else {
+        remaining_callable_signature(full_signature, callable.metadata.applied_args)?
+    };
+
+    Some(format!(
+        "FnCapture(module: {}, name: {}, sig: {})",
+        module, name, sig
+    ))
+}
+
+fn remaining_callable_signature(signature: &str, applied_args: usize) -> Option<String> {
+    let (param_types, return_ty) = callable_signature_parts(signature)?;
+    if applied_args > param_types.len() {
+        return None;
+    }
+    let remaining = &param_types[applied_args..];
+    if remaining.is_empty() {
+        Some(format!("(-> {return_ty})"))
+    } else {
+        Some(format!("({} -> {return_ty})", remaining.join(", ")))
     }
 }
 
-fn split_qualified_name(qualified_name: &str) -> (&str, &str) {
-    match qualified_name.rsplit_once("::") {
-        Some((module, name)) if !module.is_empty() => (module, name),
-        _ => ("<local>", qualified_name),
+fn callable_signature_parts(signature: &str) -> Option<(Vec<String>, String)> {
+    let arrow_idx = find_top_level_arrow(signature)?;
+    let return_ty = signature[arrow_idx + 2..].trim().to_string();
+    let head = signature[..arrow_idx].trim();
+    let open_idx = head.find('(')?;
+    let close_idx = find_matching_paren(head, open_idx)?;
+    let params_str = head[open_idx + 1..close_idx].trim();
+    let param_types = split_top_level_commas(params_str)
+        .into_iter()
+        .map(|param| {
+            param.rsplit_once(':')
+                .map(|(_, ty)| ty.trim().to_string())
+                .unwrap_or_else(|| param.trim().to_string())
+        })
+        .filter(|param| !param.is_empty())
+        .collect::<Vec<_>>();
+    Some((param_types, return_ty))
+}
+
+fn find_matching_paren(input: &str, open_idx: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (idx, ch) in input.char_indices().skip(open_idx) {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
     }
+    None
+}
+
+fn find_top_level_arrow(input: &str) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let chars = input.char_indices().collect::<Vec<_>>();
+    let mut idx = 0usize;
+    while idx + 1 < chars.len() {
+        let (byte_idx, ch) = chars[idx];
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.checked_sub(1)?,
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.checked_sub(1)?,
+            '-' if chars[idx + 1].1 == '>' && paren_depth == 0 && angle_depth == 0 => {
+                return Some(byte_idx);
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn split_top_level_commas(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut paren_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut start = 0usize;
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            ',' if paren_depth == 0 && angle_depth == 0 => {
+                let part = input[start..idx].trim();
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    let tail = input[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    parts
 }
 
 fn decode_regex_arg<'a>(
@@ -2209,8 +2279,8 @@ mod tests {
     use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
     use sindr::primitives::int;
     use sindr::runtime::{
-        Callable, CallableTarget, HashMapHandle, ListHandle, Location, RichError, TypeEntry,
-        TypeKind, TypeRegistry, Value,
+        Callable, CallableMetadata, CallableOrigin, CallableTarget, HashMapHandle, ListHandle,
+        Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value,
     };
 
     fn test_vm() -> VM {
@@ -3359,11 +3429,20 @@ mod tests {
         let value = Value::Callable(Callable {
             target: CallableTarget::Builtin(8),
             lexical_captures: Vec::new(),
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("Int".into()),
+                name: Some("shr".into()),
+                full_signature: Some(
+                    "shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>".into(),
+                ),
+                applied_args: 0,
+            },
         });
 
         assert_eq!(
             inspect_value(&vm, &value),
-            "FnCapture(module: Int, name: shr, signature: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
+            "FnCapture(module: Int, name: shr, sig: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
         );
     }
 
@@ -3387,11 +3466,18 @@ mod tests {
         let value = Value::Callable(Callable {
             target: CallableTarget::Function(0),
             lexical_captures: Vec::new(),
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("Main".into()),
+                name: Some("add".into()),
+                full_signature: Some("add(x: Int, y: Int) -> Int".into()),
+                applied_args: 0,
+            },
         });
 
         assert_eq!(
             inspect_value(&vm, &value),
-            "FnCapture(module: Main, name: add, signature: add(x: Int, y: Int) -> Int)"
+            "FnCapture(module: Main, name: add, sig: add(x: Int, y: Int) -> Int)"
         );
     }
 
@@ -3415,20 +3501,70 @@ mod tests {
         let value = Value::Callable(Callable {
             target: CallableTarget::Function(0),
             lexical_captures: Vec::new(),
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("<local>".into()),
+                name: Some("add".into()),
+                full_signature: Some("add(x: Int, y: Int) -> Int".into()),
+                applied_args: 0,
+            },
         });
 
         assert_eq!(
             inspect_value(&vm, &value),
-            "FnCapture(module: <local>, name: add, signature: add(x: Int, y: Int) -> Int)"
+            "FnCapture(module: <local>, name: add, sig: add(x: Int, y: Int) -> Int)"
         );
     }
 
     #[test]
-    fn inspect_keeps_fallback_callable_display_for_lexical_captures() {
+    fn inspect_formats_partial_capture_with_remaining_signature() {
+        let vm = VM::new(Bytecode::default());
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Function(9),
+            lexical_captures: vec![Value::Unit],
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("Add".into()),
+                name: Some("add".into()),
+                full_signature: Some("add(value: Int, rhs: Int) -> Int".into()),
+                applied_args: 1,
+            },
+        });
+
+        assert_eq!(
+            inspect_value(&vm, &value),
+            "FnCapture(module: Add, name: add, sig: (Int -> Int))"
+        );
+    }
+
+    #[test]
+    fn inspect_formats_zero_arg_partial_capture_as_thunk_type() {
+        let vm = VM::new(Bytecode::default());
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Function(9),
+            lexical_captures: vec![Value::Unit, Value::Unit],
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("Main".into()),
+                name: Some("ready".into()),
+                full_signature: Some("ready(left: Int, right: Int) -> String".into()),
+                applied_args: 2,
+            },
+        });
+
+        assert_eq!(
+            inspect_value(&vm, &value),
+            "FnCapture(module: Main, name: ready, sig: (-> String))"
+        );
+    }
+
+    #[test]
+    fn inspect_keeps_fallback_callable_display_for_unknown_lexical_captures() {
         let vm = VM::new(Bytecode::default());
         let value = Value::Callable(Callable {
             target: CallableTarget::Builtin(8),
             lexical_captures: vec![Value::Int(int(1))],
+            metadata: CallableMetadata::default(),
         });
 
         assert_eq!(inspect_value(&vm, &value), "<builtin:8>");

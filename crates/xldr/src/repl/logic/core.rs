@@ -4,7 +4,7 @@ use std::panic;
 
 use diagnostics::{SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
-use eldr::value::Value;
+use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
 use scar::typed::{TraitCallOrigin, TypedInner, TypedNode};
 use scar::types::Ty;
@@ -751,6 +751,7 @@ impl ReplEngine {
             ":doc <symbol>        Show documentation for a visible symbol".to_string(),
             ":sig <symbol|expr>   Show the signature for a visible function or expression"
                 .to_string(),
+            ":type <binding>      Show the type and identity for a visible binding".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
             ":v <line>            Recall a previous result".to_string(),
@@ -774,6 +775,14 @@ impl ReplEngine {
         ]
     }
 
+    fn type_help_lines() -> Vec<String> {
+        vec![
+            "Usage: :type <binding>".to_string(),
+            "Examples: :type list, :type my_closure".to_string(),
+            "Looks up the latest visible binding only; expressions are not supported.".to_string(),
+        ]
+    }
+
     fn handle_help(&self, topic: Option<&str>) -> Vec<String> {
         let Some(topic) = topic.map(str::trim).filter(|topic| !topic.is_empty()) else {
             return Self::help_lines();
@@ -781,6 +790,7 @@ impl ReplEngine {
         match topic.strip_prefix(':').unwrap_or(topic) {
             "doc" => Self::doc_help_lines(),
             "sig" => Self::sig_help_lines(),
+            "type" => Self::type_help_lines(),
             other => {
                 let mut rendered = vec![format!("No help found for :{}", other)];
                 rendered.push("Type :help for available REPL commands.".to_string());
@@ -1087,23 +1097,36 @@ impl ReplEngine {
             });
         }
         match parse_repl_query(trimmed) {
-            Ok(ReplQuery::Symbol(symbol)) => match self.find_signature(&symbol) {
-                Some((qualified_name, signature)) => {
-                    let rendered =
-                        Self::render_signature_with_qualified_name(&qualified_name, signature);
-                    ReplResult::ok(ReplOutput::SigResolved {
+            Ok(ReplQuery::Symbol(symbol)) => {
+                if let Some(rendered) = self.binding_callable_sig_summary(&symbol) {
+                    return ReplResult::ok(ReplOutput::SigResolved {
                         signature: rendered,
-                    })
+                    });
                 }
-                None => ReplResult::ok(ReplOutput::CommandOutput {
-                    rendered: vec![
-                        format!("No signature found for {}", trimmed),
-                        "Try `:sig <expr>` for an expression query or `:doc <symbol>` for docs."
-                            .to_string(),
-                    ],
-                }),
-            },
-            Ok(ReplQuery::TypedCall(query)) => self.handle_sig_typed_call(trimmed, &query),
+                match self.find_signature(&symbol) {
+                    Some((qualified_name, signature)) => {
+                        let rendered =
+                            Self::render_signature_with_qualified_name(&qualified_name, signature);
+                        ReplResult::ok(ReplOutput::SigResolved {
+                            signature: rendered,
+                        })
+                    }
+                    None => ReplResult::ok(ReplOutput::CommandOutput {
+                        rendered: vec![
+                            format!("No signature found for {}", trimmed),
+                            "Try `:sig <expr>` for an expression query or `:doc <symbol>` for docs."
+                                .to_string(),
+                        ],
+                    }),
+                }
+            }
+            Ok(ReplQuery::TypedCall(query)) => {
+                if query.callee.starts_with('&') {
+                    self.handle_sig_expression(trimmed)
+                } else {
+                    self.handle_sig_typed_call(trimmed, &query)
+                }
+            }
             Ok(ReplQuery::TypedOperator(query)) => {
                 if query.lhs.source.is_empty() || query.rhs.source.is_empty() {
                     ReplResult::ok(ReplOutput::CommandOutput {
@@ -1121,6 +1144,35 @@ impl ReplEngine {
                 rendered: vec![err.message().to_string()],
             }),
         }
+    }
+
+    fn handle_type(&self, symbol: &str) -> ReplResult {
+        let trimmed = symbol.trim();
+        if !Self::is_type_lookup_symbol(trimmed) {
+            return ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: Self::type_help_lines(),
+            });
+        }
+
+        let Some(binding) = self.binding_info(trimmed) else {
+            return ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: vec![format!("No binding found for {}", trimmed)],
+            });
+        };
+
+        let Some(value) = self.vm.get_local(binding.slot_id) else {
+            return ReplResult::ok(ReplOutput::CommandOutput {
+                rendered: vec![format!("Binding `{}` has no current value.", trimmed)],
+            });
+        };
+
+        ReplResult::ok(ReplOutput::CommandOutput {
+            rendered: vec![format!(
+                "{} :: {}",
+                binding.ty.as_str(),
+                self.render_type_identity(binding, &value)
+            )],
+        })
     }
 
     fn handle_sig_expression(&mut self, source_query: &str) -> ReplResult {
@@ -1300,6 +1352,13 @@ impl ReplEngine {
     }
 
     fn render_expression_signature(source_query: &str, expr: &Ast, typed: &TypedNode) -> String {
+        if let Some(kind) = Self::callable_kind_for_typed_node(typed) {
+            return Self::render_callable_sig_summary(
+                source_query,
+                &Self::ty_to_string(&typed.ty),
+                kind,
+            );
+        }
         let defined = Self::defined_signature_for_expr(expr, typed);
         let specialized = format!("{source_query}: {}", Self::ty_to_string(&typed.ty));
         format!("defined:\n  {defined}\n\nspecialized:\n  {specialized}")
@@ -1451,6 +1510,12 @@ impl ReplEngine {
     }
 
     fn handle_sig_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
+        if let Some(binding) = self.binding_info(&query.callee) {
+            if let Some(rendered) = self.handle_sig_binding_typed_call(source_query, query, binding)
+            {
+                return rendered;
+            }
+        }
         let matches = self.match_typed_call_docs(query);
         match matches.as_slice() {
             [entry] => {
@@ -1522,6 +1587,146 @@ impl ReplEngine {
 
     fn query_arg_type(&self, arg: &QueryArg) -> Result<String, String> {
         self.query_arg_ast_ty(arg).map(|ty| format_query_ty(&ty))
+    }
+
+    fn binding_callable_sig_summary(&self, symbol: &str) -> Option<String> {
+        let binding = self.binding_info(symbol)?;
+        let kind = self.binding_callable_kind(binding)?;
+        let ty = self.binding_callable_ty(binding)?;
+        Some(Self::render_callable_sig_summary(symbol, &format_query_ty(&ty), kind))
+    }
+
+    fn handle_sig_binding_typed_call(
+        &self,
+        source_query: &str,
+        query: &TypedCallQuery,
+        binding: &forge::BindingInfo,
+    ) -> Option<ReplResult> {
+        let Some(func_ty) = self.binding_callable_ty(binding) else {
+            return None;
+        };
+        let AstTy::Func(_, params, ret) = func_ty else {
+            return None;
+        };
+
+        let arg_types = match self.query_arg_ast_types(query.args.as_slice()) {
+            Ok(arg_types) => arg_types,
+            Err(message) => {
+                return Some(ReplResult::ok(ReplOutput::CommandOutput {
+                    rendered: vec![message],
+                }));
+            }
+        };
+
+        if arg_types.len() != params.len() {
+            return Some(self.sig_callable_arity_error(
+                source_query,
+                params.len(),
+                arg_types.len(),
+                &AstTy::Func(Span { start: 0, end: 0 }, params, ret),
+            ));
+        }
+
+        Some(ReplResult::ok(ReplOutput::SigResolved {
+            signature: Self::render_callable_application_summary(
+                &query.callee,
+                &arg_types,
+                ret.as_ref(),
+            ),
+        }))
+    }
+
+    fn render_callable_sig_summary(
+        name_or_source: &str,
+        ty: &str,
+        kind: forge::ReplCallableKind,
+    ) -> String {
+        let kind = match kind {
+            forge::ReplCallableKind::Closure => "Closure",
+            forge::ReplCallableKind::Capture => "Capture",
+        };
+        format!("{name_or_source}: {ty} :: {kind}")
+    }
+
+    fn render_callable_application_summary(
+        callee: &str,
+        arg_types: &[AstTy],
+        return_ty: &AstTy,
+    ) -> String {
+        let args = arg_types
+            .iter()
+            .map(format_query_ty)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{callee}({args}) -> {}", format_query_ty(return_ty))
+    }
+
+    fn binding_callable_kind(
+        &self,
+        binding: &forge::BindingInfo,
+    ) -> Option<forge::ReplCallableKind> {
+        if let Some(kind) = binding.callable_kind {
+            return Some(kind);
+        }
+        let value = self.vm.get_local(binding.slot_id)?;
+        match value {
+            Value::Callable(callable) => match callable.metadata.origin {
+                sindr::runtime::CallableOrigin::Closure => Some(forge::ReplCallableKind::Closure),
+                sindr::runtime::CallableOrigin::Capture => Some(forge::ReplCallableKind::Capture),
+                sindr::runtime::CallableOrigin::Unknown => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn binding_callable_ty(&self, binding: &forge::BindingInfo) -> Option<AstTy> {
+        let ty = parse_binding_query_type(&binding.ty)?;
+        matches!(ty, AstTy::Func(_, _, _)).then_some(ty)
+    }
+
+    fn callable_kind_for_typed_node(typed: &TypedNode) -> Option<forge::ReplCallableKind> {
+        match &typed.node {
+            TypedInner::Closure(params, _, _)
+                if params
+                    .iter()
+                    .all(|param| param.id.name.starts_with("__cap_")) =>
+            {
+                Some(forge::ReplCallableKind::Capture)
+            }
+            TypedInner::Closure(..) => Some(forge::ReplCallableKind::Closure),
+            TypedInner::Capture(..) | TypedInner::InjectCall(..) => {
+                Some(forge::ReplCallableKind::Capture)
+            }
+            TypedInner::Semi(inner) => Self::callable_kind_for_typed_node(inner),
+            _ => None,
+        }
+    }
+
+    fn sig_callable_arity_error(
+        &self,
+        source_query: &str,
+        expected: usize,
+        got: usize,
+        callable_ty: &AstTy,
+    ) -> ReplResult {
+        let error = diagnostics::TypeErrorDiagnostic::new(
+            format!("function expects {} argument(s), got {}", expected, got),
+            Span {
+                start: 0,
+                end: source_query.len(),
+            },
+            Some(format!(
+                "Callable type signature: {}",
+                format_query_ty(callable_ty)
+            )),
+        );
+        let spec = diagnostics::type_error_spec(source_query, &error);
+        let rendered = error_display::diagnostic_lines("REPL", source_query, &spec, self.error_display_mode);
+        ReplResult::ok(ReplOutput::EvalError {
+            idx: self.results.len(),
+            source: format!(":sig {source_query}"),
+            rendered,
+        })
     }
 
     fn query_arg_types(&self, args: &[QueryArg]) -> Result<Vec<String>, String> {
@@ -2063,6 +2268,97 @@ impl ReplEngine {
             .map(|binding| binding.ty.clone())
     }
 
+    fn binding_info(&self, name: &str) -> Option<&forge::BindingInfo> {
+        self.result_metas
+            .iter()
+            .rev()
+            .flatten()
+            .flat_map(|meta| meta.bindings.iter().rev())
+            .find(|binding| binding.name == name)
+    }
+
+    fn is_type_lookup_symbol(symbol: &str) -> bool {
+        if symbol.is_empty() {
+            return false;
+        }
+        if matches!(
+            symbol,
+            "True"
+                | "False"
+                | "def"
+                | "defp"
+                | "defmod"
+                | "namespace"
+                | "deftrait"
+                | "import"
+                | "include"
+                | "if"
+                | "if_then"
+                | "defstruct"
+                | "defrecord"
+                | "deferror"
+                | "defenum"
+                | "defextractor"
+                | "impl"
+                | "for"
+                | "match"
+                | "when"
+                | "cond"
+                | "private"
+                | "public"
+                | "const"
+                | "type"
+                | "where"
+        ) {
+            return false;
+        }
+
+        let mut chars = symbol.chars();
+        let Some(first) = chars.next() else {
+            return false;
+        };
+        if !(first.is_ascii_alphabetic() || first == '_') {
+            return false;
+        }
+        chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    }
+
+    fn render_type_identity(&self, binding: &forge::BindingInfo, value: &Value) -> String {
+        if let Some(kind) = binding.callable_kind {
+            return match kind {
+                forge::ReplCallableKind::Closure => "TypeIdentity::Closure".to_string(),
+                forge::ReplCallableKind::Capture => "TypeIdentity::Capture".to_string(),
+            };
+        }
+        match value {
+            Value::Callable(callable) => {
+                match callable.metadata.origin {
+                    sindr::runtime::CallableOrigin::Closure => {
+                        "TypeIdentity::Closure".to_string()
+                    }
+                    sindr::runtime::CallableOrigin::Capture => {
+                        "TypeIdentity::Capture".to_string()
+                    }
+                    sindr::runtime::CallableOrigin::Unknown => "TypeIdentity::Closure".to_string(),
+                }
+            }
+            Value::Tagged { tag, .. } => {
+                let identity = self
+                    .vm
+                    .type_registry()
+                    .lookup(*tag)
+                    .map(|entry| match entry.kind {
+                        TypeKind::Struct => "Struct",
+                        TypeKind::Record => "Record",
+                        TypeKind::EnumVariant => "Enum",
+                    })
+                    .unwrap_or("Type");
+                format!("TypeIdentity::{}", identity)
+            }
+            _ => "TypeIdentity::Type".to_string(),
+        }
+    }
+
     fn handle_error_mode(&mut self, mode: Option<&str>) -> Vec<String> {
         let Some(mode) = mode else {
             return vec![format!(
@@ -2117,6 +2413,9 @@ impl ReplEngine {
                     }
                     ReplCommand::Sig { symbol } => {
                         return self.handle_sig(&symbol);
+                    }
+                    ReplCommand::Type { symbol } => {
+                        return self.handle_type(&symbol);
                     }
                     ReplCommand::Error { mode } => {
                         let rendered = self.handle_error_mode(mode.as_deref());
