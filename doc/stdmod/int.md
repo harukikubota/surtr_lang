@@ -12,9 +12,23 @@
   - `BitWidth::W64`
   - `BitWidth::W128`
   - `BitWidth::Any(bits)`
+- `IntBase`
+  - `IntBase::Bin`
+  - `IntBase::Oct`
+  - `IntBase::Dec`
+  - `IntBase::Hex`
 
 ## Exported functions
 
+- `IntBase::radix(base) -> Int`
+- `IntBase::prefix(base) -> String`
+- `IntBase::label(base) -> String`
+- `Int::parse(text) -> Result<Int, ParseIntError>`
+- `Int::parse_dec(text) -> Result<Int, ParseIntError>`
+- `Int::parse_hex(text) -> Result<Int, ParseIntError>`
+- `Int::parse_oct(text) -> Result<Int, ParseIntError>`
+- `Int::parse_bin(text) -> Result<Int, ParseIntError>`
+- `Int::parse_literal(text) -> Result<Int, ParseIntLiteralError>`
 - `Int::safe_div(a, b) -> Result<Int | Float, ZeroDivisionError>`
 - `Int::safe_mod(a, b) -> Result<Int, ZeroDivisionError>`
 - `Int::bit_and(a, b) -> Int`
@@ -49,6 +63,12 @@
 
 ## Error contract
 
+- `ParseIntError(detail: String)`
+  - `Int::parse`, `parse_dec`, `parse_hex`, `parse_oct`, `parse_bin` が返します。
+  - `empty integer input`, `sign without digits`, `invalid digit for ... integer: ... at index ...` のような detail を持ちます。
+- `ParseIntLiteralError(detail: String)`
+  - `Int::parse_literal` が返します。
+  - `empty integer literal input`, `unknown integer base prefix: ...`, `missing digits after integer base prefix: ...`, `invalid digit for ... integer literal: ... at index ...` のような detail を持ちます。
 - `safe_div` / `safe_mod` は `Err(ZeroDivisionError)` を返します。
 - `NegativeBitIndex(index: Int)`
   - `Int::test_bit` / `set_bit` / `clear_bit` / `toggle_bit` で `index < 0` のときに返します。
@@ -69,6 +89,9 @@
 ## Examples
 
 ```surtr
+print(to_string(Int::parse("123")))
+print(to_string(Int::parse_hex("ff")))
+print(to_string(Int::parse_literal("0b1101")))
 print(to_string(Int::abs(-5)))
 print(to_string(Int::bit_and(6, 3)))
 print(to_string(Int::bit_not(6)))
@@ -82,6 +105,10 @@ print(to_string(Int::is_even(8)))
 
 ## Notes
 
+- source literal では `123`, `0d123`, `0xff`, `0o17`, `0b1101` を受理します。
+- `Int::parse` は decimal 専用で、`0xff` のような prefix 付き表記は読みません。
+- `Int::parse_literal` は source literal と同じ surface を文字列 API として読みます。
+- `String::try_to_int` / `try_from("...", Int)` は既存互換のため引き続き decimal 専用です。
 - `is_even` / `is_odd` は `safe_mod(value, 2)` を土台にした pure Surtr 実装です。
 - `bit_and` / `bit_or` / `bit_xor` / `bit_not` は surface は builtin 関数のまま公開し、direct call は VM の専用 Opcode に lower されます。
 - `test_bit` / `set_bit` / `clear_bit` / `toggle_bit` は index 検証つきの `Result` helper としてまず `CallBuiltin` で公開します。

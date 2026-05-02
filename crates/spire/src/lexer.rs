@@ -3,6 +3,34 @@ use crate::error::ParseError;
 use crate::token::{Spanned, Token};
 use sindr::primitives::SurtrInt;
 
+#[derive(Clone, Copy)]
+enum IntLiteralBase {
+    Bin,
+    Oct,
+    Dec,
+    Hex,
+}
+
+impl IntLiteralBase {
+    fn radix(self) -> u32 {
+        match self {
+            Self::Bin => 2,
+            Self::Oct => 8,
+            Self::Dec => 10,
+            Self::Hex => 16,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Bin => "binary",
+            Self::Oct => "octal",
+            Self::Dec => "decimal",
+            Self::Hex => "hexadecimal",
+        }
+    }
+}
+
 pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
     let mut tokens = Vec::new();
     let chars: Vec<char> = source.chars().collect();
@@ -227,14 +255,12 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                     span: Span { start, end: i },
                 });
             } else {
-                let text: String = chars[start..i].iter().collect();
-                let val: SurtrInt = text.parse().map_err(|_| {
-                    ParseError::syntax(format!("Invalid integer: {}", text), Span { start, end: i })
-                })?;
+                let (val, next) = lex_integer_literal(&chars, start, i, len)?;
                 tokens.push(Spanned {
                     token: Token::Int(val),
-                    span: Span { start, end: i },
+                    span: Span { start, end: next },
                 });
+                i = next;
             }
             continue;
         }
@@ -411,6 +437,96 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
     Ok(tokens)
 }
 
+fn lex_integer_literal(
+    chars: &[char],
+    start: usize,
+    decimal_end: usize,
+    len: usize,
+) -> Result<(SurtrInt, usize), ParseError> {
+    if chars[start] == '0' && decimal_end == start + 1 && decimal_end < len {
+        let prefix = chars[decimal_end];
+        let base = match prefix {
+            'b' => Some(IntLiteralBase::Bin),
+            'o' => Some(IntLiteralBase::Oct),
+            'd' => Some(IntLiteralBase::Dec),
+            'x' => Some(IntLiteralBase::Hex),
+            'B' | 'O' | 'D' | 'X' => {
+                let mut end = decimal_end + 1;
+                while end < len && chars[end].is_ascii_alphanumeric() {
+                    end += 1;
+                }
+                let text: String = chars[start..end].iter().collect();
+                return Err(ParseError::syntax(
+                    format!("Invalid integer: {}", text),
+                    Span { start, end },
+                ));
+            }
+            _ => None,
+        };
+
+        if let Some(base) = base {
+            let body_start = decimal_end + 1;
+            if body_start >= len || !chars[body_start].is_ascii_alphanumeric() {
+                let prefix_text = format!("0{}", prefix);
+                return Err(ParseError::syntax(
+                    format!("missing digits after integer base prefix: {}", prefix_text),
+                    Span {
+                        start,
+                        end: body_start,
+                    },
+                ));
+            }
+
+            let mut end = body_start;
+            while end < len && chars[end].is_ascii_alphanumeric() {
+                end += 1;
+            }
+
+            for ch in &chars[body_start..end] {
+                if !is_valid_int_digit(*ch, base) {
+                    return Err(ParseError::syntax(
+                        format!("invalid digit for {} integer literal: {}", base.label(), ch),
+                        Span {
+                            start,
+                            end: end.min(body_start + 1),
+                        },
+                    ));
+                }
+            }
+
+            let body: String = chars[body_start..end].iter().collect();
+            let val = SurtrInt::parse_bytes(body.as_bytes(), base.radix()).ok_or_else(|| {
+                ParseError::syntax(
+                    format!("Invalid integer: 0{}{}", prefix, body),
+                    Span { start, end },
+                )
+            })?;
+            return Ok((val, end));
+        }
+    }
+
+    let text: String = chars[start..decimal_end].iter().collect();
+    let val: SurtrInt = text.parse().map_err(|_| {
+        ParseError::syntax(
+            format!("Invalid integer: {}", text),
+            Span {
+                start,
+                end: decimal_end,
+            },
+        )
+    })?;
+    Ok((val, decimal_end))
+}
+
+fn is_valid_int_digit(ch: char, base: IntLiteralBase) -> bool {
+    match base {
+        IntLiteralBase::Bin => matches!(ch, '0' | '1'),
+        IntLiteralBase::Oct => matches!(ch, '0'..='7'),
+        IntLiteralBase::Dec => ch.is_ascii_digit(),
+        IntLiteralBase::Hex => ch.is_ascii_digit() || matches!(ch, 'a'..='f' | 'A'..='F'),
+    }
+}
+
 fn lex_raw_triple_quoted_string(
     chars: &[char],
     start: usize,
@@ -577,6 +693,46 @@ mod tests {
     fn test_float() {
         let tokens = tokenize("2.5").unwrap();
         assert!(matches!(tokens[0].token, Token::Float(f) if (f - 2.5).abs() < 1e-10));
+    }
+
+    #[test]
+    fn test_int_base_literals() {
+        let tokens = tokenize("123 0d123 0xff 0o17 0b1101").unwrap();
+        assert!(matches!(tokens[0].token, Token::Int(ref n) if n == &int(123)));
+        assert!(matches!(tokens[1].token, Token::Int(ref n) if n == &int(123)));
+        assert!(matches!(tokens[2].token, Token::Int(ref n) if n == &int(255)));
+        assert!(matches!(tokens[3].token, Token::Int(ref n) if n == &int(15)));
+        assert!(matches!(tokens[4].token, Token::Int(ref n) if n == &int(13)));
+    }
+
+    #[test]
+    fn test_int_hex_rejects_uppercase_prefix() {
+        let err = tokenize("0Xff").expect_err("expected invalid integer literal");
+        assert!(err.message().contains("Invalid integer"));
+    }
+
+    #[test]
+    fn test_int_base_prefix_requires_digits() {
+        for literal in ["0x", "0o", "0b", "0d"] {
+            let err = tokenize(literal).expect_err("expected missing digits error");
+            assert!(err
+                .message()
+                .contains("missing digits after integer base prefix"));
+        }
+    }
+
+    #[test]
+    fn test_int_base_rejects_invalid_digits() {
+        let cases = [
+            ("0o18", "invalid digit for octal integer literal: 8"),
+            ("0b102", "invalid digit for binary integer literal: 2"),
+            ("0xfg", "invalid digit for hexadecimal integer literal: g"),
+        ];
+
+        for (literal, expected) in cases {
+            let err = tokenize(literal).expect_err("expected invalid digit error");
+            assert!(err.message().contains(expected), "got: {}", err.message());
+        }
     }
 
     #[test]

@@ -3,6 +3,12 @@ import Int::{
   bit_or,
   bit_xor,
   bit_not,
+  parse,
+  parse_dec,
+  parse_hex,
+  parse_oct,
+  parse_bin,
+  parse_literal,
   test_bit,
   set_bit,
   clear_bit,
@@ -28,6 +34,84 @@ import Test;
 test("Int") {
   describe("bit_and") {
     it("combines shared bits") { assert_eq(2, bit_and(6, 3)) }
+  }
+
+  describe("parse") {
+    it("parses decimal text") { assert_eq("Ok(123)", inspect(parse("123"))) }
+    it("aliases parse_dec") { assert_eq(inspect(parse_dec("123")), inspect(parse("123"))) }
+  }
+
+  describe("parse_dec") {
+    it("parses plain decimal digits") { assert_eq("Ok(123)", inspect(parse_dec("123"))) }
+    it("rejects literal prefixes") {
+      assert_eq(
+        "Err(ParseIntError(\"invalid digit for decimal integer: x at index 1\"))",
+        inspect(parse_dec("0xff")),
+      )
+    }
+  }
+
+  describe("parse_hex") {
+    it("parses lowercase digits") { assert_eq("Ok(255)", inspect(parse_hex("ff"))) }
+    it("parses uppercase digits") { assert_eq("Ok(255)", inspect(parse_hex("FF"))) }
+    it("rejects prefixed input") {
+      assert_eq(
+        "Err(ParseIntError(\"invalid digit for hexadecimal integer: x at index 1\"))",
+        inspect(parse_hex("0xff")),
+      )
+    }
+  }
+
+  describe("parse_oct") {
+    it("parses octal digits") { assert_eq("Ok(15)", inspect(parse_oct("17"))) }
+    it("rejects invalid digits") {
+      assert_eq(
+        "Err(ParseIntError(\"invalid digit for octal integer: 8 at index 1\"))",
+        inspect(parse_oct("18")),
+      )
+    }
+  }
+
+  describe("parse_bin") {
+    it("parses binary digits") { assert_eq("Ok(13)", inspect(parse_bin("1101"))) }
+    it("rejects invalid digits") {
+      assert_eq(
+        "Err(ParseIntError(\"invalid digit for binary integer: 2 at index 2\"))",
+        inspect(parse_bin("102")),
+      )
+    }
+  }
+
+  describe("parse_literal") {
+    it("parses prefixed literals") {
+      assert_eq("Ok(255)", inspect(parse_literal("0xff")))
+    }
+
+    it("parses explicit decimal literals") {
+      assert_eq("Ok(123)", inspect(parse_literal("0d123")))
+    }
+
+    it("treats unprefixed literals as decimal") {
+      assert_eq("Ok(123)", inspect(parse_literal("123")))
+    }
+
+    it("rejects unknown prefixes") {
+      assert_eq(
+        "Err(ParseIntLiteralError(\"unknown integer base prefix: 0q\"))",
+        inspect(parse_literal("0q123")),
+      )
+    }
+
+    it("rejects missing digits after a prefix") {
+      assert_eq(
+        "Err(ParseIntLiteralError(\"missing digits after integer base prefix: 0x\"))",
+        inspect(parse_literal("0x")),
+      )
+    }
+
+    it("rejects empty input") {
+      assert_eq("Err(ParseIntLiteralError(\"empty integer literal input\"))", inspect(parse_literal("")))
+    }
   }
 
   describe("bit_or") {

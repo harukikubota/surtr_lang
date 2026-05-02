@@ -39,11 +39,35 @@ defenum BitWidth {
 }
 
 @@doc """
+Type-safe radix marker for integer parsing helpers and diagnostics.
+"""
+defenum IntBase {
+  Bin,
+  Oct,
+  Dec,
+  Hex,
+}
+
+@@doc """
 Concrete integer-module error for invalid custom bit widths.
 `BitWidth::Any(bits)` must use a positive width.
 """
 deferror InvalidBitWidth(width: Int) {
   "bit width must be positive: #{width}"
+}
+
+@@doc """
+Recoverable parse error for base-fixed integer parsing helpers.
+"""
+deferror ParseIntError(detail: String) {
+  detail
+}
+
+@@doc """
+Recoverable parse error for literal-syntax integer parsing helpers.
+"""
+deferror ParseIntLiteralError(detail: String) {
+  detail
 }
 
 @@doc """
@@ -53,6 +77,44 @@ range.
 """
 deferror BitIndexOutOfRange(index: Int, width: Int) {
   "bit index #{index} out of range for width #{width}"
+}
+
+impl IntBase {
+  @@doc """
+  Return the numeric radix represented by `self`.
+  """
+  def radix(self: Self) -> Int {
+    match self {
+      IntBase::Bin => 2,
+      IntBase::Oct => 8,
+      IntBase::Dec => 10,
+      IntBase::Hex => 16,
+    }
+  }
+
+  @@doc """
+  Return the canonical source prefix for `self`.
+  """
+  def prefix(self: Self) -> String {
+    match self {
+      IntBase::Bin => "0b",
+      IntBase::Oct => "0o",
+      IntBase::Dec => "0d",
+      IntBase::Hex => "0x",
+    }
+  }
+
+  @@doc """
+  Return the human-friendly base label for diagnostics.
+  """
+  def label(self: Self) -> String {
+    match self {
+      IntBase::Bin => "binary",
+      IntBase::Oct => "octal",
+      IntBase::Dec => "decimal",
+      IntBase::Hex => "hexadecimal",
+    }
+  }
 }
 
 @@doc """
@@ -156,6 +218,303 @@ impl Int {
   """
   @@builtin
   def toggle_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
+
+  defp _apply_parse_sign(value: Int, sign: Int) -> Int {
+    if(sign < 0, 0 - value, value)
+  }
+
+  defp _digit_value(ch: String) -> Result<Int> {
+    cond {
+      ch == "0" => Ok(0),
+      ch == "1" => Ok(1),
+      ch == "2" => Ok(2),
+      ch == "3" => Ok(3),
+      ch == "4" => Ok(4),
+      ch == "5" => Ok(5),
+      ch == "6" => Ok(6),
+      ch == "7" => Ok(7),
+      ch == "8" => Ok(8),
+      ch == "9" => Ok(9),
+      ch == "a" || ch == "A" => Ok(10),
+      ch == "b" || ch == "B" => Ok(11),
+      ch == "c" || ch == "C" => Ok(12),
+      ch == "d" || ch == "D" => Ok(13),
+      ch == "e" || ch == "E" => Ok(14),
+      ch == "f" || ch == "F" => Ok(15),
+      True => Err(NoneError),
+    }
+  }
+
+  defp _digit_error(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntError> {
+    Err(ParseIntError("invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}"))
+  }
+
+  defp _literal_digit_error(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntLiteralError> {
+    Err(
+      ParseIntLiteralError(
+        "invalid digit for #{IntBase::label(base)} integer literal: #{ch} at index #{index}",
+      ),
+    )
+  }
+
+  defp _parse_error_empty() -> Result<Int, ParseIntError> {
+    Err(ParseIntError("empty integer input"))
+  }
+
+  defp _parse_error_sign_only() -> Result<Int, ParseIntError> {
+    Err(ParseIntError("sign without digits"))
+  }
+
+  defp _literal_error_empty() -> Result<Int, ParseIntLiteralError> {
+    Err(ParseIntLiteralError("empty integer literal input"))
+  }
+
+  defp _literal_error_sign_only() -> Result<Int, ParseIntLiteralError> {
+    Err(ParseIntLiteralError("sign without digits"))
+  }
+
+  defp _literal_error_unknown_prefix(prefix: String) -> Result<Int, ParseIntLiteralError> {
+    Err(ParseIntLiteralError("unknown integer base prefix: #{prefix}"))
+  }
+
+  defp _literal_error_missing_digits(base: IntBase) -> Result<Int, ParseIntLiteralError> {
+    Err(ParseIntLiteralError("missing digits after integer base prefix: #{IntBase::prefix(base)}"))
+  }
+
+  defp _parse_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntError> {
+    radix = IntBase::radix(base)
+    match _digit_value(ch) {
+      Ok(value) => if(value < radix, Ok(value), _digit_error(base, ch, index)),
+      Err(_) => _digit_error(base, ch, index),
+    }
+  }
+
+  defp _parse_literal_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntLiteralError> {
+    radix = IntBase::radix(base)
+    match _digit_value(ch) {
+      Ok(value) => if(
+        value < radix,
+        Ok(value),
+        _literal_digit_error(base, ch, index),
+      ),
+      Err(_) => _literal_digit_error(base, ch, index),
+    }
+  }
+
+  defp _parse_digits_go(
+    chars: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int, ParseIntError> {
+    match chars {
+      "" => Ok(_apply_parse_sign(acc, sign)),
+      [head, ..tail] => _parse_digits_step(head, tail, base, acc, index, sign),
+    }
+  }
+
+  defp _parse_digits_step(
+    head: String,
+    tail: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int, ParseIntError> {
+    digit =? _parse_digit_for_base(base, head, index)
+    _parse_digits_go(
+      tail,
+      base,
+      acc * IntBase::radix(base) + digit,
+      index + 1,
+      sign,
+    )
+  }
+
+  defp _parse_literal_digits_go(
+    chars: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int, ParseIntLiteralError> {
+    match chars {
+      "" => Ok(_apply_parse_sign(acc, sign)),
+      [head, ..tail] => _parse_literal_digits_step(head, tail, base, acc, index, sign),
+    }
+  }
+
+  defp _parse_literal_digits_step(
+    head: String,
+    tail: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int, ParseIntLiteralError> {
+    digit =? _parse_literal_digit_for_base(base, head, index)
+    _parse_literal_digits_go(
+      tail,
+      base,
+      acc * IntBase::radix(base) + digit,
+      index + 1,
+      sign,
+    )
+  }
+
+  defp _parse_digits_unsigned(
+    chars: String,
+    base: IntBase,
+    sign: Int,
+    start_index: Int,
+  ) -> Result<Int, ParseIntError> {
+    match chars {
+      "" => _parse_error_empty(),
+      _ => _parse_digits_go(chars, base, 0, start_index, sign),
+    }
+  }
+
+  defp _parse_literal_prefixed(
+    body: String,
+    base: IntBase,
+    sign: Int,
+    start_index: Int,
+  ) -> Result<Int, ParseIntLiteralError> {
+    match body {
+      "" => _literal_error_missing_digits(base),
+      _ => _parse_literal_digits_go(body, base, 0, start_index, sign),
+    }
+  }
+
+  defp _parse_literal_unsigned(
+    chars: String,
+    sign: Int,
+    start_index: Int,
+  ) -> Result<Int, ParseIntLiteralError> {
+    match chars {
+      "" => _literal_error_empty(),
+      ["0", ..tail] => match tail {
+        "" => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
+        ["b", ..body] => _parse_literal_prefixed(body, IntBase::Bin, sign, start_index + 2),
+        ["o", ..body] => _parse_literal_prefixed(body, IntBase::Oct, sign, start_index + 2),
+        ["d", ..body] => _parse_literal_prefixed(body, IntBase::Dec, sign, start_index + 2),
+        ["x", ..body] => _parse_literal_prefixed(body, IntBase::Hex, sign, start_index + 2),
+        [prefix, .._] => match _digit_value(prefix) {
+          Ok(value) => if(
+            value < 10,
+            _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
+            _literal_error_unknown_prefix("0" ++ prefix),
+          ),
+          Err(_) => _literal_error_unknown_prefix("0" ++ prefix),
+        },
+      },
+      _ => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
+    }
+  }
+
+  @@doc """
+  Parse base-10 text as an `Int`.
+  This is an alias for `Int::parse_dec`.
+  """
+  def parse(text: String) -> Result<Int, ParseIntError> {
+    Int::parse_dec(text)
+  }
+
+  @@doc """
+  Parse base-10 digits as an `Int`.
+  Accepts an optional leading `+` or `-`.
+  """
+  def parse_dec(text: String) -> Result<Int, ParseIntError> {
+    match text {
+      "" => _parse_error_empty(),
+      ["-", ..tail] => match tail {
+        "" => _parse_error_sign_only(),
+        _ => _parse_digits_unsigned(tail, IntBase::Dec, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => _parse_error_sign_only(),
+        _ => _parse_digits_unsigned(tail, IntBase::Dec, 1, 1),
+      },
+      _ => _parse_digits_unsigned(text, IntBase::Dec, 1, 0),
+    }
+  }
+
+  @@doc """
+  Parse base-16 digits as an `Int`.
+  Prefixes such as `0x` are not accepted here.
+  """
+  def parse_hex(text: String) -> Result<Int, ParseIntError> {
+    match text {
+      "" => _parse_error_empty(),
+      ["-", ..tail] => match tail {
+        "" => _parse_error_sign_only(),
+        _ => _parse_digits_unsigned(tail, IntBase::Hex, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => _parse_error_sign_only(),
+        _ => _parse_digits_unsigned(tail, IntBase::Hex, 1, 1),
+      },
+      _ => _parse_digits_unsigned(text, IntBase::Hex, 1, 0),
+    }
+  }
+
+  @@doc """
+  Parse base-8 digits as an `Int`.
+  Prefixes such as `0o` are not accepted here.
+  """
+  def parse_oct(text: String) -> Result<Int, ParseIntError> {
+    match text {
+      "" => _parse_error_empty(),
+      ["-", ..tail] => match tail {
+        "" => _parse_error_sign_only(),
+        _ => _parse_digits_unsigned(tail, IntBase::Oct, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => _parse_error_sign_only(),
+        _ => _parse_digits_unsigned(tail, IntBase::Oct, 1, 1),
+      },
+      _ => _parse_digits_unsigned(text, IntBase::Oct, 1, 0),
+    }
+  }
+
+  @@doc """
+  Parse base-2 digits as an `Int`.
+  Prefixes such as `0b` are not accepted here.
+  """
+  def parse_bin(text: String) -> Result<Int, ParseIntError> {
+    match text {
+      "" => _parse_error_empty(),
+      ["-", ..tail] => match tail {
+        "" => _parse_error_sign_only(),
+        _ => _parse_digits_unsigned(tail, IntBase::Bin, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => _parse_error_sign_only(),
+        _ => _parse_digits_unsigned(tail, IntBase::Bin, 1, 1),
+      },
+      _ => _parse_digits_unsigned(text, IntBase::Bin, 1, 0),
+    }
+  }
+
+  @@doc """
+  Parse Surtr integer literal syntax from text.
+  Accepts plain decimal, `0d`, `0x`, `0o`, and `0b` forms.
+  """
+  def parse_literal(text: String) -> Result<Int, ParseIntLiteralError> {
+    match text {
+      "" => _literal_error_empty(),
+      ["-", ..tail] => match tail {
+        "" => _literal_error_sign_only(),
+        _ => _parse_literal_unsigned(tail, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => _literal_error_sign_only(),
+        _ => _parse_literal_unsigned(tail, 1, 1),
+      },
+      _ => _parse_literal_unsigned(text, 1, 0),
+    }
+  }
 
   defp _pow2_go(remaining: Int, acc: Int) -> Int {
     if(remaining == 0, acc, _pow2_go(remaining - 1, acc + acc))

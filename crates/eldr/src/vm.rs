@@ -743,16 +743,6 @@ impl VM {
         target: &Callable,
         lexical_captures: &[Value],
     ) -> CallableMetadata {
-        let CallableTarget::Function(fun_idx) = target.target else {
-            return target.metadata.clone();
-        };
-        let Some(entry) = self.bytecode.functions.get(fun_idx as usize) else {
-            return target.metadata.clone();
-        };
-        if !entry.flags.partial_apply_wrapper {
-            return target.metadata.clone();
-        }
-
         let Some(Value::Callable(original)) = lexical_captures.first() else {
             return target.metadata.clone();
         };
@@ -760,9 +750,26 @@ impl VM {
             return target.metadata.clone();
         }
 
-        let mut metadata = original.metadata.clone();
-        metadata.applied_args += lexical_captures.len().saturating_sub(1);
-        metadata
+        let promoted = match target.target {
+            CallableTarget::Function(fun_idx) => self
+                .bytecode
+                .functions
+                .get(fun_idx as usize)
+                .is_some_and(|entry| entry.flags.partial_apply_wrapper),
+            _ => false,
+        };
+        if promoted
+            || matches!(
+                target.metadata.origin,
+                CallableOrigin::Capture | CallableOrigin::Unknown
+            )
+        {
+            let mut metadata = original.metadata.clone();
+            metadata.applied_args += lexical_captures.len().saturating_sub(1);
+            metadata
+        } else {
+            target.metadata.clone()
+        }
     }
 
     pub fn runtime_error_location(&self) -> Option<Location> {

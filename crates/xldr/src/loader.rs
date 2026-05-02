@@ -212,11 +212,12 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
     ),
     ("IO.srt", include_str!("../../../lib/IO.srt"), "IO"),
 ];
-const DEFAULT_STD_POST_MODULES: &[(&str, &str, &str)] =
-    &[("test.srt", include_str!("../../../lib/test.srt"), "Test")];
 const STYLED_DOC_FILE: &str = "styled_doc.srt";
 const STYLED_DOC_MODULE_PATH: &str = "StyledDoc";
 const STYLED_DOC_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
+const TEST_STD_FILE: &str = "test.srt";
+const TEST_STD_MODULE_PATH: &str = "Test";
+const TEST_STD_SOURCE: &str = include_str!("../../../lib/test.srt");
 const REPL_MODULE_NAME: &str = "REPL";
 const SCRIPT_PSEUDO_MODULE_PREFIX: &str = "__Script";
 const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
@@ -676,10 +677,8 @@ pub fn is_default_std_module_path(module_path: &str) -> bool {
         || module_path == SPECIAL_TYPES_MODULE_PATH
         || module_path == KERNEL_PRELUDE_MODULE_PATH
         || module_path == STYLED_DOC_MODULE_PATH
+        || module_path == TEST_STD_MODULE_PATH
         || DEFAULT_STD_MODULES
-            .iter()
-            .any(|(_, _, builtin_module_path)| *builtin_module_path == module_path)
-        || DEFAULT_STD_POST_MODULES
             .iter()
             .any(|(_, _, builtin_module_path)| *builtin_module_path == module_path)
 }
@@ -689,10 +688,8 @@ pub fn is_default_std_module_file_name(file_name: &str) -> bool {
         || file_name == SPECIAL_TYPES_FILE
         || file_name == KERNEL_PRELUDE_FILE
         || file_name == STYLED_DOC_FILE
+        || file_name == TEST_STD_FILE
         || DEFAULT_STD_MODULES
-            .iter()
-            .any(|(builtin_file_name, _, _)| *builtin_file_name == file_name)
-        || DEFAULT_STD_POST_MODULES
             .iter()
             .any(|(builtin_file_name, _, _)| *builtin_file_name == file_name)
 }
@@ -732,17 +729,13 @@ pub fn collect_module_sources_with_extra_std_sources(
             STYLED_DOC_SOURCE,
             STYLED_DOC_MODULE_PATH,
         )))
+        .chain(std::iter::once(SourceDescriptor::std_module(
+            TEST_STD_FILE,
+            TEST_STD_SOURCE,
+            TEST_STD_MODULE_PATH,
+        )))
         .collect(),
     ];
-
-    stage_specs.push(
-        DEFAULT_STD_POST_MODULES
-            .iter()
-            .map(|(file_name, source, module_path)| {
-                SourceDescriptor::std_module(*file_name, *source, *module_path)
-            })
-            .collect(),
-    );
 
     if !extra_std_sources.is_empty() {
         stage_specs.push(extra_std_sources.to_vec());
@@ -911,18 +904,11 @@ mod tests {
             loaded.builtin_module_path.as_deref(),
             Some(BUILTIN_PRELUDE_MODULE_PATH)
         );
-        assert_eq!(
-            loaded.module_source_ids.len(),
-            4 + DEFAULT_STD_MODULES.len() + DEFAULT_STD_POST_MODULES.len()
-        );
+        assert_eq!(loaded.module_source_ids.len(), 5 + DEFAULT_STD_MODULES.len());
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
-        assert_eq!(loaded.module_stages.len(), 3);
+        assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
-        assert_eq!(loaded.module_stages[1].len(), 3 + DEFAULT_STD_MODULES.len());
-        assert_eq!(
-            loaded.module_stages[2].len(),
-            DEFAULT_STD_POST_MODULES.len()
-        );
+        assert_eq!(loaded.module_stages[1].len(), 4 + DEFAULT_STD_MODULES.len());
         let std_paths = loaded.module_stages[1]
             .iter()
             .map(|module| module.module_path.as_str())
@@ -974,9 +960,9 @@ mod tests {
                 "Random",
                 "IO",
                 "StyledDoc",
+                "Test",
             ]
         );
-        assert_eq!(loaded.module_stages[2][0].module_path, "Test");
     }
 
     #[test]
@@ -1034,15 +1020,11 @@ mod tests {
         .expect("staged module collection should succeed");
         let loaded = compose_script_compile_sources("main.srt", "print(\"hi\")", module_sources);
 
-        assert_eq!(loaded.module_stages.len(), 5);
+        assert_eq!(loaded.module_stages.len(), 4);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap
-        assert_eq!(loaded.module_stages[1].len(), 3 + DEFAULT_STD_MODULES.len()); // special types + kernel + other std modules + StyledDoc
-        assert_eq!(
-            loaded.module_stages[2].len(),
-            DEFAULT_STD_POST_MODULES.len()
-        );
-        assert_eq!(loaded.module_stages[3].len(), 1);
-        assert_eq!(loaded.module_stages[4].len(), 2);
+        assert_eq!(loaded.module_stages[1].len(), 4 + DEFAULT_STD_MODULES.len()); // special types + kernel + other std modules + StyledDoc + Test
+        assert_eq!(loaded.module_stages[2].len(), 1);
+        assert_eq!(loaded.module_stages[3].len(), 2);
         assert_eq!(
             loaded.module_stages[0][0].source_id,
             loaded.builtin_source_id
@@ -1061,11 +1043,10 @@ mod tests {
         );
         assert_eq!(
             loaded.module_stages[2][0].source_kind,
-            SourceKind::StdModule
+            SourceKind::Module
         );
         assert_eq!(loaded.module_stages[3][0].source_kind, SourceKind::Module);
-        assert_eq!(loaded.module_stages[4][0].source_kind, SourceKind::Module);
-        assert_eq!(loaded.module_stages[4][1].source_kind, SourceKind::Module);
+        assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
         let std_paths = loaded.module_stages[1]
             .iter()
             .map(|module| module.module_path.as_str())
@@ -1117,12 +1098,12 @@ mod tests {
                 "Random",
                 "IO",
                 "StyledDoc",
+                "Test",
             ]
         );
-        assert_eq!(loaded.module_stages[2][0].module_path, "Test");
-        assert_eq!(loaded.module_stages[3][0].module_path, "Std::Math");
-        assert_eq!(loaded.module_stages[4][0].module_path, "Std::String");
-        assert_eq!(loaded.module_stages[4][1].module_path, "Std::List");
+        assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");
+        assert_eq!(loaded.module_stages[3][0].module_path, "Std::String");
+        assert_eq!(loaded.module_stages[3][1].module_path, "Std::List");
     }
 
     #[test]

@@ -959,7 +959,7 @@ user = User("alice", 30)"#,
 fn test_simple_bind() {
     let resolved = parse_and_resolve("x = 10").unwrap();
     assert_eq!(resolved.len(), 1);
-    match &resolved[1] {
+    match &resolved[0] {
         Resolved::Bind(_, ResolvedPattern::Var(id), _) => {
             assert_eq!(id.name, "x");
         }
