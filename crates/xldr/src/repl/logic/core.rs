@@ -765,7 +765,7 @@ impl ReplEngine {
         vec![
             "Usage: :doc <symbol>".to_string(),
             "Also: :doc <typed-call>".to_string(),
-            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc Add, :doc +, :doc gt(3, 2)"
+            "Examples: :doc print, :doc match, :doc cond, :doc Closure, :doc Kernel::if, :doc Add, :doc +, :doc gt(3, 2)"
                 .to_string(),
         ]
     }
@@ -1116,10 +1116,20 @@ impl ReplEngine {
             .map(ToString::to_string);
         ReplOutput::DocResolved {
             symbol: entry.qualified_name.clone(),
-            signature: entry.signature.clone(),
+            signature: Self::display_signature_for_doc_entry(entry),
             summary,
             source_snippet: Some(entry.doc.clone()),
             details,
+        }
+    }
+
+    fn display_signature_for_doc_entry(entry: &DocEntry) -> Option<String> {
+        match entry.qualified_name.as_str() {
+            "Bootstrap::match" => Some("match value { pattern => expr, ... } -> $B".to_string()),
+            "Bootstrap::cond" => {
+                Some("cond { cond1 => expr1, ..., True => exprN } -> $A".to_string())
+            }
+            _ => entry.signature.clone(),
         }
     }
 
@@ -1360,9 +1370,7 @@ impl ReplEngine {
             return None;
         }
         if let Some(entry) = self.special_form_doc_entry(symbol) {
-            return entry
-                .signature
-                .clone()
+            return Self::display_signature_for_doc_entry(entry)
                 .map(|signature| (entry.qualified_name.clone(), signature));
         }
         let canonical = self

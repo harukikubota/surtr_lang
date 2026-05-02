@@ -1,0 +1,2 @@
+phase: parse
+contains: Module name `MatchArms` is reserved by a canonical builtin type declaration

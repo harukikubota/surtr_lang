@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::token::Token;
+use sindr::builtin::builtin_type_meta_by_name;
 
 use super::ast_ty_span;
 use super::context::{DeclLevel, TopLevelDeclKind};
@@ -807,6 +808,15 @@ impl Parser<'_> {
         }
         self.expect(&Token::Defmod)?;
         let (name, _) = self.expect_qualified_ident(2, "module")?;
+        if builtin_type_meta_by_name(&name).is_some() {
+            return Err(ParseError::syntax(
+                format!(
+                    "Module name `{}` is reserved by a canonical builtin type declaration",
+                    name
+                ),
+                sp,
+            ));
+        }
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         let body = self.parse_module_body_stmts(Some(name.clone()))?;
@@ -1695,6 +1705,14 @@ impl Parser<'_> {
                 } else {
                     base_name
                 }
+            }
+            Token::Match => {
+                self.advance();
+                "match".to_string()
+            }
+            Token::Cond => {
+                self.advance();
+                "cond".to_string()
             }
             Token::Bind => {
                 self.advance();

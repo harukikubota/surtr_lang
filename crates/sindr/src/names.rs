@@ -21,6 +21,8 @@ pub enum TypeName {
     Boolean,
     Unit,
     Closure,
+    MatchArms,
+    CondClauses,
     Error,
     Regex,
     RegexCaptures,
@@ -44,6 +46,8 @@ impl TypeName {
             Self::Boolean => "Boolean",
             Self::Unit => "Unit",
             Self::Closure => "Closure",
+            Self::MatchArms => "MatchArms",
+            Self::CondClauses => "CondClauses",
             Self::Error => "Error",
             Self::Regex => "Regex",
             Self::RegexCaptures => "RegexCaptures",
@@ -64,7 +68,10 @@ impl TypeName {
     }
 
     pub const fn supports_inherent_impl(self) -> bool {
-        !matches!(self, Self::TypeRef | Self::Hole | Self::Closure)
+        !matches!(
+            self,
+            Self::TypeRef | Self::Hole | Self::Closure | Self::MatchArms | Self::CondClauses
+        )
     }
 }
 
@@ -76,6 +83,8 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Boolean" => Some(TypeName::Boolean),
         "Unit" => Some(TypeName::Unit),
         "Closure" => Some(TypeName::Closure),
+        "MatchArms" => Some(TypeName::MatchArms),
+        "CondClauses" => Some(TypeName::CondClauses),
         "Error" => Some(TypeName::Error),
         "Regex" => Some(TypeName::Regex),
         "RegexCaptures" => Some(TypeName::RegexCaptures),

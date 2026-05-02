@@ -311,6 +311,80 @@ fn test_intrinsic_safebind_decl_parses_in_std_module() {
 }
 
 #[test]
+fn test_intrinsic_match_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @@doc """
+  Match special form.
+  """
+  @@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B
+}"#,
+        context,
+    )
+    .expect("intrinsic match decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "match");
+                    assert_eq!(
+                        signature,
+                        "@@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"
+                    );
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("Match special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_intrinsic_cond_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @@doc """
+  Cond special form.
+  """
+  @@intrinsic def cond(clauses: CondClauses<$A>) -> $A
+}"#,
+        context,
+    )
+    .expect("intrinsic cond decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "cond");
+                    assert_eq!(
+                        signature,
+                        "@@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
+                    );
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("Cond special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_safebind() {
     let ast = parse("num =? gen()").unwrap();
     match &ast[0] {
@@ -981,6 +1055,15 @@ fn test_defmod_rejects_self_and_self_type() {
     assert!(err
         .message()
         .contains("`Self` can only be used inside impl methods"));
+}
+
+#[test]
+fn test_defmod_rejects_matcharms_builtin_type_name() {
+    let err = parse("defmod MatchArms { def ok() -> Int { 1 } }")
+        .expect_err("builtin clause block type name should be reserved");
+    assert!(err
+        .message()
+        .contains("Module name `MatchArms` is reserved by a canonical builtin type declaration"));
 }
 
 #[test]

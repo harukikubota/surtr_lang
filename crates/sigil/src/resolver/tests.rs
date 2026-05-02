@@ -686,6 +686,25 @@ impl Pair {
 }
 
 #[test]
+fn test_precollect_rejects_impl_target_for_cond_clauses_builtin_type() {
+    let module_stages = vec![vec![staged_module(
+        "",
+        parse_module_ast(
+            r#"impl CondClauses {
+  def noop(self) -> Self { self }
+}"#,
+            "",
+        ),
+    )]];
+
+    let err = precollect_declaration_index(&module_stages)
+        .expect_err("CondClauses builtin clause type should reject inherent impl");
+    assert!(err
+        .message
+        .contains("impl target `CondClauses` must be a standard type owner or a struct/enum defined in the current stage"));
+}
+
+#[test]
 fn test_import_new_from_impl_is_rejected() {
     let module_stages = vec![vec![staged_module(
         "",

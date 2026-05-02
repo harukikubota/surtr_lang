@@ -963,6 +963,98 @@ fn canonical_builtin_type_name_closure_is_reserved_for_structs() {
 }
 
 #[test]
+fn canonical_builtin_type_name_match_arms_is_reserved_for_structs() {
+    let err = typecheck_module_source_result(
+        r#"defstruct MatchArms {
+  value: Int,
+}"#,
+    )
+    .expect_err("MatchArms should be reserved");
+    assert!(
+        err.contains("Type name `MatchArms` is reserved by a canonical builtin type declaration"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn canonical_builtin_type_name_cond_clauses_is_reserved_for_enums() {
+    let err = typecheck_module_source_result(
+        r#"defenum CondClauses {
+  Clause,
+}"#,
+    )
+    .expect_err("CondClauses should be reserved");
+    assert!(
+        err.contains("Type name `CondClauses` is reserved by a canonical builtin type declaration"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn match_arms_type_is_forbidden_in_ordinary_user_signatures() {
+    let err = typecheck_with_rules(
+        r#"def bad(arms: MatchArms<Int, String>) -> String {
+  "nope"
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("MatchArms should be restricted to special-form signatures");
+    assert!(
+        err.message
+            .contains("MatchArms<$Scrutinee, $Result> is reserved for the `match` special form"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn match_arms_type_is_forbidden_in_return_types() {
+    let err = typecheck_with_rules(
+        r#"def bad() -> MatchArms<Int, String> {
+  "nope"
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("MatchArms should be restricted to special-form return types");
+    assert!(
+        err.message
+            .contains("MatchArms<$Scrutinee, $Result> is reserved for the `match` special form"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn cond_clauses_type_is_forbidden_in_ordinary_user_signatures() {
+    let err = typecheck_with_rules(
+        r#"def bad(clauses: CondClauses<String>) -> String {
+  "nope"
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("CondClauses should be restricted to special-form signatures");
+    assert!(
+        err.message
+            .contains("CondClauses<$Result> is reserved for the `cond` special form"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn cond_clauses_type_is_forbidden_in_return_types() {
+    let err = typecheck_with_rules(
+        r#"def bad() -> CondClauses<String> {
+  "nope"
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("CondClauses should be restricted to special-form return types");
+    assert!(
+        err.message
+            .contains("CondClauses<$Result> is reserved for the `cond` special form"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn trailing_block_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def take(flag: Boolean, value: (-> Int)) -> Int {

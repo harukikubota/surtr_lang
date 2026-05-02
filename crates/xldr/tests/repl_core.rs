@@ -210,6 +210,37 @@ fn core_commands_do_not_require_a_cli_process() {
 }
 
 #[test]
+fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
+    let mut engine = engine();
+
+    let match_doc = engine.handle_line(":doc match");
+    let match_doc = doc_text(&match_doc);
+    assert!(match_doc.contains("Bootstrap::match"), "{match_doc}");
+    assert!(
+        match_doc.contains("match value { pattern => expr, ... } -> $B"),
+        "{match_doc}"
+    );
+    assert!(match_doc.contains("Match special form."), "{match_doc}");
+    assert!(match_doc.contains("pattern when cond => expr"), "{match_doc}");
+    assert!(match_doc.contains("`match` must be exhaustive"), "{match_doc}");
+    assert!(match_doc.contains("Use `Ok(...)` and `Err(...)`"), "{match_doc}");
+
+    let cond_doc = engine.handle_line(":doc cond");
+    let cond_doc = doc_text(&cond_doc);
+    assert!(cond_doc.contains("Bootstrap::cond"), "{cond_doc}");
+    assert!(
+        cond_doc.contains("cond { cond1 => expr1, ..., True => exprN } -> $A"),
+        "{cond_doc}"
+    );
+    assert!(cond_doc.contains("Cond special form."), "{cond_doc}");
+    assert!(
+        cond_doc.contains("cond { cond1 => expr1, ..., True => exprN }"),
+        "{cond_doc}"
+    );
+    assert!(cond_doc.contains("final clause must be `True`"), "{cond_doc}");
+}
+
+#[test]
 fn core_type_command_looks_up_visible_bindings_only() {
     let mut engine = engine();
 
@@ -541,6 +572,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         safe_bind_sig.trim(),
         "@@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"
     );
+
+    let match_sig = engine.handle_line(":sig match");
+    let match_sig = signature_text(&match_sig);
+    assert_eq!(match_sig.trim(), "match value { pattern => expr, ... } -> $B");
+
+    let cond_sig = engine.handle_line(":sig cond");
+    let cond_sig = signature_text(&cond_sig);
+    assert_eq!(cond_sig.trim(), "cond { cond1 => expr1, ..., True => exprN } -> $A");
 
     let typed_doc = engine.handle_line(":doc gt(Int, Int)");
     let typed_doc = doc_text(&typed_doc);

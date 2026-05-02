@@ -93,6 +93,31 @@ impl Checker {
         }
     }
 
+    fn clause_block_type_not_allowed_error(&self, span: &Span, surface_name: &str) -> TypeError {
+        let (rendered, special_form, hint) = match surface_name {
+            "MatchArms" => (
+                "MatchArms<$Scrutinee, $Result>",
+                "`match`",
+                "Use the dedicated `match value { pattern => expr, ... }` surface instead of passing or storing its clause block as a value type.",
+            ),
+            "CondClauses" => (
+                "CondClauses<$Result>",
+                "`cond`",
+                "Use the dedicated `cond { cond1 => expr1, ..., True => exprN }` surface instead of passing or storing its clause block as a value type.",
+            ),
+            other => (
+                other,
+                "special form",
+                "Do not use this compiler-reserved clause-block type in ordinary user signatures.",
+            ),
+        };
+        TypeError {
+            message: format!("{rendered} is reserved for the {special_form} special form"),
+            span: span.clone(),
+            hint: Some(hint.into()),
+        }
+    }
+
     fn hole_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             message: "`_` is only allowed as an ignored-input marker inside callable types used by variable annotations or function return signatures.".into(),
@@ -266,6 +291,12 @@ impl Checker {
         match ast_ty {
             AstTy::Named(span, name) => match Self::surface_type_name(name) {
                 "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
+                "MatchArms" | "CondClauses" => {
+                    Err(self.clause_block_type_not_allowed_error(
+                        span,
+                        Self::surface_type_name(name),
+                    ))
+                }
                 "Seq" => Err(self.seq_not_allowed_error(span)),
                 builtin_name => match builtin_type_name(builtin_name) {
                     Some(TypeName::Int) => Ok(Ty::Int),
@@ -296,6 +327,8 @@ impl Checker {
                         | TypeName::TypeRef
                         | TypeName::Hole
                         | TypeName::Closure
+                        | TypeName::MatchArms
+                        | TypeName::CondClauses
                         | TypeName::Lens,
                     )
                     | None => {
@@ -336,6 +369,14 @@ impl Checker {
             },
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
+            }
+            AstTy::Generic(span, name, _)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(
+                    span,
+                    Self::surface_type_name(name),
+                ))
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -562,6 +603,14 @@ impl Checker {
             AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
                 self.resolve_hole_surface_ty(span, context)
             }
+            AstTy::Named(span, name)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(
+                    span,
+                    Self::surface_type_name(name),
+                ))
+            }
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
@@ -583,6 +632,14 @@ impl Checker {
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
+            }
+            AstTy::Generic(span, name, _)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                return Err(self.clause_block_type_not_allowed_error(
+                    span,
+                    Self::surface_type_name(name),
+                ));
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -854,6 +911,14 @@ impl Checker {
             AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
                 self.resolve_hole_surface_ty(span, context)
             }
+            AstTy::Named(span, name)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(
+                    span,
+                    Self::surface_type_name(name),
+                ))
+            }
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
@@ -867,6 +932,14 @@ impl Checker {
             }),
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
+            }
+            AstTy::Generic(span, name, _)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                return Err(self.clause_block_type_not_allowed_error(
+                    span,
+                    Self::surface_type_name(name),
+                ));
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -1134,11 +1207,27 @@ impl Checker {
             AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
                 self.resolve_hole_surface_ty(span, context)
             }
+            AstTy::Named(span, name)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(
+                    span,
+                    Self::surface_type_name(name),
+                ))
+            }
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
+            }
+            AstTy::Generic(span, name, _)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(
+                    span,
+                    Self::surface_type_name(name),
+                ))
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))

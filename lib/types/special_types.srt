@@ -24,6 +24,29 @@ as a separate nominal data type to model in user code.
 """
 @@builtin type Closure
 
+@@doc """
+Compiler-reserved `match` clause-block marker.
+Use level: intrinsic-signature-only marker.
+`MatchArms<$Scrutinee, $Result>` does not describe an ordinary first-class
+value.
+It exists only to name the special clause block consumed by the `match`
+surface.
+Do not use it in user-defined parameters, return types, fields, bindings, impl
+targets, or module/type declarations.
+"""
+@@builtin type MatchArms<$Scrutinee, $Result>
+
+@@doc """
+Compiler-reserved `cond` clause-block marker.
+Use level: intrinsic-signature-only marker.
+`CondClauses<$Result>` does not describe an ordinary first-class value.
+It exists only to name the special clause block consumed by the `cond`
+surface.
+Do not use it in user-defined parameters, return types, fields, bindings, impl
+targets, or module/type declarations.
+"""
+@@builtin type CondClauses<$Result>
+
 impl Show for Unit {
   @@doc """
   Return the standard string rendering for `Unit`.

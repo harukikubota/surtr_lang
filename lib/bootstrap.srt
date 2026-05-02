@@ -128,6 +128,100 @@ defmod Bootstrap {
   """
   @@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
 
+  @@doc """
+  Match special form.
+
+  `match` is a language-provided branching form for pattern-directed control
+  flow.
+
+  `match value { pattern => expr, ... }` evaluates the scrutinee once and then
+  tries each arm from top to bottom.
+  Each left-hand side is interpreted as a MatchBlock pattern.
+  Structural patterns, literal patterns, constructor patterns, list/string
+  decomposition, as-patterns, and Extractors may all appear there.
+
+  An arm may also carry a guard: `pattern when cond => expr`.
+  The guard is evaluated only after the pattern matches.
+  If the guard returns `False`, that arm is treated as non-matching and
+  evaluation continues with the next arm.
+
+  Only the selected arm body is evaluated.
+  `match` is not a trait-dispatched operator.
+
+  `match` requires exhaustiveness.
+  A missing fallback or missing variant arm is a compile error even when other
+  arms use guards.
+
+  `match` is the main way to branch on `Result`.
+  Use `Ok(...)` and `Err(...)` to inspect success and failure structure.
+  Inside `Err(...)`, concrete error kinds may be checked by name, but payload
+  destructuring is not provided there.
+
+  ## Examples
+  match flag {
+    True => "yes",
+    False => "no",
+  }
+
+  match result {
+    Ok(value) => to_string(value),
+    Err(err) => inspect(err),
+  }
+
+  match [1, 2, 3] {
+    [head, ..tail] => to_string(head),
+    [] => "empty",
+  }
+
+  ## Notes
+  - `match` evaluates the scrutinee once
+  - only the selected arm body is evaluated
+  - guards must return `Boolean`
+  - `match` must be exhaustive
+  """
+  @@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B
+
+  @@doc """
+  Cond special form.
+
+  `cond` is a language-provided multi-branch conditional form.
+
+  `cond { cond1 => expr1, ..., True => exprN }` evaluates each condition from
+  top to bottom and returns the body of the first clause whose condition is
+  `True`.
+
+  Every non-final clause condition must return `Boolean`.
+  The final clause must use the literal `True`, and that `True` clause may
+  appear only once at the end.
+
+  All clause bodies must agree on one result type.
+  Bodies belonging to non-selected clauses are not evaluated.
+
+  `cond` is not a trait-dispatched operator.
+  Its meaning is equivalent to nested `if(...)` forms, but the surface keeps a
+  flatter multi-branch shape.
+
+  ## Examples
+  cond {
+    n < 0 => "neg",
+    n == 0 => "zero",
+    True => "pos",
+  }
+
+  cond {
+    is_match(term, Ok(_)) => "ok",
+    is_match(term, Err(_)) => "err",
+    True => "unknown",
+  }
+
+  ## Notes
+  - conditions are checked from top to bottom
+  - the final clause must be `True`
+  - all clause bodies must have the same type
+  - only the selected clause body is evaluated
+  """
+  @@intrinsic def cond(clauses: CondClauses<$A>) -> $A
+
   # `def` introduces a named function declaration.
   # `dummy` exists only to keep the module non-empty and to leave a minimal
   # function-shaped example in the first standard source file.

@@ -557,6 +557,14 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &[],
     },
     BuiltinTypeMeta {
+        name: TypeName::MatchArms.as_str(),
+        params: &["$Scrutinee", "$Result"],
+    },
+    BuiltinTypeMeta {
+        name: TypeName::CondClauses.as_str(),
+        params: &["$Result"],
+    },
+    BuiltinTypeMeta {
         name: TypeName::Error.as_str(),
         params: &[],
     },

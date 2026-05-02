@@ -1,0 +1,2 @@
+phase: typecheck
+contains: CondClauses<$Result> is reserved for the `cond` special form
