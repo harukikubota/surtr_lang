@@ -213,14 +213,21 @@ impl VmObserver {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct ProcessRuntime {
     next_pid: u64,
+    next_future_id: FutureId,
+    next_correlation_id: CorrelationId,
     specs_by_id: Vec<RuntimeProcessSpec>,
     spec_id_by_name: BTreeMap<String, u32>,
     specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
     singleton_by_name: BTreeMap<String, u64>,
     processes: BTreeMap<u64, ProcessInstance>,
+    futures: BTreeMap<FutureId, FutureRecord>,
+    reply_table: BTreeMap<CorrelationId, FutureId>,
+    waiting_table: BTreeMap<u64, ProcessWaitReason>,
+    deadline_queue: VecDeque<DeadlineEntry>,
 }
 
 #[allow(dead_code)]
@@ -237,15 +244,26 @@ struct ProcessInstance {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 enum ProcessStatus {
     #[default]
     Runnable,
-    WaitingBoot,
+    Waiting(ProcessWaitReason),
     Completed,
     Failed,
     Restarting,
     Stopped,
+}
+
+type FutureId = u64;
+type CorrelationId = u64;
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProcessWaitReason {
+    Future(FutureId),
+    Reply(CorrelationId),
+    Boot,
 }
 
 #[allow(dead_code)]
@@ -263,6 +281,33 @@ struct ProcessExecutionContext {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
     pc: usize,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+enum FutureState {
+    Running,
+    Ready(Value),
+    Cancelled(Value),
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq)]
+struct FutureRecord {
+    id: FutureId,
+    owner: Option<u64>,
+    state: FutureState,
+    deadline_tick: Option<u64>,
+    waiters: Vec<u64>,
+    cancel_on_timeout: bool,
+    correlation_id: Option<CorrelationId>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeadlineEntry {
+    deadline_tick: u64,
+    future_id: FutureId,
 }
 
 /// The Surtr virtual machine — executes bytecode produced by Forge.
@@ -994,6 +1039,38 @@ impl VM {
             span_end: 0,
         });
         RichError::new(kind, message, location, None)
+    }
+
+    #[allow(dead_code)]
+    fn process_err_value(&self, kind: &str, message: &str) -> Value {
+        err_vm_result(self.process_error(kind, message))
+    }
+
+    #[allow(dead_code)]
+    fn resolve_future_timeout(&mut self, future_id: FutureId) {
+        let timeout_value =
+            self.process_err_value("Timeout", &format!("future {} timed out", future_id));
+        let _ = self
+            .process_runtime
+            .resolve_future(future_id, timeout_value);
+    }
+
+    #[allow(dead_code)]
+    fn resolve_future_process_down(&mut self, future_id: FutureId, pid: u64) {
+        let process_down = self.process_err_value(
+            "ProcessDown",
+            &format!("target process {} stopped before replying", pid),
+        );
+        let _ = self.process_runtime.resolve_future(future_id, process_down);
+    }
+
+    #[allow(dead_code)]
+    fn expire_process_deadlines(&mut self, now_tick: u64) -> Vec<FutureId> {
+        let expired = self.process_runtime.collect_expired_futures(now_tick);
+        for future_id in &expired {
+            self.resolve_future_timeout(*future_id);
+        }
+        expired
     }
 
     /// Read-only access to the accumulated bytecode.
@@ -2739,6 +2816,7 @@ impl VM {
     }
 }
 
+#[allow(dead_code)]
 impl ProcessRuntime {
     fn from_spec_table(spec_table: &RuntimeProcessSpecTable) -> Self {
         let mut runtime = Self::default();
@@ -2764,6 +2842,112 @@ impl ProcessRuntime {
 
     fn spec_for_id(&self, spec_id: u32) -> Option<&RuntimeProcessSpec> {
         self.specs_by_id.get(spec_id as usize)
+    }
+
+    fn allocate_future(
+        &mut self,
+        owner: Option<u64>,
+        deadline_tick: Option<u64>,
+        cancel_on_timeout: bool,
+    ) -> FutureId {
+        let future_id = self.next_future_id;
+        self.next_future_id += 1;
+        if let Some(deadline_tick) = deadline_tick {
+            self.deadline_queue.push_back(DeadlineEntry {
+                deadline_tick,
+                future_id,
+            });
+        }
+        self.futures.insert(
+            future_id,
+            FutureRecord {
+                id: future_id,
+                owner,
+                state: FutureState::Running,
+                deadline_tick,
+                waiters: Vec::new(),
+                cancel_on_timeout,
+                correlation_id: None,
+            },
+        );
+        future_id
+    }
+
+    fn allocate_correlation_id(&mut self) -> CorrelationId {
+        let correlation_id = self.next_correlation_id;
+        self.next_correlation_id += 1;
+        correlation_id
+    }
+
+    fn register_reply_waiter(&mut self, correlation_id: CorrelationId, future_id: FutureId) {
+        self.reply_table.insert(correlation_id, future_id);
+        if let Some(future) = self.futures.get_mut(&future_id) {
+            future.correlation_id = Some(correlation_id);
+        }
+    }
+
+    fn mark_process_waiting(&mut self, pid: u64, reason: ProcessWaitReason) {
+        if let Some(process) = self.processes.get_mut(&pid) {
+            process.status = ProcessStatus::Waiting(reason.clone());
+        }
+        if let ProcessWaitReason::Future(future_id) = reason.clone() {
+            if let Some(future) = self.futures.get_mut(&future_id) {
+                if !future.waiters.contains(&pid) {
+                    future.waiters.push(pid);
+                }
+            }
+        }
+        self.waiting_table.insert(pid, reason);
+    }
+
+    fn resolve_future(&mut self, future_id: FutureId, value: Value) -> Vec<u64> {
+        let Some(future) = self.futures.get_mut(&future_id) else {
+            return Vec::new();
+        };
+        future.state = FutureState::Ready(value);
+        if let Some(correlation_id) = future.correlation_id.take() {
+            self.reply_table.remove(&correlation_id);
+        }
+        let waiters = std::mem::take(&mut future.waiters);
+        for waiter in &waiters {
+            self.waiting_table.remove(waiter);
+            if let Some(process) = self.processes.get_mut(waiter) {
+                process.status = ProcessStatus::Runnable;
+            }
+        }
+        waiters
+    }
+
+    fn resolve_reply(&mut self, correlation_id: CorrelationId, value: Value) -> Vec<u64> {
+        let Some(future_id) = self.reply_table.remove(&correlation_id) else {
+            return Vec::new();
+        };
+        self.resolve_future(future_id, value)
+    }
+
+    fn collect_expired_futures(&mut self, now_tick: u64) -> Vec<FutureId> {
+        let mut expired = Vec::new();
+        let mut retained = VecDeque::with_capacity(self.deadline_queue.len());
+        while let Some(entry) = self.deadline_queue.pop_front() {
+            if entry.deadline_tick <= now_tick {
+                let is_running = self
+                    .futures
+                    .get(&entry.future_id)
+                    .is_some_and(|future| matches!(future.state, FutureState::Running));
+                if is_running {
+                    if let Some(future) = self.futures.get_mut(&entry.future_id) {
+                        if let Some(correlation_id) = future.correlation_id.take() {
+                            self.reply_table.remove(&correlation_id);
+                        }
+                    }
+                    expired.push(entry.future_id);
+                }
+            } else {
+                retained.push_back(entry);
+            }
+        }
+        self.deadline_queue = retained;
+        expired
     }
 }
 
@@ -2986,6 +3170,187 @@ mod tests {
                 .expect("updated state should succeed"),
             super::ok_vm_result(Value::Int(int(99)))
         );
+    }
+
+    #[test]
+    fn vm_new_initializes_empty_future_runtime_tables() {
+        let vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        assert!(vm.process_runtime.futures.is_empty());
+        assert!(vm.process_runtime.reply_table.is_empty());
+        assert!(vm.process_runtime.waiting_table.is_empty());
+        assert!(vm.process_runtime.deadline_queue.is_empty());
+    }
+
+    #[test]
+    fn allocate_future_records_owner_deadline_and_flags() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let future_id = vm.process_runtime.allocate_future(Some(7), Some(42), true);
+        let future = vm
+            .process_runtime
+            .futures
+            .get(&future_id)
+            .expect("future should be recorded");
+        assert_eq!(future.id, future_id);
+        assert_eq!(future.owner, Some(7));
+        assert_eq!(future.deadline_tick, Some(42));
+        assert!(future.cancel_on_timeout);
+        assert!(matches!(future.state, super::FutureState::Running));
+        assert_eq!(
+            vm.process_runtime.deadline_queue.front(),
+            Some(&super::DeadlineEntry {
+                deadline_tick: 42,
+                future_id,
+            })
+        );
+    }
+
+    #[test]
+    fn register_reply_future_and_resolve_reply_marks_future_ready() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let future_id = vm.process_runtime.allocate_future(None, None, false);
+        let correlation_id = vm.process_runtime.allocate_correlation_id();
+        vm.process_runtime
+            .register_reply_waiter(correlation_id, future_id);
+
+        assert_eq!(
+            vm.process_runtime.reply_table.get(&correlation_id),
+            Some(&future_id)
+        );
+
+        let resumed = vm
+            .process_runtime
+            .resolve_reply(correlation_id, super::ok_vm_result(Value::Int(int(99))));
+        assert!(resumed.is_empty());
+        assert!(!vm.process_runtime.reply_table.contains_key(&correlation_id));
+        assert!(matches!(
+            vm.process_runtime
+                .futures
+                .get(&future_id)
+                .expect("future should remain tracked")
+                .state,
+            super::FutureState::Ready(Value::Tagged { tag: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn attach_waiter_updates_waiting_table_and_future_record() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![RuntimeProcessSpec {
+                process_name: "Counter".into(),
+                module_path: "Counter".into(),
+                kind: RuntimeProcessKind::StateAgent,
+                instance: RuntimeProcessInstance::Singleton,
+                boot: true,
+                registry: true,
+                lazy: false,
+                init_fun_idx: 0,
+                get_fun_idx: 1,
+                set_fun_idx: Some(2),
+            }],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process("Counter".into(), Value::Int(int(41)))
+            .expect("process allocation should succeed");
+        let future_id = vm.process_runtime.allocate_future(Some(pid), None, false);
+        vm.process_runtime
+            .mark_process_waiting(pid, super::ProcessWaitReason::Future(future_id));
+
+        assert_eq!(
+            vm.process_runtime.waiting_table.get(&pid),
+            Some(&super::ProcessWaitReason::Future(future_id))
+        );
+        assert_eq!(
+            vm.process_runtime
+                .futures
+                .get(&future_id)
+                .expect("future should exist")
+                .waiters,
+            vec![pid]
+        );
+        assert!(matches!(
+            vm.process_runtime
+                .processes
+                .get(&pid)
+                .expect("process should exist")
+                .status,
+            super::ProcessStatus::Waiting(super::ProcessWaitReason::Future(id)) if id == future_id
+        ));
+    }
+
+    #[test]
+    fn expire_deadlines_marks_timeout_err_and_clears_reply_mapping() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![RuntimeProcessSpec {
+                process_name: "Counter".into(),
+                module_path: "Counter".into(),
+                kind: RuntimeProcessKind::StateAgent,
+                instance: RuntimeProcessInstance::Singleton,
+                boot: true,
+                registry: true,
+                lazy: false,
+                init_fun_idx: 0,
+                get_fun_idx: 1,
+                set_fun_idx: Some(2),
+            }],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process("Counter".into(), Value::Int(int(41)))
+            .expect("process allocation should succeed");
+        let future_id = vm.process_runtime.allocate_future(Some(pid), Some(3), true);
+        let correlation_id = vm.process_runtime.allocate_correlation_id();
+        vm.process_runtime
+            .register_reply_waiter(correlation_id, future_id);
+        vm.process_runtime
+            .mark_process_waiting(pid, super::ProcessWaitReason::Future(future_id));
+
+        let expired = vm.expire_process_deadlines(3);
+        assert_eq!(expired, vec![future_id]);
+        assert!(!vm.process_runtime.reply_table.contains_key(&correlation_id));
+        assert_eq!(vm.process_runtime.waiting_table.get(&pid), None);
+        assert!(matches!(
+            vm.process_runtime
+                .futures
+                .get(&future_id)
+                .expect("future should exist")
+                .state,
+            super::FutureState::Ready(Value::Tagged { tag: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn process_runtime_future_tables_rollback_with_vm_checkpoint() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let checkpoint = vm.checkpoint_for_chunk(&BytecodeChunk {
+            opcodes: Vec::new(),
+            source_map: None,
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
+            functions: Vec::new(),
+            docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
+        });
+        let future_id = vm.process_runtime.allocate_future(None, Some(9), true);
+        let correlation_id = vm.process_runtime.allocate_correlation_id();
+        vm.process_runtime
+            .register_reply_waiter(correlation_id, future_id);
+
+        assert!(vm.process_runtime.futures.contains_key(&future_id));
+        assert!(vm.process_runtime.reply_table.contains_key(&correlation_id));
+
+        vm.rollback_to_checkpoint(checkpoint);
+        assert!(vm.process_runtime.futures.is_empty());
+        assert!(vm.process_runtime.reply_table.is_empty());
+        assert!(vm.process_runtime.deadline_queue.is_empty());
     }
 
     fn function_entry(
