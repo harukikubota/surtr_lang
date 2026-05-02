@@ -24,6 +24,30 @@ pub struct DeclAttrs {
     pub doc: Option<String>,
     pub auto_import: bool,
     pub visibility: Visibility,
+    pub process_spec: Option<ProcessSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessKind {
+    ReadOnlyAgent,
+    StateAgent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessInstance {
+    Singleton,
+    Multi,
+}
+
+/// Compiler-managed metadata carried by lowered `defagent` modules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessSpec {
+    pub process_name: Symbol,
+    pub kind: ProcessKind,
+    pub instance: ProcessInstance,
+    pub boot: bool,
+    pub registry: bool,
+    pub lazy: bool,
 }
 
 /// Surface builtin type head declaration: `List<$A>`, `Result<$T>`, `Int`, ...

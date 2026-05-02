@@ -1,4 +1,6 @@
-use scar::typed::{OperatorTraitOp, TraitCallOrigin, TypedInner, TypedLensSegment, TypedNode};
+use scar::typed::{
+    OperatorTraitOp, TraitCallOrigin, TypedInner, TypedLensSegment, TypedNode, TypedProgram,
+};
 use scar::types::Ty;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
@@ -2517,4 +2519,50 @@ self != rhs
     assert!(err
         .message
         .contains("From and TryFrom cannot both be implemented for String -> Int"));
+}
+
+#[test]
+fn typecheck_staged_program_keeps_process_specs() {
+    let ast = spire::parse_with_context(
+        r#"@@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
+defagent Counter {
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        spire::ParserContext::module(0, Some("Counter".to_string())),
+    )
+    .expect("defagent source should parse");
+
+    let staged_module = match ast.into_iter().next().expect("lowered module should exist") {
+        spire::ast::Ast::Defmod(_, module_path, ast, attrs) => sigil::StagedModuleAst {
+            module_path,
+            ast,
+            module_doc: attrs.doc,
+            auto_import: attrs.auto_import,
+            process_spec: attrs.process_spec,
+        },
+        other => panic!("expected lowered defmod, got {other:?}"),
+    };
+
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_module]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let resolved =
+        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
+            .expect("resolve should succeed");
+    let typed: TypedProgram =
+        crate::typecheck_staged_program(resolved).expect("typecheck should succeed");
+
+    assert_eq!(typed.process_specs.len(), 1);
+    let spec = &typed.process_specs[0];
+    assert_eq!(spec.module_path, "Counter");
+    assert_eq!(spec.process_name, "Counter");
+    assert!(spec.spec.boot);
 }

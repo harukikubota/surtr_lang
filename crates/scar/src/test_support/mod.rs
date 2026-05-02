@@ -114,6 +114,7 @@ fn parse_std_module_stage(
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
+                    process_spec: attrs.process_spec,
                 });
             }
             Ast::ImplDef(span, target, methods, attrs) => {
@@ -124,6 +125,7 @@ fn parse_std_module_stage(
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
+                    process_spec: attrs.process_spec,
                 });
             }
             Ast::Import(_, _, _) => {}
@@ -153,6 +155,7 @@ fn parse_std_module_stage(
             ast: global_ast,
             module_doc: None,
             auto_import: false,
+            process_spec: None,
         });
     }
 
@@ -164,6 +167,7 @@ fn parse_std_module_stage(
             ast: global_ast,
             module_doc: None,
             auto_import: false,
+            process_spec: None,
         });
     }
 
@@ -245,6 +249,7 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
+                    process_spec: attrs.process_spec,
                 });
             }
             Ast::ImplDef(span, target, methods, attrs) => {
@@ -255,6 +260,7 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
+                    process_spec: attrs.process_spec,
                 });
             }
             Ast::Import(_, _, _) => {}
@@ -270,6 +276,7 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
             ast: global_ast,
             module_doc: None,
             auto_import: false,
+            process_spec: None,
         });
     }
 

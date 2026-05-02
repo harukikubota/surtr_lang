@@ -3432,3 +3432,42 @@ fn test_many_top_level_declarations_parse_successfully() {
     let ast = parse(&source).expect("many top-level declarations should parse");
     assert_eq!(ast.len(), 256);
 }
+
+#[test]
+fn test_defagent_lowering_preserves_runtime_process_spec() {
+    let ast = parse_with_context(
+        r#"@@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
+defagent Counter {
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defagent should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, _, attrs) => {
+            assert_eq!(name, "Counter");
+            let process_spec = attrs
+                .process_spec
+                .as_ref()
+                .expect("defagent lowered module should keep process spec");
+            assert_eq!(process_spec.process_name, "Counter");
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::StateAgent);
+            assert_eq!(
+                process_spec.instance,
+                crate::ast::ProcessInstance::Singleton
+            );
+            assert!(process_spec.boot);
+            assert!(!process_spec.lazy);
+            assert!(process_spec.registry);
+        }
+        other => panic!("Expected lowered Defmod, got {other:?}"),
+    }
+}

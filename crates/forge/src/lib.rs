@@ -112,6 +112,7 @@ mod tests {
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
+                        process_spec: attrs.process_spec,
                     });
                 }
                 Ast::ImplDef(span, target, methods, attrs) => {
@@ -122,6 +123,7 @@ mod tests {
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
+                        process_spec: attrs.process_spec,
                     });
                 }
                 Ast::Import(_, _, _) => {}
@@ -151,6 +153,7 @@ mod tests {
                 ast: global_ast,
                 module_doc: None,
                 auto_import: false,
+                process_spec: None,
             });
         }
 
@@ -162,6 +165,7 @@ mod tests {
                 ast: global_ast,
                 module_doc: None,
                 auto_import: false,
+                process_spec: None,
             });
         }
 

@@ -476,6 +476,7 @@ fn parse_program_with_module_sources<'a>(
                     ast: module.ast,
                     module_doc: module.module_doc,
                     auto_import: module.auto_import,
+                    process_spec: module.process_spec,
                 })
                 .collect(),
         );

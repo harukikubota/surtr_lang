@@ -440,6 +440,16 @@ pub fn typecheck(resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
     typecheck_with_context(resolved, TypecheckContext::default())
 }
 
+pub fn typecheck_staged_program(
+    program: sigil::ResolvedStagedProgram,
+) -> Result<TypedProgram, TypeError> {
+    let nodes = typecheck_with_context(program.resolved, TypecheckContext::default())?;
+    Ok(TypedProgram {
+        nodes,
+        process_specs: program.process_specs.into_iter().map(Into::into).collect(),
+    })
+}
+
 pub fn typecheck_with_context(
     resolved: Vec<Resolved>,
     context: TypecheckContext,
@@ -808,6 +818,17 @@ impl ScarSession {
 
     pub fn typecheck(&mut self, resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
         self.typecheck_with_context(resolved, TypecheckContext::default())
+    }
+
+    pub fn typecheck_staged_program(
+        &mut self,
+        program: sigil::ResolvedStagedProgram,
+    ) -> Result<TypedProgram, TypeError> {
+        let nodes = self.typecheck_with_context(program.resolved, TypecheckContext::default())?;
+        Ok(TypedProgram {
+            nodes,
+            process_specs: program.process_specs.into_iter().map(Into::into).collect(),
+        })
     }
 
     pub fn typecheck_with_context(

@@ -3703,6 +3703,7 @@ pub(crate) fn parse_module_stages_from_sources(
                     ast: crate::rebase_module_ast_spans(lowered.ast, module.source_id),
                     module_doc: lowered.module_doc,
                     auto_import: lowered.auto_import,
+                    process_spec: lowered.process_spec,
                 });
             }
         }

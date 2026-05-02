@@ -67,6 +67,7 @@ pub struct LoweredModuleAst {
     pub declared_span: Option<spire::ast::Span>,
     pub module_doc: Option<String>,
     pub auto_import: bool,
+    pub process_spec: Option<spire::ast::ProcessSpec>,
 }
 
 pub(crate) fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
@@ -703,6 +704,7 @@ pub fn lower_module_source_ast(
                     declared_span: Some(span),
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
+                    process_spec: attrs.process_spec,
                 });
             }
             spire::ast::Ast::ImplDef(span, target, methods, attrs) => {
@@ -721,6 +723,7 @@ pub fn lower_module_source_ast(
                     declared_span: Some(declared_span),
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
+                    process_spec: attrs.process_spec,
                 });
             }
             spire::ast::Ast::Import(_, _, _) => {}
@@ -775,6 +778,7 @@ pub fn lower_module_source_ast(
                 declared_span: None,
                 module_doc: None,
                 auto_import: false,
+                process_spec: None,
             });
         }
     }
@@ -798,6 +802,7 @@ pub fn lower_module_source_ast(
                 declared_span: None,
                 module_doc: None,
                 auto_import: false,
+                process_spec: None,
             });
         }
     }
@@ -811,6 +816,7 @@ pub fn lower_module_source_ast(
             declared_span: None,
             module_doc: None,
             auto_import: false,
+            process_spec: None,
         });
     }
 
@@ -1290,6 +1296,7 @@ deferror NoneError { "None Value." }"#,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
+                process_spec: module.process_spec,
             })
             .collect::<Vec<_>>()];
 
@@ -1318,6 +1325,7 @@ deferror NoneError { "None Value." }"#,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
+                process_spec: module.process_spec,
             })
             .collect::<Vec<_>>()];
 
@@ -1366,6 +1374,7 @@ deferror NoneError { "None Value." }"#,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
+                process_spec: module.process_spec,
             })
             .collect::<Vec<_>>()];
 
@@ -1397,6 +1406,7 @@ deferror NoneError { "None Value." }"#,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
+                process_spec: module.process_spec,
             })
             .collect::<Vec<_>>()];
 
@@ -1410,6 +1420,38 @@ deferror NoneError { "None Value." }"#,
             dbg_docs[0].signature.as_deref(),
             Some("@@intrinsic def dbg!(values: *$A) -> Unit")
         );
+    }
+
+    #[test]
+    fn lower_module_source_ast_keeps_process_spec_on_lowered_module() {
+        let ast = spire::parse_with_context(
+            r#"@@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
+defagent Counter {
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("defagent source should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Counter"));
+        assert_eq!(lowered.len(), 1);
+        let process_spec = lowered[0]
+            .process_spec
+            .as_ref()
+            .expect("lowered module should keep process spec");
+        assert_eq!(process_spec.process_name, "Counter");
+        assert!(process_spec.boot);
+        assert!(matches!(
+            process_spec.kind,
+            spire::ast::ProcessKind::StateAgent
+        ));
     }
 
     #[test]
@@ -1434,6 +1476,7 @@ deferror NoneError { "None Value." }"#,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
+                process_spec: module.process_spec,
             })
             .collect::<Vec<_>>()];
 
@@ -1496,6 +1539,7 @@ impl Numeric for Int {
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
+                process_spec: module.process_spec,
             })
             .collect::<Vec<_>>()];
 
@@ -1552,6 +1596,7 @@ impl Show for Int {
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
+                process_spec: module.process_spec,
             })
             .collect::<Vec<_>>()];
 
@@ -1593,6 +1638,7 @@ defrecord Point(x: Float, y: Float)"#,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
+                process_spec: module.process_spec,
             })
             .collect::<Vec<_>>()];
 
@@ -1634,6 +1680,7 @@ impl User {
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
+                process_spec: module.process_spec,
             })
             .collect::<Vec<_>>()];
 

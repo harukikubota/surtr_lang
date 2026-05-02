@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use sigil::resolved::ResolvedId;
+use sigil::resolved::{ResolvedId, ResolvedProcessSpec};
 use sindr::primitives::SurtrInt;
-use spire::ast::{BinOp, Lit, Span, Visibility};
+use spire::ast::{BinOp, Lit, ProcessSpec, Span, Visibility};
 
 use crate::types::Ty;
 
@@ -11,6 +11,35 @@ pub struct TypedNode {
     pub ty: Ty,
     pub span: Span,
     pub node: TypedInner,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedProgram {
+    pub nodes: Vec<TypedNode>,
+    pub process_specs: Vec<TypedProcessSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedProcessSpec {
+    pub module_path: String,
+    pub process_name: String,
+    pub spec: ProcessSpec,
+    pub init_uid: u32,
+    pub get_uid: u32,
+    pub set_uid: Option<u32>,
+}
+
+impl From<ResolvedProcessSpec> for TypedProcessSpec {
+    fn from(value: ResolvedProcessSpec) -> Self {
+        Self {
+            module_path: value.module_path,
+            process_name: value.process_name,
+            spec: value.spec,
+            init_uid: value.init_uid,
+            get_uid: value.get_uid,
+            set_uid: value.set_uid,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

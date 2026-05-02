@@ -51,6 +51,7 @@ fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
         ast,
         module_doc: None,
         auto_import: matches!(module_path, "Bootstrap" | "Kernel" | "Result"),
+        process_spec: None,
     }
 }
 
@@ -60,6 +61,7 @@ fn staged_auto_import_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAs
         ast,
         module_doc: None,
         auto_import: true,
+        process_spec: None,
     }
 }
 
@@ -127,6 +129,57 @@ fn test_precollect_builtin_decl_in_module() {
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
     assert!(index.contains_key("Int::shl"));
+}
+
+#[test]
+fn test_resolve_staged_program_keeps_process_specs() {
+    let kernel = staged_module(
+        "Kernel",
+        parse_module_ast(
+            r#"@@builtin def __process_pid(name: String, init: (-> Result<$State>)) -> Unit
+@@builtin def __process_state(pid: Unit) -> Result<$State>
+@@builtin def __process_store(pid: Unit, state: $State) -> Result<Unit>"#,
+            "Kernel",
+        ),
+    );
+    let ast = spire::parse_with_context(
+        r#"@@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
+defagent Counter {
+  @init
+  def init() -> Result<Int> { 0 }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { state }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { next }
+}"#,
+        spire::ParserContext::module(0, Some("Counter".to_string()))
+            .with_rules(permissive_module_rules()),
+    )
+    .expect("module source should parse");
+
+    let module = match ast.into_iter().next().expect("lowered module should exist") {
+        Ast::Defmod(_, module_path, ast, attrs) => StagedModuleAst {
+            module_path,
+            ast,
+            module_doc: attrs.doc,
+            auto_import: attrs.auto_import,
+            process_spec: attrs.process_spec,
+        },
+        other => panic!("expected lowered defmod, got {other:?}"),
+    };
+    let module_stages = vec![vec![kernel, module]];
+    let declaration_index =
+        precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    let resolved =
+        resolve_staged_program_with_state(&module_stages, Vec::new(), &declaration_index, None)
+            .expect("resolve should succeed");
+
+    assert_eq!(resolved.process_specs.len(), 1);
+    let spec = &resolved.process_specs[0];
+    assert_eq!(spec.module_path, "Counter");
+    assert_eq!(spec.process_name, "Counter");
 }
 
 #[test]

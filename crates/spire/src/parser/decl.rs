@@ -28,6 +28,37 @@ struct AgentMeta {
     lazy: bool,
 }
 
+impl AgentKind {
+    fn into_process_kind(self) -> ProcessKind {
+        match self {
+            AgentKind::ReadOnly => ProcessKind::ReadOnlyAgent,
+            AgentKind::State => ProcessKind::StateAgent,
+        }
+    }
+}
+
+impl AgentInstance {
+    fn into_process_instance(self) -> ProcessInstance {
+        match self {
+            AgentInstance::Singleton => ProcessInstance::Singleton,
+            AgentInstance::Multi => ProcessInstance::Multi,
+        }
+    }
+}
+
+impl AgentMeta {
+    fn into_process_spec(self, process_name: String) -> ProcessSpec {
+        ProcessSpec {
+            process_name,
+            kind: self.kind.into_process_kind(),
+            instance: self.instance.into_process_instance(),
+            boot: self.boot,
+            registry: self.registry,
+            lazy: self.lazy,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentHandlerKind {
     Init,
@@ -791,6 +822,7 @@ impl Parser<'_> {
                 visibility,
                 doc: attrs.doc,
                 auto_import: attrs.auto_import,
+                process_spec: attrs.process_spec,
             },
         ))
     }
@@ -2349,7 +2381,9 @@ impl Parser<'_> {
             }
         }
 
-        Ok(Ast::Defmod(span, name, body, DeclAttrs::default()))
+        let mut attrs = DeclAttrs::default();
+        attrs.process_spec = Some(meta.into_process_spec(name.clone()));
+        Ok(Ast::Defmod(span, name, body, attrs))
     }
 
     pub(super) fn parse_intrinsic_decl(

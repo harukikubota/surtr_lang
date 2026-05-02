@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
-use spire::ast::{AstTy, BinOp, Lit, Span, Symbol, Visibility};
+use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
@@ -15,6 +15,16 @@ pub struct ResolvedId {
     pub qualified_name: Option<Symbol>,
     pub unique_id: u32,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedProcessSpec {
+    pub module_path: String,
+    pub process_name: String,
+    pub spec: ProcessSpec,
+    pub init_uid: u32,
+    pub get_uid: u32,
+    pub set_uid: Option<u32>,
 }
 
 /// Resolved AST — every identifier carries a unique_id.

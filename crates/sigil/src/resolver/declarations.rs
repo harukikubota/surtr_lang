@@ -11,6 +11,7 @@ pub struct StagedModuleAst {
     pub ast: Vec<Ast>,
     pub module_doc: Option<String>,
     pub auto_import: bool,
+    pub process_spec: Option<spire::ast::ProcessSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

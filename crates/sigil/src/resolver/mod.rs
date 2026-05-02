@@ -81,6 +81,7 @@ pub struct ResolveResumeState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedStagedProgram {
     pub resolved: Vec<Resolved>,
+    pub process_specs: Vec<ResolvedProcessSpec>,
     pub resume_state: ResolveResumeState,
 }
 
@@ -113,6 +114,7 @@ pub fn resolve_staged_program_from_state(
     let global_scope = build_global_scope(declaration_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     let mut resolved = Vec::new();
+    let mut process_specs = Vec::new();
     let mut next_local_id = declaration_uids
         .values()
         .copied()
@@ -145,6 +147,33 @@ pub fn resolve_staged_program_from_state(
             offset = offset.saturating_add(result.local_id_count);
         }
         next_local_id = stage_local_base.saturating_add(offset);
+
+        for module in stage {
+            if let Some(spec) = &module.process_spec {
+                let init_fq = format!("{}::__agent_init", module.module_path);
+                let get_fq = format!("{}::__agent_get", module.module_path);
+                let set_fq = format!("{}::__agent_set", module.module_path);
+                let init_uid = *declaration_uids.get(&init_fq).ok_or_else(|| ResolveError {
+                    message: format!("missing lowered init handler `{init_fq}`"),
+                    span: Span { start: 0, end: 0 },
+                    related_labels: Vec::new(),
+                })?;
+                let get_uid = *declaration_uids.get(&get_fq).ok_or_else(|| ResolveError {
+                    message: format!("missing lowered get handler `{get_fq}`"),
+                    span: Span { start: 0, end: 0 },
+                    related_labels: Vec::new(),
+                })?;
+                let set_uid = declaration_uids.get(&set_fq).copied();
+                process_specs.push(ResolvedProcessSpec {
+                    module_path: module.module_path.clone(),
+                    process_name: spec.process_name.clone(),
+                    spec: spec.clone(),
+                    init_uid,
+                    get_uid,
+                    set_uid,
+                });
+            }
+        }
     }
 
     if !user_ast.is_empty() {
@@ -170,6 +199,7 @@ pub fn resolve_staged_program_from_state(
 
     Ok(ResolvedStagedProgram {
         resolved,
+        process_specs,
         resume_state: ResolveResumeState { next_local_id },
     })
 }
