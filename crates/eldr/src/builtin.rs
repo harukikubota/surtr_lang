@@ -1748,23 +1748,62 @@ fn quote_surtr_string_literal(input: &str) -> String {
 }
 
 fn inspect_callable(_vm: &VM, callable: &Callable) -> Option<String> {
-    if callable.metadata.origin != sindr::runtime::CallableOrigin::Capture {
-        return None;
+    let sig = callable_display_signature(callable)?;
+    match callable_display_origin(callable)? {
+        CallableDisplayOrigin::Capture { module, name } => Some(format!(
+            "FnCapture(module: {}, name: {}, sig: {})",
+            module, name, sig
+        )),
+        CallableDisplayOrigin::Closure => Some(format!("Closure{sig}")),
     }
+}
 
-    let module = callable.metadata.module.as_deref()?;
-    let name = callable.metadata.name.as_deref()?;
+enum CallableDisplayOrigin<'a> {
+    Capture { module: &'a str, name: &'a str },
+    Closure,
+}
+
+fn callable_display_signature(callable: &Callable) -> Option<String> {
     let full_signature = callable.metadata.full_signature.as_deref()?;
-    let sig = if callable.metadata.applied_args == 0 {
-        full_signature.to_string()
+    if callable.metadata.applied_args == 0 {
+        Some(full_signature.to_string())
     } else {
-        remaining_callable_signature(full_signature, callable.metadata.applied_args)?
-    };
+        remaining_callable_signature(full_signature, callable.metadata.applied_args)
+    }
+}
 
-    Some(format!(
-        "FnCapture(module: {}, name: {}, sig: {})",
-        module, name, sig
-    ))
+fn callable_display_origin(callable: &Callable) -> Option<CallableDisplayOrigin<'_>> {
+    match callable.metadata.origin {
+        sindr::runtime::CallableOrigin::Capture => {
+            if let (Some(module), Some(name)) = (
+                callable.metadata.module.as_deref(),
+                callable.metadata.name.as_deref(),
+            ) {
+                Some(CallableDisplayOrigin::Capture { module, name })
+            } else {
+                callable
+                    .lexical_captures
+                    .first()
+                    .and_then(callable_capture_origin_from_value)
+            }
+        }
+        sindr::runtime::CallableOrigin::Closure => callable
+            .lexical_captures
+            .first()
+            .and_then(callable_capture_origin_from_value)
+            .or(Some(CallableDisplayOrigin::Closure)),
+        sindr::runtime::CallableOrigin::Unknown => callable
+            .lexical_captures
+            .first()
+            .and_then(callable_capture_origin_from_value),
+    }
+}
+
+fn callable_capture_origin_from_value(value: &Value) -> Option<CallableDisplayOrigin<'_>> {
+    let Value::Callable(callable) = value else {
+        return None;
+    };
+    callable_display_origin(callable)
 }
 
 fn remaining_callable_signature(signature: &str, applied_args: usize) -> Option<String> {
@@ -2277,7 +2316,7 @@ mod tests {
     use super::{call_builtin, err_result_from_rich_error, inspect_value, BUILTIN_IMPLS};
     use crate::vm::VM;
     use sindr::builtin::{builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name};
-    use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
+    use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry, FunctionFlags};
     use sindr::primitives::int;
     use sindr::runtime::{
         Callable, CallableMetadata, CallableOrigin, CallableTarget, HashMapHandle, ListHandle,
@@ -3515,6 +3554,41 @@ mod tests {
             inspect_value(&vm, &value),
             "FnCapture(module: <local>, name: add, sig: add(x: Int, y: Int) -> Int)"
         );
+    }
+
+    #[test]
+    fn inspect_formats_closure_with_type_style_signature() {
+        let vm = VM::new(Bytecode {
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 0,
+                num_locals: 0,
+                arity: 2,
+                qualified_name: None,
+                signature: Some("(Int, Int -> Int)".into()),
+                end_pc: 0,
+                span_start: 0,
+                span_end: 0,
+                flags: FunctionFlags {
+                    closure: true,
+                    ..Default::default()
+                },
+            }],
+            ..Bytecode::default()
+        });
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Closure,
+                module: None,
+                name: None,
+                full_signature: Some("(Int, Int -> Int)".into()),
+                applied_args: 0,
+            },
+        });
+
+        assert_eq!(inspect_value(&vm, &value), "Closure(Int, Int -> Int)");
     }
 
     #[test]

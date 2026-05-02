@@ -344,10 +344,15 @@ pub struct BindingInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplCallableDisplay {
-    pub module: String,
-    pub name: String,
-    pub sig: String,
+pub enum ReplCallableDisplay {
+    FnCapture {
+        module: String,
+        name: String,
+        sig: String,
+    },
+    Closure {
+        sig: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1059,7 +1064,7 @@ fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
     match &node.node {
         TypedInner::InjectCall(func, _) => {
             let (module, name) = callable_head_for_node(func.as_ref())?;
-            Some(ReplCallableDisplay {
+            Some(ReplCallableDisplay::FnCapture {
                 module,
                 name,
                 sig: ty_to_string(&node.ty),
@@ -1071,12 +1076,15 @@ fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
                 .all(|param| param.id.name.starts_with("__cap_")) =>
         {
             let (module, name) = callable_head_for_invocation(body.as_ref())?;
-            Some(ReplCallableDisplay {
+            Some(ReplCallableDisplay::FnCapture {
                 module,
                 name,
                 sig: ty_to_string(&node.ty),
             })
         }
+        TypedInner::Closure(..) => Some(ReplCallableDisplay::Closure {
+            sig: ty_to_string(&node.ty),
+        }),
         TypedInner::Semi(inner) => callable_display_for_node(inner),
         _ => None,
     }
@@ -1222,6 +1230,8 @@ struct PendingClosure {
     captures: Vec<ResolvedId>,
     params: Vec<TypedClosureParam>,
     body: Box<TypedNode>,
+    display: Option<ReplCallableDisplay>,
+    signature: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1236,6 +1246,8 @@ struct PendingInjectCall {
     fun_idx: u32,
     extra_arg_count: usize,
     span: Span,
+    display: Option<ReplCallableDisplay>,
+    signature: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1359,6 +1371,8 @@ impl Codegen {
         params: &[TypedClosureParam],
         captures: &[ResolvedId],
         body: &TypedNode,
+        display: Option<&ReplCallableDisplay>,
+        signature: &str,
     ) -> Result<(), CodegenError> {
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
@@ -1384,13 +1398,22 @@ impl Codegen {
         self.emit_tail_node(body)?;
         self.in_function = prev_in_function;
 
+        let (qualified_name, signature) = match display {
+            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => (
+                Some(format!("{module}::{name}")),
+                Some(sig.clone()),
+            ),
+            Some(ReplCallableDisplay::Closure { sig }) => (None, Some(sig.clone())),
+            None => (None, Some(signature.to_string())),
+        };
+
         self.state.functions.push(FunctionEntry {
             fun_idx,
             entry_pc,
             num_locals: self.state.next_slot,
             arity: total_arity as u8,
-            qualified_name: None,
-            signature: None,
+            qualified_name,
+            signature,
             end_pc: 0,
             span_start: body.span.start as u32,
             span_end: body.span.end as u32,
@@ -1418,6 +1441,8 @@ impl Codegen {
                     &closure.params,
                     &closure.captures,
                     &closure.body,
+                    closure.display.as_ref(),
+                    &closure.signature,
                 )?;
             }
         }
@@ -1571,6 +1596,8 @@ impl Codegen {
         fun_idx: u32,
         extra_arg_count: usize,
         span: &Span,
+        display: Option<&ReplCallableDisplay>,
+        signature: &str,
     ) -> Result<(), CodegenError> {
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
@@ -1597,13 +1624,22 @@ impl Codegen {
         self.in_function = prev_in_function;
         self.emit(Opcode::Return);
 
+        let (qualified_name, signature) = match display {
+            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => (
+                Some(format!("{module}::{name}")),
+                Some(sig.clone()),
+            ),
+            Some(ReplCallableDisplay::Closure { sig }) => (None, Some(sig.clone())),
+            None => (None, Some(signature.to_string())),
+        };
+
         self.state.functions.push(FunctionEntry {
             fun_idx,
             entry_pc,
             num_locals: self.state.next_slot,
             arity: (extra_arg_count + 2) as u8,
-            qualified_name: None,
-            signature: None,
+            qualified_name,
+            signature,
             end_pc: 0,
             span_start: span.start as u32,
             span_end: span.end as u32,
@@ -1643,6 +1679,8 @@ impl Codegen {
                         inject_call.fun_idx,
                         inject_call.extra_arg_count,
                         &inject_call.span,
+                        inject_call.display.as_ref(),
+                        &inject_call.signature,
                     )?;
                 }
             }
@@ -2129,6 +2167,8 @@ impl Codegen {
                     fun_idx,
                     extra_arg_count: args.len(),
                     span: node.span.clone(),
+                    display: callable_display_for_node(node),
+                    signature: ty_to_string(&node.ty),
                 });
                 self.emit(Opcode::LoadFunctionRef(fun_idx));
                 self.emit_callable_ref(func)?;
@@ -2334,6 +2374,8 @@ impl Codegen {
                     captures: filtered_captures.clone(),
                     params: params.clone(),
                     body: body.clone(),
+                    display: callable_display_for_node(node),
+                    signature: ty_to_string(&node.ty),
                 });
                 self.emit(Opcode::LoadFunctionRef(fun_idx));
                 for capture in &filtered_captures {

@@ -365,8 +365,21 @@ impl VM {
             return CallableMetadata::default();
         };
         if entry.flags.closure {
+            if let (Some(qualified_name), Some(signature)) =
+                (entry.qualified_name.as_deref(), entry.signature.clone())
+            {
+                let (module, name) = split_qualified_name_owned(qualified_name);
+                return CallableMetadata {
+                    origin: CallableOrigin::Capture,
+                    module,
+                    name,
+                    full_signature: Some(signature),
+                    applied_args: 0,
+                };
+            }
             return CallableMetadata {
                 origin: CallableOrigin::Closure,
+                full_signature: entry.signature.clone(),
                 ..CallableMetadata::default()
             };
         }

@@ -1,6 +1,6 @@
 use eldr::builtin::inspect_value;
 use eldr::value::Value;
-use forge::ChunkMeta;
+use forge::{ChunkMeta, ReplCallableDisplay};
 
 /// Render display lines for one evaluated result.
 ///
@@ -28,11 +28,14 @@ pub fn format_result_lines(
                     let val = vm.get_local(b.slot_id)?;
                     let displayed = b.callable_display.as_ref().map_or_else(
                         || inspect_value(vm, &val),
-                        |display| {
-                            format!(
+                        |display| match display {
+                            ReplCallableDisplay::FnCapture { module, name, sig } => format!(
                                 "FnCapture(module: {}, name: {}, sig: {})",
-                                display.module, display.name, display.sig
-                            )
+                                module, name, sig
+                            ),
+                            ReplCallableDisplay::Closure { sig } => {
+                                format!("Closure{}", sig)
+                            }
                         },
                     );
                     Some(format!("{}: {} = {}", b.name, b.ty, displayed))

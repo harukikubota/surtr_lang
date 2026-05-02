@@ -261,7 +261,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let closure_fun = engine.handle_line("pure = {|n: Int| n + 1}");
     let closure_fun_text = rendered_text(&closure_fun);
     assert!(
-        closure_fun_text.contains("pure: (Int -> Int)"),
+        closure_fun_text.contains("pure: (Int -> Int) = Closure(Int -> Int)"),
         "{closure_fun_text}"
     );
 
@@ -275,8 +275,15 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let capture_fun = engine.handle_line("inc = {|n: Int| n + captured}");
     let capture_fun_text = rendered_text(&capture_fun);
     assert!(
-        capture_fun_text.contains("inc: (Int -> Int)"),
+        capture_fun_text.contains("inc: (Int -> Int) = Closure(Int -> Int)"),
         "{capture_fun_text}"
+    );
+
+    let binary_closure = engine.handle_line("f = {|x: Int, y: Int| x + y}");
+    let binary_closure_text = rendered_text(&binary_closure);
+    assert!(
+        binary_closure_text.contains("f: (Int, Int -> Int) = Closure(Int, Int -> Int)"),
+        "{binary_closure_text}"
     );
 
     let capture_fun_type = engine.handle_line(":type inc");
@@ -823,6 +830,14 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
         "FnCapture(module: Int, name: shr, sig: Int::shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
     ));
 
+    let partial_capture_ref = engine.handle_line("&Add::add(&1, 1)");
+    assert!(rendered_text(&partial_capture_ref).contains(
+        "FnCapture(module: Add, name: add, sig: (Int -> Int))"
+    ));
+
+    let closure_ref = engine.handle_line("{|x: Int, y: Int| x + y}");
+    assert!(rendered_text(&closure_ref).contains("Closure(Int, Int -> Int)"));
+
     let trait_helper = engine.handle_line("&concat");
     assert!(!trait_helper.should_exit);
     assert!(matches!(trait_helper.output, ReplOutput::EvalError { .. }));
@@ -837,6 +852,64 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
     assert!(!add_call.should_exit);
     let add_text = rendered_text(&add_call);
     assert!(add_text.contains("Add::add requires a receiver type implementing Add, got Boolean"));
+}
+
+#[test]
+fn core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_appears() {
+    let mut engine = engine();
+
+    let def = engine.handle_line("def f(a: Int, b: Int, c: Int) -> Int { a + b + c }");
+    assert!(!def.should_exit);
+
+    let f3 = engine.handle_line("f3 = &f");
+    let f3_text = rendered_text(&f3);
+    assert!(f3_text.contains("FnCapture("), "{f3_text}");
+    assert!(f3_text.contains("name: f"), "{f3_text}");
+    assert!(
+        f3_text.contains("sig: f(a: Int, b: Int, c: Int) -> Int"),
+        "{f3_text}"
+    );
+
+    let f2 = engine.handle_line("f2 = &f3(&1, &2, 3)");
+    let f2_text = rendered_text(&f2);
+    assert!(
+        f2_text.contains("FnCapture("),
+        "{f2_text}"
+    );
+    assert!(
+        f2_text.contains("name: f"),
+        "{f2_text}"
+    );
+    assert!(
+        f2_text.contains("sig: (Int, Int -> Int)"),
+        "{f2_text}"
+    );
+
+    let f1 = engine.handle_line("f1 = &f2(&1, 2)");
+    let f1_text = rendered_text(&f1);
+    assert!(
+        f1_text.contains("FnCapture("),
+        "{f1_text}"
+    );
+    assert!(
+        f1_text.contains("name: f"),
+        "{f1_text}"
+    );
+    assert!(
+        f1_text.contains("sig: (Int -> Int)"),
+        "{f1_text}"
+    );
+
+    let applied = engine.handle_line("f1(10)");
+    assert!(rendered_text(&applied).contains("15"));
+
+    let g3 = engine.handle_line("g3 = {|a: Int, b: Int, c: Int| a + b + c}");
+    let g3_text = rendered_text(&g3);
+    assert!(g3_text.contains("Closure(Int, Int, Int -> Int)"), "{g3_text}");
+
+    let g2 = engine.handle_line("g2 = &g3(&1, &2, 3)");
+    let g2_text = rendered_text(&g2);
+    assert!(g2_text.contains("Closure(Int, Int -> Int)"), "{g2_text}");
 }
 
 #[test]
