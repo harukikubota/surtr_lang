@@ -313,6 +313,7 @@ mod tests {
             name: name.to_string(),
             qualified_name: None,
             unique_id,
+            compiler_generated: false,
             span: test_span(),
         }
     }

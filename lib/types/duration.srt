@@ -1,13 +1,80 @@
-@@builtin type Duration
+@@doc """
+Standard `Duration` data type.
+`Duration` is an opaque millisecond span used by process and task APIs.
+The field stays private so callers construct validated values through `Duration(...)`
+or `try_from(..., Duration)`, while the `100ms` literal remains syntax sugar.
+
+## REPL
+xldr(1)> 250ms
+250ms
+xldr(2)> Duration(250)
+Ok(250ms)
+"""
+defstruct Duration {
+  private millis: Int,
+}
 
 deferror InvalidDuration(message: String) {
   message
 }
 
-impl Duration {}
+impl Duration {
+  @@doc """
+  Construct a `Duration` from a millisecond count.
+  Negative values are rejected with `InvalidDuration`.
+
+  ## REPL
+  xldr(1)> Duration(10)
+  Ok(10ms)
+  xldr(2)> Duration(-1)
+  Err(InvalidDuration("duration must be non-negative: -1"))
+  """
+  def new(value: Int) -> Result<Self, Error> {
+    if(
+      value < 0,
+      Err(InvalidDuration("duration must be non-negative: #{value}")),
+      Ok(Duration { millis: value })
+    )
+  }
+
+  @@doc """
+  Return the millisecond count stored in the duration.
+
+  ## REPL
+  xldr(1)> millis(250ms)
+  250
+  """
+  def millis(self: Self) -> Int {
+    self.millis
+  }
+}
+
+impl Show for Duration {
+  @@doc """
+  Return the standard string rendering for `Duration`.
+
+  ## REPL
+  xldr(1)> to_string(250ms)
+  "250ms"
+  """
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
 
 impl TryFrom<Duration> for Int {
+  @@doc """
+  Convert an `Int` millisecond value into `Duration`.
+
+  Prefer the literal form or constructor sugar in ordinary code.
+
+  ## REPL
+  xldr(1)> try_from(10, Duration)
+  Ok(10ms)
+  xldr(2)> Duration(10)
+  Ok(10ms)
+  """
   def try_from(self: Self, to: TypeRef<Duration>) -> Result<Duration, Error> {
-    __duration_from_int(self)
+    Duration(self)
   }
 }

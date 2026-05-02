@@ -441,16 +441,6 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Duration) -> Result<Unit>",
     },
     BuiltinMeta {
-        name: "__duration_literal",
-        arity: 1,
-        sig_str: "(Int) -> Duration",
-    },
-    BuiltinMeta {
-        name: "__duration_from_int",
-        arity: 1,
-        sig_str: "(Int) -> Result<Duration, InvalidDuration>",
-    },
-    BuiltinMeta {
         name: "__task_call",
         arity: 1,
         sig_str: "((-> Result<$A>)) -> Result<$A>",
@@ -681,10 +671,6 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &["$T"],
     },
     BuiltinTypeMeta {
-        name: TypeName::Duration.as_str(),
-        params: &[],
-    },
-    BuiltinTypeMeta {
         name: TypeName::TypeRef.as_str(),
         params: &["$T"],
     },
@@ -708,6 +694,10 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("IO::get_line") => "io_get_line",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
+        Some("Task::call") => "__task_call",
+        Some("Task::async") => "__task_async",
+        Some("Task::launch") => "__task_launch",
+        Some("Task::cast") => "__task_cast",
         _ => declared_name,
     }
 }

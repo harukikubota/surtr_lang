@@ -31,6 +31,7 @@ impl Resolver {
             name,
             qualified_name: None,
             unique_id: uid,
+            compiler_generated: false,
             span,
         })
     }
@@ -68,6 +69,7 @@ impl Resolver {
                         name: ctor_name,
                         qualified_name: None,
                         unique_id: ctor_uid,
+                        compiler_generated: false,
                         span,
                     },
                     inners
@@ -108,6 +110,7 @@ impl Resolver {
                     name: head_name.clone(),
                     qualified_name: None,
                     unique_id: head_uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let resolved_inners = inners
@@ -159,6 +162,7 @@ impl Resolver {
                                 name: format!("{}::deconstruct", head_name),
                                 qualified_name: extractor_qualified_name,
                                 unique_id: extractor_uid,
+                                compiler_generated: false,
                                 span,
                             },
                             resolved_inners,

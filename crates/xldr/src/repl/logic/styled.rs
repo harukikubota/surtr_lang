@@ -318,9 +318,14 @@ fn inspect_doc(text: &str) -> String {
         if ch.is_ascii_digit()
             || (ch == '-' && chars.peek().is_some_and(|(_, next)| next.is_ascii_digit()))
         {
-            let end = consume_while(idx, &mut chars, text, |c| {
+            let mut end = consume_while(idx, &mut chars, text, |c| {
                 c.is_ascii_digit() || c == '_' || c == '.'
             });
+            if text[end..].starts_with("ms") {
+                end += "ms".len();
+                chars.next();
+                chars.next();
+            }
             out.push_str(&styled(&text[idx..end], Style::fg(Color::Yellow)));
             continue;
         }
@@ -414,9 +419,14 @@ fn source_doc(text: &str) -> String {
         if ch.is_ascii_digit()
             || (ch == '-' && chars.peek().is_some_and(|(_, next)| next.is_ascii_digit()))
         {
-            let end = consume_while(idx, &mut chars, text, |c| {
+            let mut end = consume_while(idx, &mut chars, text, |c| {
                 c.is_ascii_digit() || c == '_' || c == '.'
             });
+            if text[end..].starts_with("ms") {
+                end += "ms".len();
+                chars.next();
+                chars.next();
+            }
             out.push_str(&styled(&text[idx..end], Style::fg(Color::Yellow)));
             continue;
         }
@@ -722,6 +732,14 @@ mod tests {
             !rendered.starts_with("\x1b[96mOk(1)"),
             "constructor call must not inherit type-definition styling"
         );
+    }
+
+    #[test]
+    fn duration_literals_keep_single_literal_coloring_in_results_and_source() {
+        let result = repl_result_line("250ms");
+        let source = doc_body_line("xldr(1)> Process::sleep(250ms)");
+        assert!(result.contains("\x1b[33m250ms\x1b[0m"));
+        assert!(source.contains("\x1b[33m250ms\x1b[0m"));
     }
 
     #[test]

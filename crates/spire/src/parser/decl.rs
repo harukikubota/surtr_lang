@@ -215,6 +215,14 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
                 .map(|(field, expr)| (field, rewrite_process_self_refs(expr)))
                 .collect(),
         ),
+        Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
+            span,
+            name,
+            fields
+                .into_iter()
+                .map(|(field, expr)| (field, rewrite_process_self_refs(expr)))
+                .collect(),
+        ),
         Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(
             span,
             name,
@@ -300,6 +308,10 @@ fn var(span: &Span, name: &str) -> Ast {
     Ast::Var(span.clone(), name.to_string())
 }
 
+fn internal_var(span: &Span, name: &str) -> Ast {
+    Ast::InternalVar(span.clone(), name.to_string())
+}
+
 fn positional(expr: Ast) -> RecordLitArg {
     RecordLitArg::Positional(expr)
 }
@@ -308,6 +320,14 @@ fn call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
     Ast::App(
         span.clone(),
         Box::new(var(span, name)),
+        args.into_iter().map(positional).collect(),
+    )
+}
+
+fn internal_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
+    Ast::App(
+        span.clone(),
+        Box::new(internal_var(span, name)),
         args.into_iter().map(positional).collect(),
     )
 }
@@ -359,7 +379,7 @@ fn pid_bind(span: &Span, agent_name: &str) -> Ast {
 }
 
 fn process_pid_call(span: &Span, agent_name: &str) -> Ast {
-    call(
+    internal_call(
         span,
         "__process_pid",
         vec![
@@ -373,7 +393,7 @@ fn process_state_bind(span: &Span) -> Ast {
     Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "state".to_string()),
-        Box::new(call(span, "__process_state", vec![var(span, "pid")])),
+        Box::new(internal_call(span, "__process_state", vec![var(span, "pid")])),
     )
 }
 
@@ -440,7 +460,7 @@ fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<
     let params = def_params(init_def)?.clone();
     let body = Ast::Block(
         span.clone(),
-        vec![call(
+        vec![internal_call(
             span,
             "__process_spawn",
             vec![string_lit(span, agent_name), init_closure(span, &params)],
@@ -504,7 +524,7 @@ fn build_state_set_wrapper(
                 AstPattern::Var(span.clone(), "next_state".to_string()),
                 Box::new(call(span, "__agent_set", call_args)),
             ),
-            call(
+            internal_call(
                 span,
                 "__process_store",
                 vec![var(span, "pid"), var(span, "next_state")],
@@ -1015,6 +1035,7 @@ impl Parser<'_> {
                 visibility,
                 doc: attrs.doc,
                 auto_import: attrs.auto_import,
+                hidden: attrs.hidden,
                 process_spec: attrs.process_spec,
             },
         ))
@@ -1237,9 +1258,18 @@ impl Parser<'_> {
                         }
                     }
                 }
+                "hidden" => {
+                    if attrs.hidden {
+                        return Err(ParseError::syntax(
+                            "@@hidden may only appear once before an impl member",
+                            annotator_span,
+                        ));
+                    }
+                    attrs.hidden = true;
+                }
                 _ => {
                     return Err(ParseError::syntax(
-                        "Only @@doc / @@builtin are allowed before impl members",
+                        "Only @@doc / @@hidden / @@builtin are allowed before impl members",
                         annotator_span,
                     ));
                 }
@@ -2166,6 +2196,15 @@ impl Parser<'_> {
                     }
                     attrs.auto_import = true;
                 }
+                "hidden" => {
+                    if attrs.hidden {
+                        return Err(ParseError::syntax(
+                            "@@hidden may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    attrs.hidden = true;
+                }
                 _ => {
                     return Err(ParseError::syntax(
                         format!("Unknown annotator: @@{}", name),
@@ -2233,7 +2272,7 @@ impl Parser<'_> {
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
-                    "@@doc / @@autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defextractor`, `@@builtin type/def/defextractor`, or `@@intrinsic def`",
+                    "@@doc / @@autoimport / @@hidden must annotate `def`, `defmod`, `deftrait`, `impl`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defextractor`, `@@builtin type/def/defextractor`, or `@@intrinsic def`",
                     self.peek_span(),
                 )),
             }

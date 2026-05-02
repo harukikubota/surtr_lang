@@ -358,14 +358,6 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_process_sleep,
     },
     BuiltinImpl {
-        name: "__duration_literal",
-        func: builtin_duration_literal,
-    },
-    BuiltinImpl {
-        name: "__duration_from_int",
-        func: builtin_duration_from_int,
-    },
-    BuiltinImpl {
         name: "__task_call",
         func: builtin_task_call,
     },
@@ -602,26 +594,9 @@ fn builtin_process_self(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, Runtim
 }
 
 fn builtin_process_sleep(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let millis = duration_to_u64(&args[0], "__process_sleep", "duration")?;
+    let millis = duration_to_u64(_vm, &args[0], "__process_sleep", "duration")?;
     thread::sleep(StdDuration::from_millis(millis));
     Ok(ok_result(Value::Unit))
-}
-
-fn builtin_duration_literal(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let value = decode_duration_source_int(&args[0], "__duration_literal", "value")?;
-    Ok(Value::Duration(value))
-}
-
-fn builtin_duration_from_int(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let value = decode_duration_source_int(&args[0], "__duration_from_int", "value")?;
-    if value < int(0) {
-        return Ok(err_result(
-            vm,
-            "InvalidDuration",
-            &format!("duration must be non-negative: {}", value),
-        ));
-    }
-    Ok(ok_result(Value::Duration(value)))
 }
 
 fn builtin_task_call(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -678,7 +653,7 @@ fn invoke_task_body_with_timeout(
     let Value::Callable(body) = value.clone() else {
         return Err(RuntimeError::new(format!("{name} expects callable body")));
     };
-    let timeout_ms = duration_to_u64(timeout, name, "timeout")?;
+    let timeout_ms = duration_to_u64(vm, timeout, name, "timeout")?;
     vm.invoke_task_with_timeout(body, mode, Some(timeout_ms))
 }
 
@@ -1855,6 +1830,11 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
 
 fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
     if let Some(entry) = vm.type_registry().lookup(tag) {
+        if entry.name == "Duration" {
+            if let Some(Value::Int(ms)) = fields.first() {
+                return format!("{ms}ms");
+            }
+        }
         let render_named_value = || {
             let hidden_field_count = entry.private_flags.iter().filter(|flag| **flag).count();
             let mut parts = entry
@@ -2400,27 +2380,48 @@ fn bit_index_to_usize(vm: &VM, index: &SurtrInt) -> Result<Result<usize, Value>,
         .ok_or_else(|| RuntimeError::new(format!("bit index out of range for usize: {}", index)))
 }
 
-fn decode_duration_source_int(
-    value: &Value,
-    builtin_name: &str,
-    arg_name: &str,
-) -> Result<SurtrInt, RuntimeError> {
+fn duration_payload<'a>(vm: &'a VM, value: &'a Value) -> Result<&'a SurtrInt, RuntimeError> {
     match value {
-        Value::Int(value) => Ok(value.clone()),
+        Value::Tagged { tag, fields } => {
+            let Some(entry) = vm.type_registry().lookup(*tag) else {
+                return Err(RuntimeError::new(format!(
+                    "Duration expects registered struct tag, got unknown tag {}",
+                    tag
+                )));
+            };
+            if entry.name != "Duration" {
+                return Err(RuntimeError::new(format!(
+                    "expected Duration struct tag, got {}",
+                    entry.name
+                )));
+            }
+            match fields.first() {
+                Some(Value::Int(ms)) => Ok(ms),
+                other => Err(RuntimeError::new(format!(
+                    "Duration payload must store Int milliseconds, got {:?}",
+                    other
+                ))),
+            }
+        }
         other => Err(RuntimeError::new(format!(
-            "{builtin_name} expects Int as {arg_name}, got {:?}",
+            "expected Duration value, got {:?}",
             other
         ))),
     }
 }
 
-fn duration_to_u64(value: &Value, builtin_name: &str, arg_name: &str) -> Result<u64, RuntimeError> {
-    let Value::Duration(ms) = value else {
-        return Err(RuntimeError::new(format!(
+fn duration_to_u64(
+    vm: &VM,
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<u64, RuntimeError> {
+    let ms = duration_payload(vm, value).map_err(|_| {
+        RuntimeError::new(format!(
             "{builtin_name} expects Duration as {arg_name}, got {:?}",
             value
-        )));
-    };
+        ))
+    })?;
     ms.to_u64().ok_or_else(|| {
         RuntimeError::new(format!(
             "{builtin_name} duration is out of range for u64 milliseconds: {ms}"
@@ -2542,8 +2543,16 @@ mod tests {
     };
 
     fn test_vm() -> VM {
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
         VM::new(Bytecode {
-            type_registry: TypeRegistry::new(),
+            type_registry: registry,
             ..Bytecode::default()
         })
         .with_error_capture()
@@ -2807,48 +2816,15 @@ mod tests {
     }
 
     #[test]
-    fn duration_helpers_validate_non_negative_ints() {
-        let mut vm = test_vm();
-
-        let literal = call_builtin(
-            &mut vm,
-            builtin_id("__duration_literal"),
-            vec![Value::Int(int(5))],
-        )
-        .expect("duration literal should succeed");
-        assert_eq!(literal, Value::Duration(int(5)));
-
-        let converted = call_builtin(
-            &mut vm,
-            builtin_id("__duration_from_int"),
-            vec![Value::Int(int(5))],
-        )
-        .expect("duration conversion should return Result");
-        assert!(matches!(
-            converted,
-            Value::Tagged { tag: 0, fields } if matches!(fields.first(), Some(Value::Duration(ms)) if *ms == int(5))
-        ));
-
-        let negative = call_builtin(
-            &mut vm,
-            builtin_id("__duration_from_int"),
-            vec![Value::Int(int(-1))],
-        )
-        .expect("negative duration conversion should return Result");
-        assert!(matches!(
-            negative,
-            Value::Tagged { tag: 1, fields }
-                if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "InvalidDuration")
-        ));
-    }
-
-    #[test]
     fn process_sleep_accepts_zero_duration_value() {
         let mut vm = test_vm();
         let slept = call_builtin(
             &mut vm,
             builtin_id("__process_sleep"),
-            vec![Value::Duration(int(0))],
+            vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(0))],
+            }],
         )
         .expect("process sleep should return Result");
         assert_eq!(slept, super::ok_result(Value::Unit));

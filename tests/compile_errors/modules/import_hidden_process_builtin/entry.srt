@@ -1,0 +1,3 @@
+import Process::__process_self
+
+Process::self()

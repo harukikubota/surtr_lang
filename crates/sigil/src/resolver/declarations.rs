@@ -40,6 +40,7 @@ pub struct DeclarationEntry {
     pub kind: DeclarationKind,
     pub stage_index: usize,
     pub auto_import: bool,
+    pub hidden: bool,
     pub visibility: Visibility,
 }
 
@@ -372,6 +373,14 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|(field_name, expr)| (field_name, rewrite_self_ast(expr, target)))
                 .collect(),
         ),
+        Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
+            span,
+            name,
+            fields
+                .into_iter()
+                .map(|(field_name, expr)| (field_name, rewrite_self_ast(expr, target)))
+                .collect(),
+        ),
         Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(
             span,
             name,
@@ -676,6 +685,7 @@ pub fn precollect_declaration_index(
                                 kind,
                                 stage_index,
                                 auto_import: false,
+                                hidden: attrs.hidden,
                                 visibility: entry_visibility(attrs),
                             },
                         );
@@ -708,6 +718,7 @@ pub fn precollect_declaration_index(
                             kind: DeclarationKind::Trait,
                             stage_index,
                             auto_import: attrs.auto_import,
+                            hidden: false,
                             visibility: Visibility::Public,
                         },
                     );
@@ -740,6 +751,7 @@ pub fn precollect_declaration_index(
                                 kind: DeclarationKind::TraitMethod,
                                 stage_index,
                                 auto_import: false,
+                                hidden: false,
                                 visibility: Visibility::Public,
                             },
                         );
@@ -797,6 +809,7 @@ pub fn precollect_declaration_index(
                                 kind: DeclarationKind::ImplMethod,
                                 stage_index,
                                 auto_import: false,
+                                hidden: false,
                                 visibility: Visibility::Private,
                             },
                         );
@@ -835,6 +848,7 @@ pub fn precollect_declaration_index(
                             kind: DeclarationKind::Enum,
                             stage_index,
                             auto_import: false,
+                            hidden: false,
                             visibility: Visibility::Public,
                         },
                     );
@@ -861,6 +875,7 @@ pub fn precollect_declaration_index(
                                 kind: DeclarationKind::EnumVariant,
                                 stage_index,
                                 auto_import: false,
+                                hidden: false,
                                 visibility: Visibility::Public,
                             },
                         );
@@ -868,70 +883,80 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                let (span, name, kind, visibility) = match stmt {
+                let (span, name, kind, visibility, hidden) = match stmt {
                     Ast::Def(span, name, _, _, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Def,
                         entry_visibility(attrs),
+                        false,
                     ),
                     Ast::ExtractorDef(span, name, _, _, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Extractor,
                         entry_visibility(attrs),
+                        false,
                     ),
                     Ast::ConstDef(span, name, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Const,
                         entry_visibility(attrs),
+                        false,
                     ),
-                    Ast::BuiltinDecl(span, name, _, _, _) => (
+                    Ast::BuiltinDecl(span, name, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Def,
                         Visibility::Public,
+                        attrs.hidden,
                     ),
                     Ast::IntrinsicDecl(_, _, _, _) => continue,
-                    Ast::BuiltinExtractorDecl(span, name, _, _, _) => (
+                    Ast::BuiltinExtractorDecl(span, name, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Extractor,
                         Visibility::Public,
+                        attrs.hidden,
                     ),
                     Ast::ImplDef(_, _, _, _)
                     | Ast::TraitDef(_, _, _, _, _)
                     | Ast::TraitImplDef(_, _, _, _, _, _) => continue,
-                    Ast::ResultCtorDecl(span, name, _, _, _) => (
+                    Ast::ResultCtorDecl(span, name, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::ResultCtor,
                         Visibility::Public,
+                        attrs.hidden,
                     ),
-                    Ast::BuiltinTypeDecl(span, head, _) => (
+                    Ast::BuiltinTypeDecl(span, head, attrs) => (
                         span,
                         head.name.as_str(),
                         DeclarationKind::BuiltinType,
                         Visibility::Public,
+                        attrs.hidden,
                     ),
                     Ast::StructDef(span, name, _, _) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Struct,
                         Visibility::Public,
+                        false,
                     ),
                     Ast::RecordDef(span, name, _, _) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Record,
                         Visibility::Public,
+                        false,
                     ),
                     Ast::DeferrorDef(span, name, _, _, _) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Deferror,
                         Visibility::Public,
+                        false,
                     ),
                     _ => continue,
                 };
@@ -1028,6 +1053,7 @@ pub fn precollect_declaration_index(
                         kind,
                         stage_index,
                         auto_import: false,
+                        hidden,
                         visibility,
                     },
                 );

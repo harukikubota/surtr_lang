@@ -3,6 +3,10 @@ use super::scope_init::initialize_scope;
 use super::*;
 use spire::ast::Visibility;
 
+fn hidden_builtin_import_message(fq_name: &str) -> String {
+    format!("Import target `{fq_name}` is a hidden builtin and cannot be imported")
+}
+
 fn auto_import_trait_names(declaration_index: &DeclarationIndex) -> HashSet<String> {
     declaration_index
         .values()
@@ -198,6 +202,9 @@ fn import_module_into_scope(
         if !is_importable_declaration(&entry.kind) {
             continue;
         }
+        if entry.hidden {
+            continue;
+        }
         if entry.visibility != Visibility::Public {
             continue;
         }
@@ -382,6 +389,13 @@ fn import_single_into_scope(
     if !is_importable_declaration(&entry.kind) {
         return Err(ResolveError {
             message: format!("Import target `{}` is not importable", fq_name),
+            span,
+            related_labels: Vec::new(),
+        });
+    }
+    if entry.hidden {
+        return Err(ResolveError {
+            message: hidden_builtin_import_message(&fq_name),
             span,
             related_labels: Vec::new(),
         });

@@ -959,7 +959,7 @@ user = User("alice", 30)"#,
 fn test_simple_bind() {
     let resolved = parse_and_resolve("x = 10").unwrap();
     assert_eq!(resolved.len(), 1);
-    match &resolved[0] {
+    match &resolved[1] {
         Resolved::Bind(_, ResolvedPattern::Var(id), _) => {
             assert_eq!(id.name, "x");
         }
@@ -1003,6 +1003,53 @@ fn test_builtin_decl_resolution() {
             ));
         }
         _ => panic!("Expected BuiltinDecl"),
+    }
+}
+
+#[test]
+fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
+    let ast = spire::parse_with_context(
+        "@@hidden\n@@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
+        spire::ParserContext::module(0, Some("Process".into()))
+            .with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("std module should parse hidden builtin declarations");
+    let mut resolver = Resolver::new();
+    let resolved = resolver
+        .resolve_program(ast)
+        .expect("hidden builtin declaration should resolve");
+    match &resolved[0] {
+        Resolved::BuiltinDecl(_, id, _, _, attrs) => {
+            assert_eq!(id.name, "__process_sleep");
+            assert!(attrs.hidden);
+        }
+        _ => panic!("Expected BuiltinDecl"),
+    }
+}
+
+#[test]
+fn test_duration_literal_resolves_as_compiler_generated_struct_lit() {
+    let ast = spire::parse_with_context(
+        r#"defstruct Duration { private millis: Int }
+100ms"#,
+        spire::ParserContext::project(0),
+    )
+    .expect("duration literal should parse");
+    let mut resolver = Resolver::new();
+    let resolved = resolver
+        .resolve_program(ast)
+        .expect("duration literal should resolve");
+    let lowered = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::StructLit(_, id, _) if id.compiler_generated))
+        .expect("expected compiler-generated Duration struct literal");
+    match lowered {
+        Resolved::StructLit(_, id, fields) => {
+            assert_eq!(id.name, "Duration");
+            assert!(id.compiler_generated);
+            assert!(matches!(fields.as_slice(), [(name, Resolved::Lit(_, spire::ast::Lit::Int(value)))] if name == "millis" && *value == sindr::primitives::int(100)));
+        }
+        other => panic!("Expected compiler-generated Duration struct literal, got {:?}", other),
     }
 }
 

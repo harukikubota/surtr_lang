@@ -154,7 +154,7 @@ impl User {
 
     assert!(err
         .message()
-        .contains("Only @@doc / @@builtin are allowed before impl members"));
+        .contains("Only @@doc / @@hidden / @@builtin are allowed before impl members"));
 }
 
 #[test]
@@ -1099,6 +1099,68 @@ fn test_builtin_type_decl() {
         ast.as_slice(),
         [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, params, .. }, attrs)]
             if name == "Int" && params.is_empty() && attrs == &DeclAttrs::default()
+    ));
+}
+
+#[test]
+fn test_hidden_annotates_builtin_decl() {
+    let ast = parse_with_context(
+        "@@hidden\n@@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
+        ParserContext::module(1, Some("Process".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect("hidden + builtin def should parse");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })]
+            if name == "__process_sleep"
+    ));
+}
+
+#[test]
+fn test_hidden_duplicate_is_error() {
+    let err = parse_with_context(
+        "@@hidden\n@@hidden\n@@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
+        ParserContext::module(1, Some("Process".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect_err("duplicate hidden should fail");
+    assert!(err
+        .message()
+        .contains("@@hidden may only appear once before a declaration"));
+}
+
+#[test]
+fn test_hidden_builtin_impl_member_parses() {
+    let ast = parse_with_context(
+        r#"impl Task {
+  @@hidden
+  @@builtin def __task_call(body: (-> Result<$A>)) -> Result<$A>
+}"#,
+        ParserContext::module(1, Some("Task".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect("hidden builtin impl member should parse");
+
+    match &ast[0] {
+        Ast::ImplDef(_, target, body, _) => {
+            assert_eq!(target, "Task");
+            assert!(matches!(
+                &body[0],
+                Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })
+                    if name == "__task_call"
+            ));
+        }
+        other => panic!("expected impl, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_duration_literal_lowers_to_internal_struct_lit() {
+    let ast = parse("100ms").expect("duration literal should parse");
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::InternalStructLit(_, name, fields)]
+            if name == "Duration"
+                && matches!(fields.as_slice(), [(field, Ast::Lit(_, Lit::Int(value)))] if field == "millis" && *value == int(100))
     ));
 }
 

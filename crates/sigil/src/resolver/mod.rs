@@ -111,6 +111,15 @@ pub fn resolve_staged_program_from_state(
 ) -> Result<ResolvedStagedProgram, ResolveError> {
     let declaration_uids = assign_declaration_uids(declaration_index);
     let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
+    let declaration_hidden_by_uid = declaration_index
+        .iter()
+        .filter_map(|(fq_name, entry)| {
+            declaration_uids
+                .get(fq_name)
+                .copied()
+                .map(|uid| (uid, entry.hidden))
+        })
+        .collect::<HashMap<_, _>>();
     let global_scope = build_global_scope(declaration_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     let mut resolved = Vec::new();
@@ -136,6 +145,7 @@ pub fn resolve_staged_program_from_state(
             declaration_index,
             &declaration_uids,
             &declaration_uid_kinds,
+            &declaration_hidden_by_uid,
             &stage_impl_targets,
         );
 
@@ -191,6 +201,7 @@ pub fn resolve_staged_program_from_state(
         let mut user_resolver = Resolver::with_scope(user_scope);
         user_resolver.declaration_uids = declaration_uids;
         user_resolver.declaration_uid_kinds = declaration_uid_kinds;
+        user_resolver.declaration_hidden_by_uid = declaration_hidden_by_uid;
         user_resolver.current_module_path = user_module_path;
         user_resolver.allow_top_level_shadowing = true;
         resolved.extend(user_resolver.resolve_program(user_ast)?);
@@ -218,6 +229,7 @@ fn resolve_stage_modules_parallel(
     declaration_index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
     declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
+    declaration_hidden_by_uid: &HashMap<u32, bool>,
     stage_impl_targets: &HashMap<String, declarations::ImplTargetResolution>,
 ) -> Vec<Result<StageModuleResolveResult, ResolveError>> {
     std::thread::scope(|scope| {
@@ -242,6 +254,7 @@ fn resolve_stage_modules_parallel(
                         resolver.current_module_path = Some(module.module_path.clone());
                         resolver.declaration_uids = declaration_uids.clone();
                         resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
+                        resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();
                         resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
                         resolver.allow_top_level_shadowing = true;
                         let resolved = resolver.resolve_program(module.ast.clone())?;
@@ -533,6 +546,7 @@ struct Resolver {
     predeclared_ids: HashMap<String, VecDeque<u32>>,
     declaration_uids: HashMap<String, u32>,
     declaration_uid_kinds: HashMap<u32, DeclarationKind>,
+    declaration_hidden_by_uid: HashMap<u32, bool>,
     current_module_path: Option<String>,
     current_stage_impl_targets: Option<HashMap<String, declarations::ImplTargetResolution>>,
     allow_top_level_shadowing: bool,

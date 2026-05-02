@@ -283,7 +283,7 @@ impl Resolver {
                 }
                 Ok(())
             }
-            Ast::StructLit(_, _, fields) => {
+            Ast::StructLit(_, _, fields) | Ast::InternalStructLit(_, _, fields) => {
                 for (_, expr) in fields {
                     self.collect_capture_placeholders(
                         expr,
@@ -336,6 +336,7 @@ impl Resolver {
             }
             Ast::Lit(_, _)
             | Ast::Var(_, _)
+            | Ast::InternalVar(_, _)
             | Ast::Path(_, _)
             | Ast::FuncLiteralRef(_, _)
             | Ast::ListNil(_)
@@ -700,6 +701,24 @@ impl Resolver {
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?,
             )),
+            Ast::InternalStructLit(span, name, fields) => Ok(Ast::InternalStructLit(
+                span,
+                name,
+                fields
+                    .into_iter()
+                    .map(|(name, expr)| {
+                        Ok((
+                            name,
+                            self.rewrite_capture_placeholders(
+                                expr,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
             Ast::ConstructorCall(span, name, args) => Ok(Ast::ConstructorCall(
                 span,
                 name,
@@ -886,7 +905,7 @@ impl Resolver {
                         .or_else(|| Self::pipe_slot_span(&arm.body))
                 })
             }),
-            Ast::StructLit(_, _, fields) => fields
+            Ast::StructLit(_, _, fields) | Ast::InternalStructLit(_, _, fields) => fields
                 .iter()
                 .find_map(|(_, expr)| Self::pipe_slot_span(expr)),
             Ast::ConstructorCall(_, _, args) => args.iter().find_map(|arg| match arg {
@@ -1098,6 +1117,7 @@ impl Resolver {
                 (0, DeclarationKind::ResultCtor),
                 (1, DeclarationKind::ResultCtor),
             ]),
+            declaration_hidden_by_uid: HashMap::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
@@ -1113,6 +1133,7 @@ impl Resolver {
                 (0, DeclarationKind::ResultCtor),
                 (1, DeclarationKind::ResultCtor),
             ]),
+            declaration_hidden_by_uid: HashMap::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
@@ -1137,6 +1158,7 @@ impl Resolver {
         let mut child = Resolver::with_scope(self.scope.clone());
         child.declaration_uids = self.declaration_uids.clone();
         child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+        child.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
         child.current_module_path = self.current_module_path.clone();
         child.current_stage_impl_targets = self.current_stage_impl_targets.clone();
         child.allow_top_level_shadowing = self.allow_top_level_shadowing;
@@ -1156,6 +1178,88 @@ impl Resolver {
         self.declaration_uids
             .iter()
             .find_map(|(fq_name, entry_uid)| (*entry_uid == uid).then(|| fq_name.clone()))
+    }
+
+    fn hidden_builtin_message(name: &str) -> String {
+        let builtin_name = name.rsplit("::").next().unwrap_or(name);
+        let guidance = match builtin_name {
+            "__process_self" => "Use `Process::self()` instead.",
+            "__process_sleep" => "Use `Process::sleep(...)` instead.",
+            "__task_call" => "Use `Task::call(...)` instead.",
+            "__task_async" => "Use `Task::async(...)` instead.",
+            "__task_launch" => "Use `Task::launch(...)` instead.",
+            "__task_cast" => "Use `Task::cast(...)` instead.",
+            "__task_call_timeout"
+            | "__task_async_timeout"
+            | "__task_launch_timeout"
+            | "__task_cast_timeout" => "Use the public Task API with `@timeout(...)` instead.",
+            "__process_pid" | "__process_spawn" | "__process_state" | "__process_store" => {
+                "This helper is compiler-managed; use `defagent` / the public process surface instead."
+            }
+            _ => "Use the public standard-library surface instead.",
+        };
+        format!("hidden builtin `{builtin_name}` is compiler-internal. {guidance}")
+    }
+
+    fn hidden_builtin_error(&self, name: &str, span: Span) -> ResolveError {
+        ResolveError {
+            message: Self::hidden_builtin_message(name),
+            span,
+            related_labels: Vec::new(),
+        }
+    }
+
+    fn resolve_var_like(
+        &self,
+        span: Span,
+        name: String,
+        compiler_generated: bool,
+    ) -> Result<Resolved, ResolveError> {
+        let uid = self
+            .scope
+            .lookup(&name)
+            .or_else(|| {
+                if name == "Tuple" {
+                    Some(TUPLE_TYPE_ROOT_UID)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| ResolveError {
+                message: format!("Undefined variable: {}", name),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            })?;
+        let qualified_name = (uid != TUPLE_TYPE_ROOT_UID)
+            .then(|| self.declaration_fq_name_for_uid(uid))
+            .flatten();
+        if self
+            .declaration_uid_kinds
+            .get(&uid)
+            .is_some_and(|kind| matches!(kind, DeclarationKind::Extractor))
+        {
+            return Err(ResolveError {
+                message: format!(
+                    "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it on the left side of match, =?, or =. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
+                    name
+                ),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        if !compiler_generated && self.declaration_hidden_by_uid.get(&uid) == Some(&true) {
+            return Err(self.hidden_builtin_error(&name, span));
+        }
+        Ok(Resolved::Var(
+            span.clone(),
+            ResolvedId {
+                name,
+                qualified_name,
+                unique_id: uid,
+                compiler_generated,
+                span,
+            },
+        ))
     }
 
     pub(super) fn attached_extractor_for_struct(
@@ -1209,97 +1313,11 @@ impl Resolver {
         match node {
             Ast::Lit(span, lit) => Ok(Resolved::Lit(span, lit)),
 
-            Ast::Var(span, name) => {
-                let uid = self
-                    .scope
-                    .lookup(&name)
-                    .or_else(|| {
-                        if name == "Tuple" {
-                            Some(TUPLE_TYPE_ROOT_UID)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or_else(|| ResolveError {
-                        message: format!("Undefined variable: {}", name),
-                        span: span.clone(),
-                        related_labels: Vec::new(),
-                    })?;
-                let qualified_name = (uid != TUPLE_TYPE_ROOT_UID)
-                    .then(|| self.declaration_fq_name_for_uid(uid))
-                    .flatten();
-                if self
-                    .declaration_uid_kinds
-                    .get(&uid)
-                    .is_some_and(|kind| matches!(kind, DeclarationKind::Extractor))
-                {
-                    return Err(ResolveError {
-                        message: format!(
-                            "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it on the left side of match, =?, or =. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
-                            name
-                        ),
-                        span,
-                    related_labels: Vec::new(),
-                    });
-                }
-                Ok(Resolved::Var(
-                    span.clone(),
-                    ResolvedId {
-                        name,
-                        qualified_name,
-                        unique_id: uid,
-                        span,
-                    },
-                ))
-            }
+            Ast::Var(span, name) => self.resolve_var_like(span, name, false),
+            Ast::InternalVar(span, name) => self.resolve_var_like(span, name, true),
             Ast::Path(span, path) => {
                 let name = path.segments.join("::");
-                let uid = self
-                    .scope
-                    .lookup(&name)
-                    .or_else(|| {
-                        if name == "Tuple" {
-                            Some(TUPLE_TYPE_ROOT_UID)
-                        } else {
-                            None
-                        }
-                    })
-                    .ok_or_else(|| ResolveError {
-                        message: format!("Undefined variable: {}", name),
-                        span: span.clone(),
-                        related_labels: Vec::new(),
-                    })?;
-                let qualified_name = if uid == TUPLE_TYPE_ROOT_UID {
-                    None
-                } else {
-                    Some(
-                        self.declaration_fq_name_for_uid(uid)
-                            .unwrap_or_else(|| name.clone()),
-                    )
-                };
-                if self
-                    .declaration_uid_kinds
-                    .get(&uid)
-                    .is_some_and(|kind| matches!(kind, DeclarationKind::Extractor))
-                {
-                    return Err(ResolveError {
-                        message: format!(
-                            "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it on the left side of match, =?, or =. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
-                            name
-                        ),
-                        span,
-                    related_labels: Vec::new(),
-                    });
-                }
-                Ok(Resolved::Var(
-                    span.clone(),
-                    ResolvedId {
-                        qualified_name,
-                        name,
-                        unique_id: uid,
-                        span,
-                    },
-                ))
+                self.resolve_var_like(span, name, false)
             }
             Ast::FuncLiteralRef(span, func) => Err(ResolveError {
                 message: format!(
@@ -1560,6 +1578,7 @@ impl Resolver {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let rfields = fields
@@ -1588,6 +1607,7 @@ impl Resolver {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let rfields = fields
@@ -1616,6 +1636,7 @@ impl Resolver {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let mut error_scope = self.scope.clone();
@@ -1627,6 +1648,7 @@ impl Resolver {
                             name: f.name.clone(),
                             qualified_name: None,
                             unique_id: uid,
+                            compiler_generated: false,
                             span: f.span.clone(),
                         }),
                         name: f.name,
@@ -1636,6 +1658,12 @@ impl Resolver {
                     });
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);
+                show_resolver.declaration_uids = self.declaration_uids.clone();
+                show_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                show_resolver.declaration_hidden_by_uid =
+                    self.declaration_hidden_by_uid.clone();
+                show_resolver.current_module_path = self.current_module_path.clone();
+                show_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_show = show_resolver.resolve_node(*show_expr)?;
                 self.scope.advance_next_id_to(show_resolver.scope.next_id());
                 Ok(Resolved::DeferrorDef(
@@ -1657,6 +1685,7 @@ impl Resolver {
                     name: name.clone(),
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let resolved_type_params = type_params
@@ -1678,6 +1707,7 @@ impl Resolver {
                             name: ctor_name,
                             qualified_name: Some(qualified_ctor_name),
                             unique_id: ctor_uid,
+                            compiler_generated: false,
                             span: variant.span.clone(),
                         },
                         payload: variant
@@ -1710,6 +1740,8 @@ impl Resolver {
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                body_resolver.declaration_hidden_by_uid =
+                    self.declaration_hidden_by_uid.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -1726,6 +1758,7 @@ impl Resolver {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: fun_uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
 
@@ -1757,6 +1790,7 @@ impl Resolver {
                     name,
                     qualified_name,
                     unique_id: uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 Ok(Resolved::ConstDef(
@@ -1777,6 +1811,8 @@ impl Resolver {
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                body_resolver.declaration_hidden_by_uid =
+                    self.declaration_hidden_by_uid.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -1790,6 +1826,7 @@ impl Resolver {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: fun_uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
 
@@ -1814,6 +1851,7 @@ impl Resolver {
                     name: name.clone(),
                     qualified_name: Some(qualified_trait_name.clone()),
                     unique_id: trait_uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -1838,6 +1876,8 @@ impl Resolver {
                     let mut method_resolver = Resolver::with_scope(self.scope.clone());
                     method_resolver.declaration_uids = self.declaration_uids.clone();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                    method_resolver.declaration_hidden_by_uid =
+                        self.declaration_hidden_by_uid.clone();
                     method_resolver.current_module_path = self.current_module_path.clone();
                     method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                     let resolved_params = params
@@ -1851,6 +1891,7 @@ impl Resolver {
                             name: method_name,
                             qualified_name: Some(qualified_method),
                             unique_id: method_uid,
+                            compiler_generated: false,
                             span: method_span.clone(),
                         },
                         type_params: self.resolve_type_params(type_params)?,
@@ -1874,6 +1915,7 @@ impl Resolver {
                     name: trait_name.clone(),
                     qualified_name: Some(qualified_trait_name.clone()),
                     unique_id: trait_uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let resolved_target_ty = self.resolve_type_annotation(target_ty)?;
@@ -1973,6 +2015,8 @@ impl Resolver {
                     let mut method_resolver = Resolver::with_scope(method_scope);
                     method_resolver.declaration_uids = self.declaration_uids.clone();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                    method_resolver.declaration_hidden_by_uid =
+                        self.declaration_hidden_by_uid.clone();
                     method_resolver.current_module_path = self.current_module_path.clone();
                     method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                     let resolved_params = params
@@ -2003,6 +2047,7 @@ impl Resolver {
                             name: local_function_name,
                             qualified_name: Some(qualified_function_name),
                             unique_id: method_uid,
+                            compiler_generated: false,
                             span: method_span.clone(),
                         },
                         type_params: self.resolve_type_params(type_params)?,
@@ -2049,6 +2094,12 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 let mut decl_resolver = Resolver::with_scope(self.scope.clone());
+                decl_resolver.declaration_uids = self.declaration_uids.clone();
+                decl_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                decl_resolver.declaration_hidden_by_uid =
+                    self.declaration_hidden_by_uid.clone();
+                decl_resolver.current_module_path = self.current_module_path.clone();
+                decl_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_params = params
                     .into_iter()
                     .map(|param| decl_resolver.resolve_fun_param(param))
@@ -2059,6 +2110,7 @@ impl Resolver {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: builtin_uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 Ok(Resolved::BuiltinDecl(
@@ -2089,6 +2141,7 @@ impl Resolver {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let resolved_param = self.resolve_extractor_param(param)?;
@@ -2109,6 +2162,7 @@ impl Resolver {
                     name: head.name,
                     qualified_name: Some(qualified_name),
                     unique_id: builtin_type_uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 Ok(Resolved::BuiltinTypeDecl(
@@ -2129,6 +2183,7 @@ impl Resolver {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 Ok(Resolved::ResultCtorDecl(
@@ -2170,6 +2225,7 @@ impl Resolver {
                             name: param.name,
                             qualified_name: None,
                             unique_id: uid,
+                            compiler_generated: false,
                             span: param.span,
                         },
                         ty: param.ty,
@@ -2179,6 +2235,8 @@ impl Resolver {
                 let mut body_resolver = Resolver::with_scope(closure_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+                body_resolver.declaration_hidden_by_uid =
+                    self.declaration_hidden_by_uid.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_body = body_resolver.resolve_node(*body)?;
@@ -2231,6 +2289,27 @@ impl Resolver {
                     name: type_name,
                     qualified_name: None,
                     unique_id: uid,
+                    compiler_generated: false,
+                    span: span.clone(),
+                };
+                let resolved_fields = field_vals
+                    .into_iter()
+                    .map(|(name, expr)| Ok((name, self.resolve_node(expr)?)))
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                Ok(Resolved::StructLit(span, rid, resolved_fields))
+            }
+
+            Ast::InternalStructLit(span, type_name, field_vals) => {
+                let uid = self.scope.lookup(&type_name).ok_or_else(|| ResolveError {
+                    message: format!("Undefined type: {}", type_name),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                })?;
+                let rid = ResolvedId {
+                    name: type_name,
+                    qualified_name: None,
+                    unique_id: uid,
+                    compiler_generated: true,
                     span: span.clone(),
                 };
                 let resolved_fields = field_vals
@@ -2262,6 +2341,7 @@ impl Resolver {
                             name: normalized_name,
                             qualified_name,
                             unique_id: uid,
+                            compiler_generated: false,
                             span: span.clone(),
                         };
                         if args.is_empty() {
@@ -2297,6 +2377,7 @@ impl Resolver {
                     name: normalized_name,
                     qualified_name: None,
                     unique_id: uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let resolved_args = args
@@ -2343,6 +2424,7 @@ impl Resolver {
                 name: param.name,
                 qualified_name: None,
                 unique_id: uid,
+                compiler_generated: false,
                 span: param.span,
             },
             ty: self.resolve_type_annotation(param.ty)?,
@@ -2369,6 +2451,7 @@ impl Resolver {
                 name: param.name,
                 qualified_name: None,
                 unique_id: uid,
+                compiler_generated: false,
                 span: param.span,
             },
             ty: param

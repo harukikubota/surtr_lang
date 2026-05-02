@@ -898,6 +898,7 @@ mod tests {
                         name: "NoneError".into(),
                         qualified_name: Some("NoneError".into()),
                         unique_id: 99,
+                        compiler_generated: false,
                         span: span(10, 19),
                     }),
                 }),
@@ -929,12 +930,14 @@ mod tests {
             name: "is_even".into(),
             qualified_name: None,
             unique_id: 7,
+            compiler_generated: false,
             span: span(8, 16),
         };
         let err_id = sigil::resolved::ResolvedId {
             name: "NoneError".into(),
             qualified_name: Some("NoneError".into()),
             unique_id: 8,
+            compiler_generated: false,
             span: span(18, 27),
         };
         gene.state.slot_map.insert(8, 0);

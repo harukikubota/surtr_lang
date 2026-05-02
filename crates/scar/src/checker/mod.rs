@@ -484,6 +484,11 @@ impl Default for TypecheckContext {
 
 fn initialize_env() -> TypeEnv {
     let mut env = TypeEnv::new();
+    // `Duration` is a stdlib-defined struct, but builtin signatures mention it
+    // before stdlib declarations are typechecked. Reserve its type head here so
+    // builtin signature parsing can treat it as the same struct identity.
+    env.predeclare_type_def("Duration".into(), crate::env::TypeKind::Struct, Vec::new());
+
     // Ok constructor: ($A) -> Result<$A, $E>
     let ok_a = env.fresh_tyvar();
     let ok_e = env.fresh_tyvar();
@@ -634,6 +639,15 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
     }
 
     fn build_named_type(&mut self, ident: &str) -> Result<Ty, String> {
+        if let Some(def) = self.env.lookup_type_def(ident) {
+            return Ok(match &def.kind {
+                crate::env::TypeKind::Struct => Ty::Struct(def.name.clone(), def.fields.clone()),
+                crate::env::TypeKind::Record => Ty::Record(def.name.clone(), def.fields.clone()),
+                crate::env::TypeKind::ConcreteError => Ty::Error,
+                crate::env::TypeKind::Enum => Ty::Enum(def.name.clone(), Vec::new()),
+            });
+        }
+
         Ok(match ident {
             "Int" => Ty::Int,
             "Float" => Ty::Float,

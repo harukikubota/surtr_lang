@@ -5,6 +5,7 @@ use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
+    pub hidden: bool,
     pub visibility: Visibility,
 }
 
@@ -14,6 +15,7 @@ pub struct ResolvedId {
     pub name: Symbol,
     pub qualified_name: Option<Symbol>,
     pub unique_id: u32,
+    pub compiler_generated: bool,
     pub span: Span,
 }
 

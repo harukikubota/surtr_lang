@@ -23,6 +23,7 @@ pub enum Visibility {
 pub struct DeclAttrs {
     pub doc: Option<String>,
     pub auto_import: bool,
+    pub hidden: bool,
     pub visibility: Visibility,
     pub process_spec: Option<ProcessSpec>,
 }
@@ -261,6 +262,9 @@ pub enum Ast {
     /// Variable reference: `x`, `print`
     Var(Span, Symbol),
 
+    /// Compiler-generated hidden builtin reference.
+    InternalVar(Span, Symbol),
+
     /// Qualified path reference: `Kernel::add`
     Path(Span, AstPath),
 
@@ -335,6 +339,9 @@ pub enum Ast {
 
     /// Struct literal: `User { name: "alice", age: 30 }`
     StructLit(Span, Symbol, Vec<(Symbol, Ast)>),
+
+    /// Compiler-generated struct literal used for syntax sugars such as `100ms`.
+    InternalStructLit(Span, Symbol, Vec<(Symbol, Ast)>),
 
     /// Constructor call: `Point(1.0, 2.0)` or `Point(x: 1.0, y: 2.0)`
     ConstructorCall(Span, Symbol, Vec<RecordLitArg>),

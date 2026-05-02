@@ -37,8 +37,6 @@ fn is_global_runtime_builtin(name: &str) -> bool {
             | "__process_store"
             | "__process_self"
             | "__process_sleep"
-            | "__duration_literal"
-            | "__duration_from_int"
             | "__task_call"
             | "__task_async"
             | "__task_launch"
@@ -53,6 +51,7 @@ fn is_global_runtime_builtin(name: &str) -> bool {
 pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
     ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
+        hidden: attrs.hidden,
         visibility: attrs.visibility,
     }
 }

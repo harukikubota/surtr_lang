@@ -1181,7 +1181,7 @@ impl Checker {
             })?
             .clone();
 
-        if self.current_impl_struct_target.as_deref() != Some(id.name.as_str()) {
+        if !id.compiler_generated && self.current_impl_struct_target.as_deref() != Some(id.name.as_str()) {
             return Err(TypeError {
                 message: format!(
                     "Struct literal `{}` is only allowed inside `impl {} {{ ... }}` method bodies",
@@ -1642,6 +1642,7 @@ impl Checker {
                             name: new_name,
                             qualified_name: None,
                             unique_id: new_uid,
+                            compiler_generated: false,
                             span: id.span.clone(),
                         }),
                     }),

@@ -64,7 +64,6 @@ pub enum Value {
     RegexCaptures(RegexCapturesHandle),
     RegexMatch(RegexMatchHandle),
     RandomGenerator(RandomGeneratorHandle),
-    Duration(SurtrInt),
     Pid(PidHandle),
     PendingFuture(u64),
 }
@@ -215,7 +214,6 @@ impl Value {
                 }
             }
             Value::Unit => "()".to_string(),
-            Value::Duration(ms) => format!("{ms}ms"),
             Value::List(handle) => {
                 let inner = handle
                     .iter()
@@ -252,6 +250,11 @@ impl Value {
             }
             Value::Tagged { tag, fields } => {
                 if let Some(entry) = registry.lookup(*tag) {
+                    if entry.name == "Duration" {
+                        if let Some(Value::Int(ms)) = fields.first() {
+                            return format!("{ms}ms");
+                        }
+                    }
                     match entry.kind {
                         TypeKind::Struct | TypeKind::Record => Self::render_named_value(
                             &entry.name,

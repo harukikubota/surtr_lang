@@ -103,7 +103,7 @@ Eldr が扱う値の概念カテゴリ:
 - プリミティブ: `Int`, `Float`, `String`, `Boolean`, `Unit`
 - コンテナ: `List`, `HashMap`
 - opaque runtime 値: `Regex`, `RegexCaptures`, `RegexMatch`, `RandomGenerator`
-- opaque runtime 値: `Duration`（非負ミリ秒）
+- opaque runtime 値として見える `Duration` は source 上では private field を持つ struct として扱い、表示は `100ms` 形式にする
 - タグ付き値: `Tagged { tag, fields }`
 - runtime 内部 tag 値: `Tag(u32)`（user-visible `Int` と分離）
 - 呼び出し可能値: `Callable`
@@ -207,7 +207,7 @@ Opcode は以下のカテゴリを持つ。
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
-- process / task 系の hidden builtin は `CallBuiltin` で実装し、VM が所有する process table / PID capability / handler callable invocation を経由する。StateAgent の `set` は handler が `Ok(next_state)` を返した場合のみ VM 管理 state を更新し、`Err` の場合は旧 state を保持する。
+- process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@@hidden @@builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由し、StateAgent の `set` は handler が `Ok(next_state)` を返した場合のみ VM 管理 state を更新し、`Err` の場合は旧 state を保持する。
 - `Process::sleep(duration)` は runtime builtin とし、`Duration` 値を受け取って `Result<Unit>` を返す。
 - task timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す

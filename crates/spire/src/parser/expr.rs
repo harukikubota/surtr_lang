@@ -413,9 +413,8 @@ impl Parser<'_> {
                 if self.is_duration_suffix_here() {
                     let suffix_span = self.advance().span.clone();
                     let int_expr = Ast::Lit(sp.clone(), Lit::Int(n));
-                    return Ok(self.hidden_call(
-                        "__duration_literal",
-                        vec![RecordLitArg::Positional(int_expr)],
+                    return Ok(self.duration_literal(
+                        int_expr,
                         Span {
                             start: sp.start,
                             end: suffix_span.end,
@@ -592,7 +591,7 @@ impl Parser<'_> {
     fn hidden_call(&self, name: &str, args: Vec<RecordLitArg>, span: Span) -> Ast {
         Ast::App(
             span.clone(),
-            Box::new(Ast::Var(
+            Box::new(Ast::InternalVar(
                 Span {
                     start: span.start,
                     end: span.start,
@@ -601,6 +600,24 @@ impl Parser<'_> {
             )),
             args,
         )
+    }
+
+    fn duration_literal(&self, value: Ast, span: Span) -> Ast {
+        Ast::InternalStructLit(span, "Duration".into(), vec![("millis".into(), value)])
+    }
+
+    fn std_hidden_ref(&self, span: Span, name: Symbol) -> Ast {
+        if name.starts_with("__")
+            && self
+                .context
+                .parse_rules
+                .allowed_top_level_decl_kinds
+                .allows(super::context::TopLevelDeclKind::BuiltinDecl)
+        {
+            Ast::InternalVar(span, name)
+        } else {
+            Ast::Var(span, name)
+        }
     }
 
     fn parse_timeout_duration_literal(&mut self) -> Result<Ast, ParseError> {
@@ -620,9 +637,8 @@ impl Parser<'_> {
         }
         let suffix_span = self.advance().span.clone();
         let int_expr = Ast::Lit(sp.clone(), Lit::Int(n));
-        Ok(self.hidden_call(
-            "__duration_literal",
-            vec![RecordLitArg::Positional(int_expr)],
+        Ok(self.duration_literal(
+            int_expr,
             Span {
                 start: sp.start,
                 end: suffix_span.end,
@@ -765,22 +781,6 @@ impl Parser<'_> {
                 let args = self.parse_call_args()?;
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
-                if path_name == "Duration" {
-                    if args.len() != 1 || matches!(args[0], RecordLitArg::Named(_, _)) {
-                        return Err(ParseError::syntax(
-                            "Duration(...) expects exactly one positional Int argument",
-                            Span {
-                                start: name_span.start,
-                                end: end_span.end,
-                            },
-                        ));
-                    }
-                    let span = Span {
-                        start: name_span.start,
-                        end: end_span.end,
-                    };
-                    return Ok(self.hidden_call("__duration_from_int", args, span));
-                }
                 if path_last_is_uppercase {
                     self.reject_constructor_trailing_block()?;
                     let span = Span {
@@ -901,25 +901,9 @@ impl Parser<'_> {
             let args = self.parse_call_args()?;
             self.skip_newlines();
             let end_span = self.expect(&Token::RParen)?;
-            let func = Ast::Var(name_span.clone(), name.clone());
+            let func = self.std_hidden_ref(name_span.clone(), name.clone());
 
             if is_uppercase {
-                if name == "Duration" {
-                    if args.len() != 1 || matches!(args[0], RecordLitArg::Named(_, _)) {
-                        return Err(ParseError::syntax(
-                            "Duration(...) expects exactly one positional Int argument",
-                            Span {
-                                start: name_span.start,
-                                end: end_span.end,
-                            },
-                        ));
-                    }
-                    let span = Span {
-                        start: name_span.start,
-                        end: end_span.end,
-                    };
-                    return Ok(self.hidden_call("__duration_from_int", args, span));
-                }
                 self.reject_constructor_trailing_block()?;
                 let span = Span {
                     start: name_span.start,
@@ -942,7 +926,7 @@ impl Parser<'_> {
         // Lexer tokenizes `()` as Token::Unit.
         if matches!(self.peek(), Token::Unit) {
             let end_span = self.advance().span.clone();
-            let func = Ast::Var(name_span.clone(), name.clone());
+            let func = self.std_hidden_ref(name_span.clone(), name.clone());
             if is_uppercase {
                 self.reject_constructor_trailing_block()?;
                 let span = Span {
@@ -1024,7 +1008,7 @@ impl Parser<'_> {
         }
 
         // Just a variable
-        Ok(Ast::Var(name_span, name))
+        Ok(self.std_hidden_ref(name_span, name))
     }
 
     fn parse_dbg_special_form(&mut self, name_span: Span) -> Result<Ast, ParseError> {

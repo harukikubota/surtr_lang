@@ -810,6 +810,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
     match ast {
         Ast::Lit(span, lit) => Ast::Lit(shift_span(span, delta), lit),
         Ast::Var(span, name) => Ast::Var(shift_span(span, delta), name),
+        Ast::InternalVar(span, name) => Ast::InternalVar(shift_span(span, delta), name),
         Ast::Path(span, path) => Ast::Path(shift_span(span, delta), shift_ast_path(path, delta)),
         Ast::App(span, func, args) => Ast::App(
             shift_span(span, delta),
@@ -961,6 +962,14 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             shift_decl_attrs(attrs),
         ),
         Ast::StructLit(span, name, fields) => Ast::StructLit(
+            shift_span(span, delta),
+            name,
+            fields
+                .into_iter()
+                .map(|(name, expr)| (name, shift_ast_span(expr, delta)))
+                .collect(),
+        ),
+        Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
             shift_span(span, delta),
             name,
             fields
@@ -1213,6 +1222,7 @@ impl Ast {
         match self {
             Ast::Lit(s, _)
             | Ast::Var(s, _)
+            | Ast::InternalVar(s, _)
             | Ast::Path(s, _)
             | Ast::FuncLiteralRef(s, _)
             | Ast::App(s, _, _)
@@ -1238,6 +1248,7 @@ impl Ast {
             | Ast::StructDef(s, _, _, _)
             | Ast::RecordDef(s, _, _, _)
             | Ast::StructLit(s, _, _)
+            | Ast::InternalStructLit(s, _, _)
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _, _)
             | Ast::EnumDef(s, _, _, _, _)

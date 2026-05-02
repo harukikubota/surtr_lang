@@ -181,6 +181,7 @@ impl Resolver {
             name,
             qualified_name: self.declaration_fq_name_for_uid(uid),
             unique_id: uid,
+            compiler_generated: false,
             span,
         })
     }
