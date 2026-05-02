@@ -1,7 +1,8 @@
 use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
     line_column_for_offset, Bytecode, BytecodeChunk, Constant, DocEntry, FunctionEntry, Opcode,
-    RuntimeProcessSpec, RuntimeProcessSpecTable, SourceMap,
+    RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
+    SourceMap,
 };
 use sindr::primitives::SurtrInt;
 use sindr::runtime::{
@@ -228,6 +229,7 @@ struct ProcessRuntime {
     reply_table: BTreeMap<CorrelationId, FutureId>,
     waiting_table: BTreeMap<u64, ProcessWaitReason>,
     deadline_queue: VecDeque<DeadlineEntry>,
+    root_supervisor: RootSupervisorState,
 }
 
 #[allow(dead_code)]
@@ -343,6 +345,12 @@ struct FutureRecord {
 struct DeadlineEntry {
     deadline_tick: u64,
     future_id: FutureId,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RootSupervisorState {
+    boot_completed: bool,
+    boot_failures: BTreeMap<String, String>,
 }
 
 /// The Surtr virtual machine — executes bytecode produced by Forge.
@@ -550,6 +558,14 @@ impl VM {
             name,
             full_signature: signature,
             applied_args: 0,
+        }
+    }
+
+    fn callable_for_function(&self, fun_idx: u32) -> Callable {
+        Callable {
+            target: CallableTarget::Function(fun_idx),
+            lexical_captures: Vec::new(),
+            metadata: self.callable_metadata_for_function(fun_idx),
         }
     }
 
@@ -909,34 +925,158 @@ impl VM {
         &self.bytecode.type_registry
     }
 
-    pub(crate) fn process_singleton_pid(
-        &mut self,
-        process_name: String,
-        init: Callable,
-    ) -> Result<Value, RuntimeError> {
-        if let Some(pid) = self.process_runtime.singleton_by_name.get(&process_name) {
-            return Ok(Value::Pid(PidHandle {
-                id: *pid,
-                process_name,
-            }));
+    fn boot_failure_error(&self, process_name: &str, detail: &str) -> RuntimeError {
+        RuntimeError::new(format!("process `{process_name}` failed to boot: {detail}"))
+    }
+
+    fn ensure_root_supervisor_booted(&mut self) -> Result<(), RuntimeError> {
+        if self.process_runtime.root_supervisor.boot_completed {
+            return Ok(());
         }
 
-        let init_result = self.invoke_callable_sync(init, Vec::new())?;
-        let state = match decode_vm_result(init_result, "__process_pid", "init")? {
+        let boot_specs = self
+            .process_runtime
+            .specs_by_id
+            .iter()
+            .filter(|spec| {
+                spec.instance == RuntimeProcessInstance::Singleton
+                    && spec.boot
+                    && !self
+                        .process_runtime
+                        .singleton_by_name
+                        .contains_key(&spec.process_name)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let saved_runtime = self.process_runtime.clone();
+        for spec in boot_specs {
+            if let Err(err) = self.ensure_singleton_available(&spec.process_name) {
+                let detail = self
+                    .process_runtime
+                    .root_supervisor
+                    .boot_failures
+                    .get(&spec.process_name)
+                    .cloned()
+                    .unwrap_or_else(|| err.message.clone());
+                self.process_runtime = saved_runtime;
+                self.process_runtime
+                    .root_supervisor
+                    .boot_failures
+                    .insert(spec.process_name.clone(), detail.clone());
+                return Err(self.boot_failure_error(&spec.process_name, &detail));
+            }
+        }
+
+        self.process_runtime.root_supervisor.boot_completed = true;
+        Ok(())
+    }
+
+    fn ensure_singleton_available(&mut self, process_name: &str) -> Result<u64, RuntimeError> {
+        if let Some(pid) = self.process_runtime.singleton_by_name.get(process_name) {
+            return Ok(*pid);
+        }
+        if let Some(detail) = self
+            .process_runtime
+            .root_supervisor
+            .boot_failures
+            .get(process_name)
+            .cloned()
+        {
+            return Err(self.boot_failure_error(process_name, &detail));
+        }
+
+        let Some(spec) = self
+            .process_runtime
+            .specs_by_name
+            .get(process_name)
+            .cloned()
+        else {
+            return Err(RuntimeError::new(format!(
+                "unknown singleton process `{process_name}`"
+            )));
+        };
+
+        if spec.instance != RuntimeProcessInstance::Singleton {
+            return Err(RuntimeError::new(format!(
+                "process `{process_name}` is not a singleton"
+            )));
+        }
+
+        if spec.kind == RuntimeProcessKind::ReadOnlyAgent && spec.lazy {
+            let pid = self.allocate_process_state(process_name.to_string(), None)?;
+            self.process_runtime
+                .singleton_by_name
+                .insert(process_name.to_string(), pid);
+            return Ok(pid);
+        }
+
+        let init_result = self
+            .invoke_callable_isolated_sync(self.callable_for_function(spec.init_fun_idx), Vec::new())?;
+        let state = match decode_vm_result(init_result, "__root_boot", "init")? {
             Ok(state) => state,
             Err(err) => {
-                return Err(RuntimeError::new(format!(
-                    "process `{}` failed to initialize: {}",
-                    process_name,
-                    err.visible_message()
-                )))
+                let detail = err.visible_message().to_string();
+                self.process_runtime
+                    .root_supervisor
+                    .boot_failures
+                    .insert(process_name.to_string(), detail.clone());
+                return Err(self.boot_failure_error(process_name, &detail));
             }
         };
 
-        let pid = self.allocate_process(process_name.clone(), state)?;
+        let pid = self.allocate_process_state(process_name.to_string(), Some(state))?;
         self.process_runtime
             .singleton_by_name
-            .insert(process_name.clone(), pid);
+            .insert(process_name.to_string(), pid);
+        Ok(pid)
+    }
+
+    fn materialize_lazy_process_state(&mut self, pid: u64) -> Result<Option<Value>, RuntimeError> {
+        let Some(entry) = self.process_runtime.processes.get(&pid).cloned() else {
+            return Err(RuntimeError::new(format!(
+                "process {} disappeared while materializing state",
+                pid
+            )));
+        };
+
+        if !entry.lazy_state_pending {
+            return Ok(entry.state_value);
+        }
+
+        let Some(spec) = self.process_runtime.spec_for_id(entry.spec_id).cloned() else {
+            return Err(RuntimeError::new(format!(
+                "process {} references unknown spec {}",
+                pid, entry.spec_id
+            )));
+        };
+
+        let init_result = self
+            .invoke_callable_isolated_sync(self.callable_for_function(spec.init_fun_idx), Vec::new())?;
+        let state = match decode_vm_result(init_result, "__process_state", "init")? {
+            Ok(state) => state,
+            Err(err) => return Ok(Some(err_vm_result(err))),
+        };
+
+        let Some(entry) = self.process_runtime.processes.get_mut(&pid) else {
+            return Err(RuntimeError::new(format!(
+                "process {} disappeared after lazy init",
+                pid
+            )));
+        };
+        entry.state_value = Some(state.clone());
+        entry.lazy_state_pending = false;
+        entry.status = ProcessStatus::Runnable;
+        Ok(Some(ok_vm_result(state)))
+    }
+
+    pub(crate) fn process_singleton_pid(
+        &mut self,
+        process_name: String,
+        _init: Callable,
+    ) -> Result<Value, RuntimeError> {
+        self.ensure_root_supervisor_booted()?;
+        let pid = self.ensure_singleton_available(&process_name)?;
         Ok(Value::Pid(PidHandle {
             id: pid,
             process_name,
@@ -951,7 +1091,7 @@ impl VM {
         let init_result = self.invoke_callable_sync(init, Vec::new())?;
         match decode_vm_result(init_result, "__process_spawn", "init")? {
             Ok(state) => {
-                let pid = self.allocate_process(process_name.clone(), state)?;
+                let pid = self.allocate_process_state(process_name.clone(), Some(state))?;
                 Ok(ok_vm_result(Value::Pid(PidHandle {
                     id: pid,
                     process_name,
@@ -961,7 +1101,7 @@ impl VM {
         }
     }
 
-    pub(crate) fn process_state(&self, pid: &PidHandle) -> Result<Value, RuntimeError> {
+    pub(crate) fn process_state(&mut self, pid: &PidHandle) -> Result<Value, RuntimeError> {
         let Some(entry) = self.process_runtime.processes.get(&pid.id) else {
             return Ok(err_vm_result(self.process_error(
                 "InvalidPid",
@@ -984,13 +1124,18 @@ impl VM {
                 ),
             )));
         }
-        let Some(state) = entry.state_value.clone() else {
-            return Ok(err_vm_result(self.process_error(
-                "ProcessStateUnavailable",
-                &format!("pid {} has no materialized state", pid.id),
-            )));
-        };
-        Ok(ok_vm_result(state))
+        if let Some(state) = entry.state_value.clone() {
+            return Ok(ok_vm_result(state));
+        }
+        if entry.lazy_state_pending {
+            return self
+                .materialize_lazy_process_state(pid.id)?
+                .ok_or_else(|| RuntimeError::new(format!("lazy process {} lost state", pid.id)));
+        }
+        Ok(err_vm_result(self.process_error(
+            "ProcessStateUnavailable",
+            &format!("pid {} has no materialized state", pid.id),
+        )))
     }
 
     pub(crate) fn process_store(
@@ -1036,7 +1181,11 @@ impl VM {
         Ok(ok_vm_result(Value::Unit))
     }
 
-    fn allocate_process(&mut self, name: String, state: Value) -> Result<u64, RuntimeError> {
+    fn allocate_process_state(
+        &mut self,
+        name: String,
+        state: Option<Value>,
+    ) -> Result<u64, RuntimeError> {
         let Some(spec_id) = self.process_runtime.spec_id_by_name.get(&name).copied() else {
             return Err(RuntimeError::new(format!(
                 "unknown process spec `{name}` during allocation"
@@ -1047,7 +1196,8 @@ impl VM {
         let lazy_state_pending = self
             .process_runtime
             .spec_for_id(spec_id)
-            .is_some_and(|spec| spec.lazy);
+            .is_some_and(|spec| spec.kind == RuntimeProcessKind::ReadOnlyAgent && spec.lazy)
+            && state.is_none();
         self.process_runtime.processes.insert(
             pid,
             ProcessInstance {
@@ -1056,7 +1206,7 @@ impl VM {
                 status: ProcessStatus::Runnable,
                 mailbox: VecDeque::new(),
                 execution_context: None,
-                state_value: Some(state),
+                state_value: state,
                 owner: None,
                 lazy_state_pending,
             },
@@ -1237,6 +1387,7 @@ impl VM {
     /// Execute the loaded bytecode (`run` mode expects `Halt`).
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         self.verify_loaded_bytecode()?;
+        self.ensure_root_supervisor_booted()?;
         self.last_result = None;
         self.test_scope.clear();
         self.test_events.clear();
@@ -1279,6 +1430,7 @@ impl VM {
             docs,
             runtime_process_specs,
         } = chunk;
+        self.ensure_root_supervisor_booted()?;
         let code_base = self.bytecode.opcodes.len();
         let const_base = self.bytecode.constants.len();
         let error_template_base = self.bytecode.error_templates.len();
@@ -1344,6 +1496,15 @@ impl VM {
                 .locals
                 .extend(std::iter::repeat_n(Value::Unit, new_locals));
         }
+
+        self.process_runtime.root_supervisor.boot_completed = false;
+        for spec in &self.bytecode.runtime_process_specs.entries {
+            self.process_runtime
+                .root_supervisor
+                .boot_failures
+                .remove(&spec.process_name);
+        }
+        self.ensure_root_supervisor_booted()?;
 
         match self.run_until_outcome(code_base, ExecutionTarget::TopLevel) {
             StepOutcome::Halt(_) => {
@@ -1541,6 +1702,17 @@ impl VM {
         self.stack = context.stack;
         self.frames = context.frames;
         self.pc = context.pc;
+    }
+
+    fn invoke_callable_isolated_sync(
+        &mut self,
+        callable: Callable,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        let saved = self.capture_execution_context(self.pc, ExecutionTarget::TopLevel);
+        let result = self.invoke_callable_sync(callable, args);
+        self.restore_execution_context(saved);
+        result
     }
 
     fn load_local_or_pending(&mut self, slot: u32) -> Result<OpcodeControl, RuntimeError> {
@@ -3247,6 +3419,36 @@ mod tests {
         }
     }
 
+    fn singleton_boot_bytecode(
+        process_name: &str,
+        kind: RuntimeProcessKind,
+        lazy: bool,
+        boot: bool,
+        init_opcodes: Vec<Opcode>,
+        constants: Vec<Constant>,
+    ) -> Bytecode {
+        let mut opcodes = vec![Opcode::Halt];
+        opcodes.extend(init_opcodes);
+        let mut bytecode = base_bytecode(opcodes);
+        bytecode.constants = constants;
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Agents::__agent_init"))];
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![RuntimeProcessSpec {
+                process_name: process_name.into(),
+                module_path: "Agents".into(),
+                kind,
+                instance: RuntimeProcessInstance::Singleton,
+                boot,
+                registry: true,
+                lazy,
+                init_fun_idx: 0,
+                get_fun_idx: 1,
+                set_fun_idx: None,
+            }],
+        };
+        bytecode
+    }
+
     #[test]
     fn vm_new_registers_runtime_process_specs_from_bytecode() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
@@ -3305,7 +3507,7 @@ mod tests {
 
         let mut vm = VM::new(bytecode);
         let pid = vm
-            .allocate_process("Counter".into(), Value::Int(int(41)))
+            .allocate_process_state("Counter".into(), Some(Value::Int(int(41))))
             .expect("process allocation should succeed");
         let instance = vm
             .process_runtime
@@ -3357,7 +3559,7 @@ mod tests {
 
         let mut vm = VM::new(bytecode);
         let pid = vm
-            .allocate_process("Counter".into(), Value::Int(int(41)))
+            .allocate_process_state("Counter".into(), Some(Value::Int(int(41))))
             .expect("process allocation should succeed");
 
         let ok_pid = PidHandle {
@@ -3470,7 +3672,7 @@ mod tests {
         };
         let mut vm = VM::new(bytecode);
         let pid = vm
-            .allocate_process("Counter".into(), Value::Int(int(41)))
+            .allocate_process_state("Counter".into(), Some(Value::Int(int(41))))
             .expect("process allocation should succeed");
         let future_id = vm.process_runtime.allocate_future(Some(pid), None, false);
         vm.process_runtime
@@ -3517,7 +3719,7 @@ mod tests {
         };
         let mut vm = VM::new(bytecode);
         let pid = vm
-            .allocate_process("Counter".into(), Value::Int(int(41)))
+            .allocate_process_state("Counter".into(), Some(Value::Int(int(41))))
             .expect("process allocation should succeed");
         let future_id = vm.process_runtime.allocate_future(Some(pid), Some(3), true);
         let correlation_id = vm.process_runtime.allocate_correlation_id();
@@ -3570,6 +3772,232 @@ mod tests {
         assert!(vm.process_runtime.futures.is_empty());
         assert!(vm.process_runtime.reply_table.is_empty());
         assert!(vm.process_runtime.deadline_queue.is_empty());
+    }
+
+    #[test]
+    fn root_supervisor_eagerly_boots_singleton_before_run() {
+        let bytecode = singleton_boot_bytecode(
+            "Counter",
+            RuntimeProcessKind::StateAgent,
+            false,
+            true,
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            vec![Constant::Tag(0), Constant::Int(int(41))],
+        );
+        let mut vm = VM::new(bytecode);
+
+        vm.ensure_root_supervisor_booted()
+            .expect("boot should succeed");
+
+        let pid = vm
+            .process_runtime
+            .singleton_by_name
+            .get("Counter")
+            .copied()
+            .expect("singleton slot should be registered");
+        let instance = vm
+            .process_runtime
+            .processes
+            .get(&pid)
+            .expect("booted singleton process should exist");
+        assert_eq!(instance.state_value, Some(Value::Int(int(41))));
+        assert!(!instance.lazy_state_pending);
+    }
+
+    #[test]
+    fn lazy_readonly_singleton_materializes_state_on_first_access() {
+        let bytecode = singleton_boot_bytecode(
+            "Env",
+            RuntimeProcessKind::ReadOnlyAgent,
+            true,
+            true,
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            vec![Constant::Tag(0), Constant::Str("ready".into())],
+        );
+        let mut vm = VM::new(bytecode);
+
+        vm.ensure_root_supervisor_booted()
+            .expect("boot should register lazy singleton");
+
+        let pid = vm
+            .process_runtime
+            .singleton_by_name
+            .get("Env")
+            .copied()
+            .expect("singleton slot should be registered");
+        let instance = vm
+            .process_runtime
+            .processes
+            .get(&pid)
+            .expect("lazy singleton process should exist");
+        assert_eq!(instance.state_value, None);
+        assert!(instance.lazy_state_pending);
+
+        let value = vm
+            .process_state(&PidHandle {
+                id: pid,
+                process_name: "Env".into(),
+            })
+            .expect("lazy state access should succeed");
+        assert_eq!(value, super::ok_vm_result(Value::Str("ready".into())));
+        let instance = vm
+            .process_runtime
+            .processes
+            .get(&pid)
+            .expect("lazy singleton process should remain registered");
+        assert_eq!(instance.state_value, Some(Value::Str("ready".into())));
+        assert!(!instance.lazy_state_pending);
+    }
+
+    #[test]
+    fn boot_failure_keeps_singleton_unpublished() {
+        let bytecode = singleton_boot_bytecode(
+            "Broken",
+            RuntimeProcessKind::StateAgent,
+            false,
+            true,
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::MakeErrorLiteral {
+                    kind_const_idx: 1,
+                    message_const_idx: 2,
+                },
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            vec![
+                Constant::Tag(1),
+                Constant::Str("BootFailure".into()),
+                Constant::Str("bad boot".into()),
+            ],
+        );
+        let mut vm = VM::new(bytecode);
+
+        let err = vm
+            .ensure_root_supervisor_booted()
+            .expect_err("boot should fail");
+        assert!(err.message.contains("Broken"));
+        assert!(err.message.contains("bad boot"));
+        assert!(!vm.process_runtime.singleton_by_name.contains_key("Broken"));
+        assert_eq!(
+            vm.process_runtime
+                .root_supervisor
+                .boot_failures
+                .get("Broken")
+                .map(String::as_str),
+            Some("bad boot")
+        );
+    }
+
+    #[test]
+    fn root_supervisor_boot_preserves_execution_context() {
+        let bytecode = singleton_boot_bytecode(
+            "Counter",
+            RuntimeProcessKind::StateAgent,
+            false,
+            true,
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            vec![Constant::Tag(0), Constant::Int(int(41))],
+        );
+        let mut vm = VM::new(bytecode);
+        vm.stack.push(Value::Int(int(7)));
+        vm.pc = 0;
+
+        vm.ensure_root_supervisor_booted()
+            .expect("boot should succeed");
+
+        assert_eq!(vm.pc, 0);
+        assert_eq!(vm.frames.len(), 1);
+        assert_eq!(vm.stack, vec![Value::Int(int(7))]);
+    }
+
+    #[test]
+    fn root_supervisor_rolls_back_partial_singleton_publication_on_failure() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+            Opcode::LoadConst(2),
+            Opcode::MakeErrorLiteral {
+                kind_const_idx: 3,
+                message_const_idx: 4,
+            },
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![
+            Constant::Tag(0),
+            Constant::Int(int(1)),
+            Constant::Tag(1),
+            Constant::Str("BootFailure".into()),
+            Constant::Str("bad boot".into()),
+        ];
+        bytecode.functions = vec![
+            function_entry(0, 1, 0, 0, Some("Agents::good_init")),
+            function_entry(1, 5, 0, 0, Some("Agents::broken_init")),
+        ];
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                RuntimeProcessSpec {
+                    process_name: "Good".into(),
+                    module_path: "Agents".into(),
+                    kind: RuntimeProcessKind::StateAgent,
+                    instance: RuntimeProcessInstance::Singleton,
+                    boot: true,
+                    registry: true,
+                    lazy: false,
+                    init_fun_idx: 0,
+                    get_fun_idx: 2,
+                    set_fun_idx: None,
+                },
+                RuntimeProcessSpec {
+                    process_name: "Broken".into(),
+                    module_path: "Agents".into(),
+                    kind: RuntimeProcessKind::StateAgent,
+                    instance: RuntimeProcessInstance::Singleton,
+                    boot: true,
+                    registry: true,
+                    lazy: false,
+                    init_fun_idx: 1,
+                    get_fun_idx: 3,
+                    set_fun_idx: None,
+                },
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+
+        let err = vm
+            .ensure_root_supervisor_booted()
+            .expect_err("boot should fail");
+
+        assert!(err.message.contains("Broken"));
+        assert!(vm.process_runtime.singleton_by_name.is_empty());
+        assert!(vm.process_runtime.processes.is_empty());
+        assert_eq!(
+            vm.process_runtime
+                .root_supervisor
+                .boot_failures
+                .get("Broken")
+                .map(String::as_str),
+            Some("bad boot")
+        );
     }
 
     #[test]
