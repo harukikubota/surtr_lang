@@ -2,7 +2,8 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::common::{surtr_command, unique_temp_dir, write_source};
+use crate::common::{module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source};
+use crate::support;
 
 fn run_cache_files(cache_dir: &Path) -> Vec<PathBuf> {
     let mut files = fs::read_dir(cache_dir)
@@ -367,6 +368,76 @@ fn run_vm_dump_writes_json_on_success_when_always_enabled() {
     assert!(
         dump["stats"]["executed_opcodes"].as_u64().unwrap_or(0) > 0,
         "expected opcode stats in vm dump: {dump}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_vm_dump_includes_process_runtime_tables_for_agents() {
+    let temp = unique_temp_dir("surtr_vm_dump_process_runtime");
+    let eldr_path = temp.join("sample.eldr");
+    let dump_path = temp.join("vm-dump.json");
+    let fixture = module_spec_fixtures()
+        .into_iter()
+        .find(|fixture| {
+            fixture.case.case_dir
+                == repo_root().join("tests/spec/modules/process_state_agent_singleton_surface")
+        })
+        .expect("process_state_agent_singleton_surface fixture should exist");
+    let module_sources =
+        support::collect_module_sources(&fixture.case.module_stages).expect("module sources");
+    let compile_sources = support::compose_script_sources(
+        &fixture.case.entry_path.to_string_lossy(),
+        fixture.case.entry_source,
+        module_sources,
+    );
+    let bytecode = support::compile_script_sources(&compile_sources)
+        .expect("fixture bytecode should compile");
+    fs::write(&eldr_path, bytecode.encode().expect("bytecode must encode"))
+        .expect("eldr file should be written");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            eldr_path.to_str().expect("eldr path must be utf-8"),
+            "--vm-dump",
+            dump_path.to_str().expect("dump path must be utf-8"),
+            "--vm-dump-on",
+            "always",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dump_path.exists(), "vm dump file should exist");
+
+    let dump: Value =
+        serde_json::from_slice(&fs::read(&dump_path).expect("vm dump file should be readable"))
+            .expect("vm dump should be valid json");
+    assert_eq!(dump["process_runtime"]["counters"]["process_spec_count"], 1);
+    assert_eq!(dump["process_runtime"]["counters"]["singleton_slot_count"], 1);
+    assert_eq!(dump["process_runtime"]["counters"]["process_count"], 1);
+    assert_eq!(
+        dump["process_runtime"]["specs"][0]["process_name"],
+        "Counter"
+    );
+    assert_eq!(
+        dump["process_runtime"]["singleton_slots"]["Counter"].as_u64(),
+        Some(0)
+    );
+    assert_eq!(
+        dump["process_runtime"]["processes"][0]["process_name"],
+        "Counter"
+    );
+    assert_eq!(
+        dump["stats"]["process"]["process_spec_count"].as_u64(),
+        Some(1)
     );
 
     let _ = fs::remove_dir_all(temp);

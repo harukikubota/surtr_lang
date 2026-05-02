@@ -129,6 +129,7 @@ pub struct VmStats {
     pub closure_calls: usize,
     pub return_count: usize,
     pub tail_calls_optimized: usize,
+    pub process: VmProcessCounters,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -136,6 +137,91 @@ pub struct VmObservation {
     pub stats: VmStats,
     pub trace_lines: Vec<String>,
     pub dropped_trace_events: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VmProcessCounters {
+    pub process_spec_count: usize,
+    pub singleton_slot_count: usize,
+    pub process_count: usize,
+    pub runnable_process_count: usize,
+    pub waiting_process_count: usize,
+    pub completed_process_count: usize,
+    pub failed_process_count: usize,
+    pub mailbox_message_count: usize,
+    pub future_count: usize,
+    pub running_future_count: usize,
+    pub ready_future_count: usize,
+    pub cancelled_future_count: usize,
+    pub waiting_table_count: usize,
+    pub reply_waiter_count: usize,
+    pub deadline_queue_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmProcessSpecSnapshot {
+    pub spec_id: u32,
+    pub process_name: String,
+    pub module_path: String,
+    pub kind: String,
+    pub instance: String,
+    pub boot: bool,
+    pub registry: bool,
+    pub lazy: bool,
+    pub init_fun_idx: u32,
+    pub get_fun_idx: u32,
+    pub set_fun_idx: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmExecutionContextSnapshot {
+    pub pc: usize,
+    pub stack_depth: usize,
+    pub frame_depth: usize,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmProcessInstanceSnapshot {
+    pub pid: u64,
+    pub process_name: String,
+    pub spec_id: u32,
+    pub status: String,
+    pub mailbox_len: usize,
+    pub owner: Option<u64>,
+    pub lazy_state_pending: bool,
+    pub state_value: Option<String>,
+    pub execution_context: Option<VmExecutionContextSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmFutureSnapshot {
+    pub future_id: u64,
+    pub owner: Option<u64>,
+    pub state: String,
+    pub value: Option<String>,
+    pub deadline_tick: Option<u64>,
+    pub waiter_count: usize,
+    pub cancel_on_timeout: bool,
+    pub correlation_id: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmDeadlineSnapshot {
+    pub future_id: u64,
+    pub deadline_tick: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VmProcessRuntimeSnapshot {
+    pub counters: VmProcessCounters,
+    pub specs: Vec<VmProcessSpecSnapshot>,
+    pub singleton_slots: BTreeMap<String, u64>,
+    pub processes: Vec<VmProcessInstanceSnapshot>,
+    pub waiting: BTreeMap<u64, String>,
+    pub replies: BTreeMap<u64, u64>,
+    pub deadlines: Vec<VmDeadlineSnapshot>,
+    pub futures: Vec<VmFutureSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +437,88 @@ struct DeadlineEntry {
 struct RootSupervisorState {
     boot_completed: bool,
     boot_failures: BTreeMap<String, String>,
+}
+
+impl ProcessRuntime {
+    fn counters(&self) -> VmProcessCounters {
+        let mut counters = VmProcessCounters {
+            process_spec_count: self.specs_by_id.len(),
+            singleton_slot_count: self.singleton_by_name.len(),
+            process_count: self.processes.len(),
+            mailbox_message_count: self
+                .processes
+                .values()
+                .map(|process| process.mailbox.len())
+                .sum(),
+            future_count: self.futures.len(),
+            waiting_table_count: self.waiting_table.len(),
+            reply_waiter_count: self.reply_table.len(),
+            deadline_queue_count: self.deadline_queue.len(),
+            ..VmProcessCounters::default()
+        };
+
+        for process in self.processes.values() {
+            match process.status {
+                ProcessStatus::Runnable => counters.runnable_process_count += 1,
+                ProcessStatus::Waiting(_) => counters.waiting_process_count += 1,
+                ProcessStatus::Completed => counters.completed_process_count += 1,
+                ProcessStatus::Failed => counters.failed_process_count += 1,
+                ProcessStatus::Restarting | ProcessStatus::Stopped => {}
+            }
+        }
+
+        for future in self.futures.values() {
+            match future.state {
+                FutureState::Running => counters.running_future_count += 1,
+                FutureState::Ready(_) => counters.ready_future_count += 1,
+                FutureState::Cancelled(_) => counters.cancelled_future_count += 1,
+            }
+        }
+
+        counters
+    }
+}
+
+impl ProcessStatus {
+    fn label(&self) -> &'static str {
+        match self {
+            ProcessStatus::Runnable => "runnable",
+            ProcessStatus::Waiting(_) => "waiting",
+            ProcessStatus::Completed => "completed",
+            ProcessStatus::Failed => "failed",
+            ProcessStatus::Restarting => "restarting",
+            ProcessStatus::Stopped => "stopped",
+        }
+    }
+}
+
+impl ProcessWaitReason {
+    fn label(&self) -> &'static str {
+        match self {
+            ProcessWaitReason::Future(_) => "future",
+            ProcessWaitReason::Reply(_) => "reply",
+            ProcessWaitReason::Boot => "boot",
+        }
+    }
+}
+
+impl ExecutionTarget {
+    fn label(&self) -> String {
+        match self {
+            ExecutionTarget::TopLevel => "top_level".into(),
+            ExecutionTarget::FrameDepth(depth) => format!("frame_depth:{depth}"),
+        }
+    }
+}
+
+impl FutureState {
+    fn label(&self) -> &'static str {
+        match self {
+            FutureState::Running => "running",
+            FutureState::Ready(_) => "ready",
+            FutureState::Cancelled(_) => "cancelled",
+        }
+    }
 }
 
 /// The Surtr virtual machine — executes bytecode produced by Forge.
@@ -1374,7 +1542,121 @@ impl VM {
     }
 
     pub fn observation(&self) -> Option<VmObservation> {
-        self.observer.as_ref().map(VmObserver::snapshot)
+        self.observer.as_ref().map(|observer| {
+            let mut snapshot = observer.snapshot();
+            snapshot.stats.process = self.process_runtime.counters();
+            snapshot
+        })
+    }
+
+    pub fn process_runtime_snapshot(&self) -> VmProcessRuntimeSnapshot {
+        let specs = self
+            .process_runtime
+            .specs_by_id
+            .iter()
+            .enumerate()
+            .map(|(idx, spec)| VmProcessSpecSnapshot {
+                spec_id: idx as u32,
+                process_name: spec.process_name.clone(),
+                module_path: spec.module_path.clone(),
+                kind: format!("{:?}", spec.kind),
+                instance: format!("{:?}", spec.instance),
+                boot: spec.boot,
+                registry: spec.registry,
+                lazy: spec.lazy,
+                init_fun_idx: spec.init_fun_idx,
+                get_fun_idx: spec.get_fun_idx,
+                set_fun_idx: spec.set_fun_idx,
+            })
+            .collect();
+        let processes = self
+            .process_runtime
+            .processes
+            .values()
+            .map(|process| {
+                let process_name = self
+                    .process_runtime
+                    .spec_for_id(process.spec_id)
+                    .map(|spec| spec.process_name.clone())
+                    .unwrap_or_else(|| format!("<unknown:{}>", process.spec_id));
+                let execution_context =
+                    process
+                        .execution_context
+                        .as_ref()
+                        .map(|context| VmExecutionContextSnapshot {
+                            pc: context.pc,
+                            stack_depth: context.stack.len(),
+                            frame_depth: context.frames.len(),
+                            target: context.target.label(),
+                        });
+                VmProcessInstanceSnapshot {
+                    pid: process.pid,
+                    process_name,
+                    spec_id: process.spec_id,
+                    status: process.status.label().into(),
+                    mailbox_len: process.mailbox.len(),
+                    owner: process.owner,
+                    lazy_state_pending: process.lazy_state_pending,
+                    state_value: process
+                        .state_value
+                        .as_ref()
+                        .map(|value| crate::builtin::inspect_value(self, value)),
+                    execution_context,
+                }
+            })
+            .collect();
+        let waiting = self
+            .process_runtime
+            .waiting_table
+            .iter()
+            .map(|(pid, reason)| (*pid, reason.label().to_string()))
+            .collect();
+        let replies = self
+            .process_runtime
+            .reply_table
+            .iter()
+            .map(|(correlation_id, future_id)| (*correlation_id, *future_id))
+            .collect();
+        let deadlines = self
+            .process_runtime
+            .deadline_queue
+            .iter()
+            .map(|entry| VmDeadlineSnapshot {
+                future_id: entry.future_id,
+                deadline_tick: entry.deadline_tick,
+            })
+            .collect();
+        let futures = self
+            .process_runtime
+            .futures
+            .values()
+            .map(|future| VmFutureSnapshot {
+                future_id: future.id,
+                owner: future.owner,
+                state: future.state.label().into(),
+                value: match &future.state {
+                    FutureState::Ready(value) | FutureState::Cancelled(value) => {
+                        Some(crate::builtin::inspect_value(self, value))
+                    }
+                    FutureState::Running => None,
+                },
+                deadline_tick: future.deadline_tick,
+                waiter_count: future.waiters.len(),
+                cancel_on_timeout: future.cancel_on_timeout,
+                correlation_id: future.correlation_id,
+            })
+            .collect();
+
+        VmProcessRuntimeSnapshot {
+            counters: self.process_runtime.counters(),
+            specs,
+            singleton_slots: self.process_runtime.singleton_by_name.clone(),
+            processes,
+            waiting,
+            replies,
+            deadlines,
+            futures,
+        }
     }
 
     /// Read a local slot value (used by REPL display logic).
@@ -3399,7 +3681,7 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
 
 #[cfg(test)]
 mod tests {
-    use super::{StepOutcome, VmObservationOptions, VM};
+    use super::{ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM};
     use sindr::ir::{
         Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
         RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
@@ -5042,5 +5324,217 @@ mod tests {
         assert_eq!(observation.trace_lines.len(), 1);
         assert!(observation.trace_lines[0].contains("kind=CallBuiltin"));
         assert!(observation.trace_lines[0].contains("target=to_string"));
+    }
+
+    #[test]
+    fn observation_includes_process_runtime_counters() {
+        let bytecode = singleton_boot_bytecode(
+            "Counter",
+            RuntimeProcessKind::StateAgent,
+            false,
+            true,
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            vec![Constant::Tag(0), Constant::Int(int(41))],
+        );
+        let mut vm = VM::new(bytecode);
+        vm.enable_observation(VmObservationOptions::default());
+        vm.ensure_root_supervisor_booted()
+            .expect("boot should succeed");
+
+        let pid = vm
+            .process_runtime
+            .singleton_by_name
+            .get("Counter")
+            .copied()
+            .expect("singleton pid should exist");
+        let future_id = vm.process_runtime.allocate_future(Some(pid), Some(9), true);
+        let correlation_id = vm.process_runtime.allocate_correlation_id();
+        vm.process_runtime
+            .register_reply_waiter(correlation_id, future_id);
+        vm.process_runtime
+            .mark_process_waiting(pid, ProcessWaitReason::Reply(correlation_id));
+
+        let observation = vm.observation().expect("observation should exist");
+        assert_eq!(observation.stats.process.process_spec_count, 1);
+        assert_eq!(observation.stats.process.singleton_slot_count, 1);
+        assert_eq!(observation.stats.process.process_count, 1);
+        assert_eq!(observation.stats.process.waiting_process_count, 1);
+        assert_eq!(observation.stats.process.future_count, 1);
+        assert_eq!(observation.stats.process.running_future_count, 1);
+        assert_eq!(observation.stats.process.waiting_table_count, 1);
+        assert_eq!(observation.stats.process.reply_waiter_count, 1);
+        assert_eq!(observation.stats.process.deadline_queue_count, 1);
+    }
+
+    #[test]
+    fn process_runtime_snapshot_includes_runtime_tables() {
+        let bytecode = singleton_boot_bytecode(
+            "Counter",
+            RuntimeProcessKind::StateAgent,
+            false,
+            true,
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            vec![Constant::Tag(0), Constant::Int(int(41))],
+        );
+        let mut vm = VM::new(bytecode);
+        vm.ensure_root_supervisor_booted()
+            .expect("boot should succeed");
+
+        let pid = vm
+            .process_runtime
+            .singleton_by_name
+            .get("Counter")
+            .copied()
+            .expect("singleton pid should exist");
+        let future_id = vm.process_runtime.allocate_future(Some(pid), Some(9), true);
+        let correlation_id = vm.process_runtime.allocate_correlation_id();
+        vm.process_runtime
+            .register_reply_waiter(correlation_id, future_id);
+        vm.process_runtime
+            .mark_process_waiting(pid, ProcessWaitReason::Reply(correlation_id));
+
+        let snapshot = vm.process_runtime_snapshot();
+        assert_eq!(snapshot.specs.len(), 1);
+        assert_eq!(snapshot.specs[0].process_name, "Counter");
+        assert_eq!(snapshot.singleton_slots.get("Counter"), Some(&pid));
+        assert_eq!(snapshot.processes.len(), 1);
+        assert_eq!(snapshot.processes[0].process_name, "Counter");
+        assert_eq!(snapshot.processes[0].status, "waiting");
+        assert_eq!(snapshot.processes[0].state_value.as_deref(), Some("41"));
+        assert_eq!(
+            snapshot.waiting.get(&pid).map(String::as_str),
+            Some("reply")
+        );
+        assert_eq!(snapshot.replies.get(&correlation_id), Some(&future_id));
+        assert_eq!(snapshot.deadlines.len(), 1);
+        assert_eq!(snapshot.deadlines[0].future_id, future_id);
+        assert_eq!(snapshot.futures.len(), 1);
+        assert_eq!(snapshot.futures[0].state, "running");
+        assert_eq!(snapshot.futures[0].owner, Some(pid));
+    }
+
+    #[test]
+    fn stress_process_runtime_snapshot_handles_many_singletons_spawns_and_tasks() {
+        let singleton_count = 48u32;
+        let spawn_count = 96usize;
+        let task_count = 48usize;
+
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(2),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(3),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![
+            Constant::Tag(0),
+            Constant::Int(int(1)),
+            Constant::Int(int(2)),
+            Constant::Unit,
+        ];
+        bytecode.functions = vec![
+            function_entry(0, 1, 0, 0, Some("Agents::singleton_init")),
+            function_entry(1, 5, 0, 0, Some("Worker::__agent_init")),
+            function_entry(2, 9, 0, 0, Some("Task::body")),
+        ];
+
+        let mut specs = (0..singleton_count)
+            .map(|idx| RuntimeProcessSpec {
+                process_name: format!("Singleton{idx}"),
+                module_path: "Agents".into(),
+                kind: RuntimeProcessKind::StateAgent,
+                instance: RuntimeProcessInstance::Singleton,
+                boot: true,
+                registry: true,
+                lazy: false,
+                init_fun_idx: 0,
+                get_fun_idx: 0,
+                set_fun_idx: None,
+            })
+            .collect::<Vec<_>>();
+        specs.push(RuntimeProcessSpec {
+            process_name: "Worker".into(),
+            module_path: "Worker".into(),
+            kind: RuntimeProcessKind::StateAgent,
+            instance: RuntimeProcessInstance::Multi,
+            boot: false,
+            registry: true,
+            lazy: false,
+            init_fun_idx: 1,
+            get_fun_idx: 1,
+            set_fun_idx: None,
+        });
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable { entries: specs };
+
+        let mut vm = VM::new(bytecode);
+        vm.enable_observation(VmObservationOptions::default());
+        vm.ensure_root_supervisor_booted()
+            .expect("singleton boot stress should succeed");
+
+        let worker_init = vm.callable_for_function(1);
+        let task_body = vm.callable_for_function(2);
+        for _ in 0..spawn_count {
+            let value = vm
+                .process_spawn("Worker".into(), worker_init.clone())
+                .expect("spawn should succeed");
+            assert!(matches!(
+                value,
+                Value::Tagged { tag: 0, fields } if matches!(fields.first(), Some(Value::Pid(_)))
+            ));
+        }
+        for _ in 0..task_count {
+            vm.invoke_task(task_body.clone(), TaskMode::Call)
+                .expect("task call should succeed");
+            vm.invoke_task(task_body.clone(), TaskMode::Async)
+                .expect("task async should succeed");
+            vm.invoke_task(task_body.clone(), TaskMode::Launch)
+                .expect("task launch should succeed");
+            vm.invoke_task(task_body.clone(), TaskMode::Cast)
+                .expect("task cast should succeed");
+        }
+
+        let snapshot = vm.process_runtime_snapshot();
+        assert_eq!(
+            snapshot.counters.process_spec_count,
+            singleton_count as usize + 1
+        );
+        assert_eq!(
+            snapshot.counters.singleton_slot_count,
+            singleton_count as usize
+        );
+        assert_eq!(
+            snapshot.counters.process_count,
+            singleton_count as usize + spawn_count
+        );
+        assert_eq!(snapshot.counters.future_count, task_count * 2);
+        assert_eq!(snapshot.counters.ready_future_count, task_count * 2);
+        assert_eq!(snapshot.specs.len(), singleton_count as usize + 1);
+        assert_eq!(snapshot.processes.len(), singleton_count as usize + spawn_count);
+        assert_eq!(snapshot.futures.len(), task_count * 2);
+
+        let observation = vm.observation().expect("observation should exist");
+        assert_eq!(
+            observation.stats.process.process_count,
+            singleton_count as usize + spawn_count
+        );
+        assert_eq!(observation.stats.process.future_count, task_count * 2);
     }
 }
