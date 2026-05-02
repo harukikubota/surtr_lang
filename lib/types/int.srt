@@ -224,68 +224,26 @@ impl Int {
   }
 
   defp _digit_value(ch: String) -> Result<Int> {
-    cond {
-      ch == "0" => Ok(0),
-      ch == "1" => Ok(1),
-      ch == "2" => Ok(2),
-      ch == "3" => Ok(3),
-      ch == "4" => Ok(4),
-      ch == "5" => Ok(5),
-      ch == "6" => Ok(6),
-      ch == "7" => Ok(7),
-      ch == "8" => Ok(8),
-      ch == "9" => Ok(9),
-      ch == "a" || ch == "A" => Ok(10),
-      ch == "b" || ch == "B" => Ok(11),
-      ch == "c" || ch == "C" => Ok(12),
-      ch == "d" || ch == "D" => Ok(13),
-      ch == "e" || ch == "E" => Ok(14),
-      ch == "f" || ch == "F" => Ok(15),
-      True => Err(NoneError),
+    match String::codepoints(ch, StringEncoding::Ascii) {
+      Ok([cp]) => cond {
+        cp >= 48 && cp <= 57 => Ok(cp - 48),
+        cp >= 65 && cp <= 70 => Ok(cp - 55),
+        cp >= 97 && cp <= 102 => Ok(cp - 87),
+        True => Err(NoneError),
+      },
+      _ => Err(NoneError),
     }
-  }
-
-  defp _digit_error(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntError> {
-    Err(ParseIntError("invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}"))
-  }
-
-  defp _literal_digit_error(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntLiteralError> {
-    Err(
-      ParseIntLiteralError(
-        "invalid digit for #{IntBase::label(base)} integer literal: #{ch} at index #{index}",
-      ),
-    )
-  }
-
-  defp _parse_error_empty() -> Result<Int, ParseIntError> {
-    Err(ParseIntError("empty integer input"))
-  }
-
-  defp _parse_error_sign_only() -> Result<Int, ParseIntError> {
-    Err(ParseIntError("sign without digits"))
-  }
-
-  defp _literal_error_empty() -> Result<Int, ParseIntLiteralError> {
-    Err(ParseIntLiteralError("empty integer literal input"))
-  }
-
-  defp _literal_error_sign_only() -> Result<Int, ParseIntLiteralError> {
-    Err(ParseIntLiteralError("sign without digits"))
-  }
-
-  defp _literal_error_unknown_prefix(prefix: String) -> Result<Int, ParseIntLiteralError> {
-    Err(ParseIntLiteralError("unknown integer base prefix: #{prefix}"))
-  }
-
-  defp _literal_error_missing_digits(base: IntBase) -> Result<Int, ParseIntLiteralError> {
-    Err(ParseIntLiteralError("missing digits after integer base prefix: #{IntBase::prefix(base)}"))
   }
 
   defp _parse_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntError> {
     radix = IntBase::radix(base)
     match _digit_value(ch) {
-      Ok(value) => if(value < radix, Ok(value), _digit_error(base, ch, index)),
-      Err(_) => _digit_error(base, ch, index),
+      Ok(value) => if(
+        value < radix,
+        Ok(value),
+        Err(ParseIntError("invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}")),
+      ),
+      Err(_) => Err(ParseIntError("invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}")),
     }
   }
 
@@ -295,9 +253,17 @@ impl Int {
       Ok(value) => if(
         value < radix,
         Ok(value),
-        _literal_digit_error(base, ch, index),
+        Err(
+          ParseIntLiteralError(
+            "invalid digit for #{IntBase::label(base)} integer literal: #{ch} at index #{index}",
+          ),
+        ),
       ),
-      Err(_) => _literal_digit_error(base, ch, index),
+      Err(_) => Err(
+        ParseIntLiteralError(
+          "invalid digit for #{IntBase::label(base)} integer literal: #{ch} at index #{index}",
+        ),
+      ),
     }
   }
 
@@ -370,7 +336,7 @@ impl Int {
     start_index: Int,
   ) -> Result<Int, ParseIntError> {
     match chars {
-      "" => _parse_error_empty(),
+      "" => Err(ParseIntError("empty integer input")),
       _ => _parse_digits_go(chars, base, 0, start_index, sign),
     }
   }
@@ -382,7 +348,7 @@ impl Int {
     start_index: Int,
   ) -> Result<Int, ParseIntLiteralError> {
     match body {
-      "" => _literal_error_missing_digits(base),
+      "" => Err(ParseIntLiteralError("missing digits after integer base prefix: #{IntBase::prefix(base)}")),
       _ => _parse_literal_digits_go(body, base, 0, start_index, sign),
     }
   }
@@ -393,7 +359,7 @@ impl Int {
     start_index: Int,
   ) -> Result<Int, ParseIntLiteralError> {
     match chars {
-      "" => _literal_error_empty(),
+      "" => Err(ParseIntLiteralError("empty integer literal input")),
       ["0", ..tail] => match tail {
         "" => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
         ["b", ..body] => _parse_literal_prefixed(body, IntBase::Bin, sign, start_index + 2),
@@ -404,9 +370,9 @@ impl Int {
           Ok(value) => if(
             value < 10,
             _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
-            _literal_error_unknown_prefix("0" ++ prefix),
+            Err(ParseIntLiteralError("unknown integer base prefix: " ++ "0" ++ prefix)),
           ),
-          Err(_) => _literal_error_unknown_prefix("0" ++ prefix),
+          Err(_) => Err(ParseIntLiteralError("unknown integer base prefix: " ++ "0" ++ prefix)),
         },
       },
       _ => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
@@ -427,13 +393,13 @@ impl Int {
   """
   def parse_dec(text: String) -> Result<Int, ParseIntError> {
     match text {
-      "" => _parse_error_empty(),
+      "" => Err(ParseIntError("empty integer input")),
       ["-", ..tail] => match tail {
-        "" => _parse_error_sign_only(),
+        "" => Err(ParseIntError("sign without digits")),
         _ => _parse_digits_unsigned(tail, IntBase::Dec, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => _parse_error_sign_only(),
+        "" => Err(ParseIntError("sign without digits")),
         _ => _parse_digits_unsigned(tail, IntBase::Dec, 1, 1),
       },
       _ => _parse_digits_unsigned(text, IntBase::Dec, 1, 0),
@@ -446,13 +412,13 @@ impl Int {
   """
   def parse_hex(text: String) -> Result<Int, ParseIntError> {
     match text {
-      "" => _parse_error_empty(),
+      "" => Err(ParseIntError("empty integer input")),
       ["-", ..tail] => match tail {
-        "" => _parse_error_sign_only(),
+        "" => Err(ParseIntError("sign without digits")),
         _ => _parse_digits_unsigned(tail, IntBase::Hex, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => _parse_error_sign_only(),
+        "" => Err(ParseIntError("sign without digits")),
         _ => _parse_digits_unsigned(tail, IntBase::Hex, 1, 1),
       },
       _ => _parse_digits_unsigned(text, IntBase::Hex, 1, 0),
@@ -465,13 +431,13 @@ impl Int {
   """
   def parse_oct(text: String) -> Result<Int, ParseIntError> {
     match text {
-      "" => _parse_error_empty(),
+      "" => Err(ParseIntError("empty integer input")),
       ["-", ..tail] => match tail {
-        "" => _parse_error_sign_only(),
+        "" => Err(ParseIntError("sign without digits")),
         _ => _parse_digits_unsigned(tail, IntBase::Oct, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => _parse_error_sign_only(),
+        "" => Err(ParseIntError("sign without digits")),
         _ => _parse_digits_unsigned(tail, IntBase::Oct, 1, 1),
       },
       _ => _parse_digits_unsigned(text, IntBase::Oct, 1, 0),
@@ -484,13 +450,13 @@ impl Int {
   """
   def parse_bin(text: String) -> Result<Int, ParseIntError> {
     match text {
-      "" => _parse_error_empty(),
+      "" => Err(ParseIntError("empty integer input")),
       ["-", ..tail] => match tail {
-        "" => _parse_error_sign_only(),
+        "" => Err(ParseIntError("sign without digits")),
         _ => _parse_digits_unsigned(tail, IntBase::Bin, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => _parse_error_sign_only(),
+        "" => Err(ParseIntError("sign without digits")),
         _ => _parse_digits_unsigned(tail, IntBase::Bin, 1, 1),
       },
       _ => _parse_digits_unsigned(text, IntBase::Bin, 1, 0),
@@ -503,13 +469,13 @@ impl Int {
   """
   def parse_literal(text: String) -> Result<Int, ParseIntLiteralError> {
     match text {
-      "" => _literal_error_empty(),
+      "" => Err(ParseIntLiteralError("empty integer literal input")),
       ["-", ..tail] => match tail {
-        "" => _literal_error_sign_only(),
+        "" => Err(ParseIntLiteralError("sign without digits")),
         _ => _parse_literal_unsigned(tail, -1, 1),
       },
       ["+", ..tail] => match tail {
-        "" => _literal_error_sign_only(),
+        "" => Err(ParseIntLiteralError("sign without digits")),
         _ => _parse_literal_unsigned(tail, 1, 1),
       },
       _ => _parse_literal_unsigned(text, 1, 0),
