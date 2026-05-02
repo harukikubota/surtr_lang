@@ -340,6 +340,7 @@ pub struct BindingInfo {
     pub slot_id: u32,
     pub callable_kind: Option<ReplCallableKind>,
     pub callable_display: Option<ReplCallableDisplay>,
+    pub callable_captures: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -881,6 +882,7 @@ fn collect_stmt_meta(
                 bindings,
                 callable_kind_for_node(rhs),
                 callable_display_for_node(rhs),
+                &callable_capture_names(rhs),
             );
         }
         TypedInner::StructDef(_, name, field_names, _) => {
@@ -942,6 +944,7 @@ fn collect_pattern_binding_infos(
     out: &mut Vec<BindingInfo>,
     callable_kind: Option<ReplCallableKind>,
     callable_display: Option<ReplCallableDisplay>,
+    callable_captures: &[String],
 ) {
     match pat {
         TypedPattern::Var(ty, id) => {
@@ -952,6 +955,7 @@ fn collect_pattern_binding_infos(
                     slot_id: *slot_id,
                     callable_kind,
                     callable_display: callable_display.clone(),
+                    callable_captures: callable_captures.to_vec(),
                 });
             }
         }
@@ -963,9 +967,17 @@ fn collect_pattern_binding_infos(
                     slot_id: *slot_id,
                     callable_kind,
                     callable_display: callable_display.clone(),
+                    callable_captures: callable_captures.to_vec(),
                 });
             }
-            collect_pattern_binding_infos(inner, slot_map, out, callable_kind, callable_display);
+            collect_pattern_binding_infos(
+                inner,
+                slot_map,
+                out,
+                callable_kind,
+                callable_display,
+                callable_captures,
+            );
         }
         TypedPattern::Wildcard(_)
         | TypedPattern::ListNil(_)
@@ -980,6 +992,7 @@ fn collect_pattern_binding_infos(
                     out,
                     callable_kind,
                     callable_display.clone(),
+                    callable_captures,
                 );
             }
         }
@@ -990,11 +1003,26 @@ fn collect_pattern_binding_infos(
                 out,
                 callable_kind,
                 callable_display.clone(),
+                callable_captures,
             );
-            collect_pattern_binding_infos(tail, slot_map, out, callable_kind, callable_display);
+            collect_pattern_binding_infos(
+                tail,
+                slot_map,
+                out,
+                callable_kind,
+                callable_display,
+                callable_captures,
+            );
         }
         TypedPattern::ResultOk(_, inner) => {
-            collect_pattern_binding_infos(inner, slot_map, out, callable_kind, callable_display);
+            collect_pattern_binding_infos(
+                inner,
+                slot_map,
+                out,
+                callable_kind,
+                callable_display,
+                callable_captures,
+            );
         }
         TypedPattern::Extractor { items, .. } => {
             for item in items {
@@ -1004,6 +1032,7 @@ fn collect_pattern_binding_infos(
                     out,
                     callable_kind,
                     callable_display.clone(),
+                    callable_captures,
                 );
             }
         }
@@ -1053,13 +1082,21 @@ fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
     }
 }
 
+fn callable_capture_names(node: &TypedNode) -> Vec<String> {
+    match &node.node {
+        TypedInner::Closure(_, captures, _) => captures
+            .iter()
+            .map(|capture| capture.name.to_string())
+            .collect(),
+        TypedInner::Semi(inner) => callable_capture_names(inner),
+        _ => Vec::new(),
+    }
+}
+
 fn callable_head_for_node(node: &TypedNode) -> Option<(String, String)> {
     match &node.node {
         TypedInner::Var(id) => {
-            let qualified = id
-                .qualified_name
-                .as_deref()
-                .unwrap_or(id.name.as_str());
+            let qualified = id.qualified_name.as_deref().unwrap_or(id.name.as_str());
             let (module, name) = qualified.rsplit_once("::")?;
             Some((module.to_string(), name.to_string()))
         }
@@ -1075,7 +1112,10 @@ fn callable_head_for_invocation(node: &TypedNode) -> Option<(String, String)> {
             method_name,
             origin: TraitCallOrigin::Explicit,
             ..
-        } => Some((trait_short_name(trait_name).to_string(), method_name.clone())),
+        } => Some((
+            trait_short_name(trait_name).to_string(),
+            method_name.clone(),
+        )),
         _ => None,
     }
 }

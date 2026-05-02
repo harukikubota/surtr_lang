@@ -20,6 +20,7 @@ pub enum TypeName {
     String,
     Boolean,
     Unit,
+    Closure,
     Error,
     Regex,
     RegexCaptures,
@@ -42,6 +43,7 @@ impl TypeName {
             Self::String => "String",
             Self::Boolean => "Boolean",
             Self::Unit => "Unit",
+            Self::Closure => "Closure",
             Self::Error => "Error",
             Self::Regex => "Regex",
             Self::RegexCaptures => "RegexCaptures",
@@ -62,7 +64,7 @@ impl TypeName {
     }
 
     pub const fn supports_inherent_impl(self) -> bool {
-        !matches!(self, Self::TypeRef | Self::Hole)
+        !matches!(self, Self::TypeRef | Self::Hole | Self::Closure)
     }
 }
 
@@ -73,6 +75,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "String" => Some(TypeName::String),
         "Boolean" => Some(TypeName::Boolean),
         "Unit" => Some(TypeName::Unit),
+        "Closure" => Some(TypeName::Closure),
         "Error" => Some(TypeName::Error),
         "Regex" => Some(TypeName::Regex),
         "RegexCaptures" => Some(TypeName::RegexCaptures),

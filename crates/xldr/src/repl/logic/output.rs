@@ -22,6 +22,7 @@ pub enum ReplOutput {
         signature: Option<String>,
         summary: Option<String>,
         source_snippet: Option<String>,
+        details: Vec<String>,
     },
     SigResolved {
         signature: String,

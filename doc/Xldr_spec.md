@@ -57,7 +57,7 @@ Xldr は対話セッション中に次を保持する。
 
 - セッション開始時に標準 module source を `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float, Config, Project, Random, IO, StyledDoc] -> [Test]` の順で読み込む
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
-- `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole` の canonical builtin type head を登録する
+- `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole`, `Closure` の canonical builtin type head を登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin を登録する
 - 各 type file の top-level では対応する canonical builtin type head を登録する
 - 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/types/special_types.srt`, `lib/kernel.srt`, `lib/traits/operator/*.srt`, `lib/traits/*.srt`, type modules, `lib/lens.srt`, `lib/Config.srt`, `lib/Project.srt`, `lib/Random.srt`, `lib/IO.srt`, `lib/styled_doc.srt` を同一段として読み込み、`lib/test.srt` を次段として読み込む
@@ -129,7 +129,7 @@ REPL 実装は次の 3 層に分ける。
 | `:help`, `:h [command]` | REPL コマンド一覧、または指定コマンドのヘルプを表示する |
 | `:quit`, `:exit` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する |
-| `:doc <symbol|query>` | 現在セッションで見える symbol の doc を表示する。名前だけなら定義 doc を返し、typed query (`gt(Int, Int)`, `ret |>= up`, `num |> (Int -> String)`) を与えたときは impl / 特化先 doc を返す。operator / helper alias は `:doc Add`, `:doc +`, `:doc gt`, `:doc |>` のように trait 定義へ正規化する |
+| `:doc <symbol|query>` | 現在セッションで見える symbol の doc を表示する。名前だけなら定義 doc を返し、typed query (`gt(Int, Int)`, `ret |>= up`, `num |> (Int -> String)`) を与えたときは impl / 特化先 doc を返す。operator / helper alias は `:doc Add`, `:doc +`, `:doc gt`, `:doc |>` のように trait 定義へ正規化する。callable binding を与えた場合、capture は capture 元の doc を返し、匿名 closure は `Closure` type doc を返したうえで binding ごとの signature / captures / provenance を補足表示する。` :doc Ty` は type-bound doc を返す規約を維持し、`Closure` もこの経路で表示できる。 |
 | `:sig <symbol|query|expr>` | 現在セッションで見える関数の signature を表示する。名前だけなら定義 signature を返し、typed query を与えたときは specialized 表示を返す。trait / operator は「型なしなら定義、型ありなら実装」とし、`gt(Int, Int)`, `ret |>= up`, `:sig |>`, `:sig id(1)` のような query を受け付ける |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 

@@ -9,6 +9,21 @@ return a meaningful value.
 """
 @@builtin type Unit
 
+@@doc """
+Compiler-reserved callable category marker for REPL and doc surfaces.
+`Closure` names the family of first-class callable values produced by function
+literals and capture forms.
+Its runtime-facing shape is still described by ordinary function signatures such
+as `(Int -> Int)` or `(String, Int -> Result<Unit, Error>)`; `Closure` does not
+replace those signatures.
+Like the documentation-only `Tuple` notation, this name exists to reduce
+confusion in help text, `:doc`, REPL inspection, and related explanation
+surfaces.
+Treat it as a special builtin type anchor for callable documentation rather than
+as a separate nominal data type to model in user code.
+"""
+@@builtin type Closure
+
 impl Show for Unit {
   @@doc """
   Return the standard string rendering for `Unit`.

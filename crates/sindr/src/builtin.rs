@@ -553,6 +553,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &[],
     },
     BuiltinTypeMeta {
+        name: TypeName::Closure.as_str(),
+        params: &[],
+    },
+    BuiltinTypeMeta {
         name: TypeName::Error.as_str(),
         params: &[],
     },

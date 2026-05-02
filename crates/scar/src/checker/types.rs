@@ -295,6 +295,7 @@ impl Checker {
                         | TypeName::Result
                         | TypeName::TypeRef
                         | TypeName::Hole
+                        | TypeName::Closure
                         | TypeName::Lens,
                     )
                     | None => {

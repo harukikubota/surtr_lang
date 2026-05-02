@@ -949,6 +949,20 @@ fn canonical_builtin_type_name_hole_is_reserved_for_errors() {
 }
 
 #[test]
+fn canonical_builtin_type_name_closure_is_reserved_for_structs() {
+    let err = typecheck_module_source_result(
+        r#"defstruct Closure {
+  value: Int,
+}"#,
+    )
+    .expect_err("Closure should be reserved");
+    assert!(
+        err.contains("Type name `Closure` is reserved by a canonical builtin type declaration"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn trailing_block_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def take(flag: Boolean, value: (-> Int)) -> Int {

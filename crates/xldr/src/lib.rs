@@ -1271,6 +1271,34 @@ deferror NoneError { "None Value." }"#,
     }
 
     #[test]
+    fn collect_doc_entries_includes_special_closure_type_docs() {
+        let ast = spire::parse_with_context(
+            r#"@@doc """Closure docs."""
+@@builtin type Closure"#,
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .expect("std module source should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("SpecialTypes"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(docs.iter().any(|entry| {
+            entry.kind == DocKind::Type
+                && entry.signature.as_deref() == Some("type Closure")
+                && entry.doc == "Closure docs."
+        }));
+    }
+
+    #[test]
     fn bundled_bootstrap_source_parses_in_std_module_context() {
         let ast = spire::parse_with_context(
             include_str!("../../../lib/bootstrap.srt"),

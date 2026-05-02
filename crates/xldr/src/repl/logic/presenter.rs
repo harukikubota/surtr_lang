@@ -64,6 +64,7 @@ pub fn present_for_cli(result: &ReplResult, color: bool) -> Vec<String> {
             signature,
             summary,
             source_snippet,
+            details,
         } => {
             let mut lines = Vec::new();
             if let Some(sig) = signature {
@@ -87,6 +88,7 @@ pub fn present_for_cli(result: &ReplResult, color: bool) -> Vec<String> {
                 };
                 lines.extend(body_lines);
             }
+            lines.extend(details.iter().cloned());
             lines
         }
         ReplOutput::EvalError { .. }
@@ -118,10 +120,21 @@ pub fn present_for_interaction(result: ReplResult) -> PresentedInteraction {
             signature,
             summary,
             source_snippet,
+            details,
         } => PresentedEvent::Doc(PresentedDoc {
             symbol,
             signature,
-            body: source_snippet.or(summary),
+            body: Some(
+                [
+                    source_snippet.or(summary),
+                    (!details.is_empty()).then(|| details.join("\n")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n"),
+            )
+            .filter(|body| !body.is_empty()),
         }),
         ReplOutput::StatusMessage(message) => {
             if result.should_exit {

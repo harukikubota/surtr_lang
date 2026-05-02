@@ -762,7 +762,8 @@ impl ReplEngine {
         vec![
             "Usage: :doc <symbol>".to_string(),
             "Also: :doc <typed-call>".to_string(),
-            "Examples: :doc print, :doc Kernel::if, :doc Add, :doc +, :doc gt(3, 2)".to_string(),
+            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc Add, :doc +, :doc gt(3, 2)"
+                .to_string(),
         ]
     }
 
@@ -820,6 +821,9 @@ impl ReplEngine {
     }
 
     fn handle_doc_symbol(&self, source_symbol: &str, symbol: &str) -> ReplResult {
+        if let Some(binding_doc) = self.handle_doc_binding(symbol) {
+            return binding_doc;
+        }
         let canonical = Self::canonical_symbol(symbol);
         let preferred_kind = Self::definition_doc_kind(canonical);
         let matches = self.matching_doc_entries(canonical, preferred_kind);
@@ -884,6 +888,10 @@ impl ReplEngine {
     }
 
     fn doc_resolved_output(entry: &DocEntry) -> ReplOutput {
+        Self::doc_resolved_output_with_details(entry, Vec::new())
+    }
+
+    fn doc_resolved_output_with_details(entry: &DocEntry, details: Vec<String>) -> ReplOutput {
         let summary = entry
             .doc
             .lines()
@@ -895,6 +903,104 @@ impl ReplEngine {
             signature: entry.signature.clone(),
             summary,
             source_snippet: Some(entry.doc.clone()),
+            details,
+        }
+    }
+
+    fn handle_doc_binding(&self, symbol: &str) -> Option<ReplResult> {
+        let binding = self.binding_info(symbol)?;
+        let kind = self.binding_callable_kind(binding)?;
+        let value = self.vm.get_local(binding.slot_id)?;
+
+        let entry = match kind {
+            forge::ReplCallableKind::Capture => self.capture_doc_entry(&value)?,
+            forge::ReplCallableKind::Closure => self.closure_doc_entry()?,
+        };
+
+        Some(ReplResult::ok(Self::doc_resolved_output_with_details(
+            entry,
+            self.binding_doc_details(symbol, binding, &value),
+        )))
+    }
+
+    fn closure_doc_entry(&self) -> Option<&DocEntry> {
+        self.matching_doc_entries("Closure", Some(DocKind::Type))
+            .into_iter()
+            .next()
+    }
+
+    fn capture_doc_entry(&self, value: &Value) -> Option<&DocEntry> {
+        let Value::Callable(callable) = value else {
+            return None;
+        };
+        let module = callable.metadata.module.as_deref()?;
+        let name = callable.metadata.name.as_deref()?;
+        let qualified = format!("{module}::{name}");
+        self.docs
+            .iter()
+            .find(|entry| entry.qualified_name == qualified && entry.kind == DocKind::Function)
+            .or_else(|| {
+                self.matching_doc_entries(&qualified, None)
+                    .into_iter()
+                    .find(|entry| entry.kind == DocKind::Function)
+            })
+            .or_else(|| {
+                self.matching_doc_entries(name, None)
+                    .into_iter()
+                    .find(|entry| entry.kind == DocKind::Function)
+            })
+    }
+
+    fn binding_doc_details(
+        &self,
+        symbol: &str,
+        binding: &forge::BindingInfo,
+        value: &Value,
+    ) -> Vec<String> {
+        let mut details = vec![format!("binding: {symbol}")];
+        details.push(format!("signature: {}", binding.ty));
+
+        match self.binding_callable_kind(binding) {
+            Some(forge::ReplCallableKind::Capture) => {
+                if let Value::Callable(callable) = value {
+                    let capture_count = callable.lexical_captures.len();
+                    if capture_count == 0 {
+                        details.push("captures: none".to_string());
+                    } else {
+                        details.push(format!("captures: {capture_count} bound value(s)"));
+                    }
+                }
+                if let Some(derived) = self.callable_origin_label(value) {
+                    details.push(format!("derived from: {derived}"));
+                }
+            }
+            Some(forge::ReplCallableKind::Closure) => {
+                let captures = if binding.callable_captures.is_empty() {
+                    "none".to_string()
+                } else {
+                    binding.callable_captures.join(", ")
+                };
+                details.push(format!("captures: {captures}"));
+                details.push("derived from: closure literal".to_string());
+            }
+            None => {}
+        }
+
+        details
+    }
+
+    fn callable_origin_label(&self, value: &Value) -> Option<String> {
+        let Value::Callable(callable) = value else {
+            return None;
+        };
+        match (
+            callable.metadata.module.as_deref(),
+            callable.metadata.name.as_deref(),
+        ) {
+            (Some("<local>"), Some(name)) => Some(name.to_string()),
+            (Some(module), Some(name)) => Some(format!("{module}::{name}")),
+            (None, Some(name)) => Some(name.to_string()),
+            _ => None,
         }
     }
 
@@ -1593,7 +1699,11 @@ impl ReplEngine {
         let binding = self.binding_info(symbol)?;
         let kind = self.binding_callable_kind(binding)?;
         let ty = self.binding_callable_ty(binding)?;
-        Some(Self::render_callable_sig_summary(symbol, &format_query_ty(&ty), kind))
+        Some(Self::render_callable_sig_summary(
+            symbol,
+            &format_query_ty(&ty),
+            kind,
+        ))
     }
 
     fn handle_sig_binding_typed_call(
@@ -1721,7 +1831,8 @@ impl ReplEngine {
             )),
         );
         let spec = diagnostics::type_error_spec(source_query, &error);
-        let rendered = error_display::diagnostic_lines("REPL", source_query, &spec, self.error_display_mode);
+        let rendered =
+            error_display::diagnostic_lines("REPL", source_query, &spec, self.error_display_mode);
         ReplResult::ok(ReplOutput::EvalError {
             idx: self.results.len(),
             source: format!(":sig {source_query}"),
@@ -2331,17 +2442,11 @@ impl ReplEngine {
             };
         }
         match value {
-            Value::Callable(callable) => {
-                match callable.metadata.origin {
-                    sindr::runtime::CallableOrigin::Closure => {
-                        "TypeIdentity::Closure".to_string()
-                    }
-                    sindr::runtime::CallableOrigin::Capture => {
-                        "TypeIdentity::Capture".to_string()
-                    }
-                    sindr::runtime::CallableOrigin::Unknown => "TypeIdentity::Closure".to_string(),
-                }
-            }
+            Value::Callable(callable) => match callable.metadata.origin {
+                sindr::runtime::CallableOrigin::Closure => "TypeIdentity::Closure".to_string(),
+                sindr::runtime::CallableOrigin::Capture => "TypeIdentity::Capture".to_string(),
+                sindr::runtime::CallableOrigin::Unknown => "TypeIdentity::Closure".to_string(),
+            },
             Value::Tagged { tag, .. } => {
                 let identity = self
                     .vm
