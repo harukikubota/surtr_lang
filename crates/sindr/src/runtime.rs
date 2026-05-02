@@ -64,6 +64,7 @@ pub enum Value {
     RegexCaptures(RegexCapturesHandle),
     RegexMatch(RegexMatchHandle),
     RandomGenerator(RandomGeneratorHandle),
+    Duration(SurtrInt),
     Pid(PidHandle),
     PendingFuture(u64),
 }
@@ -214,6 +215,7 @@ impl Value {
                 }
             }
             Value::Unit => "()".to_string(),
+            Value::Duration(ms) => format!("{ms}ms"),
             Value::List(handle) => {
                 let inner = handle
                     .iter()

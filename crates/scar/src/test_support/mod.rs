@@ -57,6 +57,8 @@ const HASH_MAP_MODULE_SOURCE: &str = r#"@@builtin type HashMap<$V>
 
 impl HashMap {}"#;
 const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
+const DURATION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/duration.srt");
+const PROCESS_MODULE_SOURCE: &str = include_str!("../../../../lib/process.srt");
 const LENS_MODULE_SOURCE: &str = include_str!("../../../../lib/lens.srt");
 const FLOAT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/float.srt");
 const RANDOM_MODULE_SOURCE: &str = include_str!("../../../../lib/Random.srt");
@@ -386,6 +388,14 @@ pub(crate) fn std_module_stages_with_overrides(
             (
                 "Result",
                 pick_override("Result", RESULT_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Duration",
+                pick_override("Duration", DURATION_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Process",
+                pick_override("Process", PROCESS_MODULE_SOURCE, overrides),
             ),
             ("Lens", pick_override("Lens", LENS_MODULE_SOURCE, overrides)),
             (

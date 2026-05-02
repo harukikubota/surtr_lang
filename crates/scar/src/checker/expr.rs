@@ -3197,6 +3197,25 @@ impl Checker {
                 }
                 self.ensure_no_runtime_lens_args(&typed_args, span, name)?;
 
+                if name == "__process_self" {
+                    let Some(process_name) = self.current_process_name() else {
+                        return Err(TypeError {
+                            message: "Process::self() is only available inside process handlers"
+                                .into(),
+                            span: span.clone(),
+                            hint: Some(
+                                "Call Process::self() inside @init/@get/@set bodies of a defagent."
+                                    .into(),
+                            ),
+                        });
+                    };
+                    return Ok(TypedNode {
+                        ty: Ty::Pid(process_name),
+                        span: span.clone(),
+                        node: TypedInner::App(Box::new(typed_func), typed_args),
+                    });
+                }
+
                 if name == "set_exit_code" {
                     match self.runtime_policy.exit_code_policy {
                         ExitCodePolicy::Anywhere => {}
@@ -3349,6 +3368,13 @@ impl Checker {
                 hint: None,
             }),
         }
+    }
+
+    fn current_process_name(&self) -> Option<String> {
+        let symbol = self.current_function_symbol.as_deref()?;
+        let (module, handler) = symbol.rsplit_once("::")?;
+        matches!(handler, "__agent_get" | "__agent_set")
+            .then(|| module.to_string())
     }
 
     pub(super) fn check_closure(

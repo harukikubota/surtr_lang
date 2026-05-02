@@ -348,6 +348,10 @@ impl Checker {
                             TypeName::RandomGenerator.as_str().into(),
                             Vec::new(),
                         )),
+                        Some(TypeName::Duration) => Ok(Ty::Enum(
+                            TypeName::Duration.as_str().into(),
+                            Vec::new(),
+                        )),
                         Some(
                             TypeName::List
                             | TypeName::HashMap

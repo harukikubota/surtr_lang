@@ -12,7 +12,8 @@ use sindr::runtime::{
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Read};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -349,6 +350,22 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_process_store,
     },
     BuiltinImpl {
+        name: "__process_self",
+        func: builtin_process_self,
+    },
+    BuiltinImpl {
+        name: "__process_sleep",
+        func: builtin_process_sleep,
+    },
+    BuiltinImpl {
+        name: "__duration_literal",
+        func: builtin_duration_literal,
+    },
+    BuiltinImpl {
+        name: "__duration_from_int",
+        func: builtin_duration_from_int,
+    },
+    BuiltinImpl {
         name: "__task_call",
         func: builtin_task_call,
     },
@@ -363,6 +380,22 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "__task_cast",
         func: builtin_task_cast,
+    },
+    BuiltinImpl {
+        name: "__task_call_timeout",
+        func: builtin_task_call_timeout,
+    },
+    BuiltinImpl {
+        name: "__task_async_timeout",
+        func: builtin_task_async_timeout,
+    },
+    BuiltinImpl {
+        name: "__task_launch_timeout",
+        func: builtin_task_launch_timeout,
+    },
+    BuiltinImpl {
+        name: "__task_cast_timeout",
+        func: builtin_task_cast_timeout,
     },
     BuiltinImpl {
         name: "__operator_int_add",
@@ -562,6 +595,35 @@ fn builtin_process_store(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     vm.process_store(pid, args[1].clone())
 }
 
+fn builtin_process_self(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Process::self must be lowered to a process-owned PID binding before runtime",
+    ))
+}
+
+fn builtin_process_sleep(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let millis = duration_to_u64(&args[0], "__process_sleep", "duration")?;
+    thread::sleep(StdDuration::from_millis(millis));
+    Ok(ok_result(Value::Unit))
+}
+
+fn builtin_duration_literal(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = decode_duration_source_int(&args[0], "__duration_literal", "value")?;
+    Ok(Value::Duration(value))
+}
+
+fn builtin_duration_from_int(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = decode_duration_source_int(&args[0], "__duration_from_int", "value")?;
+    if value < int(0) {
+        return Ok(err_result(
+            vm,
+            "InvalidDuration",
+            &format!("duration must be non-negative: {}", value),
+        ));
+    }
+    Ok(ok_result(Value::Duration(value)))
+}
+
 fn builtin_task_call(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     invoke_task_body(vm, &args[0], "__task_call", TaskMode::Call)
 }
@@ -578,6 +640,22 @@ fn builtin_task_cast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     invoke_task_body(vm, &args[0], "__task_cast", TaskMode::Cast)
 }
 
+fn builtin_task_call_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body_with_timeout(vm, &args[1], &args[0], "__task_call_timeout", TaskMode::Call)
+}
+
+fn builtin_task_async_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body_with_timeout(vm, &args[1], &args[0], "__task_async_timeout", TaskMode::Async)
+}
+
+fn builtin_task_launch_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body_with_timeout(vm, &args[1], &args[0], "__task_launch_timeout", TaskMode::Launch)
+}
+
+fn builtin_task_cast_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body_with_timeout(vm, &args[1], &args[0], "__task_cast_timeout", TaskMode::Cast)
+}
+
 fn invoke_task_body(
     vm: &mut VM,
     value: &Value,
@@ -588,6 +666,20 @@ fn invoke_task_body(
         return Err(RuntimeError::new(format!("{name} expects callable body")));
     };
     vm.invoke_task(body, mode)
+}
+
+fn invoke_task_body_with_timeout(
+    vm: &mut VM,
+    value: &Value,
+    timeout: &Value,
+    name: &str,
+    mode: TaskMode,
+) -> Result<Value, RuntimeError> {
+    let Value::Callable(body) = value.clone() else {
+        return Err(RuntimeError::new(format!("{name} expects callable body")));
+    };
+    let timeout_ms = duration_to_u64(timeout, name, "timeout")?;
+    vm.invoke_task_with_timeout(body, mode, Some(timeout_ms))
 }
 
 fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2308,6 +2400,34 @@ fn bit_index_to_usize(vm: &VM, index: &SurtrInt) -> Result<Result<usize, Value>,
         .ok_or_else(|| RuntimeError::new(format!("bit index out of range for usize: {}", index)))
 }
 
+fn decode_duration_source_int(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<SurtrInt, RuntimeError> {
+    match value {
+        Value::Int(value) => Ok(value.clone()),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Int as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn duration_to_u64(value: &Value, builtin_name: &str, arg_name: &str) -> Result<u64, RuntimeError> {
+    let Value::Duration(ms) = value else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects Duration as {arg_name}, got {:?}",
+            value
+        )));
+    };
+    ms.to_u64().ok_or_else(|| {
+        RuntimeError::new(format!(
+            "{builtin_name} duration is out of range for u64 milliseconds: {ms}"
+        ))
+    })
+}
+
 fn ok_result(value: Value) -> Value {
     Value::Tagged {
         tag: 0,
@@ -2684,6 +2804,54 @@ mod tests {
             *next_rng, original_rng,
             "equal calls return equal next states, but the state should be opaque and stable"
         );
+    }
+
+    #[test]
+    fn duration_helpers_validate_non_negative_ints() {
+        let mut vm = test_vm();
+
+        let literal = call_builtin(
+            &mut vm,
+            builtin_id("__duration_literal"),
+            vec![Value::Int(int(5))],
+        )
+        .expect("duration literal should succeed");
+        assert_eq!(literal, Value::Duration(int(5)));
+
+        let converted = call_builtin(
+            &mut vm,
+            builtin_id("__duration_from_int"),
+            vec![Value::Int(int(5))],
+        )
+        .expect("duration conversion should return Result");
+        assert!(matches!(
+            converted,
+            Value::Tagged { tag: 0, fields } if matches!(fields.first(), Some(Value::Duration(ms)) if *ms == int(5))
+        ));
+
+        let negative = call_builtin(
+            &mut vm,
+            builtin_id("__duration_from_int"),
+            vec![Value::Int(int(-1))],
+        )
+        .expect("negative duration conversion should return Result");
+        assert!(matches!(
+            negative,
+            Value::Tagged { tag: 1, fields }
+                if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "InvalidDuration")
+        ));
+    }
+
+    #[test]
+    fn process_sleep_accepts_zero_duration_value() {
+        let mut vm = test_vm();
+        let slept = call_builtin(
+            &mut vm,
+            builtin_id("__process_sleep"),
+            vec![Value::Duration(int(0))],
+        )
+        .expect("process sleep should return Result");
+        assert_eq!(slept, super::ok_result(Value::Unit));
     }
 
     #[test]

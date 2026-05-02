@@ -67,6 +67,8 @@ mod tests {
     const GENERATOR_MODULE_SOURCE: &str = include_str!("../../../lib/types/generator.srt");
     const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/types/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/types/result.srt");
+    const DURATION_MODULE_SOURCE: &str = include_str!("../../../lib/types/duration.srt");
+    const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
     const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/types/option.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/types/float.srt");
@@ -211,6 +213,8 @@ mod tests {
                 ("Generator", GENERATOR_MODULE_SOURCE),
                 ("HashMap", HASH_MAP_MODULE_SOURCE),
                 ("Result", RESULT_MODULE_SOURCE),
+                ("Duration", DURATION_MODULE_SOURCE),
+                ("Process", PROCESS_MODULE_SOURCE),
                 ("Option", OPTION_MODULE_SOURCE),
                 ("Lens", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),

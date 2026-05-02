@@ -394,6 +394,10 @@ impl Parser<'_> {
             expr = Ast::FieldAccess(span, Box::new(expr), field);
         }
 
+        if self.is_timeout_modifier_start() {
+            expr = self.parse_timeout_modifier(expr)?;
+        }
+
         Ok(expr)
     }
 
@@ -406,6 +410,18 @@ impl Parser<'_> {
             // Literals
             Token::Int(n) => {
                 self.advance();
+                if self.is_duration_suffix_here() {
+                    let suffix_span = self.advance().span.clone();
+                    let int_expr = Ast::Lit(sp.clone(), Lit::Int(n));
+                    return Ok(self.hidden_call(
+                        "__duration_literal",
+                        vec![RecordLitArg::Positional(int_expr)],
+                        Span {
+                            start: sp.start,
+                            end: suffix_span.end,
+                        },
+                    ));
+                }
                 Ok(Ast::Lit(sp, Lit::Int(n)))
             }
             Token::Float(f) => {
@@ -564,6 +580,129 @@ impl Parser<'_> {
         }
     }
 
+    fn is_duration_suffix_here(&self) -> bool {
+        matches!(self.peek(), Token::Ident(name) if name == "ms")
+    }
+
+    fn is_timeout_modifier_start(&self) -> bool {
+        matches!(self.peek(), Token::At)
+            && matches!(self.peek_n(1), Some(Token::Ident(name)) if name == "timeout")
+    }
+
+    fn hidden_call(&self, name: &str, args: Vec<RecordLitArg>, span: Span) -> Ast {
+        Ast::App(
+            span.clone(),
+            Box::new(Ast::Var(
+                Span {
+                    start: span.start,
+                    end: span.start,
+                },
+                name.to_string(),
+            )),
+            args,
+        )
+    }
+
+    fn parse_timeout_duration_literal(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        let Token::Int(n) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                "@timeout(...) requires a duration literal like `100ms`",
+                sp,
+            ));
+        };
+        self.advance();
+        if !self.is_duration_suffix_here() {
+            return Err(ParseError::syntax(
+                "@timeout(...) requires a duration literal like `100ms`",
+                sp,
+            ));
+        }
+        let suffix_span = self.advance().span.clone();
+        let int_expr = Ast::Lit(sp.clone(), Lit::Int(n));
+        Ok(self.hidden_call(
+            "__duration_literal",
+            vec![RecordLitArg::Positional(int_expr)],
+            Span {
+                start: sp.start,
+                end: suffix_span.end,
+            },
+        ))
+    }
+
+    fn parse_timeout_modifier(&mut self, expr: Ast) -> Result<Ast, ParseError> {
+        let start = expr.span().start;
+        self.expect(&Token::At)?;
+        let (modifier, _) = self.expect_ident()?;
+        if modifier != "timeout" {
+            return Err(ParseError::syntax(
+                format!("Unsupported call modifier: @{modifier}"),
+                self.peek_span(),
+            ));
+        }
+        self.expect(&Token::LParen)?;
+        let timeout_arg = self.parse_timeout_duration_literal()?;
+        self.skip_newlines();
+        let end_span = self.expect(&Token::RParen)?;
+
+        let (target, mut args) = match expr {
+            Ast::App(_, func, args) => (*func, args),
+            _ => {
+                return Err(ParseError::syntax(
+                    "@timeout(...) can only be applied to Task calls",
+                    Span {
+                        start,
+                        end: end_span.end,
+                    },
+                ));
+            }
+        };
+
+        let hidden_name = match &target {
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "call"] => {
+                "__task_call_timeout"
+            }
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "async"] => {
+                "__task_async_timeout"
+            }
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "launch"] => {
+                "__task_launch_timeout"
+            }
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "cast"] => {
+                "__task_cast_timeout"
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "@timeout(...) is only supported on Task::call/async/launch/cast",
+                    Span {
+                        start,
+                        end: end_span.end,
+                    },
+                ));
+            }
+        };
+
+        if args.len() != 1 || matches!(args[0], RecordLitArg::Named(_, _)) {
+            return Err(ParseError::syntax(
+                "@timeout(...) expects a Task call with exactly one positional body argument",
+                Span {
+                    start,
+                    end: end_span.end,
+                },
+            ));
+        }
+
+        args.insert(0, RecordLitArg::Positional(timeout_arg));
+        Ok(self.hidden_call(
+            hidden_name,
+            args,
+            Span {
+                start,
+                end: end_span.end,
+            },
+        ))
+    }
+
     /// After seeing an identifier, figure out what it is:
     /// - `Name { field: val }` → StructLit (uppercase start + `{`)
     /// - `Name(args)` → ConstructorCall if uppercase, App if lowercase
@@ -626,6 +765,22 @@ impl Parser<'_> {
                 let args = self.parse_call_args()?;
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
+                if path_name == "Duration" {
+                    if args.len() != 1 || matches!(args[0], RecordLitArg::Named(_, _)) {
+                        return Err(ParseError::syntax(
+                            "Duration(...) expects exactly one positional Int argument",
+                            Span {
+                                start: name_span.start,
+                                end: end_span.end,
+                            },
+                        ));
+                    }
+                    let span = Span {
+                        start: name_span.start,
+                        end: end_span.end,
+                    };
+                    return Ok(self.hidden_call("__duration_from_int", args, span));
+                }
                 if path_last_is_uppercase {
                     self.reject_constructor_trailing_block()?;
                     let span = Span {
@@ -749,6 +904,22 @@ impl Parser<'_> {
             let func = Ast::Var(name_span.clone(), name.clone());
 
             if is_uppercase {
+                if name == "Duration" {
+                    if args.len() != 1 || matches!(args[0], RecordLitArg::Named(_, _)) {
+                        return Err(ParseError::syntax(
+                            "Duration(...) expects exactly one positional Int argument",
+                            Span {
+                                start: name_span.start,
+                                end: end_span.end,
+                            },
+                        ));
+                    }
+                    let span = Span {
+                        start: name_span.start,
+                        end: end_span.end,
+                    };
+                    return Ok(self.hidden_call("__duration_from_int", args, span));
+                }
                 self.reject_constructor_trailing_block()?;
                 let span = Span {
                     start: name_span.start,

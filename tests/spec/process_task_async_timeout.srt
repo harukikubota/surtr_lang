@@ -1,0 +1,4 @@
+value = Task::async({||
+  Process::sleep(50ms)
+}) @timeout(1ms)
+print(inspect(value))

@@ -2522,6 +2522,46 @@ self != rhs
 }
 
 #[test]
+fn process_sleep_accepts_duration_literal() {
+    let typed = typecheck_with_builtin_prelude(r#"value = Process::sleep(100ms)"#);
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("bind rhs should exist");
+    assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
+}
+
+#[test]
+fn process_self_is_rejected_outside_process_context() {
+    let resolved = resolve_with_builtin_prelude(r#"pid = Process::self()"#);
+    let err = typecheck(resolved).expect_err("Process::self outside process must fail");
+    assert!(err.message.contains("Process::self"));
+}
+
+#[test]
+fn process_self_typechecks_inside_process_handler() {
+    typecheck_module_source_result(
+        r#"@@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
+defagent Counter {
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<PID<Counter>> {
+    Ok(Process::self())
+  }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+    )
+    .expect("Process::self should typecheck inside process handler");
+}
+
+#[test]
 fn typecheck_staged_program_keeps_process_specs() {
     let ast = spire::parse_with_context(
         r#"@@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)

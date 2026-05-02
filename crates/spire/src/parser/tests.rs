@@ -3557,3 +3557,13 @@ defagent Worker {
         other => panic!("Expected lowered Defmod, got {other:?}"),
     }
 }
+
+#[test]
+fn test_task_timeout_literal_parses_in_project_context() {
+    let ast = parse_with_context(
+        r#"value = Task::async({|| Ok(())}) @timeout(100ms)"#,
+        ParserContext::project(1),
+    )
+    .expect("task timeout literal should parse");
+    assert!(!ast.is_empty());
+}

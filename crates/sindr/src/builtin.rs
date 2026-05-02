@@ -431,6 +431,26 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(PID<$Process>, $State) -> Result<Unit>",
     },
     BuiltinMeta {
+        name: "__process_self",
+        arity: 0,
+        sig_str: "() -> PID<$Process>",
+    },
+    BuiltinMeta {
+        name: "__process_sleep",
+        arity: 1,
+        sig_str: "(Duration) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__duration_literal",
+        arity: 1,
+        sig_str: "(Int) -> Duration",
+    },
+    BuiltinMeta {
+        name: "__duration_from_int",
+        arity: 1,
+        sig_str: "(Int) -> Result<Duration, InvalidDuration>",
+    },
+    BuiltinMeta {
         name: "__task_call",
         arity: 1,
         sig_str: "((-> Result<$A>)) -> Result<$A>",
@@ -449,6 +469,26 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "__task_cast",
         arity: 1,
         sig_str: "((-> Unit)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__task_call_timeout",
+        arity: 2,
+        sig_str: "(Duration, (-> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_async_timeout",
+        arity: 2,
+        sig_str: "(Duration, (-> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_launch_timeout",
+        arity: 2,
+        sig_str: "(Duration, (-> Result<Unit>)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__task_cast_timeout",
+        arity: 2,
+        sig_str: "(Duration, (-> Unit)) -> Result<Unit>",
     },
     BuiltinMeta {
         name: "__operator_int_add",
@@ -641,6 +681,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &["$T"],
     },
     BuiltinTypeMeta {
+        name: TypeName::Duration.as_str(),
+        params: &[],
+    },
+    BuiltinTypeMeta {
         name: TypeName::TypeRef.as_str(),
         params: &["$T"],
     },
@@ -662,6 +706,8 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
     match qualified_name {
         Some("IO::get") => "io_get",
         Some("IO::get_line") => "io_get_line",
+        Some("Process::self") => "__process_self",
+        Some("Process::sleep") => "__process_sleep",
         _ => declared_name,
     }
 }

@@ -1,0 +1,13 @@
+@@builtin type Duration
+
+deferror InvalidDuration(message: String) {
+  message
+}
+
+impl Duration {}
+
+impl TryFrom<Duration> for Int {
+  def try_from(self: Self, to: TypeRef<Duration>) -> Result<Duration, Error> {
+    __duration_from_int(self)
+  }
+}

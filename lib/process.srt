@@ -1,7 +1,18 @@
 @@doc """
-Task provides the first process-oriented surface while the scheduler-backed
-runtime is still staged.
+Process and Task provide the staged process-oriented surface.
 """
+defmod Process {
+  @@doc """
+  Return the current process PID.
+  """
+  @@builtin def self() -> PID<$Process>
+
+  @@doc """
+  Sleep the current execution for the given duration.
+  """
+  @@builtin def sleep(duration: Duration) -> Result<Unit>
+}
+
 defmod Task {
   @@doc """
   Run a zero-argument task body and return its Result.

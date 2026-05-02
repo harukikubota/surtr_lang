@@ -1,0 +1,2 @@
+d: Duration =? Duration(5)
+print(inspect(Process::sleep(d)))

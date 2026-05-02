@@ -71,11 +71,192 @@ struct AgentHandler {
     def: Ast,
 }
 
-fn rename_agent_handler(mut def: Ast, internal_name: &str) -> Result<Ast, ParseError> {
+fn pid_ty(span: &Span, agent_name: &str) -> AstTy {
+    AstTy::Generic(
+        span.clone(),
+        "PID".to_string(),
+        vec![AstTy::Named(span.clone(), agent_name.to_string())],
+    )
+}
+
+fn process_self_param(span: &Span, agent_name: &str) -> FunParam {
+    FunParam {
+        name: "__process_self_pid".to_string(),
+        ty: pid_ty(span, agent_name),
+        span: span.clone(),
+    }
+}
+
+fn rewrite_process_self_refs(node: Ast) -> Ast {
+    match node {
+        Ast::App(span, func, args) => {
+            let rewritten_func = rewrite_process_self_refs(*func);
+            let rewritten_args: Vec<RecordLitArg> = args
+                .into_iter()
+                .map(|arg| match arg {
+                    RecordLitArg::Positional(expr) => {
+                        RecordLitArg::Positional(rewrite_process_self_refs(expr))
+                    }
+                    RecordLitArg::Named(name, expr) => {
+                        RecordLitArg::Named(name, rewrite_process_self_refs(expr))
+                    }
+                })
+                .collect();
+            if matches!(
+                &rewritten_func,
+                Ast::Path(_, path) if path.segments.as_slice() == ["Process", "self"]
+            ) && rewritten_args.is_empty()
+            {
+                Ast::Var(span, "__process_self_pid".to_string())
+            } else {
+                Ast::App(span, Box::new(rewritten_func), rewritten_args)
+            }
+        }
+        Ast::Block(span, stmts) => Ast::Block(
+            span,
+            stmts.into_iter().map(rewrite_process_self_refs).collect(),
+        ),
+        Ast::Bind(span, pat, rhs) => {
+            Ast::Bind(span, pat, Box::new(rewrite_process_self_refs(*rhs)))
+        }
+        Ast::SafeBind(span, pat, rhs) => {
+            Ast::SafeBind(span, pat, Box::new(rewrite_process_self_refs(*rhs)))
+        }
+        Ast::BinOp(span, op, lhs, rhs) => Ast::BinOp(
+            span,
+            op,
+            Box::new(rewrite_process_self_refs(*lhs)),
+            Box::new(rewrite_process_self_refs(*rhs)),
+        ),
+        Ast::Pipe(span, lhs, rhs) => Ast::Pipe(
+            span,
+            Box::new(rewrite_process_self_refs(*lhs)),
+            Box::new(rewrite_process_self_refs(*rhs)),
+        ),
+        Ast::ContextMap(span, lhs, rhs) => Ast::ContextMap(
+            span,
+            Box::new(rewrite_process_self_refs(*lhs)),
+            Box::new(rewrite_process_self_refs(*rhs)),
+        ),
+        Ast::ContextBind(span, lhs, rhs) => Ast::ContextBind(
+            span,
+            Box::new(rewrite_process_self_refs(*lhs)),
+            Box::new(rewrite_process_self_refs(*rhs)),
+        ),
+        Ast::Compose(span, lhs, rhs) => Ast::Compose(
+            span,
+            Box::new(rewrite_process_self_refs(*lhs)),
+            Box::new(rewrite_process_self_refs(*rhs)),
+        ),
+        Ast::LiftedCompose(span, lhs, rhs) => Ast::LiftedCompose(
+            span,
+            Box::new(rewrite_process_self_refs(*lhs)),
+            Box::new(rewrite_process_self_refs(*rhs)),
+        ),
+        Ast::KleisliCompose(span, lhs, rhs) => Ast::KleisliCompose(
+            span,
+            Box::new(rewrite_process_self_refs(*lhs)),
+            Box::new(rewrite_process_self_refs(*rhs)),
+        ),
+        Ast::ListCons(span, head, tail) => Ast::ListCons(
+            span,
+            Box::new(rewrite_process_self_refs(*head)),
+            Box::new(rewrite_process_self_refs(*tail)),
+        ),
+        Ast::ListLiteral(span, items) => Ast::ListLiteral(
+            span,
+            items.into_iter().map(rewrite_process_self_refs).collect(),
+        ),
+        Ast::TupleLiteral(span, items) => Ast::TupleLiteral(
+            span,
+            items.into_iter().map(rewrite_process_self_refs).collect(),
+        ),
+        Ast::Grouped(span, inner) => Ast::Grouped(span, Box::new(rewrite_process_self_refs(*inner))),
+        Ast::InterpolatedStr(span, parts) => Ast::InterpolatedStr(
+            span,
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    InterpolatedPart::Text(text) => InterpolatedPart::Text(text),
+                    InterpolatedPart::Expr(expr) => {
+                        InterpolatedPart::Expr(Box::new(rewrite_process_self_refs(*expr)))
+                    }
+                })
+                .collect(),
+        ),
+        Ast::Dbg(span, args) => Ast::Dbg(
+            span,
+            args.into_iter()
+                .map(|arg| DbgArg {
+                    span: arg.span,
+                    expr: rewrite_process_self_refs(arg.expr),
+                })
+                .collect(),
+        ),
+        Ast::Match(span, scrutinee, arms) => Ast::Match(
+            span,
+            Box::new(rewrite_process_self_refs(*scrutinee)),
+            arms.into_iter()
+                .map(|arm| AstMatchArm {
+                    pattern: arm.pattern,
+                    guard: arm.guard.map(rewrite_process_self_refs),
+                    body: rewrite_process_self_refs(arm.body),
+                })
+                .collect(),
+        ),
+        Ast::FieldAccess(span, expr, field) => {
+            Ast::FieldAccess(span, Box::new(rewrite_process_self_refs(*expr)), field)
+        }
+        Ast::StructLit(span, name, fields) => Ast::StructLit(
+            span,
+            name,
+            fields
+                .into_iter()
+                .map(|(field, expr)| (field, rewrite_process_self_refs(expr)))
+                .collect(),
+        ),
+        Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(
+            span,
+            name,
+            args.into_iter()
+                .map(|arg| match arg {
+                    RecordLitArg::Positional(expr) => {
+                        RecordLitArg::Positional(rewrite_process_self_refs(expr))
+                    }
+                    RecordLitArg::Named(name, expr) => {
+                        RecordLitArg::Named(name, rewrite_process_self_refs(expr))
+                    }
+                })
+                .collect(),
+        ),
+        Ast::Closure(span, params, body) => {
+            Ast::Closure(span, params, Box::new(rewrite_process_self_refs(*body)))
+        }
+        Ast::Capture(span, target, args) => Ast::Capture(
+            span,
+            Box::new(rewrite_process_self_refs(*target)),
+            args.into_iter().map(rewrite_process_self_refs).collect(),
+        ),
+        Ast::Semi(span, inner) => Ast::Semi(span, Box::new(rewrite_process_self_refs(*inner))),
+        other => other,
+    }
+}
+
+fn rename_agent_handler(
+    mut def: Ast,
+    internal_name: &str,
+    agent_name: &str,
+    inject_process_self: bool,
+) -> Result<Ast, ParseError> {
     match &mut def {
-        Ast::Def(_, name, _, _, _, _, attrs) => {
+        Ast::Def(_, name, _, params, _, body, attrs) => {
             *name = internal_name.to_string();
             attrs.visibility = Visibility::Private;
+            if inject_process_self {
+                params.insert(0, process_self_param(&body.span().clone(), agent_name));
+                let rewritten = rewrite_process_self_refs((**body).clone());
+                **body = rewritten;
+            }
             Ok(def)
         }
         other => Err(ParseError::syntax(
@@ -147,14 +328,6 @@ fn result_unit_ty(span: &Span) -> AstTy {
     )
 }
 
-fn pid_ty(span: &Span, agent_name: &str) -> AstTy {
-    AstTy::Generic(
-        span.clone(),
-        "PID".to_string(),
-        vec![AstTy::Named(span.clone(), agent_name.to_string())],
-    )
-}
-
 fn result_pid_ty(span: &Span, agent_name: &str) -> AstTy {
     AstTy::Generic(
         span.clone(),
@@ -218,8 +391,8 @@ fn build_readonly_get_wrapper(
     get_def: &Ast,
 ) -> Result<Ast, ParseError> {
     let params = def_params(get_def)?;
-    let surface_params = params.iter().skip(1).cloned().collect::<Vec<_>>();
-    let mut call_args = vec![var(span, "state")];
+    let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
+    let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, &surface_params));
     let body = Ast::Block(
         span.clone(),
@@ -291,8 +464,8 @@ fn build_state_get_wrapper(
 ) -> Result<Ast, ParseError> {
     let params = def_params(get_def)?;
     let mut surface_params = vec![pid_param(span, agent_name)];
-    surface_params.extend(params.iter().skip(1).cloned());
-    let mut call_args = vec![var(span, "state")];
+    surface_params.extend(params.iter().skip(2).cloned());
+    let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, &surface_params[1..]));
     let body = Ast::Block(
         span.clone(),
@@ -319,8 +492,8 @@ fn build_state_set_wrapper(
 ) -> Result<Ast, ParseError> {
     let params = def_params(set_def)?;
     let mut surface_params = vec![pid_param(span, agent_name)];
-    surface_params.extend(params.iter().skip(1).cloned());
-    let mut call_args = vec![var(span, "state")];
+    surface_params.extend(params.iter().skip(2).cloned());
+    let mut call_args = vec![var(span, "pid"), var(span, "state")];
     call_args.extend(param_vars(span, &surface_params[1..]));
     let body = Ast::Block(
         span.clone(),
@@ -2348,10 +2521,10 @@ impl Parser<'_> {
         helpers: Vec<Ast>,
     ) -> Result<Ast, ParseError> {
         let mut body = Vec::new();
-        let init_def = rename_agent_handler(init.def, "__agent_init")?;
-        let get_def = rename_agent_handler(get.def, "__agent_get")?;
+        let init_def = rename_agent_handler(init.def, "__agent_init", &name, false)?;
+        let get_def = rename_agent_handler(get.def, "__agent_get", &name, true)?;
         let set_def = set
-            .map(|handler| rename_agent_handler(handler.def, "__agent_set"))
+            .map(|handler| rename_agent_handler(handler.def, "__agent_set", &name, true))
             .transpose()?;
 
         let init_params = def_params(&init_def)?;

@@ -24,7 +24,29 @@ pub(super) fn initialize_scope() -> Scope {
 fn is_global_runtime_builtin(name: &str) -> bool {
     matches!(
         name,
-        "print" | "to_string" | "inspect" | "safe_div" | "safe_mod" | "eprint" | "set_exit_code"
+        "print"
+            | "to_string"
+            | "inspect"
+            | "safe_div"
+            | "safe_mod"
+            | "eprint"
+            | "set_exit_code"
+            | "__process_pid"
+            | "__process_spawn"
+            | "__process_state"
+            | "__process_store"
+            | "__process_self"
+            | "__process_sleep"
+            | "__duration_literal"
+            | "__duration_from_int"
+            | "__task_call"
+            | "__task_async"
+            | "__task_launch"
+            | "__task_cast"
+            | "__task_call_timeout"
+            | "__task_async_timeout"
+            | "__task_launch_timeout"
+            | "__task_cast_timeout"
     )
 }
 

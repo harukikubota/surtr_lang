@@ -15,6 +15,7 @@ use crate::builtin::call_builtin;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
 use std::io::{self, Write};
+use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmTestEventKind {
@@ -2217,21 +2218,50 @@ impl VM {
         }
     }
 
-    pub(crate) fn invoke_task(&mut self, callable: Callable, mode: TaskMode) -> Result<Value, RuntimeError> {
+    pub(crate) fn invoke_task(
+        &mut self,
+        callable: Callable,
+        mode: TaskMode,
+    ) -> Result<Value, RuntimeError> {
+        self.invoke_task_with_timeout(callable, mode, None)
+    }
+
+    pub(crate) fn invoke_task_with_timeout(
+        &mut self,
+        callable: Callable,
+        mode: TaskMode,
+        timeout_ms: Option<u64>,
+    ) -> Result<Value, RuntimeError> {
+        let started = Instant::now();
         match mode {
             TaskMode::Call | TaskMode::Async => {
                 let completion_future = self.process_runtime.allocate_future(None, None, false);
                 let outcome = self.invoke_callable_step(callable, Vec::new());
-                self.await_task_completion(completion_future, outcome)
+                let result = self.await_task_completion(completion_future, outcome)?;
+                Ok(self.apply_task_timeout(timeout_ms, started, result))
             }
             TaskMode::Launch => {
                 let _ = self.invoke_callable_sync(callable, Vec::new())?;
-                Ok(ok_vm_result(Value::Unit))
+                Ok(self.apply_task_timeout(timeout_ms, started, ok_vm_result(Value::Unit)))
             }
             TaskMode::Cast => {
                 let _ = self.invoke_callable_sync(callable, Vec::new())?;
-                Ok(ok_vm_result(Value::Unit))
+                Ok(self.apply_task_timeout(timeout_ms, started, ok_vm_result(Value::Unit)))
             }
+        }
+    }
+
+    fn apply_task_timeout(&self, timeout_ms: Option<u64>, started: Instant, value: Value) -> Value {
+        let Some(timeout_ms) = timeout_ms else {
+            return value;
+        };
+        if started.elapsed().as_millis() > u128::from(timeout_ms) {
+            err_vm_result(self.process_error(
+                "Timeout",
+                &format!("task timed out after {}ms", timeout_ms),
+            ))
+        } else {
+            value
         }
     }
 

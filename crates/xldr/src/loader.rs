@@ -175,6 +175,11 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         "Result",
     ),
     (
+        "types/duration.srt",
+        include_str!("../../../lib/types/duration.srt"),
+        "Duration",
+    ),
+    (
         "types/option.srt",
         include_str!("../../../lib/types/option.srt"),
         "Option",
@@ -959,6 +964,7 @@ mod tests {
                 "Generator",
                 "HashMap",
                 "Result",
+                "Duration",
                 "Option",
                 "Task",
                 "Lens",
@@ -1101,6 +1107,7 @@ mod tests {
                 "Generator",
                 "HashMap",
                 "Result",
+                "Duration",
                 "Option",
                 "Task",
                 "Lens",
