@@ -1686,39 +1686,48 @@ impl Parser<'_> {
         attrs: DeclAttrs,
     ) -> Result<Ast, ParseError> {
         self.expect(&Token::Def)?;
-        let (base_name, _) = self.expect_ident()?;
-        let name = if matches!(self.peek(), Token::Bang) {
-            self.advance();
-            format!("{base_name}!")
-        } else {
-            base_name
+        let name = match self.peek().clone() {
+            Token::Ident(base_name) => {
+                self.advance();
+                if matches!(self.peek(), Token::Bang) {
+                    self.advance();
+                    format!("{base_name}!")
+                } else {
+                    base_name
+                }
+            }
+            Token::Bind => {
+                self.advance();
+                "=".to_string()
+            }
+            Token::SafeBind => {
+                self.advance();
+                "=?".to_string()
+            }
+            Token::Eof => {
+                return Err(ParseError::incomplete(
+                    "intrinsic declaration name",
+                    self.peek_span(),
+                ))
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    format!("Expected identifier, got {:?}", self.peek()),
+                    self.peek_span(),
+                ))
+            }
         };
 
-        let _generic_name = if matches!(self.peek(), Token::Lt) {
+        while !matches!(self.peek(), Token::Newline | Token::Eof | Token::LBrace) {
             self.advance();
-            self.expect(&Token::Dollar)?;
-            let (generic_name, _) = self.expect_ident()?;
-            self.expect(&Token::Gt)?;
-            Some(generic_name)
-        } else {
-            None
-        };
+        }
 
-        self.expect(&Token::LParen)?;
-        let (_param_name, _) = self.expect_ident()?;
-        self.expect(&Token::Colon)?;
-        if !matches!(self.peek(), Token::Star) {
+        if matches!(self.peek(), Token::LBrace) {
             return Err(ParseError::syntax(
-                "@@intrinsic parameters currently require variadic `*` surface syntax",
+                "@@intrinsic declaration must not have a function body",
                 self.peek_span(),
             ));
         }
-        self.advance();
-        self.expect(&Token::Dollar)?;
-        let (_param_ty_name, _) = self.expect_ident()?;
-        self.expect(&Token::RParen)?;
-        self.expect(&Token::Arrow)?;
-        let (_ret_ty_name, _) = self.expect_ident()?;
 
         let mut lookahead = self.pos;
         while matches!(

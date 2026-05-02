@@ -59,6 +59,75 @@ defmod Bootstrap {
   """
   @@intrinsic def dbg!(values: *$A) -> Unit
 
+  @@doc """
+  Bind special form.
+
+  `=` is a language-provided binding form.
+  It evaluates the right-hand side once, checks it against a total left-hand
+  MatchBlock pattern, and introduces the resulting bindings into the current
+  scope.
+
+  `=` is not a trait-dispatched operator.
+  Use `=?` when the left-hand side is partial or when failure propagation is
+  part of the intended control flow.
+
+  ## Examples
+  name = "surtr"
+  pair = (1, 2)
+  (left, right) = pair
+
+  ## Notes
+  - `=` returns `()`
+  - only total MatchBlock patterns are accepted
+  """
+  @@intrinsic def =(pattern: $Pattern, value: $A) -> Unit
+
+  @@doc """
+  SafeBind special form.
+
+  `=?` is a language-provided binding form for failure-aware destructuring.
+  It may be used only inside functions whose current evaluation returns
+  `Result<T>`.
+  The REPL accepts the syntax, reports the resulting error message, and keeps
+  the session alive.
+
+  `=?` evaluates the right-hand side once and then applies the left-hand
+  MatchBlock pattern to the successful payload.
+  If the RHS produces `Err(error)`, that `Err(error)` is returned immediately.
+  If the LHS MatchBlock or Extractor observes `Err(error)`, that
+  `Err(error)` is also returned immediately.
+  If matching produces `MatchBlock::NoMatch`, the runtime converts it into an
+  error and returns it immediately.
+
+  `=?` is not a trait-dispatched operator.
+  It is the binding-form entrypoint for Result-style propagation and other
+  SafeBind-aware MatchBlock inputs.
+  `num: Int =? Option::Some(1)` is an error because `Option` is not a
+  SafeBind target.
+
+  The left-hand side may use structural pattern matching such as `uncons`,
+  list/string decomposition, and literal matching.
+  The left-hand side may also apply Extractors.
+  MatchBlock patterns and Extractors may be written recursively, and each step
+  is executed only as far as the current partial match requires.
+  When every recursive match and Extractor step succeeds under `Ok(...)`, the
+  bound variables are introduced and evaluation continues.
+
+  ## Examples
+  value: Int =? try_from("1", Int)
+  [head, ..tail] =? [1, 2, 3]
+  [first, ..rest] =? "source"
+
+  ## Notes
+  - `=?` returns `()`
+  - `=?` is valid only in functions that return `Result<T>`
+  - RHS `Err(...)` returns early
+  - LHS MatchBlock / Extractor `Err(...)` returns early
+  - `MatchBlock::NoMatch` becomes an error and returns early
+  - `Option` is not a SafeBind target
+  """
+  @@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
+
   # `def` introduces a named function declaration.
   # `dummy` exists only to keep the module non-empty and to leave a minimal
   # function-shaped example in the first standard source file.

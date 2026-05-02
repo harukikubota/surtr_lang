@@ -480,6 +480,42 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     assert!(or_doc.contains("Kernel::or"));
     assert!(or_doc.contains("Logical disjunction with short-circuit evaluation."));
 
+    let bind_doc = engine.handle_line(":doc =");
+    let bind_doc = doc_text(&bind_doc);
+    assert!(bind_doc.contains("Bootstrap::="), "{bind_doc}");
+    assert!(
+        bind_doc.contains("@@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"),
+        "{bind_doc}"
+    );
+    assert!(bind_doc.contains("Bind special form."), "{bind_doc}");
+
+    let safe_bind_doc = engine.handle_line(":doc =?");
+    let safe_bind_doc = doc_text(&safe_bind_doc);
+    assert!(safe_bind_doc.contains("Bootstrap::=?"), "{safe_bind_doc}");
+    assert!(
+        safe_bind_doc.contains("@@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"),
+        "{safe_bind_doc}"
+    );
+    assert!(
+        safe_bind_doc.contains("SafeBind special form."),
+        "{safe_bind_doc}"
+    );
+    assert!(
+        safe_bind_doc
+            .contains("It may be used only inside functions whose current evaluation returns"),
+        "{safe_bind_doc}"
+    );
+    assert!(
+        safe_bind_doc.contains("`num: Int =? Option::Some(1)` is an error"),
+        "{safe_bind_doc}"
+    );
+    assert!(
+        safe_bind_doc.contains(
+            "The REPL accepts the syntax, reports the resulting error message, and keeps"
+        ),
+        "{safe_bind_doc}"
+    );
+
     let typed_sig = engine.handle_line(":sig gt(Int, Int)");
     let typed_sig = signature_text(&typed_sig);
     assert!(typed_sig.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"));
@@ -491,6 +527,20 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let helper_sig = engine.handle_line(":sig gt");
     let helper_sig = signature_text(&helper_sig);
     assert!(helper_sig.contains("trait Gt { gt(self: Self, rhs: Self) -> Boolean }"));
+
+    let bind_sig = engine.handle_line(":sig =");
+    let bind_sig = signature_text(&bind_sig);
+    assert_eq!(
+        bind_sig.trim(),
+        "@@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"
+    );
+
+    let safe_bind_sig = engine.handle_line(":sig =?");
+    let safe_bind_sig = signature_text(&safe_bind_sig);
+    assert_eq!(
+        safe_bind_sig.trim(),
+        "@@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"
+    );
 
     let typed_doc = engine.handle_line(":doc gt(Int, Int)");
     let typed_doc = doc_text(&typed_doc);

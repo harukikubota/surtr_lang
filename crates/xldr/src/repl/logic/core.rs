@@ -61,6 +61,7 @@ const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("gte", "Gte"),
     ("concat", "Concat"),
 ];
+
 const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 /// Error returned when loading a `.eldr` file into a REPL engine.
@@ -886,12 +887,8 @@ impl ReplEngine {
                 return ReplResult::ok(Self::doc_resolved_output(entry));
             }
         }
-        if symbol == "dbg!" {
-            if let Some(entry) = self.docs.iter().find(|entry| {
-                entry.kind == DocKind::Function && entry.qualified_name == "Bootstrap::dbg!"
-            }) {
-                return ReplResult::ok(Self::doc_resolved_output(entry));
-            }
+        if let Some(entry) = self.special_form_doc_entry(symbol) {
+            return ReplResult::ok(Self::doc_resolved_output(entry));
         }
         if let Some(binding_doc) = self.handle_doc_binding(symbol) {
             return binding_doc;
@@ -1344,6 +1341,13 @@ impl ReplEngine {
         }
     }
 
+    fn special_form_doc_entry(&self, symbol: &str) -> Option<&DocEntry> {
+        self.docs.iter().find(|entry| {
+            entry.kind == DocKind::Function
+                && entry.qualified_name == format!("Bootstrap::{symbol}")
+        })
+    }
+
     fn signature_matches_callee(signature: &str, callee: &str) -> bool {
         signature.starts_with(&format!("{callee}("))
             || signature.contains(&format!("::{callee}("))
@@ -1355,17 +1359,11 @@ impl ReplEngine {
         if symbol == "Tuple" {
             return None;
         }
-        if symbol == "dbg!" {
-            return self
-                .docs
-                .iter()
-                .find(|entry| entry.qualified_name == "Bootstrap::dbg!")
-                .and_then(|entry| {
-                    entry
-                        .signature
-                        .clone()
-                        .map(|signature| (entry.qualified_name.clone(), signature))
-                });
+        if let Some(entry) = self.special_form_doc_entry(symbol) {
+            return entry
+                .signature
+                .clone()
+                .map(|signature| (entry.qualified_name.clone(), signature));
         }
         let canonical = self
             .visible_helper_trait_alias(symbol)

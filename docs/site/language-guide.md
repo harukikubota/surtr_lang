@@ -470,9 +470,11 @@ def pick() -> Result<Int> {
 例外送出ではなく、`Either` 的な分岐を短く書くための記法だと考えると追いやすくなります。
 
 `=?` は Result 専用というより、Surtr では「失敗を伝播する束縛」の入口です。  
+通常の user code では `Result<T>` を返す関数の中で使います。
 現在きちんと使える対象は `Result`、`List`、`String` です。
 `Option` は標準 enum として存在しますが、`=?` や Result 文脈の関数演算子では特別扱いしません。
 必要な場合は `Option::to_result(value, err)` で明示的に `Result` へ変換します。
+そのため `num: Int =? Option::Some(1)` はエラーです。
 
 ```surtr
 [head, ..tail] =? [1, 2, 3]
@@ -485,6 +487,10 @@ print(to_string(tail))
 print(first)   # => "s"
 print(tail)    # => "ource"
 ```
+
+LHS には list/string 分解、literal match、Extractor を再帰的に書けます。  
+途中で `Err(...)` が出ればそのまま早期伝播し、`NoMatch` は error として返されます。  
+REPL ではその失敗を表示しますが、セッション自体は継続します。
 
 `Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では `defenum` と同一 contract にはしません。  
 あくまで `Result` は dedicated な失敗表現であり、`Ok` / `Err` もその専用 constructor として見せます。

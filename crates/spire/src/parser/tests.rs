@@ -237,6 +237,80 @@ fn test_intrinsic_decl_preserves_source_text_verbatim() {
 }
 
 #[test]
+fn test_intrinsic_bind_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @@doc """
+  Bind special form.
+  """
+  @@intrinsic def =(pattern: $Pattern, value: $A) -> Unit
+}"#,
+        context,
+    )
+    .expect("intrinsic bind decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "=");
+                    assert_eq!(
+                        signature,
+                        "@@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"
+                    );
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("Bind special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_intrinsic_safebind_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @@doc """
+  SafeBind special form.
+  """
+  @@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
+}"#,
+        context,
+    )
+    .expect("intrinsic safebind decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "=?");
+                    assert_eq!(
+                        signature,
+                        "@@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"
+                    );
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("SafeBind special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_safebind() {
     let ast = parse("num =? gen()").unwrap();
     match &ast[0] {

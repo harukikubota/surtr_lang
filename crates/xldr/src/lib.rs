@@ -1413,6 +1413,53 @@ deferror NoneError { "None Value." }"#,
     }
 
     #[test]
+    fn collect_doc_entries_keeps_bootstrap_bind_intrinsic_docs() {
+        let ast = spire::parse_with_context(
+            r#"defmod Bootstrap {
+  @@doc """Bind special form."""
+  @@intrinsic def =(pattern: $Pattern, value: $A) -> Unit
+
+  @@doc """SafeBind special form."""
+  @@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
+}"#,
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .expect("std module source should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Bootstrap"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        let bind_docs = docs
+            .iter()
+            .filter(|entry| entry.qualified_name == "Bootstrap::=")
+            .collect::<Vec<_>>();
+        assert_eq!(bind_docs.len(), 1, "{bind_docs:?}");
+        assert_eq!(
+            bind_docs[0].signature.as_deref(),
+            Some("@@intrinsic def =(pattern: $Pattern, value: $A) -> Unit")
+        );
+
+        let safe_bind_docs = docs
+            .iter()
+            .filter(|entry| entry.qualified_name == "Bootstrap::=?")
+            .collect::<Vec<_>>();
+        assert_eq!(safe_bind_docs.len(), 1, "{safe_bind_docs:?}");
+        assert_eq!(
+            safe_bind_docs[0].signature.as_deref(),
+            Some("@@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit")
+        );
+    }
+
+    #[test]
     fn collect_doc_entries_includes_impl_and_trait_docs() {
         let ast = spire::parse_with_context(
             r#"@@doc """Trait docs."""

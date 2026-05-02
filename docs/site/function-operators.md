@@ -1,7 +1,8 @@
-# 関数演算子
+# 関数演算子と束縛フォーム
 
 Surtr には、値の流し込み、文脈付き計算、関数合成を短く書くための関数演算子があります。
-このページでは `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` をまとめて引けるようにします。
+加えて、見た目は近いものの trait 演算子ではない binding form として `=?` もあります。
+このページでは `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?`, `=` をまとめて引けるようにします。
 apply 系の詳説は `./pipe-operators.md`、capture 自体の詳説は `./capture-operator.md`、関数コールや closure の総論は `./callables.md` に分けています。
 
 ## 先に覚えるルール
@@ -10,6 +11,22 @@ apply 系の詳説は `./pipe-operators.md`、capture 自体の詳説は `./capt
 - `|>` の右辺が call 式なら、左辺値が第 1 引数へ注入されます
 - `>>`, `>*`, `>=>` は compose なので、左右とも関数値でなければなりません
 - `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度、左結合です
+- `=` は同じ記号帯ですが expression operator ではなく、束縛構文として別扱いです
+
+## `=` Bind
+
+`=` は一番基本の束縛フォームです。
+
+```surtr
+name = expr
+pair = ("alice", 42)
+(left, right) = (1, 2)
+```
+
+これは trait dispatch される演算子ではなく、language-level binding form です。
+RHS を 1 回だけ評価し、LHS の total pattern へ束縛します。
+
+partial な分解や failure 伝播を伴う形は `=` ではなく `=?` を使います。
 
 ## `|>` 値を流す
 
@@ -191,6 +208,8 @@ pipeline = &parse_int >=> &require_small
 ## `=?` SafeBind
 
 `=?` は失敗しうる値から成功側だけを束縛し、失敗はそのまま返す構文です。
+通常の user code では、`Result<T>` を返す関数の中でのみ使います。
+REPL では入力自体は受理しますが、失敗時はエラーを表示してセッションを継続します。
 
 ```surtr
 value: Int =? try_from("1", Int)
@@ -205,6 +224,17 @@ value: Int =? try_from("1", Int)
 - `String`
 
 `Option` は対象外なので、必要なら `Option::to_result` で `Result` へ変換してから使います。
+たとえば `num: Int =? Option::Some(1)` はエラーです。
+
+`=?` も trait 演算子ではなく、language-level binding form です。
+
+SafeBind の流れは次です。
+
+- RHS が `Err(...)` ならその `Err(...)` を早期リターンします
+- LHS の MatchBlock / Extractor の途中で `Err(...)` が出た場合も早期リターンします
+- LHS のマッチ結果が `NoMatch` なら error 化して早期リターンします
+- LHS には `uncons`、literal match、Extractor を再帰的に書けます
+- 上のチェックが全部成功したときだけ変数が束縛されて続行します
 
 ## `Result` でよくある形
 
