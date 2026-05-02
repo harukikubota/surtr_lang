@@ -65,6 +65,7 @@ pub enum Value {
     RegexMatch(RegexMatchHandle),
     RandomGenerator(RandomGeneratorHandle),
     Pid(PidHandle),
+    PendingFuture(u64),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -313,6 +314,7 @@ impl Value {
             Value::RegexMatch(handle) => format!("RegexMatch({}..{})", handle.start, handle.end),
             Value::RandomGenerator(_) => "RandomGenerator(<opaque>)".to_string(),
             Value::Pid(handle) => format!("PID({}#{})", handle.process_name, handle.id),
+            Value::PendingFuture(future_id) => format!("<pending:future#{future_id}>"),
         }
     }
 }

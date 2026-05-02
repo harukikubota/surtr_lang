@@ -281,6 +281,33 @@ struct ProcessExecutionContext {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
     pc: usize,
+    target: ExecutionTarget,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExecutionTarget {
+    TopLevel,
+    FrameDepth(usize),
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum StepOutcome {
+    Continue,
+    Halt(Value),
+    Pending {
+        future_id: FutureId,
+        resume: ProcessExecutionContext,
+    },
+    RuntimeError(RuntimeError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpcodeControl {
+    Continue,
+    Halt,
+    Pending(FutureId),
 }
 
 #[allow(dead_code)]
@@ -1207,23 +1234,16 @@ impl VM {
         self.test_events.clear();
         self.test_stdout_cursor = self.current_output_len();
         self.test_stderr_cursor = self.current_error_output_len();
-        loop {
-            if self.pc >= self.bytecode.opcodes.len() {
-                return Err(RuntimeError::new("PC out of bounds"));
-            }
-            let op = self.bytecode.opcodes[self.pc].clone();
-            self.observe_opcode_step(self.pc, &op);
-            let mut next_pc = self.pc + 1;
-            let halted = self
-                .execute_opcode(op.clone(), &mut next_pc)
-                .map_err(|err| self.enrich_runtime_error(err, self.pc, &op))?;
-            self.pc = next_pc;
-            self.observe_current_depths();
-
-            if halted {
+        match self.run_until_outcome(self.pc, ExecutionTarget::TopLevel) {
+            StepOutcome::Halt(_) => {
                 self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
-                return Ok(());
+                Ok(())
             }
+            StepOutcome::Pending { .. } => {
+                Err(RuntimeError::new("top-level execution suspended without scheduler support"))
+            }
+            StepOutcome::RuntimeError(err) => Err(err),
+            StepOutcome::Continue => Err(RuntimeError::new("top-level execution did not finish")),
         }
     }
 
@@ -1317,25 +1337,19 @@ impl VM {
                 .extend(std::iter::repeat_n(Value::Unit, new_locals));
         }
 
-        let mut pc = code_base;
-        while pc < self.bytecode.opcodes.len() {
-            let current_pc = pc;
-            let op = self.bytecode.opcodes[pc].clone();
-            self.observe_opcode_step(current_pc, &op);
-            pc += 1;
-            let halted = self
-                .execute_opcode(op.clone(), &mut pc)
-                .map_err(|err| self.enrich_runtime_error(err, current_pc, &op))?;
-            self.observe_current_depths();
-            if halted {
-                break;
+        match self.run_until_outcome(code_base, ExecutionTarget::TopLevel) {
+            StepOutcome::Halt(_) => {
+                let result = self.stack.pop().unwrap_or(Value::Unit);
+                self.last_result = Some(result.clone());
+                self.stack.clear();
+                Ok(result)
             }
+            StepOutcome::Pending { .. } => Err(RuntimeError::new(
+                "chunk execution suspended without scheduler support",
+            )),
+            StepOutcome::RuntimeError(err) => Err(err),
+            StepOutcome::Continue => Err(RuntimeError::new("chunk execution did not finish")),
         }
-
-        let result = self.stack.pop().unwrap_or(Value::Unit);
-        self.last_result = Some(result.clone());
-        self.stack.clear();
-        Ok(result)
     }
 
     /// Execute a chunk atomically, preserving the existing VM state on failure.
@@ -1501,20 +1515,151 @@ impl VM {
         }
     }
 
-    pub(crate) fn invoke_callable_sync(
+    fn capture_execution_context(
+        &self,
+        pc: usize,
+        target: ExecutionTarget,
+    ) -> ProcessExecutionContext {
+        ProcessExecutionContext {
+            stack: self.stack.clone(),
+            frames: self.frames.clone(),
+            pc,
+            target,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn restore_execution_context(&mut self, context: ProcessExecutionContext) {
+        self.stack = context.stack;
+        self.frames = context.frames;
+        self.pc = context.pc;
+    }
+
+    fn load_local_or_pending(&mut self, slot: u32) -> Result<OpcodeControl, RuntimeError> {
+        let slot_index = slot as usize;
+        let value = self
+            .current_frame()?
+            .locals
+            .get(slot_index)
+            .cloned()
+            .ok_or_else(|| RuntimeError::new(format!("LoadLocal out of bounds: {}", slot)))?;
+
+        match value {
+            Value::PendingFuture(future_id) => {
+                let resolved = self.process_runtime.futures.get(&future_id).and_then(|future| {
+                    match &future.state {
+                        FutureState::Ready(value) | FutureState::Cancelled(value) => {
+                            Some(value.clone())
+                        }
+                        FutureState::Running => None,
+                    }
+                });
+
+                if let Some(value) = resolved {
+                    self.current_frame_mut()?.locals[slot_index] = value.clone();
+                    self.stack.push(value);
+                    Ok(OpcodeControl::Continue)
+                } else {
+                    Ok(OpcodeControl::Pending(future_id))
+                }
+            }
+            value => {
+                self.stack.push(value);
+                Ok(OpcodeControl::Continue)
+            }
+        }
+    }
+
+    fn complete_execution_target(
         &mut self,
-        callable: Callable,
-        args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
+        target: &ExecutionTarget,
+    ) -> Result<Option<Value>, RuntimeError> {
+        match target {
+            ExecutionTarget::TopLevel => Ok(None),
+            ExecutionTarget::FrameDepth(frame_depth) => {
+                if self.frames.len() == *frame_depth {
+                    Ok(Some(self.pop_stack()?))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    fn run_until_outcome(&mut self, mut pc: usize, target: ExecutionTarget) -> StepOutcome {
+        loop {
+            if pc >= self.bytecode.opcodes.len() {
+                return StepOutcome::RuntimeError(RuntimeError::new("PC out of bounds"));
+            }
+            self.pc = pc;
+            let current_pc = pc;
+            let op = self.bytecode.opcodes[current_pc].clone();
+            self.observe_opcode_step(current_pc, &op);
+            let mut next_pc = current_pc + 1;
+            let control = match self.execute_opcode(op.clone(), &mut next_pc) {
+                Ok(control) => control,
+                Err(err) => {
+                    return StepOutcome::RuntimeError(
+                        self.enrich_runtime_error(err, current_pc, &op),
+                    );
+                }
+            };
+            self.observe_current_depths();
+
+            match control {
+                OpcodeControl::Continue => {
+                    pc = next_pc;
+                    self.pc = pc;
+                    match self.complete_execution_target(&target) {
+                        Ok(Some(value)) => return StepOutcome::Halt(value),
+                        Ok(None) => {}
+                        Err(err) => {
+                            return StepOutcome::RuntimeError(
+                                self.enrich_runtime_error(err, current_pc, &op),
+                            );
+                        }
+                    }
+                }
+                OpcodeControl::Halt => {
+                    self.pc = next_pc;
+                    return StepOutcome::Halt(
+                        self.stack.last().cloned().unwrap_or(Value::Unit),
+                    );
+                }
+                OpcodeControl::Pending(future_id) => {
+                    return StepOutcome::Pending {
+                        future_id,
+                        resume: self.capture_execution_context(current_pc, target),
+                    };
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn resume_execution(&mut self, context: ProcessExecutionContext) -> StepOutcome {
+        let pc = context.pc;
+        let target = context.target.clone();
+        self.restore_execution_context(context);
+        self.run_until_outcome(pc, target)
+    }
+
+    fn invoke_callable_step(&mut self, callable: Callable, args: Vec<Value>) -> StepOutcome {
         let mut full_args = callable.lexical_captures;
         full_args.extend(args);
 
         match callable.target {
-            CallableTarget::Builtin(builtin_id) => call_builtin(self, builtin_id, full_args),
+            CallableTarget::Builtin(builtin_id) => match call_builtin(self, builtin_id, full_args) {
+                Ok(value) => StepOutcome::Halt(value),
+                Err(err) => StepOutcome::RuntimeError(err),
+            },
             CallableTarget::Function(fun_idx) => {
-                let entry = self.function_entry(fun_idx)?.clone();
+                let entry = match self.function_entry(fun_idx) {
+                    Ok(entry) => entry.clone(),
+                    Err(err) => return StepOutcome::RuntimeError(err),
+                };
                 if entry.arity as usize != full_args.len() {
-                    return Err(RuntimeError::new(format!(
+                    return StepOutcome::RuntimeError(RuntimeError::new(format!(
                         "Call arity mismatch for function {}: expected {}, got {}",
                         fun_idx,
                         entry.arity,
@@ -1522,14 +1667,17 @@ impl VM {
                     )));
                 }
                 if entry.entry_pc as usize >= self.bytecode.opcodes.len() {
-                    return Err(RuntimeError::new(format!(
+                    return StepOutcome::RuntimeError(RuntimeError::new(format!(
                         "Function {} entry_pc out of bounds: {}",
                         fun_idx, entry.entry_pc
                     )));
                 }
 
                 let frame_depth = self.frames.len();
-                let locals = Self::build_locals_for_call(&entry, full_args)?;
+                let locals = match Self::build_locals_for_call(&entry, full_args) {
+                    Ok(locals) => locals,
+                    Err(err) => return StepOutcome::RuntimeError(err),
+                };
                 let stack_base = self.stack.len();
                 self.frames.push(CallFrame {
                     return_pc: usize::MAX,
@@ -1538,26 +1686,26 @@ impl VM {
                     locals,
                 });
 
-                let mut pc = entry.entry_pc as usize;
-                while self.frames.len() > frame_depth {
-                    if pc >= self.bytecode.opcodes.len() {
-                        return Err(RuntimeError::new("PC out of bounds during process call"));
-                    }
-                    let current_pc = pc;
-                    let op = self.bytecode.opcodes[pc].clone();
-                    self.observe_opcode_step(current_pc, &op);
-                    pc += 1;
-                    let halted = self
-                        .execute_opcode(op.clone(), &mut pc)
-                        .map_err(|err| self.enrich_runtime_error(err, current_pc, &op))?;
-                    if halted {
-                        return Err(RuntimeError::new("process handler halted the VM"));
-                    }
-                    self.observe_current_depths();
-                }
-
-                self.pop_stack()
+                self.run_until_outcome(
+                    entry.entry_pc as usize,
+                    ExecutionTarget::FrameDepth(frame_depth),
+                )
             }
+        }
+    }
+
+    pub(crate) fn invoke_callable_sync(
+        &mut self,
+        callable: Callable,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        match self.invoke_callable_step(callable, args) {
+            StepOutcome::Halt(value) => Ok(value),
+            StepOutcome::Pending { .. } => {
+                Err(RuntimeError::new("callable suspended without scheduler support"))
+            }
+            StepOutcome::RuntimeError(err) => Err(err),
+            StepOutcome::Continue => Err(RuntimeError::new("callable execution did not finish")),
         }
     }
 
@@ -1956,9 +2104,13 @@ impl VM {
         Ok(render_dbg_report(&file, source, template, &args))
     }
 
-    fn execute_opcode(&mut self, op: Opcode, pc: &mut usize) -> Result<bool, RuntimeError> {
+    fn execute_opcode(
+        &mut self,
+        op: Opcode,
+        pc: &mut usize,
+    ) -> Result<OpcodeControl, RuntimeError> {
         match op {
-            Opcode::Halt => return Ok(true),
+            Opcode::Halt => return Ok(OpcodeControl::Halt),
 
             Opcode::LoadConst(idx) => {
                 let c = self.bytecode.constants.get(idx as usize).ok_or_else(|| {
@@ -1992,15 +2144,7 @@ impl VM {
             }
 
             Opcode::LoadLocal(slot) => {
-                let val = self
-                    .current_frame()?
-                    .locals
-                    .get(slot as usize)
-                    .cloned()
-                    .ok_or_else(|| {
-                        RuntimeError::new(format!("LoadLocal out of bounds: {}", slot))
-                    })?;
-                self.stack.push(val);
+                return self.load_local_or_pending(slot);
             }
 
             Opcode::StoreLocal(slot) => {
@@ -2663,7 +2807,7 @@ impl VM {
             }
         }
 
-        Ok(false)
+        Ok(OpcodeControl::Continue)
     }
 
     fn build_locals_for_call(
@@ -3011,14 +3155,17 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
 
 #[cfg(test)]
 mod tests {
-    use super::{VmObservationOptions, VM};
+    use super::{StepOutcome, VmObservationOptions, VM};
     use sindr::ir::{
         Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
         RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
         SourceMap,
     };
     use sindr::primitives::int;
-    use sindr::runtime::{PidHandle, TypeEntry, TypeKind, TypeRegistry, Value};
+    use sindr::runtime::{
+        Callable, CallableMetadata, CallableTarget, PidHandle, TypeEntry, TypeKind, TypeRegistry,
+        Value,
+    };
 
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
@@ -3351,6 +3498,112 @@ mod tests {
         assert!(vm.process_runtime.futures.is_empty());
         assert!(vm.process_runtime.reply_table.is_empty());
         assert!(vm.process_runtime.deadline_queue.is_empty());
+    }
+
+    #[test]
+    fn invoke_callable_step_returns_pending_with_resume_context() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::LoadLocal(0), Opcode::Return]);
+        bytecode.functions = vec![function_entry(0, 1, 1, 1, Some("Main::await_value"))];
+        let mut vm = VM::new(bytecode);
+        let future_id = vm.process_runtime.allocate_future(None, None, false);
+        let callable = Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata::default(),
+        };
+
+        let outcome = vm.invoke_callable_step(callable, vec![Value::PendingFuture(future_id)]);
+        match outcome {
+            StepOutcome::Pending {
+                future_id: pending_id,
+                resume,
+            } => {
+                assert_eq!(pending_id, future_id);
+                assert_eq!(resume.pc, 1);
+                assert!(resume.stack.is_empty());
+                assert_eq!(resume.frames.len(), 2);
+                assert!(matches!(
+                    resume.frames.last().and_then(|frame| frame.locals.first()),
+                    Some(Value::PendingFuture(id)) if *id == future_id
+                ));
+            }
+            other => panic!("expected pending outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resume_execution_reloads_ready_future_value_and_returns_result() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::LoadLocal(0), Opcode::Return]);
+        bytecode.functions = vec![function_entry(0, 1, 1, 1, Some("Main::await_value"))];
+        let mut vm = VM::new(bytecode);
+        let future_id = vm.process_runtime.allocate_future(None, None, false);
+        let callable = Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata::default(),
+        };
+
+        let resume = match vm.invoke_callable_step(callable, vec![Value::PendingFuture(future_id)]) {
+            StepOutcome::Pending { resume, .. } => resume,
+            other => panic!("expected pending outcome, got {other:?}"),
+        };
+
+        let resumed = vm
+            .process_runtime
+            .resolve_future(future_id, Value::Int(int(41)));
+        assert!(resumed.is_empty());
+
+        match vm.resume_execution(resume) {
+            StepOutcome::Halt(Value::Int(value)) => assert_eq!(value, int(41)),
+            other => panic!("expected resumed halt value, got {other:?}"),
+        }
+        assert_eq!(vm.frames.len(), 1);
+    }
+
+    #[test]
+    fn pending_local_preserves_left_to_right_evaluation_until_resume() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadLocal(0),
+            Opcode::LoadLocal(1),
+            Opcode::AddInt,
+            Opcode::Return,
+        ]);
+        bytecode.functions = vec![function_entry(0, 1, 2, 2, Some("Main::await_add"))];
+        let mut vm = VM::new(bytecode);
+        let future_id = vm.process_runtime.allocate_future(None, None, false);
+        let callable = Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata::default(),
+        };
+
+        let outcome = vm.invoke_callable_step(
+            callable,
+            vec![Value::PendingFuture(future_id), Value::Int(int(1))],
+        );
+        let resume = match outcome {
+            StepOutcome::Pending { resume, .. } => {
+                assert!(resume.stack.is_empty());
+                assert_eq!(resume.pc, 1);
+                assert!(matches!(
+                    resume.frames.last().map(|frame| frame.locals.as_slice()),
+                    Some([Value::PendingFuture(id), Value::Int(value)]) if *id == future_id && *value == int(1)
+                ));
+                resume
+            }
+            other => panic!("expected pending outcome, got {other:?}"),
+        };
+
+        let resumed = vm
+            .process_runtime
+            .resolve_future(future_id, Value::Int(int(41)));
+        assert!(resumed.is_empty());
+
+        match vm.resume_execution(resume) {
+            StepOutcome::Halt(Value::Int(value)) => assert_eq!(value, int(42)),
+            other => panic!("expected resumed halt value, got {other:?}"),
+        }
     }
 
     fn function_entry(
