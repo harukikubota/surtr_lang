@@ -292,6 +292,39 @@ fn core_type_command_looks_up_visible_bindings_only() {
 }
 
 #[test]
+fn core_repl_surfaces_keep_generic_arguments_for_bindings() {
+    let mut engine = engine();
+
+    let bind = engine.handle_line("maybe: Option<Int> = Option::Some(1)");
+    let bind_text = rendered_text(&bind);
+    assert!(
+        bind_text.contains("maybe: Option<Int> = Option::Some(1)"),
+        "{bind_text}"
+    );
+
+    let nested = engine.handle_line("nested: List<Option<Int>> = [Option::Some(1)]");
+    let nested_text = rendered_text(&nested);
+    assert!(
+        nested_text.contains("nested: List<Option<Int>> = [Option::Some(1)]"),
+        "{nested_text}"
+    );
+
+    let ty = engine.handle_line(":type maybe");
+    assert_eq!(rendered_text(&ty), "Option<Int> :: TypeIdentity::Enum");
+
+    let info = engine.handle_line(":info maybe");
+    let info_text = rendered_text(&info);
+    assert!(info_text.contains("type: Option<Int>"), "{info_text}");
+
+    let nested_info = engine.handle_line(":info nested");
+    let nested_info_text = rendered_text(&nested_info);
+    assert!(
+        nested_info_text.contains("type: List<Option<Int>>"),
+        "{nested_info_text}"
+    );
+}
+
+#[test]
 fn core_help_and_error_commands_return_structured_command_output() {
     let mut engine = engine();
 

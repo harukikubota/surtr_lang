@@ -1150,7 +1150,18 @@ fn ty_to_string(ty: &Ty) -> String {
                 .join(", ")
         ),
         Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
-        Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.clone(),
+        Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+        Ty::Enum(name, args) => {
+            if args.is_empty() {
+                name.clone()
+            } else {
+                format!(
+                    "{}<{}>",
+                    name,
+                    args.iter().map(ty_to_string).collect::<Vec<_>>().join(", ")
+                )
+            }
+        }
         Ty::Error => "Error".into(),
         // Hide internal type-variable IDs from REPL output.
         Ty::Var(_id) => "_".into(),
