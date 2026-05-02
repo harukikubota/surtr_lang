@@ -372,6 +372,39 @@ pub struct PcSpanEntry {
     pub span_id: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeProcessKind {
+    ReadOnlyAgent,
+    StateAgent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeProcessInstance {
+    Singleton,
+    Multi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeProcessSpec {
+    pub process_name: String,
+    pub module_path: String,
+    pub kind: RuntimeProcessKind,
+    pub instance: RuntimeProcessInstance,
+    pub boot: bool,
+    pub registry: bool,
+    pub lazy: bool,
+    pub init_fun_idx: u32,
+    pub get_fun_idx: u32,
+    #[serde(default)]
+    pub set_fun_idx: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeProcessSpecTable {
+    #[serde(default)]
+    pub entries: Vec<RuntimeProcessSpec>,
+}
+
 /// A compiled Surtr program, ready for Eldr to execute.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bytecode {
@@ -405,6 +438,8 @@ pub struct Bytecode {
     pub sources: Vec<SourceFileEntry>,
     #[serde(default)]
     pub pc_spans: Vec<PcSpanEntry>,
+    #[serde(default)]
+    pub runtime_process_specs: RuntimeProcessSpecTable,
 }
 
 impl Default for Bytecode {
@@ -428,6 +463,7 @@ impl Default for Bytecode {
             spans: Vec::new(),
             sources: Vec::new(),
             pc_spans: Vec::new(),
+            runtime_process_specs: RuntimeProcessSpecTable::default(),
         }
     }
 }
@@ -450,6 +486,7 @@ pub struct BytecodeChunk {
     pub dbg_templates: Vec<DbgTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub docs: Vec<DocEntry>,
+    pub runtime_process_specs: Vec<RuntimeProcessSpec>,
 }
 
 /// Function table entry.
@@ -701,6 +738,7 @@ impl Bytecode {
     const CHUNK_SOURCES: [u8; 4] = *b"SrcP";
     const CHUNK_PC_SPANS: [u8; 4] = *b"PcSp";
     const CHUNK_DOCS: [u8; 4] = *b"Docs";
+    const CHUNK_PROCESS_SPECS: [u8; 4] = *b"Proc";
 
     pub fn refresh_viewer_metadata(&mut self) {
         self.compile_info.num_locals = self.num_locals;
@@ -749,6 +787,10 @@ impl Bytecode {
             (Self::CHUNK_SPANS, serialize_chunk(&bytecode.spans)?),
             (Self::CHUNK_SOURCES, serialize_chunk(&bytecode.sources)?),
             (Self::CHUNK_PC_SPANS, serialize_chunk(&bytecode.pc_spans)?),
+            (
+                Self::CHUNK_PROCESS_SPECS,
+                serialize_chunk(&bytecode.runtime_process_specs)?,
+            ),
         ];
 
         if !bytecode.docs.is_empty() {
@@ -817,6 +859,8 @@ fn decode_payloads(
     let sources = deserialize_required::<Vec<SourceFileEntry>>(payloads, "SrcP")?;
     let pc_spans = deserialize_required::<Vec<PcSpanEntry>>(payloads, "PcSp")?;
     let docs = deserialize_optional::<Vec<DocEntry>>(payloads, "Docs")?.unwrap_or_default();
+    let runtime_process_specs =
+        deserialize_optional::<RuntimeProcessSpecTable>(payloads, "Proc")?.unwrap_or_default();
 
     Ok(Bytecode {
         opcodes,
@@ -837,6 +881,7 @@ fn decode_payloads(
         spans,
         sources,
         pc_spans,
+        runtime_process_specs,
     })
 }
 
@@ -986,6 +1031,7 @@ fn is_known_chunk_tag(tag: &str) -> bool {
             | "SpnT"
             | "SrcP"
             | "PcSp"
+            | "Proc"
             | "Docs"
     )
 }
@@ -1318,7 +1364,8 @@ mod tests {
     use super::{
         checked_payload_len, line_column_for_offset, populate_error_template_lines,
         stable_hash_hex, Bytecode, BytecodeFormatError, CompileInfo, Constant, DocEntry, DocKind,
-        ErrTemplate, FunctionEntry, FunctionFlags, Opcode, OpcodeSource, SourceFileEntry,
+        ErrTemplate, FunctionEntry, FunctionFlags, Opcode, OpcodeSource, RuntimeProcessInstance,
+        RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable, SourceFileEntry,
         SourceMap,
     };
     use crate::primitives::int;
@@ -1400,6 +1447,20 @@ mod tests {
                 text: Some("let x = 42".to_string()),
             }],
             pc_spans: Vec::new(),
+            runtime_process_specs: RuntimeProcessSpecTable {
+                entries: vec![RuntimeProcessSpec {
+                    process_name: "Counter".to_string(),
+                    module_path: "Agents::Counter".to_string(),
+                    kind: RuntimeProcessKind::StateAgent,
+                    instance: RuntimeProcessInstance::Singleton,
+                    boot: true,
+                    registry: true,
+                    lazy: false,
+                    init_fun_idx: 0,
+                    get_fun_idx: 0,
+                    set_fun_idx: Some(0),
+                }],
+            },
         };
         bytecode.refresh_viewer_metadata();
         bytecode
@@ -1474,6 +1535,7 @@ mod tests {
         assert_eq!(inspected.header.version, 1);
         assert!(inspected.chunks.len() >= 14);
         assert_eq!(inspected.chunks[0].tag, "Code");
+        assert!(inspected.chunks.iter().any(|chunk| chunk.tag == "Proc"));
         assert!(inspected.chunks[0].payload_offset >= 16);
         assert!(inspected.chunks[0].padded_size >= inspected.chunks[0].size as usize);
     }

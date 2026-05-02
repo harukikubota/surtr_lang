@@ -1,7 +1,7 @@
 use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
     line_column_for_offset, Bytecode, BytecodeChunk, Constant, DocEntry, FunctionEntry, Opcode,
-    SourceMap,
+    RuntimeProcessSpec, RuntimeProcessSpecTable, SourceMap,
 };
 use sindr::primitives::SurtrInt;
 use sindr::runtime::{
@@ -104,6 +104,7 @@ struct VmCheckpoint {
     error_template_len: usize,
     function_len: usize,
     doc_len: usize,
+    process_spec_len: usize,
     source_map_len: Option<usize>,
     overwritten_functions: Vec<(usize, FunctionEntry)>,
 }
@@ -215,6 +216,7 @@ impl VmObserver {
 #[derive(Debug, Clone, Default)]
 struct ProcessRuntime {
     next_pid: u64,
+    specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
     singleton_by_name: BTreeMap<String, u64>,
     processes: BTreeMap<u64, ProcessEntry>,
 }
@@ -270,6 +272,7 @@ pub struct VM {
 impl VM {
     pub fn new(bytecode: Bytecode) -> Self {
         let num_locals = bytecode.num_locals;
+        let process_runtime = ProcessRuntime::from_spec_table(&bytecode.runtime_process_specs);
         Self {
             bytecode,
             stack: Vec::new(),
@@ -295,7 +298,7 @@ impl VM {
             test_events: Vec::new(),
             test_stdout_cursor: 0,
             test_stderr_cursor: 0,
-            process_runtime: ProcessRuntime::default(),
+            process_runtime,
         }
     }
 
@@ -1082,6 +1085,7 @@ impl VM {
             dbg_templates,
             functions,
             docs,
+            runtime_process_specs,
         } = chunk;
         let code_base = self.bytecode.opcodes.len();
         let const_base = self.bytecode.constants.len();
@@ -1118,6 +1122,12 @@ impl VM {
         self.bytecode.error_templates.extend(error_templates);
         self.bytecode.dbg_templates.extend(dbg_templates);
         self.extend_docs_unique(docs);
+        self.bytecode
+            .runtime_process_specs
+            .entries
+            .extend(runtime_process_specs);
+        self.process_runtime
+            .register_spec_table(&self.bytecode.runtime_process_specs);
         self.bytecode.opcodes.extend(chunk_opcodes);
         self.relocate_and_extend_source_map(source_map, code_base)?;
         // Invariant: runtime uses O(1) lookup `functions[fun_idx as usize]`.
@@ -1218,6 +1228,7 @@ impl VM {
             error_template_len: self.bytecode.error_templates.len(),
             function_len: self.bytecode.functions.len(),
             doc_len: self.bytecode.docs.len(),
+            process_spec_len: self.bytecode.runtime_process_specs.entries.len(),
             source_map_len: self
                 .bytecode
                 .source_map
@@ -1258,6 +1269,10 @@ impl VM {
             .truncate(checkpoint.error_template_len);
         self.bytecode.functions.truncate(checkpoint.function_len);
         self.bytecode.docs.truncate(checkpoint.doc_len);
+        self.bytecode
+            .runtime_process_specs
+            .entries
+            .truncate(checkpoint.process_spec_len);
         for (idx, entry) in checkpoint.overwritten_functions {
             if idx < self.bytecode.functions.len() {
                 self.bytecode.functions[idx] = entry;
@@ -2637,6 +2652,23 @@ impl VM {
     }
 }
 
+impl ProcessRuntime {
+    fn from_spec_table(spec_table: &RuntimeProcessSpecTable) -> Self {
+        let mut runtime = Self::default();
+        runtime.register_spec_table(spec_table);
+        runtime
+    }
+
+    fn register_spec_table(&mut self, spec_table: &RuntimeProcessSpecTable) {
+        self.specs_by_name = spec_table
+            .entries
+            .iter()
+            .cloned()
+            .map(|spec| (spec.process_name.clone(), spec))
+            .collect();
+    }
+}
+
 fn ok_vm_result(value: Value) -> Value {
     Value::Tagged {
         tag: 0,
@@ -2700,6 +2732,7 @@ mod tests {
     use super::{VmObservationOptions, VM};
     use sindr::ir::{
         Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
+        RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
         SourceMap,
     };
     use sindr::primitives::int;
@@ -2711,6 +2744,36 @@ mod tests {
             type_registry: TypeRegistry::new(),
             ..Bytecode::default()
         }
+    }
+
+    #[test]
+    fn vm_new_registers_runtime_process_specs_from_bytecode() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![RuntimeProcessSpec {
+                process_name: "Counter".into(),
+                module_path: "Counter".into(),
+                kind: RuntimeProcessKind::StateAgent,
+                instance: RuntimeProcessInstance::Singleton,
+                boot: true,
+                registry: true,
+                lazy: false,
+                init_fun_idx: 0,
+                get_fun_idx: 1,
+                set_fun_idx: Some(2),
+            }],
+        };
+
+        let vm = VM::new(bytecode);
+        let spec = vm
+            .process_runtime
+            .specs_by_name
+            .get("Counter")
+            .expect("process spec should be registered");
+        assert_eq!(spec.module_path, "Counter");
+        assert_eq!(spec.init_fun_idx, 0);
+        assert_eq!(spec.get_fun_idx, 1);
+        assert_eq!(spec.set_fun_idx, Some(2));
     }
 
     fn function_entry(
@@ -2938,6 +3001,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -2963,6 +3027,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -3010,6 +3075,7 @@ mod tests {
             }],
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -3057,6 +3123,7 @@ mod tests {
                 }],
                 functions: Vec::new(),
                 docs: Vec::new(),
+                runtime_process_specs: Vec::new(),
             })
             .expect("push should succeed");
         match result {
@@ -3121,6 +3188,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -3146,6 +3214,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -3175,6 +3244,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: vec![function_entry(0, 2, 1, 0, Some("new"))],
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -3214,6 +3284,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -3240,6 +3311,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -3274,6 +3346,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         vm.push_atomic(chunk).expect("push should succeed");
@@ -3315,6 +3388,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -3441,6 +3515,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -3478,6 +3553,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");

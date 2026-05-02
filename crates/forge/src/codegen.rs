@@ -15,9 +15,23 @@ use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 
 /// Lower the typed AST to bytecode.
 pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
+    codegen_typed_program(TypedProgram {
+        nodes: typed,
+        process_specs: Vec::new(),
+    })
+}
+
+/// Lower a typed program, including runtime process metadata, to bytecode.
+pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenError> {
+    let TypedProgram {
+        nodes,
+        process_specs,
+    } = typed;
     let mut gene = Codegen::new();
-    gene.emit_program(typed)?;
+    gene.emit_program(nodes.clone())?;
     let (opcodes, state) = gene.finalize()?;
+    let runtime_process_specs =
+        build_runtime_process_specs(&process_specs, &nodes, &state.functions)?;
     Ok(Bytecode {
         opcodes,
         constants: state.constants,
@@ -37,6 +51,7 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         spans: Vec::new(),
         sources: Vec::new(),
         pc_spans: Vec::new(),
+        runtime_process_specs,
     })
 }
 
@@ -164,7 +179,125 @@ pub fn compose_bytecode_with_chunk(
     base.functions = functions;
     base.source_map = None;
     extend_docs_unique(&mut base.docs, chunk.docs);
+    base.runtime_process_specs
+        .entries
+        .extend(chunk.runtime_process_specs);
     Ok(base)
+}
+
+fn build_runtime_process_specs(
+    process_specs: &[TypedProcessSpec],
+    nodes: &[TypedNode],
+    functions: &[FunctionEntry],
+) -> Result<RuntimeProcessSpecTable, CodegenError> {
+    let qualified_names = nodes
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Def(_, id, _, _, _, _, _)
+            | TypedInner::ExtractorDef(_, id, _, _, _, _, _) => Some((
+                id.unique_id,
+                id.qualified_name.clone().unwrap_or_else(|| id.name.clone()),
+            )),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+
+    let function_ids = functions
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .qualified_name
+                .as_ref()
+                .map(|name| (name.clone(), entry.fun_idx))
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut entries = Vec::with_capacity(process_specs.len());
+    for spec in process_specs {
+        let init_name = qualified_names
+            .get(&spec.init_uid)
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing lowered init handler metadata for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+        let init_fun_idx = function_ids
+            .get(init_name)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing bytecode init handler for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+
+        let get_name = qualified_names
+            .get(&spec.get_uid)
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing lowered get handler metadata for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+        let get_fun_idx = function_ids
+            .get(get_name)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing bytecode get handler for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+
+        let set_fun_idx = spec
+            .set_uid
+            .map(|uid| {
+                let set_name = qualified_names.get(&uid).ok_or_else(|| CodegenError {
+                    message: format!(
+                        "missing lowered set handler metadata for process `{}`",
+                        spec.process_name
+                    ),
+                    span: Span { start: 0, end: 0 },
+                })?;
+                function_ids
+                    .get(set_name)
+                    .copied()
+                    .ok_or_else(|| CodegenError {
+                        message: format!(
+                            "missing bytecode set handler for process `{}`",
+                            spec.process_name
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    })
+            })
+            .transpose()?;
+
+        entries.push(RuntimeProcessSpec {
+            process_name: spec.process_name.clone(),
+            module_path: spec.module_path.clone(),
+            kind: match spec.spec.kind {
+                spire::ast::ProcessKind::ReadOnlyAgent => RuntimeProcessKind::ReadOnlyAgent,
+                spire::ast::ProcessKind::StateAgent => RuntimeProcessKind::StateAgent,
+            },
+            instance: match spec.spec.instance {
+                spire::ast::ProcessInstance::Singleton => RuntimeProcessInstance::Singleton,
+                spire::ast::ProcessInstance::Multi => RuntimeProcessInstance::Multi,
+            },
+            boot: spec.spec.boot,
+            registry: spec.spec.registry,
+            lazy: spec.spec.lazy,
+            init_fun_idx,
+            get_fun_idx,
+            set_fun_idx,
+        });
+    }
+
+    Ok(RuntimeProcessSpecTable { entries })
 }
 
 fn relocate_base_ops_for_insert(
@@ -480,21 +613,60 @@ impl ForgeSession {
         &mut self,
         typed: Vec<TypedNode>,
     ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
-        self.codegen_chunk_with_options(typed, false)
+        self.codegen_chunk_typed_program(TypedProgram {
+            nodes: typed,
+            process_specs: Vec::new(),
+        })
+    }
+
+    pub fn codegen_chunk_typed_program(
+        &mut self,
+        typed: TypedProgram,
+    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+        self.codegen_chunk_typed_program_with_options(typed, false)
     }
 
     pub fn codegen_chunk_repl_result(
         &mut self,
         typed: Vec<TypedNode>,
     ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
-        self.codegen_chunk_with_options(typed, true)
+        self.codegen_chunk_typed_program_with_options(
+            TypedProgram {
+                nodes: typed,
+                process_specs: Vec::new(),
+            },
+            true,
+        )
     }
 
-    fn codegen_chunk_with_options(
+    fn codegen_chunk_typed_program_with_options(
+        &mut self,
+        typed: TypedProgram,
+        top_level_returns_result: bool,
+    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+        let TypedProgram {
+            nodes,
+            process_specs,
+        } = typed;
+        let typed_for_meta = nodes.clone();
+        let (chunk, meta, functions) =
+            self.codegen_chunk_nodes_with_options(nodes, top_level_returns_result)?;
+        let runtime_process_specs =
+            build_runtime_process_specs(&process_specs, &typed_for_meta, &functions)?.entries;
+        Ok((
+            BytecodeChunk {
+                runtime_process_specs,
+                ..chunk
+            },
+            meta,
+        ))
+    }
+
+    fn codegen_chunk_nodes_with_options(
         &mut self,
         typed: Vec<TypedNode>,
         top_level_returns_result: bool,
-    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+    ) -> Result<(BytecodeChunk, ChunkMeta, Vec<FunctionEntry>), CodegenError> {
         let before = self.state.clone();
         let typed_for_meta = typed.clone();
         let const_base = before.constants.len();
@@ -549,10 +721,12 @@ impl ForgeSession {
                 error_templates,
                 dbg_template_base,
                 dbg_templates,
-                functions,
+                functions: functions.clone(),
                 docs: Vec::new(),
+                runtime_process_specs: Vec::new(),
             },
             meta,
+            functions,
         ))
     }
 }

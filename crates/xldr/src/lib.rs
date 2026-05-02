@@ -952,10 +952,11 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         file_name: "<stdlib>".into(),
         message: e.message,
     })?;
+    let resume_state = resolved.resume_state;
     let mut scar_session = scar::ScarSession::new();
     let typed = scar_session
-        .typecheck_with_context(
-            resolved.resolved,
+        .typecheck_staged_program_with_context(
+            resolved,
             scar::TypecheckContext {
                 runtime_policy: RuntimeSourcePolicy::std_module(),
                 enforce_builtin_type_contracts: true,
@@ -967,11 +968,12 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
             file_name: "<stdlib>".into(),
             message: e.message,
         })?;
-    let mut bytecode = forge::codegen(typed).map_err(|e| LoadError::BootstrapFailed {
-        phase: "codegen".into(),
-        file_name: "<stdlib>".into(),
-        message: e.message,
-    })?;
+    let mut bytecode =
+        forge::codegen_typed_program(typed).map_err(|e| LoadError::BootstrapFailed {
+            phase: "codegen".into(),
+            file_name: "<stdlib>".into(),
+            message: e.message,
+        })?;
     bytecode.docs = docs.clone();
     let next_fun_idx = bytecode
         .functions
@@ -980,7 +982,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         .max()
         .unwrap_or(0);
     let resolve_state = sigil::ResolveResumeState {
-        next_local_id: resolved.resume_state.next_local_id.max(next_fun_idx),
+        next_local_id: resume_state.next_local_id.max(next_fun_idx),
     };
 
     let snapshot = DefaultStdlibSnapshot {

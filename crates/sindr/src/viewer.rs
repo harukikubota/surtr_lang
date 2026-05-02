@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::builtin::builtin_meta_by_id;
 use crate::ir::{
     Bytecode, Constant, EldrInspect, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
-    SourceFileEntry,
+    RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, SourceFileEntry,
 };
 
 pub const VIEWER_SCHEMA_VERSION: u32 = 1;
@@ -20,6 +20,7 @@ pub struct ViewerFile {
     pub format: String,
     pub header: ViewerHeader,
     pub chunks: Vec<ChunkView>,
+    pub process_specs: Vec<ProcessSpecView>,
     pub functions: Vec<FunctionView>,
     pub constants: Vec<ConstantView>,
     pub opcodes: Vec<OpcodeRowView>,
@@ -238,6 +239,35 @@ pub struct ErrorTemplateView {
     pub source_ref: Option<SourceRefView>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
+pub struct ProcessSpecView {
+    pub process_name: String,
+    pub module_path: String,
+    pub kind: ProcessSpecKindView,
+    pub instance: ProcessSpecInstanceView,
+    pub boot: bool,
+    pub registry: bool,
+    pub lazy: bool,
+    pub init_fun_idx: u32,
+    pub get_fun_idx: u32,
+    pub set_fun_idx: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
+pub enum ProcessSpecKindView {
+    ReadOnlyAgent,
+    StateAgent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
+pub enum ProcessSpecInstanceView {
+    Singleton,
+    Multi,
+}
+
 #[cfg(feature = "viewer-schema")]
 pub fn viewer_schema() -> RootSchema {
     schema_for!(ViewerFile)
@@ -278,6 +308,13 @@ pub fn viewer_file_from_inspect(inspected: &EldrInspect) -> ViewerFile {
                 payload_offset: chunk.payload_offset as u32,
                 padded_size: chunk.padded_size as u32,
             })
+            .collect(),
+        process_specs: inspected
+            .bytecode
+            .runtime_process_specs
+            .entries
+            .iter()
+            .map(process_spec_view)
             .collect(),
         functions: inspected
             .bytecode
@@ -573,6 +610,27 @@ fn error_template_view(
     }
 }
 
+fn process_spec_view(spec: &RuntimeProcessSpec) -> ProcessSpecView {
+    ProcessSpecView {
+        process_name: spec.process_name.clone(),
+        module_path: spec.module_path.clone(),
+        kind: match spec.kind {
+            RuntimeProcessKind::ReadOnlyAgent => ProcessSpecKindView::ReadOnlyAgent,
+            RuntimeProcessKind::StateAgent => ProcessSpecKindView::StateAgent,
+        },
+        instance: match spec.instance {
+            RuntimeProcessInstance::Singleton => ProcessSpecInstanceView::Singleton,
+            RuntimeProcessInstance::Multi => ProcessSpecInstanceView::Multi,
+        },
+        boot: spec.boot,
+        registry: spec.registry,
+        lazy: spec.lazy,
+        init_fun_idx: spec.init_fun_idx,
+        get_fun_idx: spec.get_fun_idx,
+        set_fun_idx: spec.set_fun_idx,
+    }
+}
+
 fn source_lookup(sources: &[SourceFileEntry]) -> HashMap<String, String> {
     let mut lookup = HashMap::new();
     for source in sources {
@@ -628,6 +686,7 @@ mod tests {
     use crate::ir::{
         Bytecode, CompileInfo, Constant, DocEntry, DocKind, EldrChunkInfo, EldrHeader, EldrInspect,
         ErrTemplate, FunctionEntry, FunctionFlags, LabelEntry, Opcode, OpcodeSource,
+        RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
         SourceFileEntry, SourceMap,
     };
     use crate::primitives::int;
@@ -722,6 +781,20 @@ mod tests {
                 text: Some("print(42)".into()),
             }],
             pc_spans: Vec::new(),
+            runtime_process_specs: RuntimeProcessSpecTable {
+                entries: vec![RuntimeProcessSpec {
+                    process_name: "Counter".into(),
+                    module_path: "Agents::Counter".into(),
+                    kind: RuntimeProcessKind::StateAgent,
+                    instance: RuntimeProcessInstance::Singleton,
+                    boot: true,
+                    registry: true,
+                    lazy: false,
+                    init_fun_idx: 0,
+                    get_fun_idx: 0,
+                    set_fun_idx: Some(0),
+                }],
+            },
         };
         let inspected = EldrInspect {
             header: EldrHeader {
@@ -742,6 +815,7 @@ mod tests {
         let viewer = viewer_file_from_inspect(&inspected);
         assert_eq!(viewer.schema_version, VIEWER_SCHEMA_VERSION);
         assert_eq!(viewer.format, VIEWER_FORMAT);
+        assert_eq!(viewer.process_specs.len(), 1);
         assert_eq!(viewer.functions.len(), 1);
         assert_eq!(viewer.constants.len(), 1);
         assert_eq!(viewer.opcodes.len(), 4);

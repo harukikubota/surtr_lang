@@ -5,15 +5,16 @@ pub mod opcode;
 pub mod registry;
 
 pub use codegen::{
-    codegen, compose_bytecode_with_chunk, BindingInfo, ChunkMeta, ForgeCheckpoint, ForgeSession,
-    ReplCallableDisplay, ReplCallableKind, ReplTypeKind, TypeDefDisplay,
+    codegen, codegen_typed_program, compose_bytecode_with_chunk, BindingInfo, ChunkMeta,
+    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplTypeKind,
+    TypeDefDisplay,
 };
 
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
 
-    use super::codegen;
+    use super::{codegen, codegen_typed_program};
     use crate::bytecode::Constant;
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
@@ -247,6 +248,51 @@ mod tests {
             sigil::resolve_staged_program(module_stages, user_ast, declaration_index, None)
                 .expect("source should resolve");
         scar::typecheck(resolved).expect("source should typecheck")
+    }
+
+    fn typed_module_program_with_builtin_prelude(source: &str) -> scar::typed::TypedProgram {
+        let (module_stages, _) = cached_std_modules_and_declarations();
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+            .expect("source should parse");
+        let shared_imports = ast
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Import(_, _, _) => Some(stmt.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let lowered = ast
+            .into_iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Defmod(_, module_path, body, attrs) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.extend(body);
+                    Some(sigil::StagedModuleAst {
+                        module_path,
+                        ast: module_ast,
+                        module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
+                        process_spec: attrs.process_spec,
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let mut all_stages = module_stages.clone();
+        all_stages.push(lowered);
+        let declaration_index = sigil::precollect_declaration_index(&all_stages)
+            .expect("module stages should precollect");
+        let resolved = sigil::resolve_staged_program_from_state(
+            &all_stages,
+            Vec::new(),
+            &declaration_index,
+            None,
+            0,
+            sigil::ResolveResumeState::default(),
+        )
+        .expect("module source should resolve");
+        scar::typecheck_staged_program(resolved).expect("module source should typecheck")
     }
 
     fn codegen_source(source: &str) -> sindr::ir::Bytecode {
@@ -714,5 +760,35 @@ b = double(1.5)"#,
             .opcodes
             .iter()
             .any(|op| matches!(op, Opcode::AddFloat)));
+    }
+
+    #[test]
+    fn codegen_typed_program_embeds_runtime_process_specs() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"@@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
+defagent Counter {
+  @init
+  def init() -> Result<Int> { Ok(41) }
+
+  @get
+  def get(state: Int, label: String) -> Result<String> {
+    Ok(label ++ ":" ++ to_string(state + 1))
+  }
+
+  @set
+  def set(state: Int, next: Int) -> Result<Int> {
+    Ok(next)
+  }
+}"#,
+        );
+
+        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
+        let spec = &bytecode.runtime_process_specs.entries[0];
+        assert_eq!(spec.process_name, "Counter");
+        assert_eq!(spec.module_path, "Counter");
+        assert!(spec.boot);
+        assert!(spec.registry);
+        assert_eq!(spec.set_fun_idx.is_some(), true);
     }
 }

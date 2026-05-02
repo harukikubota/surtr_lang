@@ -575,8 +575,8 @@ pub(crate) fn compile_source(
         .unwrap_or(0);
     scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
     let typed = scar_session
-        .typecheck_with_context(
-            resolved.resolved,
+        .typecheck_staged_program_with_context(
+            resolved,
             scar::TypecheckContext {
                 runtime_policy: xldr::derive_runtime_policy(
                     compile_unit_kind,
@@ -600,16 +600,18 @@ pub(crate) fn compile_source(
         })?;
 
     let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
-    let (chunk, _) = forge_session.codegen_chunk(typed).map_err(|e| {
-        let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-        RuneError::diagnostic(
-            1,
-            sources,
-            source_id,
-            "codegen",
-            diagnostics::simple_error("CodegenError", &e.message, span, None),
-        )
-    })?;
+    let (chunk, _) = forge_session
+        .codegen_chunk_typed_program(typed)
+        .map_err(|e| {
+            let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                "codegen",
+                diagnostics::simple_error("CodegenError", &e.message, span, None),
+            )
+        })?;
     let mut bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
         .map_err(|e| {
             let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);

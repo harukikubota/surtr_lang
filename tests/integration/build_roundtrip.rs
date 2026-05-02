@@ -1,4 +1,4 @@
-use crate::common::{surtr_command, unique_temp_dir, write_source};
+use crate::common::{repo_root, surtr_command, unique_temp_dir, write_source};
 use serde_json::Value;
 use std::fs;
 
@@ -129,6 +129,42 @@ fn dump_outputs_valid_json_for_jq() {
     assert!(json["summary"]["label_count"].as_u64().unwrap_or(0) > 0);
 
     let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn dump_outputs_runtime_process_specs_for_agent_modules() {
+    let fixture = repo_root().join("tests/spec/modules/process_state_agent_singleton_surface");
+    let source_path = fixture.join("Agents.srt");
+
+    let dump = surtr_command()
+        .current_dir(&fixture)
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert_eq!(json["summary"]["process_spec_count"], 1);
+    let specs = json["bytecode"]["runtime_process_specs"]["entries"]
+        .as_array()
+        .expect("runtime process specs must be an array");
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0]["process_name"], "Counter");
+    assert_eq!(specs[0]["module_path"], "Counter");
+    assert_eq!(specs[0]["kind"], "StateAgent");
+    assert_eq!(specs[0]["instance"], "Singleton");
+    assert_eq!(specs[0]["boot"], true);
+    assert_eq!(specs[0]["set_fun_idx"].is_number(), true);
 }
 
 #[test]
