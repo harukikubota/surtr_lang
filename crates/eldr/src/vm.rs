@@ -8,7 +8,7 @@ use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, ListHandle, Location, PidHandle,
     RichError, TypeRegistry, Value,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::builtin::call_builtin;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
@@ -216,15 +216,53 @@ impl VmObserver {
 #[derive(Debug, Clone, Default)]
 struct ProcessRuntime {
     next_pid: u64,
+    specs_by_id: Vec<RuntimeProcessSpec>,
+    spec_id_by_name: BTreeMap<String, u32>,
     specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
     singleton_by_name: BTreeMap<String, u64>,
-    processes: BTreeMap<u64, ProcessEntry>,
+    processes: BTreeMap<u64, ProcessInstance>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
-struct ProcessEntry {
-    name: String,
-    state: Value,
+struct ProcessInstance {
+    pid: u64,
+    spec_id: u32,
+    status: ProcessStatus,
+    mailbox: VecDeque<ProcessMailboxMessage>,
+    execution_context: Option<ProcessExecutionContext>,
+    state_value: Option<Value>,
+    owner: Option<u64>,
+    lazy_state_pending: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ProcessStatus {
+    #[default]
+    Runnable,
+    WaitingBoot,
+    Completed,
+    Failed,
+    Restarting,
+    Stopped,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum ProcessMailboxMessage {
+    Request { payload: Value },
+    Reply { payload: Value },
+    Cast(Value),
+    SystemBoot,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct ProcessExecutionContext {
+    stack: Vec<Value>,
+    frames: Vec<CallFrame>,
+    pc: usize,
 }
 
 /// The Surtr virtual machine — executes bytecode produced by Forge.
@@ -815,7 +853,7 @@ impl VM {
             }
         };
 
-        let pid = self.allocate_process(process_name.clone(), state);
+        let pid = self.allocate_process(process_name.clone(), state)?;
         self.process_runtime
             .singleton_by_name
             .insert(process_name.clone(), pid);
@@ -833,7 +871,7 @@ impl VM {
         let init_result = self.invoke_callable_sync(init, Vec::new())?;
         match decode_vm_result(init_result, "__process_spawn", "init")? {
             Ok(state) => {
-                let pid = self.allocate_process(process_name.clone(), state);
+                let pid = self.allocate_process(process_name.clone(), state)?;
                 Ok(ok_vm_result(Value::Pid(PidHandle {
                     id: pid,
                     process_name,
@@ -850,8 +888,14 @@ impl VM {
                 &format!("unknown pid {} for {}", pid.id, pid.process_name),
             )));
         };
-        if entry.name != pid.process_name {
-            let actual_name = entry.name.clone();
+        let Some(spec) = self.process_runtime.spec_for_id(entry.spec_id) else {
+            return Err(RuntimeError::new(format!(
+                "process {} references unknown spec {}",
+                entry.pid, entry.spec_id
+            )));
+        };
+        if spec.process_name != pid.process_name {
+            let actual_name = spec.process_name.clone();
             return Ok(err_vm_result(self.process_error(
                 "InvalidPid",
                 &format!(
@@ -860,7 +904,13 @@ impl VM {
                 ),
             )));
         }
-        Ok(ok_vm_result(entry.state.clone()))
+        let Some(state) = entry.state_value.clone() else {
+            return Ok(err_vm_result(self.process_error(
+                "ProcessStateUnavailable",
+                &format!("pid {} has no materialized state", pid.id),
+            )));
+        };
+        Ok(ok_vm_result(state))
     }
 
     pub(crate) fn process_store(
@@ -868,14 +918,25 @@ impl VM {
         pid: &PidHandle,
         next_state: Value,
     ) -> Result<Value, RuntimeError> {
-        let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
+        let Some(spec_id) = self
+            .process_runtime
+            .processes
+            .get(&pid.id)
+            .map(|entry| entry.spec_id)
+        else {
             return Ok(err_vm_result(self.process_error(
                 "InvalidPid",
                 &format!("unknown pid {} for {}", pid.id, pid.process_name),
             )));
         };
-        if entry.name != pid.process_name {
-            let actual_name = entry.name.clone();
+        let Some(spec) = self.process_runtime.spec_for_id(spec_id) else {
+            return Err(RuntimeError::new(format!(
+                "process {} references unknown spec {}",
+                pid.id, spec_id
+            )));
+        };
+        if spec.process_name != pid.process_name {
+            let actual_name = spec.process_name.clone();
             return Ok(err_vm_result(self.process_error(
                 "InvalidPid",
                 &format!(
@@ -884,17 +945,43 @@ impl VM {
                 ),
             )));
         }
-        entry.state = next_state;
+        let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
+            return Err(RuntimeError::new(format!(
+                "process {} disappeared while storing state",
+                pid.id
+            )));
+        };
+        entry.state_value = Some(next_state);
+        entry.lazy_state_pending = false;
         Ok(ok_vm_result(Value::Unit))
     }
 
-    fn allocate_process(&mut self, name: String, state: Value) -> u64 {
+    fn allocate_process(&mut self, name: String, state: Value) -> Result<u64, RuntimeError> {
+        let Some(spec_id) = self.process_runtime.spec_id_by_name.get(&name).copied() else {
+            return Err(RuntimeError::new(format!(
+                "unknown process spec `{name}` during allocation"
+            )));
+        };
         let pid = self.process_runtime.next_pid;
         self.process_runtime.next_pid += 1;
-        self.process_runtime
-            .processes
-            .insert(pid, ProcessEntry { name, state });
-        pid
+        let lazy_state_pending = self
+            .process_runtime
+            .spec_for_id(spec_id)
+            .is_some_and(|spec| spec.lazy);
+        self.process_runtime.processes.insert(
+            pid,
+            ProcessInstance {
+                pid,
+                spec_id,
+                status: ProcessStatus::Runnable,
+                mailbox: VecDeque::new(),
+                execution_context: None,
+                state_value: Some(state),
+                owner: None,
+                lazy_state_pending,
+            },
+        );
+        Ok(pid)
     }
 
     fn process_error(&self, kind: &str, message: &str) -> RichError {
@@ -2660,12 +2747,23 @@ impl ProcessRuntime {
     }
 
     fn register_spec_table(&mut self, spec_table: &RuntimeProcessSpecTable) {
+        self.specs_by_id = spec_table.entries.clone();
+        self.spec_id_by_name = spec_table
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(idx, spec)| (spec.process_name.clone(), idx as u32))
+            .collect();
         self.specs_by_name = spec_table
             .entries
             .iter()
             .cloned()
             .map(|spec| (spec.process_name.clone(), spec))
             .collect();
+    }
+
+    fn spec_for_id(&self, spec_id: u32) -> Option<&RuntimeProcessSpec> {
+        self.specs_by_id.get(spec_id as usize)
     }
 }
 
@@ -2736,7 +2834,7 @@ mod tests {
         SourceMap,
     };
     use sindr::primitives::int;
-    use sindr::runtime::{TypeEntry, TypeKind, TypeRegistry, Value};
+    use sindr::runtime::{PidHandle, TypeEntry, TypeKind, TypeRegistry, Value};
 
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
@@ -2774,6 +2872,120 @@ mod tests {
         assert_eq!(spec.init_fun_idx, 0);
         assert_eq!(spec.get_fun_idx, 1);
         assert_eq!(spec.set_fun_idx, Some(2));
+        assert_eq!(vm.process_runtime.spec_id_by_name.get("Counter"), Some(&0));
+        assert_eq!(
+            vm.process_runtime
+                .spec_for_id(0)
+                .expect("spec id 0 should resolve")
+                .process_name,
+            "Counter"
+        );
+    }
+
+    #[test]
+    fn allocate_process_creates_process_instance_with_runtime_shape() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![RuntimeProcessSpec {
+                process_name: "Counter".into(),
+                module_path: "Counter".into(),
+                kind: RuntimeProcessKind::StateAgent,
+                instance: RuntimeProcessInstance::Singleton,
+                boot: true,
+                registry: true,
+                lazy: false,
+                init_fun_idx: 0,
+                get_fun_idx: 1,
+                set_fun_idx: Some(2),
+            }],
+        };
+
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process("Counter".into(), Value::Int(int(41)))
+            .expect("process allocation should succeed");
+        let instance = vm
+            .process_runtime
+            .processes
+            .get(&pid)
+            .expect("process instance should be stored");
+
+        assert_eq!(instance.pid, pid);
+        assert_eq!(instance.spec_id, 0);
+        assert_eq!(instance.status, super::ProcessStatus::Runnable);
+        assert!(instance.mailbox.is_empty());
+        assert!(instance.execution_context.is_none());
+        assert_eq!(instance.state_value, Some(Value::Int(int(41))));
+        assert_eq!(instance.owner, None);
+        assert!(!instance.lazy_state_pending);
+    }
+
+    #[test]
+    fn process_state_and_store_validate_pid_against_registered_spec() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                RuntimeProcessSpec {
+                    process_name: "Counter".into(),
+                    module_path: "Counter".into(),
+                    kind: RuntimeProcessKind::StateAgent,
+                    instance: RuntimeProcessInstance::Singleton,
+                    boot: true,
+                    registry: true,
+                    lazy: false,
+                    init_fun_idx: 0,
+                    get_fun_idx: 1,
+                    set_fun_idx: Some(2),
+                },
+                RuntimeProcessSpec {
+                    process_name: "Clock".into(),
+                    module_path: "Clock".into(),
+                    kind: RuntimeProcessKind::StateAgent,
+                    instance: RuntimeProcessInstance::Singleton,
+                    boot: true,
+                    registry: true,
+                    lazy: false,
+                    init_fun_idx: 3,
+                    get_fun_idx: 4,
+                    set_fun_idx: Some(5),
+                },
+            ],
+        };
+
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process("Counter".into(), Value::Int(int(41)))
+            .expect("process allocation should succeed");
+
+        let ok_pid = PidHandle {
+            id: pid,
+            process_name: "Counter".into(),
+        };
+        let wrong_pid = PidHandle {
+            id: pid,
+            process_name: "Clock".into(),
+        };
+
+        assert_eq!(
+            vm.process_state(&ok_pid)
+                .expect("state lookup should succeed"),
+            super::ok_vm_result(Value::Int(int(41)))
+        );
+        let mismatch = vm
+            .process_state(&wrong_pid)
+            .expect("mismatch should still return Err(Result)");
+        assert!(matches!(mismatch, Value::Tagged { tag: 1, .. }));
+
+        assert_eq!(
+            vm.process_store(&ok_pid, Value::Int(int(99)))
+                .expect("store should succeed"),
+            super::ok_vm_result(Value::Unit)
+        );
+        assert_eq!(
+            vm.process_state(&ok_pid)
+                .expect("updated state should succeed"),
+            super::ok_vm_result(Value::Int(int(99)))
+        );
     }
 
     fn function_entry(

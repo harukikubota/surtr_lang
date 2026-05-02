@@ -64,14 +64,14 @@ pub(super) fn compile_sources_with_mode(
         .unwrap_or(0);
     scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
     let typed = scar_session
-        .typecheck_with_context(
-            resolved.resolved,
+        .typecheck_staged_program_with_context(
+            resolved,
             compile_chunk_typecheck_context_for_mode(mode),
         )
         .map_err(|e| format!("phase=typecheck; message={}", e))?;
     let mut forge_session = forge::ForgeSession::from_bytecode(&compile_prefix.bytecode);
     let (chunk, _) = forge_session
-        .codegen_chunk(typed)
+        .codegen_chunk_typed_program(typed)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
     let mut bytecode = forge::compose_bytecode_with_chunk(compile_prefix.bytecode.clone(), chunk)
         .map_err(|e| format!("phase=codegen; message={}", e))?;

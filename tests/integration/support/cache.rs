@@ -289,20 +289,21 @@ fn cached_script_compile_prefix(
         std_snapshot.resolve_state,
     )
     .map_err(|e| format!("phase=resolve; message={}", e))?;
+    let resume_state = resolved.resume_state;
 
     let mut scar_session = scar::ScarSession::new();
     scar_session.rollback(std_snapshot.scar_checkpoint.clone());
     scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&std_snapshot.bytecode));
     let typed = scar_session
-        .typecheck_with_context(
-            resolved.resolved,
+        .typecheck_staged_program_with_context(
+            resolved,
             compile_chunk_typecheck_context_for_mode(TestCompileMode::Script),
         )
         .map_err(|e| format!("phase=typecheck; message={}", e))?;
 
     let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
     let (chunk, _) = forge_session
-        .codegen_chunk(typed)
+        .codegen_chunk_typed_program(typed)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
     let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
@@ -311,10 +312,7 @@ fn cached_script_compile_prefix(
         module_asts: cached_modules.module_asts,
         declaration_index: cached_modules.declaration_index,
         resolve_state: sigil::ResolveResumeState {
-            next_local_id: resolved
-                .resume_state
-                .next_local_id
-                .max(next_fun_idx(&bytecode)),
+            next_local_id: resume_state.next_local_id.max(next_fun_idx(&bytecode)),
         },
         scar_checkpoint: scar_session.checkpoint(),
         bytecode,
@@ -351,20 +349,18 @@ pub(super) fn cached_compile_prefix(
             None,
         )
         .map_err(|e| format!("phase=resolve; message={}", e))?;
+        let resume_state = resolved.resume_state;
         let mut scar_session = scar::ScarSession::new();
         let typed = scar_session
-            .typecheck_with_context(resolved.resolved, std_typecheck_context_for_mode(mode))
+            .typecheck_staged_program_with_context(resolved, std_typecheck_context_for_mode(mode))
             .map_err(|e| format!("phase=typecheck; message={}", e))?;
-        let bytecode =
-            forge::codegen(typed).map_err(|e| format!("phase=codegen; message={}", e))?;
+        let bytecode = forge::codegen_typed_program(typed)
+            .map_err(|e| format!("phase=codegen; message={}", e))?;
         Arc::new(CachedCompilePrefix {
             module_asts: cached_modules.module_asts,
             declaration_index: cached_modules.declaration_index,
             resolve_state: sigil::ResolveResumeState {
-                next_local_id: resolved
-                    .resume_state
-                    .next_local_id
-                    .max(next_fun_idx(&bytecode)),
+                next_local_id: resume_state.next_local_id.max(next_fun_idx(&bytecode)),
             },
             scar_checkpoint: scar_session.checkpoint(),
             bytecode,
