@@ -76,6 +76,7 @@ pub enum Token {
     // ── Keywords ──
     Def,
     Defp,
+    Defagent,
     Defmod,
     Namespace,
     Deftrait,

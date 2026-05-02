@@ -179,6 +179,11 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         include_str!("../../../lib/types/option.srt"),
         "Option",
     ),
+    (
+        "process.srt",
+        include_str!("../../../lib/process.srt"),
+        "Task",
+    ),
     ("lens.srt", include_str!("../../../lib/lens.srt"), "Lens"),
     (
         "types/float.srt",
@@ -955,6 +960,7 @@ mod tests {
                 "HashMap",
                 "Result",
                 "Option",
+                "Task",
                 "Lens",
                 "Float",
                 "Config",
@@ -1096,6 +1102,7 @@ mod tests {
                 "HashMap",
                 "Result",
                 "Option",
+                "Task",
                 "Lens",
                 "Float",
                 "Config",

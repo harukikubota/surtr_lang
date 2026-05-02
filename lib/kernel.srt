@@ -325,4 +325,13 @@ defmod Kernel {
   []
   """
   @@builtin def project_args() -> List<String>
+
+  @@builtin def __process_pid(name: String, init: (-> Result<$State>)) -> Unit
+  @@builtin def __process_spawn(name: String, init: (-> Result<$State>)) -> Result<Unit>
+  @@builtin def __process_state(pid: Unit) -> Result<$State>
+  @@builtin def __process_store(pid: Unit, state: $State) -> Result<Unit>
+  @@builtin def __task_call(body: (-> Result<$A>)) -> Result<$A>
+  @@builtin def __task_async(body: (-> Result<$A>)) -> Result<$A>
+  @@builtin def __task_launch(body: (-> Result<Unit>)) -> Result<Unit>
+  @@builtin def __task_cast(body: (-> Unit)) -> Result<Unit>
 }

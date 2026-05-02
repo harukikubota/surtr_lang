@@ -5,8 +5,8 @@ use sindr::ir::{
 };
 use sindr::primitives::SurtrInt;
 use sindr::runtime::{
-    Callable, CallableMetadata, CallableOrigin, CallableTarget, ListHandle, Location, RichError,
-    TypeRegistry, Value,
+    Callable, CallableMetadata, CallableOrigin, CallableTarget, ListHandle, Location, PidHandle,
+    RichError, TypeRegistry, Value,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -97,6 +97,7 @@ struct VmCheckpoint {
     test_stdout_cursor: usize,
     test_stderr_cursor: usize,
     stdin_input_cursor: usize,
+    process_runtime: ProcessRuntime,
     opcode_len: usize,
     constant_len: usize,
     type_entry_len: usize,
@@ -211,6 +212,19 @@ impl VmObserver {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct ProcessRuntime {
+    next_pid: u64,
+    singleton_by_name: BTreeMap<String, u64>,
+    processes: BTreeMap<u64, ProcessEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct ProcessEntry {
+    name: String,
+    state: Value,
+}
+
 /// The Surtr virtual machine — executes bytecode produced by Forge.
 #[derive(Clone)]
 pub struct VM {
@@ -249,6 +263,8 @@ pub struct VM {
     /// Cursor tracking for test-event I/O slices.
     test_stdout_cursor: usize,
     test_stderr_cursor: usize,
+    /// VM-owned process table for the initial actor/agent runtime.
+    process_runtime: ProcessRuntime,
 }
 
 impl VM {
@@ -279,6 +295,7 @@ impl VM {
             test_events: Vec::new(),
             test_stdout_cursor: 0,
             test_stderr_cursor: 0,
+            process_runtime: ProcessRuntime::default(),
         }
     }
 
@@ -771,6 +788,124 @@ impl VM {
         &self.bytecode.type_registry
     }
 
+    pub(crate) fn process_singleton_pid(
+        &mut self,
+        process_name: String,
+        init: Callable,
+    ) -> Result<Value, RuntimeError> {
+        if let Some(pid) = self.process_runtime.singleton_by_name.get(&process_name) {
+            return Ok(Value::Pid(PidHandle {
+                id: *pid,
+                process_name,
+            }));
+        }
+
+        let init_result = self.invoke_callable_sync(init, Vec::new())?;
+        let state = match decode_vm_result(init_result, "__process_pid", "init")? {
+            Ok(state) => state,
+            Err(err) => {
+                return Err(RuntimeError::new(format!(
+                    "process `{}` failed to initialize: {}",
+                    process_name,
+                    err.visible_message()
+                )))
+            }
+        };
+
+        let pid = self.allocate_process(process_name.clone(), state);
+        self.process_runtime
+            .singleton_by_name
+            .insert(process_name.clone(), pid);
+        Ok(Value::Pid(PidHandle {
+            id: pid,
+            process_name,
+        }))
+    }
+
+    pub(crate) fn process_spawn(
+        &mut self,
+        process_name: String,
+        init: Callable,
+    ) -> Result<Value, RuntimeError> {
+        let init_result = self.invoke_callable_sync(init, Vec::new())?;
+        match decode_vm_result(init_result, "__process_spawn", "init")? {
+            Ok(state) => {
+                let pid = self.allocate_process(process_name.clone(), state);
+                Ok(ok_vm_result(Value::Pid(PidHandle {
+                    id: pid,
+                    process_name,
+                })))
+            }
+            Err(err) => Ok(err_vm_result(err)),
+        }
+    }
+
+    pub(crate) fn process_state(&self, pid: &PidHandle) -> Result<Value, RuntimeError> {
+        let Some(entry) = self.process_runtime.processes.get(&pid.id) else {
+            return Ok(err_vm_result(self.process_error(
+                "InvalidPid",
+                &format!("unknown pid {} for {}", pid.id, pid.process_name),
+            )));
+        };
+        if entry.name != pid.process_name {
+            let actual_name = entry.name.clone();
+            return Ok(err_vm_result(self.process_error(
+                "InvalidPid",
+                &format!(
+                    "pid {} belongs to {}, not {}",
+                    pid.id, actual_name, pid.process_name
+                ),
+            )));
+        }
+        Ok(ok_vm_result(entry.state.clone()))
+    }
+
+    pub(crate) fn process_store(
+        &mut self,
+        pid: &PidHandle,
+        next_state: Value,
+    ) -> Result<Value, RuntimeError> {
+        let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
+            return Ok(err_vm_result(self.process_error(
+                "InvalidPid",
+                &format!("unknown pid {} for {}", pid.id, pid.process_name),
+            )));
+        };
+        if entry.name != pid.process_name {
+            let actual_name = entry.name.clone();
+            return Ok(err_vm_result(self.process_error(
+                "InvalidPid",
+                &format!(
+                    "pid {} belongs to {}, not {}",
+                    pid.id, actual_name, pid.process_name
+                ),
+            )));
+        }
+        entry.state = next_state;
+        Ok(ok_vm_result(Value::Unit))
+    }
+
+    fn allocate_process(&mut self, name: String, state: Value) -> u64 {
+        let pid = self.process_runtime.next_pid;
+        self.process_runtime.next_pid += 1;
+        self.process_runtime
+            .processes
+            .insert(pid, ProcessEntry { name, state });
+        pid
+    }
+
+    fn process_error(&self, kind: &str, message: &str) -> RichError {
+        let location = self.runtime_error_location().unwrap_or_else(|| Location {
+            file: self.source_file().unwrap_or("<runtime>").to_string(),
+            func: "<process>".into(),
+            line: 0,
+            column: 0,
+            span_start: 0,
+            span_end: 0,
+        });
+        RichError::new(kind, message, location, None)
+    }
+
     /// Read-only access to the accumulated bytecode.
     pub fn bytecode(&self) -> &Bytecode {
         &self.bytecode
@@ -1076,6 +1211,7 @@ impl VM {
             test_stdout_cursor: self.test_stdout_cursor,
             test_stderr_cursor: self.test_stderr_cursor,
             stdin_input_cursor: self.stdin_input_cursor,
+            process_runtime: self.process_runtime.clone(),
             opcode_len: self.bytecode.opcodes.len(),
             constant_len: self.bytecode.constants.len(),
             type_entry_len: self.bytecode.type_registry.entries.len(),
@@ -1109,6 +1245,7 @@ impl VM {
         self.test_stdout_cursor = checkpoint.test_stdout_cursor;
         self.test_stderr_cursor = checkpoint.test_stderr_cursor;
         self.stdin_input_cursor = checkpoint.stdin_input_cursor;
+        self.process_runtime = checkpoint.process_runtime;
 
         self.bytecode.opcodes.truncate(checkpoint.opcode_len);
         self.bytecode.constants.truncate(checkpoint.constant_len);
@@ -1182,6 +1319,66 @@ impl VM {
     fn observe_tail_call_optimized(&mut self) {
         if let Some(observer) = self.observer.as_mut() {
             observer.stats.tail_calls_optimized += 1;
+        }
+    }
+
+    pub(crate) fn invoke_callable_sync(
+        &mut self,
+        callable: Callable,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        let mut full_args = callable.lexical_captures;
+        full_args.extend(args);
+
+        match callable.target {
+            CallableTarget::Builtin(builtin_id) => call_builtin(self, builtin_id, full_args),
+            CallableTarget::Function(fun_idx) => {
+                let entry = self.function_entry(fun_idx)?.clone();
+                if entry.arity as usize != full_args.len() {
+                    return Err(RuntimeError::new(format!(
+                        "Call arity mismatch for function {}: expected {}, got {}",
+                        fun_idx,
+                        entry.arity,
+                        full_args.len()
+                    )));
+                }
+                if entry.entry_pc as usize >= self.bytecode.opcodes.len() {
+                    return Err(RuntimeError::new(format!(
+                        "Function {} entry_pc out of bounds: {}",
+                        fun_idx, entry.entry_pc
+                    )));
+                }
+
+                let frame_depth = self.frames.len();
+                let locals = Self::build_locals_for_call(&entry, full_args)?;
+                let stack_base = self.stack.len();
+                self.frames.push(CallFrame {
+                    return_pc: usize::MAX,
+                    stack_base,
+                    call_site: self.current_frame().ok().and_then(|frame| frame.call_site),
+                    locals,
+                });
+
+                let mut pc = entry.entry_pc as usize;
+                while self.frames.len() > frame_depth {
+                    if pc >= self.bytecode.opcodes.len() {
+                        return Err(RuntimeError::new("PC out of bounds during process call"));
+                    }
+                    let current_pc = pc;
+                    let op = self.bytecode.opcodes[pc].clone();
+                    self.observe_opcode_step(current_pc, &op);
+                    pc += 1;
+                    let halted = self
+                        .execute_opcode(op.clone(), &mut pc)
+                        .map_err(|err| self.enrich_runtime_error(err, current_pc, &op))?;
+                    if halted {
+                        return Err(RuntimeError::new("process handler halted the VM"));
+                    }
+                    self.observe_current_depths();
+                }
+
+                self.pop_stack()
+            }
         }
     }
 
@@ -2437,6 +2634,51 @@ impl VM {
         let a = self.pop_float()?;
         self.stack.push(f(a, b));
         Ok(())
+    }
+}
+
+fn ok_vm_result(value: Value) -> Value {
+    Value::Tagged {
+        tag: 0,
+        fields: vec![value],
+    }
+}
+
+fn err_vm_result(rich: RichError) -> Value {
+    Value::Tagged {
+        tag: 1,
+        fields: vec![Value::Error(Box::new(rich))],
+    }
+}
+
+fn decode_vm_result(
+    value: Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<Result<Value, RichError>, RuntimeError> {
+    match value {
+        Value::Tagged { tag: 0, fields } => match fields.as_slice() {
+            [inner] => Ok(Ok(inner.clone())),
+            other => Err(RuntimeError::new(format!(
+                "{builtin_name} expects Ok with exactly one field for {arg_name}, got {}",
+                other.len()
+            ))),
+        },
+        Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+            [Value::Error(rich)] => Ok(Err((**rich).clone())),
+            [other] => Err(RuntimeError::new(format!(
+                "{builtin_name} expects Err(Error) for {arg_name}, got Err({:?})",
+                other
+            ))),
+            other => Err(RuntimeError::new(format!(
+                "{builtin_name} expects Err with exactly one field for {arg_name}, got {}",
+                other.len()
+            ))),
+        },
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Result as {arg_name}, got {:?}",
+            other
+        ))),
     }
 }
 

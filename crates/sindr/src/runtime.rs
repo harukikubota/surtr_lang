@@ -64,6 +64,7 @@ pub enum Value {
     RegexCaptures(RegexCapturesHandle),
     RegexMatch(RegexMatchHandle),
     RandomGenerator(RandomGeneratorHandle),
+    Pid(PidHandle),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +89,12 @@ pub struct RegexMatchHandle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RandomGeneratorHandle {
     pub state: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PidHandle {
+    pub id: u64,
+    pub process_name: String,
 }
 
 /// Shared runtime handle for immutable string-keyed maps.
@@ -305,6 +312,7 @@ impl Value {
             }
             Value::RegexMatch(handle) => format!("RegexMatch({}..{})", handle.start, handle.end),
             Value::RandomGenerator(_) => "RandomGenerator(<opaque>)".to_string(),
+            Value::Pid(handle) => format!("PID({}#{})", handle.process_name, handle.id),
         }
     }
 }

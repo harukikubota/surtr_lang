@@ -7,6 +7,297 @@ use super::ast_ty_span;
 use super::context::{DeclLevel, TopLevelDeclKind};
 use super::Parser;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentKind {
+    ReadOnly,
+    State,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentInstance {
+    Singleton,
+    Multi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentMeta {
+    kind: AgentKind,
+    instance: AgentInstance,
+    boot: bool,
+    registry: bool,
+    lazy: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentHandlerKind {
+    Init,
+    Get,
+    Set,
+}
+
+#[derive(Debug, Clone)]
+struct AgentHandler {
+    def: Ast,
+}
+
+fn rename_agent_handler(mut def: Ast, internal_name: &str) -> Result<Ast, ParseError> {
+    match &mut def {
+        Ast::Def(_, name, _, _, _, _, attrs) => {
+            *name = internal_name.to_string();
+            attrs.visibility = Visibility::Private;
+            Ok(def)
+        }
+        other => Err(ParseError::syntax(
+            "agent handlers must be `def` declarations",
+            other.span().clone(),
+        )),
+    }
+}
+
+fn def_params(def: &Ast) -> Result<&Vec<FunParam>, ParseError> {
+    match def {
+        Ast::Def(_, _, _, params, _, _, _) => Ok(params),
+        other => Err(ParseError::syntax(
+            "agent lowering expected a function definition",
+            other.span().clone(),
+        )),
+    }
+}
+
+fn def_ret_ty(def: &Ast) -> Result<Option<AstTy>, ParseError> {
+    match def {
+        Ast::Def(_, _, _, _, ret_ty, _, _) => Ok(ret_ty.clone()),
+        other => Err(ParseError::syntax(
+            "agent lowering expected a function definition",
+            other.span().clone(),
+        )),
+    }
+}
+
+fn def_type_params(def: &Ast) -> Result<Vec<TypeParam>, ParseError> {
+    match def {
+        Ast::Def(_, _, type_params, _, _, _, _) => Ok(type_params.clone()),
+        other => Err(ParseError::syntax(
+            "agent lowering expected a function definition",
+            other.span().clone(),
+        )),
+    }
+}
+
+fn var(span: &Span, name: &str) -> Ast {
+    Ast::Var(span.clone(), name.to_string())
+}
+
+fn positional(expr: Ast) -> RecordLitArg {
+    RecordLitArg::Positional(expr)
+}
+
+fn call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
+    Ast::App(
+        span.clone(),
+        Box::new(var(span, name)),
+        args.into_iter().map(positional).collect(),
+    )
+}
+
+fn string_lit(span: &Span, value: &str) -> Ast {
+    Ast::Lit(span.clone(), Lit::Str(value.to_string()))
+}
+
+fn capture_ref(span: &Span, name: &str) -> Ast {
+    Ast::Capture(span.clone(), Box::new(var(span, name)), Vec::new())
+}
+
+fn result_unit_ty(span: &Span) -> AstTy {
+    AstTy::Generic(
+        span.clone(),
+        "Result".to_string(),
+        vec![AstTy::Named(span.clone(), "Unit".to_string())],
+    )
+}
+
+fn unit_ty(span: &Span) -> AstTy {
+    AstTy::Named(span.clone(), "Unit".to_string())
+}
+
+fn param_vars(span: &Span, params: &[FunParam]) -> Vec<Ast> {
+    params
+        .iter()
+        .map(|param| var(&param.span, &param.name))
+        .chain(std::iter::empty::<Ast>())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|node| match node {
+            Ast::Var(_, _) => node,
+            _ => var(span, ""),
+        })
+        .collect()
+}
+
+fn pid_bind(span: &Span, agent_name: &str) -> Ast {
+    Ast::Bind(
+        span.clone(),
+        AstPattern::Var(span.clone(), "pid".to_string()),
+        Box::new(process_pid_call(span, agent_name)),
+    )
+}
+
+fn process_pid_call(span: &Span, agent_name: &str) -> Ast {
+    call(
+        span,
+        "__process_pid",
+        vec![
+            string_lit(span, agent_name),
+            capture_ref(span, "__agent_init"),
+        ],
+    )
+}
+
+fn process_state_bind(span: &Span) -> Ast {
+    Ast::SafeBind(
+        span.clone(),
+        AstPattern::Var(span.clone(), "state".to_string()),
+        Box::new(call(span, "__process_state", vec![var(span, "pid")])),
+    )
+}
+
+fn init_closure(span: &Span, params: &[FunParam]) -> Ast {
+    Ast::Closure(
+        span.clone(),
+        Vec::new(),
+        Box::new(call(span, "__agent_init", param_vars(span, params))),
+    )
+}
+
+fn build_readonly_get_wrapper(
+    span: &Span,
+    agent_name: &str,
+    get_def: &Ast,
+) -> Result<Ast, ParseError> {
+    let params = def_params(get_def)?;
+    let surface_params = params.iter().skip(1).cloned().collect::<Vec<_>>();
+    let mut call_args = vec![var(span, "state")];
+    call_args.extend(param_vars(span, &surface_params));
+    let body = Ast::Block(
+        span.clone(),
+        vec![
+            pid_bind(span, agent_name),
+            process_state_bind(span),
+            call(span, "__agent_get", call_args),
+        ],
+    );
+    Ok(Ast::Def(
+        span.clone(),
+        "get".to_string(),
+        def_type_params(get_def)?,
+        surface_params,
+        def_ret_ty(get_def)?,
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
+}
+
+fn pid_param(span: &Span) -> FunParam {
+    FunParam {
+        name: "pid".to_string(),
+        ty: unit_ty(span),
+        span: span.clone(),
+    }
+}
+
+fn build_pid_wrapper(span: &Span, agent_name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        "pid".to_string(),
+        Vec::new(),
+        Vec::new(),
+        Some(unit_ty(span)),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![process_pid_call(span, agent_name)],
+        )),
+        DeclAttrs::default(),
+    )
+}
+
+fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<Ast, ParseError> {
+    let params = def_params(init_def)?.clone();
+    let body = Ast::Block(
+        span.clone(),
+        vec![call(
+            span,
+            "__process_spawn",
+            vec![string_lit(span, agent_name), init_closure(span, &params)],
+        )],
+    );
+    Ok(Ast::Def(
+        span.clone(),
+        "spawn".to_string(),
+        def_type_params(init_def)?,
+        params,
+        Some(result_unit_ty(span)),
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
+}
+
+fn build_state_get_wrapper(span: &Span, get_def: &Ast) -> Result<Ast, ParseError> {
+    let params = def_params(get_def)?;
+    let mut surface_params = vec![pid_param(span)];
+    surface_params.extend(params.iter().skip(1).cloned());
+    let mut call_args = vec![var(span, "state")];
+    call_args.extend(param_vars(span, &surface_params[1..]));
+    let body = Ast::Block(
+        span.clone(),
+        vec![
+            process_state_bind(span),
+            call(span, "__agent_get", call_args),
+        ],
+    );
+    Ok(Ast::Def(
+        span.clone(),
+        "get".to_string(),
+        def_type_params(get_def)?,
+        surface_params,
+        def_ret_ty(get_def)?,
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
+}
+
+fn build_state_set_wrapper(span: &Span, set_def: &Ast) -> Result<Ast, ParseError> {
+    let params = def_params(set_def)?;
+    let mut surface_params = vec![pid_param(span)];
+    surface_params.extend(params.iter().skip(1).cloned());
+    let mut call_args = vec![var(span, "state")];
+    call_args.extend(param_vars(span, &surface_params[1..]));
+    let body = Ast::Block(
+        span.clone(),
+        vec![
+            process_state_bind(span),
+            Ast::SafeBind(
+                span.clone(),
+                AstPattern::Var(span.clone(), "next_state".to_string()),
+                Box::new(call(span, "__agent_set", call_args)),
+            ),
+            call(
+                span,
+                "__process_store",
+                vec![var(span, "pid"), var(span, "next_state")],
+            ),
+        ],
+    );
+    Ok(Ast::Def(
+        span.clone(),
+        "set".to_string(),
+        def_type_params(set_def)?,
+        surface_params,
+        Some(result_unit_ty(span)),
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
+}
+
 impl Parser<'_> {
     fn is_cap_pattern(name: &str) -> bool {
         let mut chars = name.chars();
@@ -1559,6 +1850,7 @@ impl Parser<'_> {
         let mut attrs = DeclAttrs::default();
         let mut saw_builtin = false;
         let mut saw_intrinsic = false;
+        let mut agent_meta: Option<AgentMeta> = None;
         let mut start_span: Option<Span> = None;
         let mut intrinsic_start_span: Option<Span> = None;
 
@@ -1594,6 +1886,21 @@ impl Parser<'_> {
                     }
                     saw_intrinsic = true;
                     intrinsic_start_span = Some(annotator_span);
+                }
+                "agent" => {
+                    if agent_meta.is_some() {
+                        return Err(ParseError::syntax(
+                            "@@agent may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    if saw_builtin || saw_intrinsic {
+                        return Err(ParseError::syntax(
+                            "@@agent cannot be combined with @@builtin or @@intrinsic",
+                            annotator_span,
+                        ));
+                    }
+                    agent_meta = Some(self.parse_agent_meta()?);
                 }
                 "doc" => {
                     if attrs.doc.is_some() {
@@ -1648,7 +1955,21 @@ impl Parser<'_> {
             .map(|span| span.start)
             .unwrap_or_else(|| self.peek_span().start);
 
-        if saw_intrinsic {
+        if let Some(meta) = agent_meta {
+            if saw_builtin || saw_intrinsic {
+                return Err(ParseError::syntax(
+                    "@@agent cannot be combined with @@builtin or @@intrinsic",
+                    self.peek_span(),
+                ));
+            }
+            match self.peek() {
+                Token::Defagent => self.parse_defagent(meta, start),
+                _ => Err(ParseError::syntax(
+                    "Expected `defagent` after @@agent(...)",
+                    self.peek_span(),
+                )),
+            }
+        } else if saw_intrinsic {
             let intrinsic_start = intrinsic_start_span
                 .as_ref()
                 .map(|span| span.start)
@@ -1676,6 +1997,10 @@ impl Parser<'_> {
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deftrait => self.parse_trait_def_with_attrs(attrs, Some(start)),
                 Token::Impl => self.parse_impl_def_with_attrs(attrs, Some(start)),
+                Token::Defagent => Err(ParseError::syntax(
+                    "`defagent` declarations must be preceded by @@agent(...)",
+                    self.peek_span(),
+                )),
                 Token::Defstruct => self.parse_struct_def_with_attrs(attrs, Some(start)),
                 Token::Defrecord => self.parse_record_def_with_attrs(attrs, Some(start)),
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
@@ -1688,6 +2013,343 @@ impl Parser<'_> {
                 )),
             }
         }
+    }
+
+    fn parse_agent_meta(&mut self) -> Result<AgentMeta, ParseError> {
+        self.skip_newlines();
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+
+        let mut kind = None;
+        let mut instance = None;
+        let mut boot = false;
+        let mut registry = false;
+        let mut lazy = false;
+
+        while !matches!(self.peek(), Token::RParen) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete(")", self.peek_span()));
+            }
+            let (key, key_span) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+            match key.as_str() {
+                "kind" => {
+                    let (value, value_span) = self.expect_ident()?;
+                    kind = Some(match value.as_str() {
+                        "ReadOnly" => AgentKind::ReadOnly,
+                        "State" => AgentKind::State,
+                        _ => {
+                            return Err(ParseError::syntax(
+                                "agent kind must be ReadOnly or State",
+                                value_span,
+                            ))
+                        }
+                    });
+                }
+                "instance" => {
+                    let (value, value_span) = self.expect_ident()?;
+                    instance = Some(match value.as_str() {
+                        "Singleton" => AgentInstance::Singleton,
+                        "Multi" => AgentInstance::Multi,
+                        _ => {
+                            return Err(ParseError::syntax(
+                                "agent instance must be Singleton or Multi",
+                                value_span,
+                            ))
+                        }
+                    });
+                }
+                "boot" => boot = self.parse_agent_bool_value("boot")?,
+                "registry" => registry = self.parse_agent_bool_value("registry")?,
+                "lazy" => lazy = self.parse_agent_bool_value("lazy")?,
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown @@agent option: {key}"),
+                        key_span,
+                    ))
+                }
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            } else {
+                break;
+            }
+        }
+        self.expect(&Token::RParen)?;
+
+        let kind =
+            kind.ok_or_else(|| ParseError::syntax("@@agent requires kind", self.peek_span()))?;
+        let instance = instance
+            .ok_or_else(|| ParseError::syntax("@@agent requires instance", self.peek_span()))?;
+
+        Ok(AgentMeta {
+            kind,
+            instance,
+            boot,
+            registry,
+            lazy,
+        })
+    }
+
+    fn parse_agent_bool_value(&mut self, key: &str) -> Result<bool, ParseError> {
+        match self.peek().clone() {
+            Token::True => {
+                self.advance();
+                Ok(true)
+            }
+            Token::False => {
+                self.advance();
+                Ok(false)
+            }
+            Token::Ident(value) if value == "true" => {
+                self.advance();
+                Ok(true)
+            }
+            Token::Ident(value) if value == "false" => {
+                self.advance();
+                Ok(false)
+            }
+            _ => Err(ParseError::syntax(
+                format!("agent option `{key}` must be true or false"),
+                self.peek_span(),
+            )),
+        }
+    }
+
+    fn parse_defagent(&mut self, meta: AgentMeta, start: usize) -> Result<Ast, ParseError> {
+        self.expect(&Token::Defagent)?;
+        let (name, _name_span) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut init = None;
+        let mut get = None;
+        let mut set = None;
+        let mut helpers = Vec::new();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let marker = if matches!(self.peek(), Token::At) {
+                Some(self.parse_agent_handler_marker()?)
+            } else {
+                None
+            };
+            self.skip_newlines();
+            let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
+            self.ensure_stmt_boundary(&def, true)?;
+            match marker {
+                Some(AgentHandlerKind::Init) => {
+                    if init.is_some() {
+                        return Err(ParseError::syntax(
+                            "duplicate @init handler",
+                            def.span().clone(),
+                        ));
+                    }
+                    init = Some(AgentHandler { def });
+                }
+                Some(AgentHandlerKind::Get) => {
+                    if get.is_some() {
+                        return Err(ParseError::syntax(
+                            "duplicate @get handler",
+                            def.span().clone(),
+                        ));
+                    }
+                    get = Some(AgentHandler { def });
+                }
+                Some(AgentHandlerKind::Set) => {
+                    if set.is_some() {
+                        return Err(ParseError::syntax(
+                            "duplicate @set handler",
+                            def.span().clone(),
+                        ));
+                    }
+                    set = Some(AgentHandler { def });
+                }
+                None => helpers.push(def),
+            }
+            self.skip_newlines();
+        }
+        let end = self.expect(&Token::RBrace)?;
+
+        let init = init.ok_or_else(|| {
+            ParseError::syntax(
+                "agents must define an @init handler",
+                Span {
+                    start,
+                    end: end.end,
+                },
+            )
+        })?;
+        let get = get.ok_or_else(|| {
+            ParseError::syntax(
+                "agents must define a @get handler",
+                Span {
+                    start,
+                    end: end.end,
+                },
+            )
+        })?;
+
+        self.validate_agent_meta(
+            &meta,
+            set.as_ref(),
+            Span {
+                start,
+                end: end.end,
+            },
+        )?;
+        self.lower_defagent_to_defmod(
+            Span {
+                start,
+                end: end.end,
+            },
+            name,
+            meta,
+            init,
+            get,
+            set,
+            helpers,
+        )
+    }
+
+    fn parse_agent_handler_marker(&mut self) -> Result<AgentHandlerKind, ParseError> {
+        self.expect(&Token::At)?;
+        let (name, span) = self.expect_ident()?;
+        self.skip_newlines();
+        match name.as_str() {
+            "init" => Ok(AgentHandlerKind::Init),
+            "get" => Ok(AgentHandlerKind::Get),
+            "set" => Ok(AgentHandlerKind::Set),
+            _ => Err(ParseError::syntax(
+                "agent handler marker must be @init, @get, or @set",
+                span,
+            )),
+        }
+    }
+
+    fn validate_agent_meta(
+        &self,
+        meta: &AgentMeta,
+        set: Option<&AgentHandler>,
+        span: Span,
+    ) -> Result<(), ParseError> {
+        match meta.kind {
+            AgentKind::ReadOnly => {
+                if meta.instance != AgentInstance::Singleton {
+                    return Err(ParseError::syntax(
+                        "ReadOnly agents must use instance: Singleton",
+                        span,
+                    ));
+                }
+                if set.is_some() {
+                    return Err(ParseError::syntax(
+                        "ReadOnly agents must not define @set",
+                        span,
+                    ));
+                }
+            }
+            AgentKind::State => {
+                if set.is_none() {
+                    return Err(ParseError::syntax(
+                        "State agents must define an @set handler",
+                        span,
+                    ));
+                }
+                if meta.lazy {
+                    return Err(ParseError::syntax(
+                        "State agents must use lazy: false",
+                        span,
+                    ));
+                }
+            }
+        }
+        if meta.instance == AgentInstance::Multi && meta.registry {
+            return Err(ParseError::syntax(
+                "registry: true is only allowed for Singleton agents",
+                span,
+            ));
+        }
+        if meta.instance == AgentInstance::Multi && meta.boot {
+            return Err(ParseError::syntax(
+                "boot: true is only allowed for Singleton agents",
+                span,
+            ));
+        }
+        Ok(())
+    }
+
+    fn lower_defagent_to_defmod(
+        &self,
+        span: Span,
+        name: Symbol,
+        meta: AgentMeta,
+        init: AgentHandler,
+        get: AgentHandler,
+        set: Option<AgentHandler>,
+        helpers: Vec<Ast>,
+    ) -> Result<Ast, ParseError> {
+        let mut body = Vec::new();
+        let init_def = rename_agent_handler(init.def, "__agent_init")?;
+        let get_def = rename_agent_handler(get.def, "__agent_get")?;
+        let set_def = set
+            .map(|handler| rename_agent_handler(handler.def, "__agent_set"))
+            .transpose()?;
+
+        let init_params = def_params(&init_def)?;
+        let get_params = def_params(&get_def)?;
+        if meta.instance == AgentInstance::Singleton && !init_params.is_empty() {
+            return Err(ParseError::syntax(
+                "Singleton agent @init handlers must not take parameters",
+                span.clone(),
+            ));
+        }
+        if get_params.is_empty() {
+            return Err(ParseError::syntax(
+                "@get handlers must take state as their first parameter",
+                span.clone(),
+            ));
+        }
+        if let Some(set_def) = &set_def {
+            let set_params = def_params(set_def)?;
+            if set_params.is_empty() {
+                return Err(ParseError::syntax(
+                    "@set handlers must take state as their first parameter",
+                    span.clone(),
+                ));
+            }
+        }
+
+        body.push(init_def.clone());
+        body.push(get_def.clone());
+        if let Some(set_def) = &set_def {
+            body.push(set_def.clone());
+        }
+        body.extend(helpers);
+
+        match meta.kind {
+            AgentKind::ReadOnly => {
+                body.push(build_readonly_get_wrapper(&span, &name, &get_def)?);
+            }
+            AgentKind::State => {
+                body.push(build_pid_wrapper(&span, &name));
+                if meta.instance == AgentInstance::Multi {
+                    body.push(build_spawn_wrapper(&span, &name, &init_def)?);
+                }
+                body.push(build_state_get_wrapper(&span, &get_def)?);
+                if let Some(set_def) = &set_def {
+                    body.push(build_state_set_wrapper(&span, set_def)?);
+                }
+            }
+        }
+
+        Ok(Ast::Defmod(span, name, body, DeclAttrs::default()))
     }
 
     pub(super) fn parse_intrinsic_decl(

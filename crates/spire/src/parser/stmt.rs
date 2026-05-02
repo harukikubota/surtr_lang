@@ -15,6 +15,7 @@ impl Parser<'_> {
                 Token::Annotator(_)
                     | Token::Def
                     | Token::Defp
+                    | Token::Defagent
                     | Token::Defmod
                     | Token::Namespace
                     | Token::Deftrait
@@ -41,6 +42,12 @@ impl Parser<'_> {
         let stmt = match self.peek() {
             Token::Annotator(_) => self.parse_annotated_decl()?,
             Token::Def | Token::Defp => self.parse_def()?,
+            Token::Defagent => {
+                return Err(ParseError::syntax(
+                    "`defagent` declarations must be preceded by @@agent(...)",
+                    self.peek_span(),
+                ))
+            }
             Token::Defmod => self.parse_defmod()?,
             Token::Namespace => self.parse_namespace()?,
             Token::Deftrait => self.parse_trait_def()?,

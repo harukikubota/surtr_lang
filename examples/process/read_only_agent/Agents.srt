@@ -1,0 +1,12 @@
+@@agent(kind: ReadOnly, instance: Singleton, boot: true, lazy: false)
+defagent Env {
+  @init
+  def init() -> Result<String> {
+    Ok("demo-home")
+  }
+
+  @get
+  def get(state: String, key: String) -> Result<String> {
+    Ok(key ++ "=" ++ state)
+  }
+}

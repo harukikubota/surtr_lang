@@ -411,6 +411,46 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Error) -> String",
     },
     BuiltinMeta {
+        name: "__process_pid",
+        arity: 2,
+        sig_str: "(String, (-> Result<$State>)) -> Unit",
+    },
+    BuiltinMeta {
+        name: "__process_spawn",
+        arity: 2,
+        sig_str: "(String, (-> Result<$State>)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__process_state",
+        arity: 1,
+        sig_str: "(Unit) -> Result<$State>",
+    },
+    BuiltinMeta {
+        name: "__process_store",
+        arity: 2,
+        sig_str: "(Unit, $State) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__task_call",
+        arity: 1,
+        sig_str: "((-> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_async",
+        arity: 1,
+        sig_str: "((-> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_launch",
+        arity: 1,
+        sig_str: "((-> Result<Unit>)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__task_cast",
+        arity: 1,
+        sig_str: "((-> Unit)) -> Result<Unit>",
+    },
+    BuiltinMeta {
         name: "__operator_int_add",
         arity: 2,
         sig_str: "(Int, Int) -> Int",

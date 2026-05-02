@@ -251,6 +251,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "False" => Token::False,
                 "def" => Token::Def,
                 "defp" => Token::Defp,
+                "defagent" => Token::Defagent,
                 "defmod" => Token::Defmod,
                 "namespace" => Token::Namespace,
                 "deftrait" => Token::Deftrait,

@@ -221,9 +221,18 @@ fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
         "{match_doc}"
     );
     assert!(match_doc.contains("Match special form."), "{match_doc}");
-    assert!(match_doc.contains("pattern when cond => expr"), "{match_doc}");
-    assert!(match_doc.contains("`match` must be exhaustive"), "{match_doc}");
-    assert!(match_doc.contains("Use `Ok(...)` and `Err(...)`"), "{match_doc}");
+    assert!(
+        match_doc.contains("pattern when cond => expr"),
+        "{match_doc}"
+    );
+    assert!(
+        match_doc.contains("`match` must be exhaustive"),
+        "{match_doc}"
+    );
+    assert!(
+        match_doc.contains("Use `Ok(...)` and `Err(...)`"),
+        "{match_doc}"
+    );
 
     let cond_doc = engine.handle_line(":doc cond");
     let cond_doc = doc_text(&cond_doc);
@@ -237,7 +246,10 @@ fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
         cond_doc.contains("cond { cond1 => expr1, ..., True => exprN }"),
         "{cond_doc}"
     );
-    assert!(cond_doc.contains("final clause must be `True`"), "{cond_doc}");
+    assert!(
+        cond_doc.contains("final clause must be `True`"),
+        "{cond_doc}"
+    );
 }
 
 #[test]
@@ -582,11 +594,17 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let match_sig = engine.handle_line(":sig match");
     let match_sig = signature_text(&match_sig);
-    assert_eq!(match_sig.trim(), "match value { pattern => expr, ... } -> $B");
+    assert_eq!(
+        match_sig.trim(),
+        "match value { pattern => expr, ... } -> $B"
+    );
 
     let cond_sig = engine.handle_line(":sig cond");
     let cond_sig = signature_text(&cond_sig);
-    assert_eq!(cond_sig.trim(), "cond { cond1 => expr1, ..., True => exprN } -> $A");
+    assert_eq!(
+        cond_sig.trim(),
+        "cond { cond1 => expr1, ..., True => exprN } -> $A"
+    );
 
     let typed_doc = engine.handle_line(":doc gt(Int, Int)");
     let typed_doc = doc_text(&typed_doc);
@@ -831,9 +849,8 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
     ));
 
     let partial_capture_ref = engine.handle_line("&Add::add(&1, 1)");
-    assert!(rendered_text(&partial_capture_ref).contains(
-        "FnCapture(module: Add, name: add, sig: (Int -> Int))"
-    ));
+    assert!(rendered_text(&partial_capture_ref)
+        .contains("FnCapture(module: Add, name: add, sig: (Int -> Int))"));
 
     let closure_ref = engine.handle_line("{|x: Int, y: Int| x + y}");
     assert!(rendered_text(&closure_ref).contains("Closure(Int, Int -> Int)"));
@@ -872,40 +889,25 @@ fn core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_a
 
     let f2 = engine.handle_line("f2 = &f3(&1, &2, 3)");
     let f2_text = rendered_text(&f2);
-    assert!(
-        f2_text.contains("FnCapture("),
-        "{f2_text}"
-    );
-    assert!(
-        f2_text.contains("name: f"),
-        "{f2_text}"
-    );
-    assert!(
-        f2_text.contains("sig: (Int, Int -> Int)"),
-        "{f2_text}"
-    );
+    assert!(f2_text.contains("FnCapture("), "{f2_text}");
+    assert!(f2_text.contains("name: f"), "{f2_text}");
+    assert!(f2_text.contains("sig: (Int, Int -> Int)"), "{f2_text}");
 
     let f1 = engine.handle_line("f1 = &f2(&1, 2)");
     let f1_text = rendered_text(&f1);
-    assert!(
-        f1_text.contains("FnCapture("),
-        "{f1_text}"
-    );
-    assert!(
-        f1_text.contains("name: f"),
-        "{f1_text}"
-    );
-    assert!(
-        f1_text.contains("sig: (Int -> Int)"),
-        "{f1_text}"
-    );
+    assert!(f1_text.contains("FnCapture("), "{f1_text}");
+    assert!(f1_text.contains("name: f"), "{f1_text}");
+    assert!(f1_text.contains("sig: (Int -> Int)"), "{f1_text}");
 
     let applied = engine.handle_line("f1(10)");
     assert!(rendered_text(&applied).contains("15"));
 
     let g3 = engine.handle_line("g3 = {|a: Int, b: Int, c: Int| a + b + c}");
     let g3_text = rendered_text(&g3);
-    assert!(g3_text.contains("Closure(Int, Int, Int -> Int)"), "{g3_text}");
+    assert!(
+        g3_text.contains("Closure(Int, Int, Int -> Int)"),
+        "{g3_text}"
+    );
 
     let g2 = engine.handle_line("g2 = &g3(&1, &2, 3)");
     let g2_text = rendered_text(&g2);

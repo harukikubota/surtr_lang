@@ -1,0 +1,6 @@
+pid = Counter::pid()
+print(inspect(Counter::get(pid, "count")))
+print(inspect(Counter::set(pid, 99)))
+print(inspect(Counter::get(pid, "count")))
+print(inspect(Counter::set(pid, -1)))
+print(inspect(Counter::get(pid, "count")))

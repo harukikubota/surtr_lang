@@ -289,94 +289,89 @@ impl Checker {
         }
 
         match ast_ty {
-            AstTy::Named(span, name) => match Self::surface_type_name(name) {
-                "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
-                "MatchArms" | "CondClauses" => {
-                    Err(self.clause_block_type_not_allowed_error(
-                        span,
-                        Self::surface_type_name(name),
-                    ))
-                }
-                "Seq" => Err(self.seq_not_allowed_error(span)),
-                builtin_name => match builtin_type_name(builtin_name) {
-                    Some(TypeName::Int) => Ok(Ty::Int),
-                    Some(TypeName::Float) => Ok(Ty::Float),
-                    Some(TypeName::String) => Ok(Ty::Str),
-                    Some(TypeName::Boolean) => Ok(Ty::Bool),
-                    Some(TypeName::Unit) => Ok(Ty::Unit),
-                    Some(TypeName::Error) => Ok(Ty::Error),
-                    Some(TypeName::Regex) => {
-                        Ok(Ty::Enum(TypeName::Regex.as_str().into(), Vec::new()))
-                    }
-                    Some(TypeName::RegexCaptures) => Ok(Ty::Enum(
-                        TypeName::RegexCaptures.as_str().into(),
-                        Vec::new(),
-                    )),
-                    Some(TypeName::RegexMatch) => {
-                        Ok(Ty::Enum(TypeName::RegexMatch.as_str().into(), Vec::new()))
-                    }
-                    Some(TypeName::RandomGenerator) => Ok(Ty::Enum(
-                        TypeName::RandomGenerator.as_str().into(),
-                        Vec::new(),
-                    )),
-                    Some(
-                        TypeName::List
-                        | TypeName::HashMap
-                        | TypeName::Generator
-                        | TypeName::Result
-                        | TypeName::TypeRef
-                        | TypeName::Hole
-                        | TypeName::Closure
-                        | TypeName::MatchArms
-                        | TypeName::CondClauses
-                        | TypeName::Lens,
-                    )
-                    | None => {
-                        if let Some(def) = self.env.lookup_type_def(name) {
-                            match &def.kind {
-                                crate::env::TypeKind::Struct => {
-                                    Ok(Ty::Struct(def.name.clone(), def.fields.clone()))
-                                }
-                                crate::env::TypeKind::Record => {
-                                    Ok(Ty::Record(def.name.clone(), def.fields.clone()))
-                                }
-                                crate::env::TypeKind::ConcreteError => Ok(Ty::Error),
-                                crate::env::TypeKind::Enum => {
-                                    if def.type_params.is_empty() {
-                                        Ok(Ty::Enum(def.name.clone(), Vec::new()))
-                                    } else {
-                                        Err(TypeError {
-                                            message: format!(
-                                                "Type {} requires {} type argument(s)",
-                                                name,
-                                                def.type_params.len()
-                                            ),
-                                            span: span.clone(),
-                                            hint: None,
-                                        })
+            AstTy::Named(span, name) => {
+                match Self::surface_type_name(name) {
+                    "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
+                    "MatchArms" | "CondClauses" => Err(self
+                        .clause_block_type_not_allowed_error(span, Self::surface_type_name(name))),
+                    "Seq" => Err(self.seq_not_allowed_error(span)),
+                    builtin_name => match builtin_type_name(builtin_name) {
+                        Some(TypeName::Int) => Ok(Ty::Int),
+                        Some(TypeName::Float) => Ok(Ty::Float),
+                        Some(TypeName::String) => Ok(Ty::Str),
+                        Some(TypeName::Boolean) => Ok(Ty::Bool),
+                        Some(TypeName::Unit) => Ok(Ty::Unit),
+                        Some(TypeName::Error) => Ok(Ty::Error),
+                        Some(TypeName::Regex) => {
+                            Ok(Ty::Enum(TypeName::Regex.as_str().into(), Vec::new()))
+                        }
+                        Some(TypeName::RegexCaptures) => Ok(Ty::Enum(
+                            TypeName::RegexCaptures.as_str().into(),
+                            Vec::new(),
+                        )),
+                        Some(TypeName::RegexMatch) => {
+                            Ok(Ty::Enum(TypeName::RegexMatch.as_str().into(), Vec::new()))
+                        }
+                        Some(TypeName::RandomGenerator) => Ok(Ty::Enum(
+                            TypeName::RandomGenerator.as_str().into(),
+                            Vec::new(),
+                        )),
+                        Some(
+                            TypeName::List
+                            | TypeName::HashMap
+                            | TypeName::Generator
+                            | TypeName::Result
+                            | TypeName::TypeRef
+                            | TypeName::Hole
+                            | TypeName::Closure
+                            | TypeName::MatchArms
+                            | TypeName::CondClauses
+                            | TypeName::Lens,
+                        )
+                        | None => {
+                            if let Some(def) = self.env.lookup_type_def(name) {
+                                match &def.kind {
+                                    crate::env::TypeKind::Struct => {
+                                        Ok(Ty::Struct(def.name.clone(), def.fields.clone()))
+                                    }
+                                    crate::env::TypeKind::Record => {
+                                        Ok(Ty::Record(def.name.clone(), def.fields.clone()))
+                                    }
+                                    crate::env::TypeKind::ConcreteError => Ok(Ty::Error),
+                                    crate::env::TypeKind::Enum => {
+                                        if def.type_params.is_empty() {
+                                            Ok(Ty::Enum(def.name.clone(), Vec::new()))
+                                        } else {
+                                            Err(TypeError {
+                                                message: format!(
+                                                    "Type {} requires {} type argument(s)",
+                                                    name,
+                                                    def.type_params.len()
+                                                ),
+                                                span: span.clone(),
+                                                hint: None,
+                                            })
+                                        }
                                     }
                                 }
+                            } else {
+                                Err(TypeError {
+                                    message: format!("Unknown type: {}", name),
+                                    span: span.clone(),
+                                    hint: None,
+                                })
                             }
-                        } else {
-                            Err(TypeError {
-                                message: format!("Unknown type: {}", name),
-                                span: span.clone(),
-                                hint: None,
-                            })
                         }
-                    }
-                },
-            },
+                    },
+                }
+            }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
                 if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
             {
-                Err(self.clause_block_type_not_allowed_error(
-                    span,
-                    Self::surface_type_name(name),
-                ))
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -606,10 +601,7 @@ impl Checker {
             AstTy::Named(span, name)
                 if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
             {
-                Err(self.clause_block_type_not_allowed_error(
-                    span,
-                    Self::surface_type_name(name),
-                ))
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -636,10 +628,9 @@ impl Checker {
             AstTy::Generic(span, name, _)
                 if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
             {
-                return Err(self.clause_block_type_not_allowed_error(
-                    span,
-                    Self::surface_type_name(name),
-                ));
+                return Err(
+                    self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name))
+                );
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -914,10 +905,7 @@ impl Checker {
             AstTy::Named(span, name)
                 if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
             {
-                Err(self.clause_block_type_not_allowed_error(
-                    span,
-                    Self::surface_type_name(name),
-                ))
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -936,10 +924,9 @@ impl Checker {
             AstTy::Generic(span, name, _)
                 if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
             {
-                return Err(self.clause_block_type_not_allowed_error(
-                    span,
-                    Self::surface_type_name(name),
-                ));
+                return Err(
+                    self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name))
+                );
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -1210,10 +1197,7 @@ impl Checker {
             AstTy::Named(span, name)
                 if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
             {
-                Err(self.clause_block_type_not_allowed_error(
-                    span,
-                    Self::surface_type_name(name),
-                ))
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -1224,10 +1208,7 @@ impl Checker {
             AstTy::Generic(span, name, _)
                 if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
             {
-                Err(self.clause_block_type_not_allowed_error(
-                    span,
-                    Self::surface_type_name(name),
-                ))
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))

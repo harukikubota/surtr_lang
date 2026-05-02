@@ -1399,10 +1399,9 @@ impl Codegen {
         self.in_function = prev_in_function;
 
         let (qualified_name, signature) = match display {
-            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => (
-                Some(format!("{module}::{name}")),
-                Some(sig.clone()),
-            ),
+            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => {
+                (Some(format!("{module}::{name}")), Some(sig.clone()))
+            }
             Some(ReplCallableDisplay::Closure { sig }) => (None, Some(sig.clone())),
             None => (None, Some(signature.to_string())),
         };
@@ -1625,10 +1624,9 @@ impl Codegen {
         self.emit(Opcode::Return);
 
         let (qualified_name, signature) = match display {
-            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => (
-                Some(format!("{module}::{name}")),
-                Some(sig.clone()),
-            ),
+            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => {
+                (Some(format!("{module}::{name}")), Some(sig.clone()))
+            }
             Some(ReplCallableDisplay::Closure { sig }) => (None, Some(sig.clone())),
             None => (None, Some(signature.to_string())),
         };

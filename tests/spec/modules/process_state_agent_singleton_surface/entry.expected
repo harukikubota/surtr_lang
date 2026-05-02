@@ -1,0 +1,5 @@
+Ok("count:42")
+Ok(())
+Ok("count:100")
+Err(NoneError("None Value."))
+Ok("count:100")

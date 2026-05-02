@@ -1,0 +1,17 @@
+@@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
+defagent Counter {
+  @init
+  def init() -> Result<Int> {
+    Ok(41)
+  }
+
+  @get
+  def get(state: Int, label: String) -> Result<String> {
+    Ok(label ++ ":" ++ to_string(state + 1))
+  }
+
+  @set
+  def set(state: Int, next: Int) -> Result<Int> {
+    if(next >= 0, Ok(next), Err(NoneError))
+  }
+}

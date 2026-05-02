@@ -333,6 +333,38 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_error_format,
     },
     BuiltinImpl {
+        name: "__process_pid",
+        func: builtin_process_pid,
+    },
+    BuiltinImpl {
+        name: "__process_spawn",
+        func: builtin_process_spawn,
+    },
+    BuiltinImpl {
+        name: "__process_state",
+        func: builtin_process_state,
+    },
+    BuiltinImpl {
+        name: "__process_store",
+        func: builtin_process_store,
+    },
+    BuiltinImpl {
+        name: "__task_call",
+        func: builtin_task_call,
+    },
+    BuiltinImpl {
+        name: "__task_async",
+        func: builtin_task_async,
+    },
+    BuiltinImpl {
+        name: "__task_launch",
+        func: builtin_task_launch,
+    },
+    BuiltinImpl {
+        name: "__task_cast",
+        func: builtin_task_cast,
+    },
+    BuiltinImpl {
         name: "__operator_int_add",
         func: builtin_operator_int_add,
     },
@@ -490,6 +522,71 @@ fn builtin_error_message(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
 fn builtin_error_format(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let rich = decode_error_arg(&args[0], "format", "err")?;
     Ok(Value::Str(rich.to_eprint_lines().join("\n")))
+}
+
+fn builtin_process_pid(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(process_name) = &args[0] else {
+        return Err(RuntimeError::new("__process_pid expects String as name"));
+    };
+    let Value::Callable(init) = args[1].clone() else {
+        return Err(RuntimeError::new(
+            "__process_pid expects callable init handler",
+        ));
+    };
+    vm.process_singleton_pid(process_name.clone(), init)
+}
+
+fn builtin_process_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(process_name) = &args[0] else {
+        return Err(RuntimeError::new("__process_spawn expects String as name"));
+    };
+    let Value::Callable(init) = args[1].clone() else {
+        return Err(RuntimeError::new(
+            "__process_spawn expects callable init handler",
+        ));
+    };
+    vm.process_spawn(process_name.clone(), init)
+}
+
+fn builtin_process_state(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Pid(pid) = &args[0] else {
+        return Err(RuntimeError::new("__process_state expects PID"));
+    };
+    vm.process_state(pid)
+}
+
+fn builtin_process_store(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Pid(pid) = &args[0] else {
+        return Err(RuntimeError::new("__process_store expects PID"));
+    };
+    vm.process_store(pid, args[1].clone())
+}
+
+fn builtin_task_call(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body(vm, &args[0], "__task_call")
+}
+
+fn builtin_task_async(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body(vm, &args[0], "__task_async")
+}
+
+fn builtin_task_launch(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body(vm, &args[0], "__task_launch")
+}
+
+fn builtin_task_cast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Callable(body) = args[0].clone() else {
+        return Err(RuntimeError::new("__task_cast expects callable body"));
+    };
+    let _ = vm.invoke_callable_sync(body, Vec::new())?;
+    Ok(ok_result(Value::Unit))
+}
+
+fn invoke_task_body(vm: &mut VM, value: &Value, name: &str) -> Result<Value, RuntimeError> {
+    let Value::Callable(body) = value.clone() else {
+        return Err(RuntimeError::new(format!("{name} expects callable body")));
+    };
+    vm.invoke_callable_sync(body, Vec::new())
 }
 
 fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

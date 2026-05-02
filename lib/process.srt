@@ -1,0 +1,33 @@
+@@doc """
+Task provides the first process-oriented surface while the scheduler-backed
+runtime is still staged.
+"""
+defmod Task {
+  @@doc """
+  Run a zero-argument task body and return its Result.
+  """
+  def call(body: (-> Result<$A>)) -> Result<$A> {
+    __task_call(body)
+  }
+
+  @@doc """
+  Initial synchronous form of Task.async.
+  """
+  def async(body: (-> Result<$A>)) -> Result<$A> {
+    __task_async(body)
+  }
+
+  @@doc """
+  Initial synchronous form of Task.launch.
+  """
+  def launch(body: (-> Result<Unit>)) -> Result<Unit> {
+    __task_launch(body)
+  }
+
+  @@doc """
+  Initial synchronous fire-and-forget form.
+  """
+  def cast(body: (-> Unit)) -> Result<Unit> {
+    __task_cast(body)
+  }
+}
