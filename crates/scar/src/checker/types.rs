@@ -54,7 +54,14 @@ impl Checker {
             Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
                 .iter()
                 .any(|(_, field_ty)| Self::ty_exposes_error_value(field_ty)),
-            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Hole | Ty::Var(_) => false,
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Hole
+            | Ty::Var(_)
+            | Ty::Pid(_) => false,
         }
     }
 
@@ -90,6 +97,31 @@ impl Checker {
                 "Use TypeRef<$T> only in deftrait / impl Trait method parameters, not in ordinary signatures or return types."
                     .into(),
             ),
+        }
+    }
+
+    fn resolve_pid_surface_ty(&self, span: &Span, args: &[AstTy]) -> Result<Ty, TypeError> {
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: "PID<T> requires exactly 1 type argument".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        Ok(Ty::Pid(self.pid_marker_from_ast(&args[0])?))
+    }
+
+    fn pid_marker_from_ast(&self, ast_ty: &AstTy) -> Result<String, TypeError> {
+        match ast_ty {
+            AstTy::Named(_, name) => Ok(name.clone()),
+            other => Err(TypeError {
+                message: "PID<T> expects a process marker such as PID<Counter>".into(),
+                span: Self::ast_ty_span(other).clone(),
+                hint: Some(
+                    "Use the generated process surface marker name, for example PID<Counter>."
+                        .into(),
+                ),
+            }),
         }
     }
 
@@ -326,7 +358,8 @@ impl Checker {
                             | TypeName::Closure
                             | TypeName::MatchArms
                             | TypeName::CondClauses
-                            | TypeName::Lens,
+                            | TypeName::Lens
+                            | TypeName::Pid,
                         )
                         | None => {
                             if let Some(def) = self.env.lookup_type_def(name) {
@@ -456,6 +489,7 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
                     Ok(Ty::Lens(Box::new(source), Box::new(focus)))
                 }
+                "PID" => self.resolve_pid_surface_ty(span, args),
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -704,6 +738,9 @@ impl Checker {
                     tyvars,
                 )?;
                 Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
+                self.resolve_pid_surface_ty(span, args)
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
                 if !self.match_result_type_allowed(context) {
@@ -1006,6 +1043,9 @@ impl Checker {
                     tyvars,
                 )?;
                 Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
+                self.resolve_pid_surface_ty(span, args)
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
                 if !self.match_result_type_allowed(context) {
@@ -1317,6 +1357,7 @@ impl Checker {
                     )?;
                     Ok(Ty::Lens(Box::new(source), Box::new(focus)))
                 }
+                "PID" => self.resolve_pid_surface_ty(span, args),
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -1458,6 +1499,7 @@ impl Checker {
             | (Ty::Error, Ty::Error) => true,
             (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
             (Ty::TypeRef(a), Ty::TypeRef(b)) => self.types_compatible(a, b),
+            (Ty::Pid(a), Ty::Pid(b)) => a == b || a.starts_with('$') || b.starts_with('$'),
             (Ty::Lens(src_a, focus_a), Ty::Lens(src_b, focus_b)) => {
                 self.types_compatible(src_a, src_b) && self.types_compatible(focus_a, focus_b)
             }
@@ -1548,6 +1590,7 @@ impl Checker {
             Ty::Hole => false,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
             Ty::TypeRef(inner) => self.ty_contains_var(&inner, needle),
+            Ty::Pid(_) => false,
             Ty::Lens(source, focus) => {
                 self.ty_contains_var(&source, needle) || self.ty_contains_var(&focus, needle)
             }
@@ -1584,6 +1627,7 @@ impl Checker {
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
             Ty::Hole => Ty::Hole,
             Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
+            Ty::Pid(name) => Ty::Pid(name.clone()),
             Ty::Lens(source, focus) => Ty::Lens(
                 Box::new(self.resolve_ty(source)),
                 Box::new(self.resolve_ty(focus)),
@@ -1658,6 +1702,7 @@ impl Checker {
             Ty::TypeRef(inner) => {
                 Ty::TypeRef(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
             }
+            Ty::Pid(name) => Ty::Pid(name.clone()),
             Ty::Lens(source, focus) => Ty::Lens(
                 Box::new(self.instantiate_ty_with_fresh(source, fresh)),
                 Box::new(self.instantiate_ty_with_fresh(focus, fresh)),
@@ -1778,6 +1823,7 @@ impl Checker {
             Ty::Hole => "_".into(),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
+            Ty::Pid(name) => format!("PID<{}>", name),
             Ty::Lens(source, focus) => {
                 format!("Lens<{}, {}>", self.ty_name(source), self.ty_name(focus))
             }
@@ -1850,7 +1896,8 @@ impl Checker {
             | Ty::Unit
             | Ty::Var(_)
             | Ty::Error
-            | Ty::Hole => false,
+            | Ty::Hole
+            | Ty::Pid(_) => false,
         }
     }
 

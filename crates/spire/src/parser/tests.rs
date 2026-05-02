@@ -3452,7 +3452,7 @@ defagent Counter {
     .expect("defagent should parse");
 
     match &ast[0] {
-        Ast::Defmod(_, name, _, attrs) => {
+        Ast::Defmod(_, name, body, attrs) => {
             assert_eq!(name, "Counter");
             let process_spec = attrs
                 .process_spec
@@ -3467,6 +3467,89 @@ defagent Counter {
             assert!(process_spec.boot);
             assert!(!process_spec.lazy);
             assert!(process_spec.registry);
+
+            let pid_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "pid"))
+                .expect("lowered module should include pid wrapper");
+            match pid_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Generic(_, ty_name, ty_args)), _, _) => {
+                    assert!(params.is_empty());
+                    assert_eq!(ty_name, "PID");
+                    assert!(
+                        matches!(ty_args.as_slice(), [AstTy::Named(_, inner)] if inner == "Counter")
+                    );
+                }
+                other => panic!("expected pid wrapper to return PID<Counter>, got {other:?}"),
+            }
+
+            assert!(body.iter().all(
+                |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn")
+            ));
+
+            let get_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "get"))
+                .expect("lowered module should include get wrapper");
+            match get_wrapper {
+                Ast::Def(_, _, _, params, _, _, _) => {
+                    assert!(matches!(
+                        params.as_slice(),
+                        [FunParam {
+                            ty: AstTy::Generic(_, ty_name, ty_args),
+                            ..
+                        }, ..] if ty_name == "PID"
+                            && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Counter")
+                    ));
+                }
+                other => panic!("expected get wrapper definition, got {other:?}"),
+            }
+        }
+        other => panic!("Expected lowered Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
+    let ast = parse_with_context(
+        r#"@@agent(kind: State, instance: Multi, boot: false, lazy: false)
+defagent Worker {
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("multi defagent should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Worker");
+            let spawn_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn"),
+                )
+                .expect("multi agent should include spawn wrapper");
+            match spawn_wrapper {
+                Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), _, _) => {
+                    assert_eq!(ty_name, "Result");
+                    assert!(matches!(
+                        ty_args.as_slice(),
+                        [AstTy::Generic(_, inner_name, inner_args)]
+                            if inner_name == "PID"
+                                && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Worker")
+                    ));
+                }
+                other => {
+                    panic!("expected spawn wrapper to return Result<PID<Worker>>, got {other:?}")
+                }
+            }
         }
         other => panic!("Expected lowered Defmod, got {other:?}"),
     }

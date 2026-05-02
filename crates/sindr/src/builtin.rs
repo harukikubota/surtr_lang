@@ -413,22 +413,22 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__process_pid",
         arity: 2,
-        sig_str: "(String, (-> Result<$State>)) -> Unit",
+        sig_str: "(String, (-> Result<$State>)) -> PID<$Process>",
     },
     BuiltinMeta {
         name: "__process_spawn",
         arity: 2,
-        sig_str: "(String, (-> Result<$State>)) -> Result<Unit>",
+        sig_str: "(String, (-> Result<$State>)) -> Result<PID<$Process>>",
     },
     BuiltinMeta {
         name: "__process_state",
         arity: 1,
-        sig_str: "(Unit) -> Result<$State>",
+        sig_str: "(PID<$Process>) -> Result<$State>",
     },
     BuiltinMeta {
         name: "__process_store",
         arity: 2,
-        sig_str: "(Unit, $State) -> Result<Unit>",
+        sig_str: "(PID<$Process>, $State) -> Result<Unit>",
     },
     BuiltinMeta {
         name: "__task_call",

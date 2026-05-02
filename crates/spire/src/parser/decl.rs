@@ -147,8 +147,20 @@ fn result_unit_ty(span: &Span) -> AstTy {
     )
 }
 
-fn unit_ty(span: &Span) -> AstTy {
-    AstTy::Named(span.clone(), "Unit".to_string())
+fn pid_ty(span: &Span, agent_name: &str) -> AstTy {
+    AstTy::Generic(
+        span.clone(),
+        "PID".to_string(),
+        vec![AstTy::Named(span.clone(), agent_name.to_string())],
+    )
+}
+
+fn result_pid_ty(span: &Span, agent_name: &str) -> AstTy {
+    AstTy::Generic(
+        span.clone(),
+        "Result".to_string(),
+        vec![pid_ty(span, agent_name)],
+    )
 }
 
 fn param_vars(span: &Span, params: &[FunParam]) -> Vec<Ast> {
@@ -228,10 +240,10 @@ fn build_readonly_get_wrapper(
     ))
 }
 
-fn pid_param(span: &Span) -> FunParam {
+fn pid_param(span: &Span, agent_name: &str) -> FunParam {
     FunParam {
         name: "pid".to_string(),
-        ty: unit_ty(span),
+        ty: pid_ty(span, agent_name),
         span: span.clone(),
     }
 }
@@ -242,7 +254,7 @@ fn build_pid_wrapper(span: &Span, agent_name: &str) -> Ast {
         "pid".to_string(),
         Vec::new(),
         Vec::new(),
-        Some(unit_ty(span)),
+        Some(pid_ty(span, agent_name)),
         Box::new(Ast::Block(
             span.clone(),
             vec![process_pid_call(span, agent_name)],
@@ -266,15 +278,19 @@ fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<
         "spawn".to_string(),
         def_type_params(init_def)?,
         params,
-        Some(result_unit_ty(span)),
+        Some(result_pid_ty(span, agent_name)),
         Box::new(body),
         DeclAttrs::default(),
     ))
 }
 
-fn build_state_get_wrapper(span: &Span, get_def: &Ast) -> Result<Ast, ParseError> {
+fn build_state_get_wrapper(
+    span: &Span,
+    agent_name: &str,
+    get_def: &Ast,
+) -> Result<Ast, ParseError> {
     let params = def_params(get_def)?;
-    let mut surface_params = vec![pid_param(span)];
+    let mut surface_params = vec![pid_param(span, agent_name)];
     surface_params.extend(params.iter().skip(1).cloned());
     let mut call_args = vec![var(span, "state")];
     call_args.extend(param_vars(span, &surface_params[1..]));
@@ -296,9 +312,13 @@ fn build_state_get_wrapper(span: &Span, get_def: &Ast) -> Result<Ast, ParseError
     ))
 }
 
-fn build_state_set_wrapper(span: &Span, set_def: &Ast) -> Result<Ast, ParseError> {
+fn build_state_set_wrapper(
+    span: &Span,
+    agent_name: &str,
+    set_def: &Ast,
+) -> Result<Ast, ParseError> {
     let params = def_params(set_def)?;
-    let mut surface_params = vec![pid_param(span)];
+    let mut surface_params = vec![pid_param(span, agent_name)];
     surface_params.extend(params.iter().skip(1).cloned());
     let mut call_args = vec![var(span, "state")];
     call_args.extend(param_vars(span, &surface_params[1..]));
@@ -2374,9 +2394,9 @@ impl Parser<'_> {
                 if meta.instance == AgentInstance::Multi {
                     body.push(build_spawn_wrapper(&span, &name, &init_def)?);
                 }
-                body.push(build_state_get_wrapper(&span, &get_def)?);
+                body.push(build_state_get_wrapper(&span, &name, &get_def)?);
                 if let Some(set_def) = &set_def {
-                    body.push(build_state_set_wrapper(&span, set_def)?);
+                    body.push(build_state_set_wrapper(&span, &name, set_def)?);
                 }
             }
         }

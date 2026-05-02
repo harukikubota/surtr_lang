@@ -675,6 +675,12 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 };
                 Ty::TypeRef(Box::new(inner.clone()))
             }
+            "PID" => {
+                let [inner] = args.as_slice() else {
+                    return Err("PID requires exactly 1 type argument".into());
+                };
+                Ty::Pid(pid_marker_name_from_ty(inner))
+            }
             other => Ty::Enum(other.to_string(), args),
         })
     }
@@ -730,6 +736,22 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
 
     fn is_eof(&self) -> bool {
         self.pos >= self.input.len()
+    }
+}
+
+fn pid_marker_name_from_ty(ty: &Ty) -> String {
+    match ty {
+        Ty::Var(_) => "$Pid".to_string(),
+        Ty::Int => "Int".to_string(),
+        Ty::Float => "Float".to_string(),
+        Ty::Str => "String".to_string(),
+        Ty::Bool => "Boolean".to_string(),
+        Ty::Unit => "Unit".to_string(),
+        Ty::Error => "Error".to_string(),
+        Ty::Hole => "_".to_string(),
+        Ty::Pid(name) => name.clone(),
+        Ty::Enum(name, _) | Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+        other => format!("{other:?}"),
     }
 }
 

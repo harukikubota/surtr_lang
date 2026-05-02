@@ -915,6 +915,10 @@ impl Checker {
                 self.match_specialization_ty(left_ok, right_ok, bound_tyvars, mapping);
                 self.match_specialization_ty(left_err, right_err, bound_tyvars, mapping);
             }
+            (Ty::Pid(left_name), Ty::Pid(right_name))
+                if left_name == right_name
+                    || left_name.starts_with('$')
+                    || right_name.starts_with('$') => {}
             (Ty::Enum(left_name, left_args), Ty::Enum(right_name, right_args))
                 if left_name == right_name =>
             {
@@ -1145,7 +1149,14 @@ impl Checker {
                     self.collect_bound_tyvars_in_ty(&arg, ordered, seen);
                 }
             }
-            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error | Ty::Hole => {}
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Hole
+            | Ty::Pid(_) => {}
         }
     }
 

@@ -743,7 +743,14 @@ impl Checker {
                     Self::collect_ty_vars(field_ty, out);
                 }
             }
-            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error | Ty::Hole => {}
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Hole
+            | Ty::Pid(_) => {}
         }
     }
 
@@ -851,6 +858,7 @@ impl Checker {
             Ty::Bool => Some("Boolean".into()),
             Ty::Unit => Some("Unit".into()),
             Ty::Error => Some("Error".into()),
+            Ty::Pid(name) => Some(format!("PID<{name}>")),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
             Ty::Func(_, _) => Some("Function".into()),

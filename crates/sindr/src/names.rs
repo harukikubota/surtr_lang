@@ -35,6 +35,7 @@ pub enum TypeName {
     TypeRef,
     Hole,
     Lens,
+    Pid,
 }
 
 impl TypeName {
@@ -60,6 +61,7 @@ impl TypeName {
             Self::TypeRef => "TypeRef",
             Self::Hole => "Hole",
             Self::Lens => "Lens",
+            Self::Pid => "PID",
         }
     }
 
@@ -70,7 +72,12 @@ impl TypeName {
     pub const fn supports_inherent_impl(self) -> bool {
         !matches!(
             self,
-            Self::TypeRef | Self::Hole | Self::Closure | Self::MatchArms | Self::CondClauses
+            Self::TypeRef
+                | Self::Hole
+                | Self::Closure
+                | Self::MatchArms
+                | Self::CondClauses
+                | Self::Pid
         )
     }
 }
@@ -97,6 +104,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "TypeRef" => Some(TypeName::TypeRef),
         "Hole" => Some(TypeName::Hole),
         "Lens" => Some(TypeName::Lens),
+        "PID" => Some(TypeName::Pid),
         _ => None,
     }
 }

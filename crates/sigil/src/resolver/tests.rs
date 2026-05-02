@@ -136,9 +136,9 @@ fn test_resolve_staged_program_keeps_process_specs() {
     let kernel = staged_module(
         "Kernel",
         parse_module_ast(
-            r#"@@builtin def __process_pid(name: String, init: (-> Result<$State>)) -> Unit
-@@builtin def __process_state(pid: Unit) -> Result<$State>
-@@builtin def __process_store(pid: Unit, state: $State) -> Result<Unit>"#,
+            r#"@@builtin def __process_pid(name: String, init: (-> Result<$State>)) -> PID<$Process>
+@@builtin def __process_state(pid: PID<$Process>) -> Result<$State>
+@@builtin def __process_store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
             "Kernel",
         ),
     );

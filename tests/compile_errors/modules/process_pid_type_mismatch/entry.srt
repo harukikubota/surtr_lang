@@ -1,0 +1,2 @@
+pid = Counter::pid()
+print(inspect(Clock::get(pid, "tick")))
