@@ -3530,6 +3530,9 @@ defagent Worker {
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
             assert_eq!(name, "Worker");
+            assert!(body.iter().all(
+                |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "pid")
+            ));
             let spawn_wrapper = body
                 .iter()
                 .find(

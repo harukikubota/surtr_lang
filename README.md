@@ -86,6 +86,7 @@ cargo clean
   - [Trait impls](./docs/site/trait-impls.md)
   - [Lens](./docs/site/lens.md)
   - [Kernel](./docs/site/kernel.md)
+  - [Agents](./docs/site/agents.md)
   - [Pattern matching](./docs/site/pattern-matching.md)
   - [Extractors](./docs/site/extractors.md)
   - [Language features](./docs/site/language-features.md)

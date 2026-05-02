@@ -22,6 +22,7 @@ REPL でそのまま試しやすい題材を優先しており、実行例は `s
 - [関数演算子](./function-operators.md)
 - [エラーハンドリング](./error-handling.md)
 - [Extractor](./extractors.md)
+- [Agents](./agents.md)
 - [言語機能 (`import`, `include`, `@@autoimport`)](./language-features.md)
 
 ## 補助ページ

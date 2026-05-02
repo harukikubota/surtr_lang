@@ -2390,9 +2390,10 @@ impl Parser<'_> {
                 body.push(build_readonly_get_wrapper(&span, &name, &get_def)?);
             }
             AgentKind::State => {
-                body.push(build_pid_wrapper(&span, &name));
                 if meta.instance == AgentInstance::Multi {
                     body.push(build_spawn_wrapper(&span, &name, &init_def)?);
+                } else {
+                    body.push(build_pid_wrapper(&span, &name));
                 }
                 body.push(build_state_get_wrapper(&span, &name, &get_def)?);
                 if let Some(set_def) = &set_def {

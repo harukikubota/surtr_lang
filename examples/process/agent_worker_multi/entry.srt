@@ -1,0 +1,16 @@
+include "./Agents.srt"
+
+alpha =? Worker::spawn(3)
+beta =? Worker::spawn(7)
+
+print("alpha: " ++ inspect(alpha))
+print("beta: " ++ inspect(beta))
+print(inspect(Worker::get(alpha, "jobs")))
+print(inspect(Worker::get(beta, "jobs")))
+print(inspect(Worker::set(alpha, 1)))
+print(inspect(Worker::set(beta, 2)))
+print(inspect(Worker::get(alpha, "jobs")))
+print(inspect(Worker::get(beta, "jobs")))
+print(inspect(Worker::set(alpha, 5)))
+print(inspect(Worker::get(alpha, "jobs")))
+print(inspect(Worker::spawn(-1)))
