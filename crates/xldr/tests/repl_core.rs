@@ -11,7 +11,12 @@ fn rendered(result: &ReplResult) -> &[String] {
     match &result.output {
         ReplOutput::EvalSuccess { rendered, .. }
         | ReplOutput::EvalError { rendered, .. }
-        | ReplOutput::CommandOutput { rendered } => rendered,
+        | ReplOutput::PlainText { lines: rendered }
+        | ReplOutput::StyledDoc { lines: rendered } => rendered,
+        ReplOutput::Diagnostic {
+            rendered,
+            summary_tail: _,
+        } => rendered,
         ReplOutput::DocResolved {
             symbol,
             signature,
@@ -22,9 +27,6 @@ fn rendered(result: &ReplResult) -> &[String] {
             panic!(
                 "expected rendered output, got doc resolved: symbol={symbol}, signature={signature:?}, summary={summary:?}, source_snippet={source_snippet:?}, details={details:?}"
             )
-        }
-        ReplOutput::SigResolved { signature } => {
-            panic!("expected rendered output, got signature: {signature}")
         }
         ReplOutput::StatusMessage(message) => {
             panic!("expected rendered output, got status: {message}")
@@ -55,17 +57,39 @@ fn doc_text(result: &ReplResult) -> String {
             details.join("\n"),
         ]
         .join("\n"),
-        ReplOutput::CommandOutput { rendered } => rendered.join("\n"),
+        ReplOutput::PlainText { lines: rendered } | ReplOutput::StyledDoc { lines: rendered } => {
+            rendered.join("\n")
+        }
+        ReplOutput::Diagnostic {
+            rendered,
+            summary_tail,
+        } => rendered
+            .iter()
+            .chain(summary_tail.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n"),
         other => panic!("expected doc output, got {}", output_kind(other)),
     }
 }
 
 fn signature_text(result: &ReplResult) -> String {
     match &result.output {
-        ReplOutput::SigResolved { signature } => signature.clone(),
-        ReplOutput::CommandOutput { rendered } => rendered.join("\n"),
+        ReplOutput::StyledDoc { lines } | ReplOutput::PlainText { lines } => lines.join("\n"),
+        ReplOutput::Diagnostic {
+            rendered,
+            summary_tail,
+        } => rendered
+            .iter()
+            .chain(summary_tail.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n"),
         ReplOutput::EvalError { rendered, .. } => {
-            panic!("expected signature output, got EvalError:\n{}", rendered.join("\n"))
+            panic!(
+                "expected signature output, got EvalError:\n{}",
+                rendered.join("\n")
+            )
         }
         other => panic!("expected signature output, got {}", output_kind(other)),
     }
@@ -83,11 +107,32 @@ fn output_kind(output: &ReplOutput) -> &'static str {
         ReplOutput::EvalStarted { .. } => "EvalStarted",
         ReplOutput::EvalSuccess { .. } => "EvalSuccess",
         ReplOutput::EvalError { .. } => "EvalError",
-        ReplOutput::CommandOutput { .. } => "CommandOutput",
+        ReplOutput::PlainText { .. } => "PlainText",
+        ReplOutput::StyledDoc { .. } => "StyledDoc",
+        ReplOutput::Diagnostic { .. } => "Diagnostic",
         ReplOutput::DocResolved { .. } => "DocResolved",
-        ReplOutput::SigResolved { .. } => "SigResolved",
         ReplOutput::StatusMessage(_) => "StatusMessage",
     }
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+
+    out
 }
 
 #[test]
@@ -254,9 +299,13 @@ fn core_help_and_error_commands_return_structured_command_output() {
     let help_text = rendered_text(&help);
     assert!(help_text.contains("REPL commands:"));
     assert!(help_text.contains(":save <path.eldr>"));
+    assert!(help_text.contains(":info <query>"));
 
     let sig_help = engine.handle_line(":h sig");
     assert!(rendered_text(&sig_help).contains("Usage: :sig <function|expr>"));
+
+    let info_help = engine.handle_line(":help info");
+    assert!(rendered_text(&info_help).contains("Usage: :info <query>"));
 
     let error_default = engine.handle_line(":error");
     assert!(rendered_text(&error_default).contains("error display mode: full"));
@@ -266,6 +315,61 @@ fn core_help_and_error_commands_return_structured_command_output() {
 
     let error_full = engine.handle_line(":error full");
     assert!(rendered_text(&error_full).contains("error display mode: full"));
+}
+
+#[test]
+fn core_info_command_reports_queries_and_command_errors() {
+    let mut engine = engine();
+
+    let info_usage = engine.handle_line(":info");
+    assert!(rendered_text(&info_usage).contains("Usage: :info <query>"));
+
+    let print_info = engine.handle_line(":info print");
+    let print_info_text = rendered_text(&print_info);
+    assert!(
+        print_info_text.contains("Kernel::print"),
+        "{print_info_text}"
+    );
+    assert!(print_info_text.contains("kind:"), "{print_info_text}");
+    assert!(print_info_text.contains("origin:"), "{print_info_text}");
+    assert!(print_info_text.contains("defined:"), "{print_info_text}");
+
+    let _ = engine.handle_line("ret = Ok(\"3\")");
+    let _ = engine.handle_line("up = {|term: String| try_from(term, Int)}");
+    let typed_info = engine.handle_line(":info ret |>= up");
+    let typed_info_text = rendered_text(&typed_info);
+    assert!(typed_info_text.contains("defined:"), "{typed_info_text}");
+    assert!(
+        typed_info_text.contains("specialized:"),
+        "{typed_info_text}"
+    );
+    assert!(typed_info_text.contains("Result<Int>"), "{typed_info_text}");
+}
+
+#[test]
+fn core_repl_command_and_query_errors_use_diagnostics() {
+    let mut engine = engine();
+
+    let bad_error_mode = engine.handle_line(":error bad");
+    let bad_error_mode_text = strip_ansi(&rendered_text(&bad_error_mode));
+    assert!(
+        bad_error_mode_text.contains("Error: ReplCommandError"),
+        "{bad_error_mode_text}"
+    );
+
+    let bad_sig_query = engine.handle_line(":sig gt(Int, )");
+    let bad_sig_query_text = strip_ansi(&rendered_text(&bad_sig_query));
+    assert!(
+        bad_sig_query_text.contains("Error: ReplQueryParseError"),
+        "{bad_sig_query_text}"
+    );
+
+    let info_type_error = engine.handle_line(":info 1 + \"2\"");
+    let info_type_error_text = strip_ansi(&rendered_text(&info_type_error));
+    assert!(
+        info_type_error_text.contains("Error: TypeError"),
+        "{info_type_error_text}"
+    );
 }
 
 #[test]

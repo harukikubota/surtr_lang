@@ -751,6 +751,8 @@ impl ReplEngine {
             ":doc <symbol>        Show documentation for a visible symbol".to_string(),
             ":sig <symbol|expr>   Show the signature for a visible function or expression"
                 .to_string(),
+            ":info <query>        Show derived information for a visible symbol or query"
+                .to_string(),
             ":type <binding>      Show the type and identity for a visible binding".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
@@ -776,6 +778,14 @@ impl ReplEngine {
         ]
     }
 
+    fn info_help_lines() -> Vec<String> {
+        vec![
+            "Usage: :info <query>".to_string(),
+            "Accepts: symbol | typed-call | typed-operator | expr".to_string(),
+            "Examples: :info print, :info id(1), :info ret |>= up, :info 1 + 2".to_string(),
+        ]
+    }
+
     fn type_help_lines() -> Vec<String> {
         vec![
             "Usage: :type <binding>".to_string(),
@@ -791,6 +801,7 @@ impl ReplEngine {
         match topic.strip_prefix(':').unwrap_or(topic) {
             "doc" => Self::doc_help_lines(),
             "sig" => Self::sig_help_lines(),
+            "info" => Self::info_help_lines(),
             "type" => Self::type_help_lines(),
             other => {
                 let mut rendered = vec![format!("No help found for :{}", other)];
@@ -800,23 +811,69 @@ impl ReplEngine {
         }
     }
 
+    fn plain(lines: Vec<String>) -> ReplResult {
+        ReplResult::plain(lines)
+    }
+
+    fn styled(lines: Vec<String>) -> ReplResult {
+        ReplResult::styled(lines)
+    }
+
+    fn repl_command_diagnostic(
+        &self,
+        source: &str,
+        message: impl Into<String>,
+        span: Span,
+        help: Option<String>,
+        summary_tail: Vec<String>,
+    ) -> ReplResult {
+        let mut spec = diagnostics::repl_command_parse_error_spec(source, message, span);
+        if let Some(help) = help {
+            spec.help = Some(help);
+        }
+        let rendered =
+            error_display::diagnostic_lines("REPL", source, &spec, self.error_display_mode);
+        error_display::emit_diagnostic("REPL", source, &spec, self.error_display_mode);
+        if matches!(self.error_display_mode, ErrorDisplayMode::Summary) && !summary_tail.is_empty()
+        {
+            error_display::emit_text(&summary_tail.join("\n"), self.error_display_mode);
+        }
+        ReplResult::diagnostic(rendered, summary_tail)
+    }
+
+    fn repl_query_diagnostic(
+        &self,
+        source: &str,
+        message: impl Into<String>,
+        span: Span,
+        help: Option<String>,
+    ) -> ReplResult {
+        let mut spec = diagnostics::repl_query_parse_error_spec(source, message, span);
+        if let Some(help) = help {
+            spec.help = Some(help);
+        }
+        let rendered =
+            error_display::diagnostic_lines("REPL", source, &spec, self.error_display_mode);
+        error_display::emit_diagnostic("REPL", source, &spec, self.error_display_mode);
+        ReplResult::diagnostic(rendered, Vec::new())
+    }
+
     fn handle_doc(&self, symbol: &str) -> ReplResult {
         let trimmed = symbol.trim();
         if trimmed.is_empty() {
-            return ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: Self::doc_help_lines(),
-            });
+            return Self::plain(Self::doc_help_lines());
         }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => self.handle_doc_symbol(trimmed, &symbol),
             Ok(ReplQuery::TypedCall(query)) => self.handle_doc_typed_call(trimmed, &query),
             Ok(ReplQuery::TypedOperator(query)) => self.handle_doc_typed_operator(trimmed, &query),
-            Ok(ReplQuery::Expr(_)) => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: Self::doc_help_lines(),
-            }),
-            Err(err) => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![err.message().to_string()],
-            }),
+            Ok(ReplQuery::Expr(_)) => Self::plain(Self::doc_help_lines()),
+            Err(err) => self.repl_query_diagnostic(
+                &format!(":doc {trimmed}"),
+                err.message().to_string(),
+                err.span(),
+                Some("Accepted forms: symbol, typed call, or typed operator.".to_string()),
+            ),
         }
     }
 
@@ -830,11 +887,9 @@ impl ReplEngine {
             }
         }
         if symbol == "dbg!" {
-            if let Some(entry) = self
-                .docs
-                .iter()
-                .find(|entry| entry.kind == DocKind::Function && entry.qualified_name == "Bootstrap::dbg!")
-            {
+            if let Some(entry) = self.docs.iter().find(|entry| {
+                entry.kind == DocKind::Function && entry.qualified_name == "Bootstrap::dbg!"
+            }) {
                 return ReplResult::ok(Self::doc_resolved_output(entry));
             }
         }
@@ -849,12 +904,16 @@ impl ReplEngine {
             self.visible_doc_entries(&canonical, preferred_kind)
         } else if let Some(decl) = self.visible_declaration(symbol) {
             let expected_signature = self.declaration_signature(decl);
-            let mut matches = self.docs
+            let mut matches = self
+                .docs
                 .iter()
                 .filter(|entry| entry.qualified_name == decl.fq_name)
                 .filter(|entry| {
                     expected_signature.as_ref().is_none_or(|signature| {
-                        entry.signature.as_ref().is_some_and(|entry_sig| entry_sig == signature)
+                        entry
+                            .signature
+                            .as_ref()
+                            .is_some_and(|entry_sig| entry_sig == signature)
                     })
                 })
                 .collect::<Vec<_>>();
@@ -874,14 +933,10 @@ impl ReplEngine {
                 .undocumented_doc_output(&canonical)
                 .map(|output| ReplResult::ok(output))
                 .unwrap_or_else(|| {
-                    ReplResult::ok(ReplOutput::CommandOutput {
-                        rendered: vec![format!("No docs found for {}", source_symbol)],
-                    })
+                    Self::plain(vec![format!("No docs found for {}", source_symbol)])
                 }),
             [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
-            entries => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: Self::ambiguous_doc_lines(source_symbol, entries),
-            }),
+            entries => Self::plain(Self::ambiguous_doc_lines(source_symbol, entries)),
         }
     }
 
@@ -1045,7 +1100,9 @@ impl ReplEngine {
             sigil::DeclarationKind::Deferror => Some(format!("deferror {}", decl.name)),
             sigil::DeclarationKind::Enum => Some(format!("defenum {}", decl.name)),
             sigil::DeclarationKind::BuiltinType => Some(format!("type {}", decl.name)),
-            _ => self.find_signature(&decl.fq_name).map(|(_, signature)| signature),
+            _ => self
+                .find_signature(&decl.fq_name)
+                .map(|(_, signature)| signature),
         }
     }
 
@@ -1207,19 +1264,13 @@ impl ReplEngine {
 
     fn handle_doc_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
         if let Err(message) = self.query_arg_types(query.args.as_slice()) {
-            return ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![message],
-            });
+            return Self::plain(vec![message]);
         }
         let matches = self.match_typed_call_docs(query);
         match matches.as_slice() {
-            [] => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![format!("No docs found for {}", source_query)],
-            }),
+            [] => Self::plain(vec![format!("No docs found for {}", source_query)]),
             [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
-            entries => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: Self::ambiguous_doc_lines(source_query, entries),
-            }),
+            entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
         }
     }
 
@@ -1398,9 +1449,7 @@ impl ReplEngine {
     fn handle_sig(&mut self, symbol: &str) -> ReplResult {
         let trimmed = symbol.trim();
         if trimmed.is_empty() {
-            return ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: Self::sig_help_lines(),
-            });
+            return Self::plain(Self::sig_help_lines());
         }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => {
@@ -1408,25 +1457,19 @@ impl ReplEngine {
                     return self.handle_sig_expression(trimmed);
                 }
                 if let Some(rendered) = self.binding_callable_sig_summary(&symbol) {
-                    return ReplResult::ok(ReplOutput::SigResolved {
-                        signature: rendered,
-                    });
+                    return Self::styled(vec![rendered]);
                 }
                 match self.find_signature(&symbol) {
                     Some((qualified_name, signature)) => {
                         let rendered =
                             Self::render_signature_with_qualified_name(&qualified_name, signature);
-                        ReplResult::ok(ReplOutput::SigResolved {
-                            signature: rendered,
-                        })
+                        Self::styled(vec![rendered])
                     }
-                    None => ReplResult::ok(ReplOutput::CommandOutput {
-                        rendered: vec![
-                            format!("No signature found for {}", trimmed),
-                            "Try `:sig <expr>` for an expression query or `:doc <symbol>` for docs."
-                                .to_string(),
-                        ],
-                    }),
+                    None => Self::plain(vec![
+                        format!("No signature found for {}", trimmed),
+                        "Try `:sig <expr>` for an expression query or `:doc <symbol>` for docs."
+                            .to_string(),
+                    ]),
                 }
             }
             Ok(ReplQuery::TypedCall(query)) => {
@@ -1438,50 +1481,346 @@ impl ReplEngine {
             }
             Ok(ReplQuery::TypedOperator(query)) => {
                 if query.lhs.source.is_empty() || query.rhs.source.is_empty() {
-                    ReplResult::ok(ReplOutput::CommandOutput {
-                        rendered: vec![format!(
-                            "Invalid operator query: `{}` requires both left and right operands.",
-                            query.operator
-                        )],
-                    })
+                    Self::plain(vec![format!(
+                        "Invalid operator query: `{}` requires both left and right operands.",
+                        query.operator
+                    )])
                 } else {
                     self.handle_sig_typed_operator(trimmed, &query)
                 }
             }
             Ok(ReplQuery::Expr(expr)) => self.handle_sig_expression(&expr),
-            Err(err) => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![err.message().to_string()],
-            }),
+            Err(err) => self.repl_query_diagnostic(
+                &format!(":sig {trimmed}"),
+                err.message().to_string(),
+                err.span(),
+                Some(
+                    "Accepted forms: symbol, typed call, typed operator, or expression."
+                        .to_string(),
+                ),
+            ),
         }
     }
 
     fn handle_type(&self, symbol: &str) -> ReplResult {
         let trimmed = symbol.trim();
+        if trimmed.is_empty() {
+            return Self::plain(Self::type_help_lines());
+        }
         if !Self::is_type_lookup_symbol(trimmed) {
-            return ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: Self::type_help_lines(),
-            });
+            return self.repl_command_diagnostic(
+                &format!(":type {trimmed}"),
+                format!("Invalid binding lookup target `{trimmed}`."),
+                Span {
+                    start: ":type ".chars().count(),
+                    end: format!(":type {trimmed}").chars().count(),
+                },
+                Some("Usage: :type <binding>".to_string()),
+                Vec::new(),
+            );
         }
 
         let Some(binding) = self.binding_info(trimmed) else {
-            return ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![format!("No binding found for {}", trimmed)],
-            });
+            return Self::plain(vec![format!("No binding found for {}", trimmed)]);
         };
 
         let Some(value) = self.vm.get_local(binding.slot_id) else {
-            return ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![format!("Binding `{}` has no current value.", trimmed)],
-            });
+            return Self::plain(vec![format!("Binding `{}` has no current value.", trimmed)]);
         };
 
-        ReplResult::ok(ReplOutput::CommandOutput {
-            rendered: vec![format!(
-                "{} :: {}",
-                binding.ty.as_str(),
-                self.render_type_identity(binding, &value)
-            )],
-        })
+        Self::plain(vec![format!(
+            "{} :: {}",
+            binding.ty.as_str(),
+            self.render_type_identity(binding, &value)
+        )])
+    }
+
+    fn handle_info(&mut self, query: &str) -> ReplResult {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Self::plain(Self::info_help_lines());
+        }
+        match parse_repl_query(trimmed) {
+            Ok(ReplQuery::Symbol(symbol)) => self.handle_info_symbol(trimmed, &symbol),
+            Ok(ReplQuery::TypedCall(query)) => self.handle_info_typed_call(trimmed, &query),
+            Ok(ReplQuery::TypedOperator(query)) => self.handle_info_typed_operator(trimmed, &query),
+            Ok(ReplQuery::Expr(expr)) => self.handle_info_expression(&expr),
+            Err(err) => self.repl_query_diagnostic(
+                &format!(":info {trimmed}"),
+                err.message().to_string(),
+                err.span(),
+                Some(
+                    "Accepted forms: symbol, typed call, typed operator, or expression."
+                        .to_string(),
+                ),
+            ),
+        }
+    }
+
+    fn handle_info_symbol(&self, source_query: &str, symbol: &str) -> ReplResult {
+        if let Some(binding) = self.binding_info(symbol) {
+            let mut lines = vec![symbol.to_string()];
+            let kind = match self.binding_callable_kind(binding) {
+                Some(forge::ReplCallableKind::Closure) => "closure",
+                Some(forge::ReplCallableKind::Capture) => "capture",
+                None => "binding",
+            };
+            lines.push(format!("kind: {kind}"));
+            lines.push("origin: repl".to_string());
+            if let Some(value) = self.vm.get_local(binding.slot_id) {
+                lines.push(format!("type: {}", binding.ty));
+                lines.push(format!(
+                    "identity: {}",
+                    self.render_type_identity(binding, &value)
+                ));
+            }
+            if let Some(sig) = self.binding_callable_sig_summary(symbol) {
+                lines.push(format!("defined: {sig}"));
+            }
+            return Self::styled(lines);
+        }
+
+        if let Some((qualified_name, signature)) = self.find_signature(symbol) {
+            return Self::styled(vec![
+                qualified_name.clone(),
+                "kind: function".to_string(),
+                format!("origin: {}", Self::origin_for_name(&qualified_name)),
+                format!(
+                    "defined: {}",
+                    Self::render_signature_with_qualified_name(&qualified_name, signature)
+                ),
+            ]);
+        }
+
+        Self::plain(vec![format!("No signature found for {}", source_query)])
+    }
+
+    fn handle_info_typed_call(&mut self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
+        let sig = self.handle_sig_typed_call(source_query, query);
+        let sig_text = Self::repl_result_text(&sig);
+        match sig.output {
+            ReplOutput::EvalError { rendered, .. } => ReplResult::ok(ReplOutput::EvalError {
+                idx: self.results.len(),
+                source: format!(":info {source_query}"),
+                rendered,
+            }),
+            _ => {
+                let mut lines = vec![source_query.to_string(), "kind: function".to_string()];
+                lines.push(format!("origin: {}", Self::origin_for_name(&query.callee)));
+                for block in sig_text.split("\n\n") {
+                    if let Some(rest) = block.strip_prefix("defined:\n  ") {
+                        lines.push(format!("defined: {rest}"));
+                    } else if let Some(rest) = block.strip_prefix("specialized:\n  ") {
+                        lines.push(format!("specialized: {rest}"));
+                    } else {
+                        lines.push(format!("defined: {block}"));
+                    }
+                }
+                Self::styled(lines)
+            }
+        }
+    }
+
+    fn handle_info_typed_operator(
+        &mut self,
+        source_query: &str,
+        query: &TypedOperatorQuery,
+    ) -> ReplResult {
+        match self.typed_operator_signature(query) {
+            Ok((defined, result_ty)) => Self::styled(vec![
+                source_query.to_string(),
+                "kind: operator".to_string(),
+                format!("origin: {}", Self::origin_for_name(query.operator)),
+                format!("defined: {defined}"),
+                format!(
+                    "specialized: {source_query}: {}",
+                    format_query_ty(&result_ty)
+                ),
+                format!("type: {}", format_query_ty(&result_ty)),
+            ]),
+            Err(message) => self.repl_query_diagnostic(
+                &format!(":info {source_query}"),
+                message,
+                Span {
+                    start: ":info ".chars().count(),
+                    end: format!(":info {source_query}").chars().count(),
+                },
+                None,
+            ),
+        }
+    }
+
+    fn handle_info_expression(&mut self, source_query: &str) -> ReplResult {
+        let original_pending = self.pending.clone();
+        let original_source = self
+            .sources
+            .source(self.repl_source_id)
+            .unwrap_or("")
+            .to_string();
+        let query_source = format!("{source_query}\n");
+        let sigil_cp = self.sigil_session.checkpoint();
+        let scar_cp = self.scar_session.checkpoint();
+        let forge_cp = self.forge_session.checkpoint();
+
+        self.sources
+            .update_source(self.repl_source_id, query_source.clone());
+
+        let result = self.handle_info_expression_inner(source_query, &query_source);
+
+        self.sigil_session.rollback(sigil_cp);
+        self.scar_session.rollback(scar_cp);
+        self.forge_session.rollback(forge_cp);
+        self.pending = original_pending;
+        self.sources
+            .update_source(self.repl_source_id, original_source);
+
+        result
+    }
+
+    fn handle_info_expression_inner(
+        &mut self,
+        source_query: &str,
+        query_source: &str,
+    ) -> ReplResult {
+        let ast = match spire::parse_with_context(
+            query_source,
+            spire::ParserContext::repl(self.repl_source_id.0)
+                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
+        ) {
+            Ok(ast) => ast,
+            Err(e) => {
+                let message = e.message();
+                let spec = diagnostics::parse_error_spec(query_source, message, e.span().clone());
+                let rendered = error_display::diagnostic_lines_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
+                );
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: format!(":info {source_query}"),
+                    rendered,
+                });
+            }
+        };
+
+        let resolved = match self.sigil_session.resolve(ast) {
+            Ok(r) => r,
+            Err(e) => {
+                let spec =
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None);
+                let rendered = error_display::diagnostic_lines_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
+                );
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: format!(":info {source_query}"),
+                    rendered,
+                });
+            }
+        };
+
+        let typed = match self.scar_session.typecheck_with_context(
+            resolved,
+            scar::TypecheckContext {
+                runtime_policy: derive_runtime_policy(
+                    CompileUnitKind::Repl,
+                    SourceKind::ReplChunk,
+                    None,
+                ),
+                enforce_builtin_type_contracts: false,
+                allow_error_function_params: false,
+            },
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                let error = diagnostics::TypeErrorDiagnostic::new(e.message, e.span, e.hint);
+                let spec =
+                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
+                let rendered = error_display::diagnostic_lines_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
+                );
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: format!(":info {source_query}"),
+                    rendered,
+                });
+            }
+        };
+
+        let Some(root) = typed.first() else {
+            return Self::plain(Self::info_help_lines());
+        };
+
+        Self::styled(vec![
+            source_query.to_string(),
+            "kind: expr".to_string(),
+            "origin: repl".to_string(),
+            format!("type: {}", Self::ty_to_string(&root.ty)),
+            format!(
+                "specialized: {}",
+                Self::render_expression_signature(
+                    source_query,
+                    &Ast::Var(Span { start: 0, end: 0 }, source_query.to_string()),
+                    root
+                )
+            ),
+        ])
+    }
+
+    fn origin_for_name(name: &str) -> &'static str {
+        if name.contains("REPL::") {
+            "repl"
+        } else if BUILTIN_METAS
+            .iter()
+            .any(|meta| name == meta.name || name.ends_with(&format!("::{}", meta.name)))
+        {
+            "builtin"
+        } else {
+            "stdlib"
+        }
+    }
+
+    fn repl_result_text(result: &ReplResult) -> String {
+        match &result.output {
+            ReplOutput::StyledDoc { lines } | ReplOutput::PlainText { lines } => lines.join("\n"),
+            ReplOutput::Diagnostic {
+                rendered,
+                summary_tail,
+            } => rendered
+                .iter()
+                .chain(summary_tail.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n"),
+            ReplOutput::EvalSuccess { rendered, .. } | ReplOutput::EvalError { rendered, .. } => {
+                rendered.join("\n")
+            }
+            ReplOutput::DocResolved {
+                symbol,
+                signature,
+                summary,
+                source_snippet,
+                details,
+            } => [
+                vec![symbol.clone()],
+                signature.clone().into_iter().collect(),
+                summary.clone().into_iter().collect(),
+                source_snippet.clone().into_iter().collect(),
+                details.clone(),
+            ]
+            .concat()
+            .join("\n"),
+            ReplOutput::StatusMessage(message) => message.clone(),
+            ReplOutput::EvalStarted { source, .. } => source.clone(),
+        }
     }
 
     fn handle_sig_expression(&mut self, source_query: &str) -> ReplResult {
@@ -1543,9 +1882,7 @@ impl ReplEngine {
         let expr = match Self::sig_query_expr_ast(&ast) {
             Ok(expr) => expr,
             Err(message) => {
-                return ReplResult::ok(ReplOutput::CommandOutput {
-                    rendered: vec![message],
-                });
+                return Self::plain(vec![message]);
             }
         }
         .clone();
@@ -1601,17 +1938,13 @@ impl ReplEngine {
         };
 
         let Some(root) = typed.first() else {
-            return ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![
-                    "`:sig` could not infer a signature for the empty query.".to_string()
-                ],
-            });
+            return Self::plain(vec![
+                "`:sig` could not infer a signature for the empty query.".to_string(),
+            ]);
         };
 
         let rendered = Self::render_expression_signature(source_query, &expr, root);
-        ReplResult::ok(ReplOutput::SigResolved {
-            signature: rendered,
-        })
+        Self::styled(vec![rendered])
     }
 
     fn sig_query_expr_ast(ast: &[Ast]) -> Result<&Ast, String> {
@@ -1984,9 +2317,7 @@ impl ReplEngine {
                 let arg_types = match self.query_arg_ast_types(query.args.as_slice()) {
                     Ok(arg_types) => arg_types,
                     Err(message) => {
-                        return ReplResult::ok(ReplOutput::CommandOutput {
-                            rendered: vec![message],
-                        });
+                        return Self::plain(vec![message]);
                     }
                 };
                 let rendered = if query.callee == "dbg!" {
@@ -2009,16 +2340,10 @@ impl ReplEngine {
                         specialized_return
                     )
                 };
-                ReplResult::ok(ReplOutput::SigResolved {
-                    signature: rendered,
-                })
+                Self::styled(rendered.lines().map(|line| line.to_string()).collect())
             }
-            [] => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![format!("No signature found for {}", source_query)],
-            }),
-            entries => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: Self::ambiguous_doc_lines(source_query, entries),
-            }),
+            [] => Self::plain(vec![format!("No signature found for {}", source_query)]),
+            entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
         }
     }
 
@@ -2028,15 +2353,16 @@ impl ReplEngine {
         query: &TypedOperatorQuery,
     ) -> ReplResult {
         match self.typed_operator_signature(query) {
-            Ok((defined, result_ty)) => ReplResult::ok(ReplOutput::SigResolved {
-                signature: format!(
+            Ok((defined, result_ty)) => Self::styled(
+                format!(
                     "defined:\n  {defined}\n\nspecialized:\n  {source_query}: {}",
                     format_query_ty(&result_ty)
-                ),
-            }),
-            Err(message) => ReplResult::ok(ReplOutput::CommandOutput {
-                rendered: vec![message],
-            }),
+                )
+                .lines()
+                .map(|line| line.to_string())
+                .collect(),
+            ),
+            Err(message) => Self::plain(vec![message]),
         }
     }
 
@@ -2071,9 +2397,7 @@ impl ReplEngine {
         let arg_types = match self.query_arg_ast_types(query.args.as_slice()) {
             Ok(arg_types) => arg_types,
             Err(message) => {
-                return Some(ReplResult::ok(ReplOutput::CommandOutput {
-                    rendered: vec![message],
-                }));
+                return Some(Self::plain(vec![message]));
             }
         };
 
@@ -2086,13 +2410,9 @@ impl ReplEngine {
             ));
         }
 
-        Some(ReplResult::ok(ReplOutput::SigResolved {
-            signature: Self::render_callable_application_summary(
-                &query.callee,
-                &arg_types,
-                ret.as_ref(),
-            ),
-        }))
+        Some(Self::styled(vec![
+            Self::render_callable_application_summary(&query.callee, &arg_types, ret.as_ref()),
+        ]))
     }
 
     fn render_callable_sig_summary(
@@ -2813,20 +3133,29 @@ impl ReplEngine {
         }
     }
 
-    fn handle_error_mode(&mut self, mode: Option<&str>) -> Vec<String> {
+    fn handle_error_mode(&mut self, mode: Option<&str>) -> ReplResult {
         let Some(mode) = mode else {
-            return vec![format!(
+            return Self::plain(vec![format!(
                 "error display mode: {}",
                 self.error_display_mode.as_str()
-            )];
+            )]);
         };
 
         match ErrorDisplayMode::parse(mode.trim()) {
             Some(parsed) => {
                 self.error_display_mode = parsed;
-                vec![format!("error display mode: {}", parsed.as_str())]
+                Self::plain(vec![format!("error display mode: {}", parsed.as_str())])
             }
-            None => vec!["Usage: :error [full|summary]".to_string()],
+            None => self.repl_command_diagnostic(
+                &format!(":error {}", mode.trim()),
+                format!("Invalid error display mode `{}`.", mode.trim()),
+                Span {
+                    start: ":error ".chars().count(),
+                    end: format!(":error {}", mode.trim()).chars().count(),
+                },
+                Some("Usage: :error [full|summary]".to_string()),
+                vec!["Use `:error full` or `:error summary`.".to_string()],
+            ),
         }
     }
 
@@ -2851,7 +3180,7 @@ impl ReplEngine {
         if self.pending.is_empty() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
-                return ReplResult::ok(ReplOutput::CommandOutput { rendered: vec![] });
+                return Self::plain(vec![]);
             }
             if let Some(cmd) = parse_repl_command(trimmed) {
                 match cmd {
@@ -2860,7 +3189,7 @@ impl ReplEngine {
                     }
                     ReplCommand::Help { topic } => {
                         let rendered = self.handle_help(topic.as_deref());
-                        return ReplResult::ok(ReplOutput::CommandOutput { rendered });
+                        return Self::plain(rendered);
                     }
                     ReplCommand::Doc { symbol } => {
                         return self.handle_doc(&symbol);
@@ -2868,28 +3197,32 @@ impl ReplEngine {
                     ReplCommand::Sig { symbol } => {
                         return self.handle_sig(&symbol);
                     }
+                    ReplCommand::Info { query } => {
+                        return self.handle_info(&query);
+                    }
                     ReplCommand::Type { symbol } => {
                         return self.handle_type(&symbol);
                     }
                     ReplCommand::Error { mode } => {
-                        let rendered = self.handle_error_mode(mode.as_deref());
-                        return ReplResult::ok(ReplOutput::CommandOutput { rendered });
+                        return self.handle_error_mode(mode.as_deref());
                     }
                     ReplCommand::ValueRecall { arg } => {
-                        let rendered = self.handle_value_recall(&arg);
-                        return ReplResult::ok(ReplOutput::CommandOutput { rendered });
+                        return self.handle_value_recall(&arg);
                     }
                     ReplCommand::Save { path } => {
-                        let rendered = self.handle_save(&path);
-                        return ReplResult::ok(ReplOutput::CommandOutput { rendered });
+                        return self.handle_save(&path);
                     }
                     ReplCommand::Unknown { raw } => {
-                        return ReplResult::ok(ReplOutput::CommandOutput {
-                            rendered: vec![
-                                format!("Unknown REPL command: {}", raw),
-                                "Type :help for available REPL commands.".to_string(),
-                            ],
-                        });
+                        return self.repl_command_diagnostic(
+                            &raw,
+                            format!("Unknown REPL command: {}", raw),
+                            Span {
+                                start: 0,
+                                end: raw.chars().count(),
+                            },
+                            Some("Type :help for available REPL commands.".to_string()),
+                            Vec::new(),
+                        );
                     }
                 }
             }
@@ -2910,7 +3243,7 @@ impl ReplEngine {
         ) {
             Ok(ast) => ast,
             Err(e) if e.is_incomplete() => {
-                return ReplResult::ok(ReplOutput::CommandOutput { rendered: vec![] });
+                return Self::plain(vec![]);
             }
             Err(e) => {
                 let message = e.message();
@@ -2939,7 +3272,7 @@ impl ReplEngine {
 
         if ast.is_empty() {
             self.pending.clear();
-            return ReplResult::ok(ReplOutput::CommandOutput { rendered: vec![] });
+            return Self::plain(vec![]);
         }
 
         let import_only = ast.iter().all(|stmt| matches!(stmt, Ast::Import(_, _, _)));
@@ -3158,9 +3491,9 @@ impl ReplEngine {
         }
     }
 
-    fn handle_save(&mut self, arg: &str) -> Vec<String> {
+    fn handle_save(&mut self, arg: &str) -> ReplResult {
         if arg.is_empty() {
-            return vec!["Usage: :save <path.eldr>".to_string()];
+            return Self::plain(vec!["Usage: :save <path.eldr>".to_string()]);
         }
 
         let path = if arg.ends_with(".eldr") {
@@ -3172,42 +3505,51 @@ impl ReplEngine {
         let mut bytecode = self.vm.snapshot_bytecode();
         bytecode.docs = self.docs.clone();
         match bytecode.encode() {
-            Err(e) => vec![format!("Error encoding bytecode: {}", e)],
+            Err(e) => Self::plain(vec![format!("Error encoding bytecode: {}", e)]),
             Ok(bytes) => match fs::write(&path, bytes) {
-                Ok(()) => vec![format!("saved to {}", path)],
-                Err(e) => vec![format!("Error writing {}: {}", path, e)],
+                Ok(()) => Self::plain(vec![format!("saved to {}", path)]),
+                Err(e) => Self::plain(vec![format!("Error writing {}: {}", path, e)]),
             },
         }
     }
 
-    fn handle_value_recall(&mut self, arg: &str) -> Vec<String> {
+    fn handle_value_recall(&mut self, arg: &str) -> ReplResult {
         if arg.is_empty() {
             self.bump_line(None, None);
-            return vec!["Usage: :v <line>".to_string()];
+            return Self::plain(vec!["Usage: :v <line>".to_string()]);
         }
 
         let line_num = match arg.parse::<usize>() {
             Ok(n) if n > 0 => n,
             _ => {
                 self.bump_line(None, None);
-                return vec![format!("Invalid line number for :v: {}", arg)];
+                return self.repl_command_diagnostic(
+                    &format!(":v {arg}"),
+                    format!("Invalid line number for :v: {}", arg),
+                    Span {
+                        start: ":v ".chars().count(),
+                        end: format!(":v {arg}").chars().count(),
+                    },
+                    Some("Usage: :v <line>".to_string()),
+                    Vec::new(),
+                );
             }
         };
 
         if line_num > self.results.len() {
             self.bump_line(None, None);
-            return vec![format!("No such line: {}", line_num)];
+            return Self::plain(vec![format!("No such line: {}", line_num)]);
         }
 
         match self.results[line_num - 1].clone() {
             Some(value) => {
                 let displayed = inspect_value(&self.vm, &value);
                 self.bump_line(Some(value), None);
-                vec![displayed]
+                Self::plain(vec![displayed])
             }
             None => {
                 self.bump_line(None, None);
-                vec![format!("Line {} has no value", line_num)]
+                Self::plain(vec![format!("Line {} has no value", line_num)])
             }
         }
     }

@@ -92,6 +92,58 @@ pub fn signature(signature: &str) -> String {
     signature_doc(signature)
 }
 
+pub fn info_line(line: &str) -> String {
+    if let Some(rest) = line.strip_prefix("kind: ") {
+        return concat([
+            styled("kind", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            styled(rest, Style::fg(Color::Yellow)),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("origin: ") {
+        return concat([
+            styled("origin", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            styled(rest, Style::fg(Color::Green)),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("defined: ") {
+        return concat([
+            styled("defined", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            signature_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("specialized: ") {
+        return concat([
+            styled("specialized", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            source_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("type: ") {
+        return concat([
+            styled("type", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            type_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("identity: ") {
+        return concat([
+            styled("identity", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            source_doc(rest),
+        ]);
+    }
+    if line.contains("->") && line.contains('(') {
+        return signature_doc(line);
+    }
+    if line.contains("::") || looks_like_source_line(line) {
+        return source_doc(line);
+    }
+    styled(line, Style::default().bold())
+}
+
 pub fn doc_signature_banner(symbol: &str, signature: &str) -> String {
     signature_banner(symbol, signature, true)
 }
@@ -188,7 +240,7 @@ fn strip_visual_indent(line: &str, columns_to_strip: usize) -> &str {
     ""
 }
 
-fn doc_body_line(line: &str) -> String {
+pub(crate) fn doc_body_line(line: &str) -> String {
     let trimmed = line.trim_start();
     if trimmed.starts_with("##") {
         return styled(line, Style::fg(Color::Yellow).bold());

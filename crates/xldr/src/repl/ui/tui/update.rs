@@ -59,6 +59,7 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("doc", ":doc <symbol>  — show docs"),
     ("error", ":error [full|summary]  — set error display mode"),
     ("sig", ":sig <symbol|expr>  — show signature"),
+    ("info", ":info <query>  — show derived info"),
     ("type", ":type <binding>  — lookup binding type"),
     ("save", ":save <path>  — save session to .eldr"),
 ];
@@ -235,102 +236,19 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
 
     match cmd {
         "q" | "quit" => app.should_quit = true,
-        "help" => {
-            app.push_result(
-                ":help",
-                vec![
-                    ":q :help :doc <sym> :error [full|summary] :sig <sym|expr> :type <binding> :save <path> :v <idx> :j <idx>"
-                        .to_string(),
-                ],
-                PresentedResultKind::Info,
-            );
-        }
-        "save" => {
-            if arg.is_empty() {
-                app.push_result(
-                    ":save",
-                    vec!["Usage: :save <path>".to_string()],
-                    PresentedResultKind::EvalError,
-                );
-            } else {
-                let line = format!(":save {arg}");
-                let presented = present_for_interaction(engine.handle_line(&line));
-                match presented.event {
-                    PresentedEvent::Result(result) => {
-                        app.push_result(line, result.lines, result.kind);
-                    }
-                    PresentedEvent::Doc(doc) => app.push_doc(doc),
-                    PresentedEvent::None => {}
-                }
-            }
-        }
-        "doc" => {
-            if arg.is_empty() {
-                app.push_result(
-                    ":doc",
-                    vec!["Usage: :doc <symbol>".to_string()],
-                    PresentedResultKind::EvalError,
-                );
-            } else {
-                let line = format!(":doc {arg}");
-                let presented = present_for_interaction(engine.handle_line(&line));
-                match presented.event {
-                    PresentedEvent::Result(result) => {
-                        app.push_result(line, result.lines, result.kind);
-                    }
-                    PresentedEvent::Doc(doc) => app.push_doc(doc),
-                    PresentedEvent::None => {}
-                }
-            }
-        }
-        "error" => {
+        "help" | "save" | "doc" | "error" | "sig" | "info" | "type" => {
             let line = if arg.is_empty() {
-                ":error".to_string()
+                format!(":{cmd}")
             } else {
-                format!(":error {arg}")
+                format!(":{cmd} {arg}")
             };
-            let result = engine.handle_line(&line);
-            let presented = present_for_interaction(result);
+            let presented = present_for_interaction(engine.handle_line(&line));
             match presented.event {
-                PresentedEvent::Result(result) => app.push_result(line, result.lines, result.kind),
+                PresentedEvent::Result(result) => {
+                    app.push_result(line, result.lines, result.kind);
+                }
                 PresentedEvent::Doc(doc) => app.push_doc(doc),
                 PresentedEvent::None => {}
-            }
-        }
-        "sig" => {
-            if arg.is_empty() {
-                app.push_result(
-                    ":sig",
-                    vec!["Usage: :sig <function|expr>".to_string()],
-                    PresentedResultKind::EvalError,
-                );
-            } else {
-                let line = format!(":sig {arg}");
-                let presented = present_for_interaction(engine.handle_line(&line));
-                match presented.event {
-                    PresentedEvent::Result(result) => {
-                        app.push_result(line, result.lines, result.kind);
-                    }
-                    PresentedEvent::Doc(doc) => app.push_doc(doc),
-                    PresentedEvent::None => {}
-                }
-            }
-        }
-        "type" => {
-            if arg.is_empty() {
-                app.push_result(
-                    ":type",
-                    vec!["Usage: :type <binding>".to_string()],
-                    PresentedResultKind::EvalError,
-                );
-            } else {
-                app.push_result(
-                    format!(":type {arg}"),
-                    vec![format!(
-                        "Type lookup is handled by the REPL core for `{arg}`."
-                    )],
-                    PresentedResultKind::Info,
-                );
             }
         }
         "v" => {

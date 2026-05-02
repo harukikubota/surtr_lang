@@ -12,3 +12,6 @@ mod runtime;
 
 #[path = "tests/typecheck.rs"]
 mod typecheck;
+
+#[path = "tests/repl.rs"]
+mod repl;

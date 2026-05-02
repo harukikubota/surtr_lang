@@ -4,6 +4,7 @@ pub enum ReplCommand {
     Help { topic: Option<String> },
     Doc { symbol: String },
     Sig { symbol: String },
+    Info { query: String },
     Type { symbol: String },
     Error { mode: Option<String> },
     ValueRecall { arg: String },
@@ -39,6 +40,9 @@ pub fn parse_repl_command(trimmed: &str) -> Option<ReplCommand> {
         },
         "sig" => ReplCommand::Sig {
             symbol: rest.to_string(),
+        },
+        "info" => ReplCommand::Info {
+            query: rest.to_string(),
         },
         "type" => ReplCommand::Type {
             symbol: rest.to_string(),
@@ -135,6 +139,15 @@ mod tests {
         assert!(matches!(
             parsed,
             ReplCommand::Type { symbol } if symbol == "list"
+        ));
+    }
+
+    #[test]
+    fn parse_info_command_with_query() {
+        let parsed = parse_repl_command(":info ret |>= up").expect("command should parse");
+        assert!(matches!(
+            parsed,
+            ReplCommand::Info { query } if query == "ret |>= up"
         ));
     }
 }

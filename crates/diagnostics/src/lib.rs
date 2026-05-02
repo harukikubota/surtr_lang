@@ -4,6 +4,7 @@ mod debug_render;
 mod heuristics;
 mod parse;
 mod render;
+mod repl;
 mod report;
 mod resolve;
 mod runtime;
@@ -20,6 +21,7 @@ pub use render::{
     render_error, render_error_by_id, report_error, report_error_by_id,
     serializable_diagnostic_by_id, serializable_report_by_id,
 };
+pub use repl::{repl_command_parse_error_spec, repl_query_parse_error_spec};
 pub use report::{
     simple_error, DiagnosticLabel, DiagnosticSpec, RuntimeDiagnosticContext,
     SerializableDiagnostic, SerializableDiagnosticReport,

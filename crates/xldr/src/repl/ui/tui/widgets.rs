@@ -101,7 +101,8 @@ impl Widget for ResultsPaneWidget<'_> {
             let rendered_style = match entry.kind {
                 PresentedResultKind::EvalError => Style::default().fg(Color::Red),
                 PresentedResultKind::Info => Style::default().fg(Color::Yellow),
-                PresentedResultKind::CommandOutput => Style::default().fg(Color::Cyan),
+                PresentedResultKind::PlainText => Style::default().fg(Color::Cyan),
+                PresentedResultKind::Diagnostic => Style::default().fg(Color::Red),
                 PresentedResultKind::EvalSuccess => Style::default().fg(Color::Green),
             };
             for line in entry.rendered_lines.iter() {

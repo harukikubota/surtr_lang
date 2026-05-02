@@ -14,8 +14,15 @@ pub enum ReplOutput {
         source: String,
         rendered: Vec<String>,
     },
-    CommandOutput {
+    PlainText {
+        lines: Vec<String>,
+    },
+    StyledDoc {
+        lines: Vec<String>,
+    },
+    Diagnostic {
         rendered: Vec<String>,
+        summary_tail: Vec<String>,
     },
     DocResolved {
         symbol: String,
@@ -23,9 +30,6 @@ pub enum ReplOutput {
         summary: Option<String>,
         source_snippet: Option<String>,
         details: Vec<String>,
-    },
-    SigResolved {
-        signature: String,
     },
     StatusMessage(String),
 }
@@ -51,5 +55,20 @@ impl ReplResult {
             output,
             should_exit: true,
         }
+    }
+
+    pub fn plain(lines: Vec<String>) -> Self {
+        Self::ok(ReplOutput::PlainText { lines })
+    }
+
+    pub fn styled(lines: Vec<String>) -> Self {
+        Self::ok(ReplOutput::StyledDoc { lines })
+    }
+
+    pub fn diagnostic(rendered: Vec<String>, summary_tail: Vec<String>) -> Self {
+        Self::ok(ReplOutput::Diagnostic {
+            rendered,
+            summary_tail,
+        })
     }
 }

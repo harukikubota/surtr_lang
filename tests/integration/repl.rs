@@ -241,6 +241,27 @@ fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
 }
 
 #[test]
+fn repl_info_renders_styled_summary_for_queries() {
+    let output = run_repl_session_with_color(
+        "ret = Ok(\"3\")\nup = {|term: String| try_from(term, Int)}\n:info ret |>= up\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\u{1b}["));
+    let plain = strip_ansi(&stdout);
+    assert!(plain.contains("kind:"), "{plain}");
+    assert!(plain.contains("defined:"), "{plain}");
+    assert!(plain.contains("specialized:"), "{plain}");
+    assert!(plain.contains("Result<Int>"), "{plain}");
+}
+
+#[test]
 fn repl_sig_missing_symbol_prints_guidance() {
     let output = run_repl_session(":sig a\n:quit\n");
     assert!(
@@ -276,9 +297,8 @@ fn repl_colorizes_doc_for_qualified_kernel_if() {
 
 #[test]
 fn repl_error_summary_then_full_changes_diagnostic_detail() {
-    let output = run_repl_session(
-        ":error summary\nbad: Int = \"oops\"\n:error full\nworse: Int = \"oops\"\n:quit\n",
-    );
+    let output =
+        run_repl_session(":error summary\n:error bad\n:error full\nworse: Int = \"oops\"\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -288,8 +308,8 @@ fn repl_error_summary_then_full_changes_diagnostic_detail() {
 
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     let first_error_pos = stderr
-        .find("Error: TypeError")
-        .expect("expected first TypeError headline");
+        .find("Error: ReplCommandError")
+        .expect("expected first ReplCommandError headline");
     let second_error_pos = stderr[first_error_pos + 1..]
         .find("Error: TypeError")
         .map(|offset| first_error_pos + 1 + offset)
@@ -299,6 +319,10 @@ fn repl_error_summary_then_full_changes_diagnostic_detail() {
     let second_block = &stderr[second_error_pos..];
 
     assert!(!first_block.contains("╭─["));
+    assert!(
+        first_block.contains("Use `:error full` or `:error summary`."),
+        "{first_block}"
+    );
     assert!(second_block.contains("╭─["));
 }
 

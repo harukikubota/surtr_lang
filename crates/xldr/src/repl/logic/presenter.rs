@@ -5,7 +5,8 @@ use super::styled;
 pub enum PresentedResultKind {
     EvalSuccess,
     EvalError,
-    CommandOutput,
+    PlainText,
+    Diagnostic,
     Info,
 }
 
@@ -48,17 +49,15 @@ pub fn present_for_cli(result: &ReplResult, color: bool) -> Vec<String> {
                 format!("> {rendered}")
             })
             .collect(),
-        ReplOutput::CommandOutput { rendered } => {
-            rendered.iter().map(|line| format!("> {line}")).collect()
-        }
-        ReplOutput::SigResolved { signature } => {
-            let rendered = if color {
-                styled::signature(signature)
+        ReplOutput::PlainText { lines } => lines.iter().map(|line| format!("> {line}")).collect(),
+        ReplOutput::StyledDoc { lines } => {
+            if color {
+                lines.iter().map(|line| styled::info_line(line)).collect()
             } else {
-                signature.clone()
-            };
-            vec![rendered]
+                lines.clone()
+            }
         }
+        ReplOutput::Diagnostic { .. } => Vec::new(),
         ReplOutput::DocResolved {
             symbol,
             signature,
@@ -107,14 +106,24 @@ pub fn present_for_interaction(result: ReplResult) -> PresentedInteraction {
             lines: rendered,
             kind: PresentedResultKind::EvalError,
         }),
-        ReplOutput::CommandOutput { rendered } => PresentedEvent::Result(PresentedResult {
-            lines: rendered,
-            kind: PresentedResultKind::CommandOutput,
+        ReplOutput::PlainText { lines } => PresentedEvent::Result(PresentedResult {
+            lines,
+            kind: PresentedResultKind::PlainText,
         }),
-        ReplOutput::SigResolved { signature } => PresentedEvent::Result(PresentedResult {
-            lines: vec![signature],
+        ReplOutput::StyledDoc { lines } => PresentedEvent::Result(PresentedResult {
+            lines,
             kind: PresentedResultKind::Info,
         }),
+        ReplOutput::Diagnostic {
+            mut rendered,
+            summary_tail,
+        } => {
+            rendered.extend(summary_tail);
+            PresentedEvent::Result(PresentedResult {
+                lines: rendered,
+                kind: PresentedResultKind::Diagnostic,
+            })
+        }
         ReplOutput::DocResolved {
             symbol,
             signature,
