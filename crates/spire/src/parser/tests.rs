@@ -1614,6 +1614,147 @@ fn test_logical_precedence_is_lower_than_expr_class() {
 }
 
 #[test]
+fn test_prefix_bang_lowers_to_boolean_not_call() {
+    let ast = parse("x = !flag").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Ast::Path(_, path)
+                        if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                ));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(arg)]
+                        if matches!(arg, Ast::Var(_, name) if name == "flag")
+                ));
+            }
+            other => panic!("Expected lowered Boolean::not call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_prefix_bang_binds_tighter_than_comparison() {
+    let ast = parse("x = !a == b").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::BinOp(_, BinOp::Eq, left, right) => {
+                assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "b"));
+                assert!(matches!(
+                    left.as_ref(),
+                    Ast::App(_, func, args)
+                        if matches!(
+                            func.as_ref(),
+                            Ast::Path(_, path)
+                                if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                        ) && matches!(
+                            args.as_slice(),
+                            [RecordLitArg::Positional(arg)]
+                                if matches!(arg, Ast::Var(_, name) if name == "a")
+                        )
+                ));
+            }
+            other => panic!("Expected Eq at top level, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_prefix_bang_binds_tighter_than_expr_class_ops() {
+    let ast = parse("x = !a + b").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::BinOp(_, BinOp::Add, left, right) => {
+                assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "b"));
+                assert!(matches!(
+                    left.as_ref(),
+                    Ast::App(_, func, args)
+                        if matches!(
+                            func.as_ref(),
+                            Ast::Path(_, path)
+                                if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                        ) && matches!(
+                            args.as_slice(),
+                            [RecordLitArg::Positional(arg)]
+                                if matches!(arg, Ast::Var(_, name) if name == "a")
+                        )
+                ));
+            }
+            other => panic!("Expected Add at top level, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_prefix_bang_binds_tighter_than_and() {
+    let ast = parse("x = !a && b").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(
+                            left,
+                            Ast::App(_, func, args)
+                                if matches!(
+                                    func.as_ref(),
+                                    Ast::Path(_, path)
+                                        if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                                ) && matches!(
+                                    args.as_slice(),
+                                    [RecordLitArg::Positional(arg)]
+                                        if matches!(arg, Ast::Var(_, name) if name == "a")
+                                )
+                        ) && matches!(right, Ast::Var(_, name) if name == "b")
+                ));
+            }
+            other => panic!("Expected and(...) call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_prefix_bang_preserves_grouping() {
+    let ast = parse("x = !(a && b)").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Ast::Path(_, path)
+                        if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                ));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(Ast::Grouped(_, inner))]
+                        if matches!(
+                            inner.as_ref(),
+                            Ast::App(_, inner_func, inner_args)
+                                if matches!(inner_func.as_ref(), Ast::Var(_, name) if name == "and")
+                                    && matches!(
+                                        inner_args.as_slice(),
+                                        [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                                            if matches!(left, Ast::Var(_, name) if name == "a")
+                                                && matches!(right, Ast::Var(_, name) if name == "b")
+                                    )
+                        )
+                ));
+            }
+            other => panic!("Expected lowered Boolean::not call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_func_literal_name_lowers_to_binary_call() {
     let ast = parse("x = left `eq` right").unwrap();
     match &ast[0] {

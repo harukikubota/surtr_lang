@@ -9,9 +9,14 @@ contract.
 impl Boolean {
   @doc """
   Return the logical negation of `value`.
+
+  Prefix `!expr` is syntax sugar for `Boolean::not(expr)`.
+
   ## REPL
   xldr(1)> Boolean::not(True)
   False
+  xldr(2)> !False
+  True
   """
   def not(value: Boolean) -> Boolean {
     if(value, False, True)

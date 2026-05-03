@@ -409,6 +409,26 @@ impl Parser<'_> {
         let sp = self.peek_span();
 
         match self.peek().clone() {
+            Token::Bang => {
+                self.advance();
+                let inner = self.parse_primary()?;
+                let span = Span {
+                    start: sp.start,
+                    end: inner.span().end,
+                };
+                Ok(Ast::App(
+                    span.clone(),
+                    Box::new(Ast::Path(
+                        span.clone(),
+                        AstPath {
+                            span: span.clone(),
+                            segments: vec!["Boolean".into(), "not".into()],
+                        },
+                    )),
+                    vec![RecordLitArg::Positional(inner)],
+                ))
+            }
+
             // Literals
             Token::Int(n) => {
                 self.advance();
