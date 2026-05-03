@@ -204,48 +204,44 @@ SURTR_SCAR_PROFILE=1 /usr/bin/time -p ./target/debug/surtr build tests/profile/h
 - 同一 process 内の warm compile では default stdlib の Scar 処理は省かれ、後段 user/include 分だけが対象になる。
 - この測定では post-stdlib の Scar 対象は 405 stmt 相当から 39 stmt へ縮小した。
 
-## v1.5 / v2 semantic cache 実装後メモ
+## v1.5 / v2 branch 実装メモ（未採用）
 
 - 実装日: 2026-04-29
-- 実装範囲: `xldr` の default stdlib semantic snapshot を disk cache 化した。
+- 実装範囲: `xldr` の default stdlib semantic snapshot を disk cache 化する branch を作成した。
+- この時点では `main` へは未採用。採否判断用のメモとして残す。
 - cache file は `target/surtr-stdlib-cache/std.semantic`。`SURTR_STDLIB_CACHE_DIR` 指定時はその directory 配下へ保存する。
-- cache payload は `DeclarationIndex` / `ResolveResumeState` / `ScarCheckpoint` / precompiled stdlib `Bytecode` / doc metadata / auto-import metadata を保持する。
-- `spire::Ast` 全体の永続化は避け、cache hit 時も stdlib parse と doc collection は実行する。resolve / typecheck / codegen は cache から復元する。
-- cache key は schema version、compiler version、`BUILTIN_METAS`、`BUILTIN_TYPE_METAS`、default stdlib source hash から作る。
-- cache miss / corrupt / schema mismatch / key mismatch は silent rebuild とする。
+- cache payload 候補は `DeclarationIndex` / `ResolveResumeState` / `ScarCheckpoint` / precompiled stdlib `Bytecode` / doc metadata / auto-import metadata。
+- `spire::Ast` 全体の永続化は避け、cache hit 時も stdlib parse と doc collection は実行し、resolve / typecheck / codegen を cache から復元する方針を試した。
+- cache key 候補は schema version、`xldr` crate version、compile policy version、`BUILTIN_METAS`、`BUILTIN_TYPE_METAS`、default stdlib source hash。
+- cache miss / corrupt / schema mismatch / key mismatch / read-write failure は user-visible error にせず source rebuild へ fallback する。
 - test build cost を抑えるため、serde derive は cache payload が実際に参照する型に限定する。`spire::Ast` 全体や `scar::TypedNode` 全体は永続化しない。
+- branch では serialize / deserialize の stack 消費が大きい箇所に備え、大きめ stack の worker thread に逃がす案も合わせて試した。
 
 計測:
 
 ```bash
-SURTR_RUN_CACHE=0 SURTR_STDLIB_CACHE_DIR=/tmp/surtr-stdlib-cache-measure /usr/bin/time -p ./target/debug/surtr run tests/profile/heavy_compile.srt
-SURTR_RUN_CACHE=0 SURTR_STDLIB_CACHE_DIR=/tmp/surtr-stdlib-cache-profile SURTR_SCAR_PROFILE=1 /usr/bin/time -p ./target/debug/surtr run tests/profile/heavy_compile.srt
+rm -rf target/surtr-stdlib-cache
+SURTR_SCAR_PROFILE=1 /usr/bin/time -p ./target/debug/surtr build tests/profile/heavy_compile.srt /tmp/surtr-heavy-cold.eldr
+SURTR_SCAR_PROFILE=1 /usr/bin/time -p ./target/debug/surtr build tests/profile/heavy_compile.srt /tmp/surtr-heavy-hit.eldr
 ```
 
-| case | real | 読み取り |
-|---|---:|---|
-| cold semantic cache miss | 1.11s | stdlib semantic rebuild + 620KB cache write が発生 |
-| warm semantic cache hit | 0.19s | stdlib Scar profile が消え、user/include 側のみ typecheck |
-| minimized clean test build | 16.70s | 広すぎた serde derive を削減後。実装直後の 19.89s から改善 |
-| empty semantic cache `cargo nextest run -p rune` | 15.03s | cache file は 1 個だけ作成され、初回 cost は共有される |
+| item | cold miss | disk hit |
+|---|---:|---:|
+| `surtr build` real | 1.69s | 0.12s |
+| `surtr build` user | 0.81s | 0.11s |
+| stdlib Scar total | 801.045ms | skipped |
+| post-stdlib Scar total | 31.501ms | 40.625ms |
+| post-stdlib stmt count | 39 | 39 |
 
-warm cache hit の Scar profile:
+読み取り:
 
-| item | value |
-|---|---:|
-| post-stdlib Scar total | 14.885ms |
-| post-stdlib stmt count | 39 |
+- cold miss では source から snapshot を再構築し、cache write も行うため v1 cold より重い。
+- disk hit では default stdlib の parse / resolve / typecheck / codegen を disk snapshot から復元し、Scar は user/include 分だけを処理する。
+- disk cache は compile-time artifact であり、壊れても通常 compile に戻る。
 
-確認:
+branch 実装で別途確認した事項:
 
-```bash
-cargo test -p xldr
-cargo nextest run -p rune --test integration run_srt::spec_fixtures_bucket_0
-cargo nextest run --workspace
-```
-
-結果:
-
-- `cargo test -p xldr`: 47 passed
-- `cargo nextest run -p rune --test integration run_srt::spec_fixtures_bucket_0`: 1 passed
-- `cargo nextest run --workspace`: 830 passed
+- `.eldr` 形式は変更しない
+- cache payload は compile-time artifact としてのみ扱う
+- 壊れた cache を拾っても通常 compile へ戻ることを最優先にする
+- 採用する場合は、serialize 対象型の境界をこれ以上広げずに済むかを先に見直す
