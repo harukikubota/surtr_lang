@@ -9,10 +9,6 @@ shared abstraction.
 """
 @@builtin type Error
 
-@@doc """
-Error module.
-Provides runtime inspection helpers for abstract `Error` values.
-"""
 impl Error {
   @@doc """
   Return the concrete `deferror` kind name stored in an `Error` value.

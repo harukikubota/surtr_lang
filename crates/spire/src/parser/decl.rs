@@ -875,6 +875,19 @@ impl Parser<'_> {
             ));
         }
 
+        if attrs.doc.is_some() {
+            return Err(ParseError::syntax(
+                "@@doc is not allowed before `impl Type`; attach docs to the type declaration or impl members",
+                sp.clone(),
+            ));
+        }
+        if attrs.hidden {
+            return Err(ParseError::syntax(
+                "@@hidden is not allowed before `impl Type`; use member-level visibility instead",
+                sp.clone(),
+            ));
+        }
+
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
 

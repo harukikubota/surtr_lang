@@ -24,11 +24,6 @@ deferror RegexCompileError(detail: String) {
   detail
 }
 
-@@doc """
-Regex module.
-Provides Rust-regex-backed helpers for pattern compilation, matching, capture
-access, replacement, and text splitting.
-"""
 impl Regex {
   @@doc """
   Compile a pattern string into a `Regex` value.
@@ -124,10 +119,6 @@ impl Regex {
   @@builtin def group_names(re: Regex) -> List<String>
 }
 
-@@doc """
-Capture-access module.
-Extracts per-group values from `RegexCaptures`.
-"""
 impl RegexCaptures {
   @@doc """
   Return the whole matched text (`group 0`).
@@ -172,10 +163,6 @@ impl RegexCaptures {
   @@builtin def get_name(caps: RegexCaptures, name: String) -> Result<String, NoneError>
 }
 
-@@doc """
-Match-span module.
-Accessors for `RegexMatch`.
-"""
 impl RegexMatch {
   @@doc """
   Return matched text.

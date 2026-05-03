@@ -231,10 +231,6 @@ fn format_record_signature(name: &str) -> String {
     format!("defrecord {name}")
 }
 
-fn format_impl_signature(target: &str) -> String {
-    format!("impl {target}")
-}
-
 fn format_impl_method_signature(
     target: &str,
     name: &str,
@@ -420,21 +416,7 @@ fn collect_doc_entries_for_ast(
                     });
                 }
             }
-            spire::ast::Ast::ImplDef(_, target, methods, attrs) => {
-                let impl_doc_name = if module_path == target {
-                    target.clone()
-                } else {
-                    qualified_name(module_path, target)
-                };
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: impl_doc_name,
-                        kind: DocKind::Type,
-                        module_path: module_path.to_string(),
-                        signature: Some(format_impl_signature(target)),
-                        doc: doc.clone(),
-                    });
-                }
+            spire::ast::Ast::ImplDef(_, target, methods, _attrs) => {
                 for method in methods {
                     match method {
                         spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
@@ -1667,13 +1649,6 @@ defstruct User {
   name: String,
 }
 
-@@doc """User helper docs."""
-impl User {
-  def new(name: String) -> Self {
-    User { name: name }
-  }
-}
-
 @@doc """Numeric Int docs."""
 impl Numeric for Int {
   def add(self: Self, rhs: Self) -> Self {
@@ -1703,16 +1678,45 @@ impl Numeric for Int {
                 && entry.doc == "Trait docs."
         }));
         assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "User"
-                && entry.kind == DocKind::Type
-                && entry.signature.as_deref() == Some("impl User")
-                && entry.doc == "User helper docs."
-        }));
-        assert!(docs.iter().any(|entry| {
             entry.qualified_name == "Sample::impl Numeric for Int"
                 && entry.kind == DocKind::Type
                 && entry.signature.as_deref() == Some("impl Numeric for Int")
                 && entry.doc == "Numeric Int docs."
+        }));
+    }
+
+    #[test]
+    fn collect_doc_entries_excludes_impl_owner_docs() {
+        let ast = spire::parse_with_context(
+            r#"defstruct User {
+  name: String,
+}
+
+@@autoimport
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("impl owner annotations should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Sample"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+                process_spec: module.process_spec,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(!docs.iter().any(|entry| {
+            entry.qualified_name == "User" && entry.signature.as_deref() == Some("impl User")
         }));
     }
 

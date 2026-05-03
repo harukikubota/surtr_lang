@@ -779,7 +779,7 @@ fn test_trait_impl_rejects_builtin_defp_method() {
 }
 
 #[test]
-fn test_doc_attributes_parse_for_trait_and_impl_decls() {
+fn test_doc_attributes_parse_for_trait_and_trait_impl_decls() {
     let ast = parse_with_context(
         r#"@@doc """Trait docs."""
 deftrait Numeric {
@@ -787,14 +787,14 @@ deftrait Numeric {
 }
 
 @@doc """Impl docs."""
-impl User {
-  def new(name: String) -> Self {
-    User { name: name }
+impl Show for User {
+  def to_string(self: Self) -> String {
+    "user"
   }
 }"#,
         ParserContext::module(1, None),
     )
-    .expect("annotated trait and impl should parse");
+    .expect("annotated trait and trait impl should parse");
 
     match &ast[0] {
         Ast::TraitDef(_, name, _, _, attrs) => {
@@ -805,11 +805,70 @@ impl User {
     }
 
     match &ast[1] {
-        Ast::ImplDef(_, target, _, attrs) => {
-            assert_eq!(target, "User");
+        Ast::TraitImplDef(_, trait_name, _, target, _, attrs) => {
+            assert_eq!(trait_name, "Show");
+            assert!(matches!(target, AstTy::Named(_, name) if name == "User"));
             assert_eq!(attrs.doc.as_deref(), Some("Impl docs."));
         }
-        _ => panic!("Expected ImplDef"),
+        _ => panic!("Expected TraitImplDef"),
+    }
+}
+
+#[test]
+fn test_doc_attribute_rejected_for_impl_block() {
+    let err = parse_with_context(
+        r#"@@doc """Impl docs."""
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@@doc on impl block should be rejected");
+
+    assert!(err
+        .message()
+        .contains("@@doc is not allowed before `impl Type`; attach docs to the type declaration or impl members"));
+}
+
+#[test]
+fn test_hidden_attribute_rejected_for_impl_block() {
+    let err = parse_with_context(
+        r#"@@hidden
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@@hidden on impl block should be rejected");
+
+    assert!(err
+        .message()
+        .contains("@@hidden is not allowed before `impl Type`; use member-level visibility instead"));
+}
+
+#[test]
+fn test_autoimport_attribute_allowed_for_impl_block() {
+    let ast = parse_with_context(
+        r#"@@autoimport
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("@@autoimport on impl block should parse");
+
+    match &ast[0] {
+        Ast::ImplDef(_, target, _, attrs) => {
+            assert_eq!(target, "User");
+            assert!(attrs.auto_import);
+        }
+        other => panic!("Expected ImplDef, got {other:?}"),
     }
 }
 

@@ -7,13 +7,6 @@ This top-level declaration exists so the rest of the pipeline can talk about
 """
 @@builtin type Float
 
-@@doc """
-Float module.
-Groups float-specific helpers while the exact `Float` contract continues to be
-refined.
-This module stays intentionally small and focuses on arithmetic helpers that
-are independent of rounding-policy decisions.
-"""
 impl Float {
   @@doc """
   Return the absolute value of `value`.

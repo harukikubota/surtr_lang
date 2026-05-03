@@ -117,12 +117,6 @@ impl IntBase {
   }
 }
 
-@@doc """
-Int module.
-Groups integer-specific helpers and arithmetic predicates.
-The type declaration lives at the top level of this file, while the module body
-is reserved for integer-owned helpers.
-"""
 impl Int {
   @@doc """
   Divide two values and return `Err(ZeroDivisionError)` instead of trapping.

@@ -17,12 +17,6 @@ defenum ReduceStep<$A> {
   Stop($A),
 }
 
-@@doc """
-List module.
-Groups helpers for transforming list values in source code.
-Empty lists usually need a type annotation such as `List<Int>`, and `[]` is the
-canonical Nil value.
-"""
 impl List {
   @@doc """
   Prepend one element onto the front of a list.

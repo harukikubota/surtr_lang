@@ -7,11 +7,6 @@ defstruct Config {
   paths: List<String>,
 }
 
-@@doc """
-Configuration builder helpers for the standard `Config` support type.
-These methods keep project-style examples compact by offering a small fluent
-surface around the raw record fields.
-"""
 impl Config {
   @@doc """
   Build a config with a default entrypoint and no extra paths.

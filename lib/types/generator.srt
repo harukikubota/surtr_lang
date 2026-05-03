@@ -20,11 +20,6 @@ deferror InvalidCharRange(message: String) {
   "#{message}"
 }
 
-@@doc """
-Generator module.
-Provides finite sequence construction helpers and cursor-aware consumption
-operations.
-"""
 impl Generator {
   @@doc """
   Internal runtime bridge: construct an opaque `Generator` from `(idx, items)`.

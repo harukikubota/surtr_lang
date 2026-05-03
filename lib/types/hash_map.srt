@@ -6,12 +6,6 @@ The canonical builtin head is fixed to this shape.
 """
 @@builtin type HashMap<$V>
 
-@@doc """
-HashMap module.
-Provides immutable map helpers backed by runtime builtins.
-Keys are always `String`.
-Visible ordering is deterministic and sorted by key.
-"""
 impl HashMap {
   defp _map_values_go(
     source: HashMap<$A>,

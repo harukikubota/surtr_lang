@@ -2,11 +2,6 @@ defstruct Project {
   entries: List<Config>,
 }
 
-@@doc """
-Project builder helpers for the standard `Project` support type.
-These methods provide a compact surface for assembling entrypoint-oriented
-examples in docs and REPL sessions.
-"""
 impl Project {
   @@doc """
   Construct a project from the provided entry configurations.

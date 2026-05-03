@@ -39,55 +39,6 @@ Outside the allowed scope, `User.secret`-style path roots are compile errors.
 """
 @@builtin type Lens<$S, $A>
 
-@@doc """
-Lens module.
-Provides compiler-managed path access/update intrinsics:
-`view`, `set`, `over`, `over_result`, `compose`.
-
-Typical workflow:
-
-1. Build a path with `Type.segment`, `left / right`, or `Lens::compose(...)`
-2. Read with `Lens::view(...)` or `value.segment`
-3. Update with `Lens::set(...)`, `Lens::over(...)`, or `Lens::over_result(...)`
-
-## REPL
-Struct path create/get/set/update:
-xldr(1)> cfg = Config::new("demo")
-> cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
-xldr(2)> cfg.entrypoint
-"Main::main"
-xldr(3)> cfg2 =? Lens::set(Config.entrypoint, cfg, "App::main")
-> cfg2: Config = Config { name: "demo", entrypoint: "App::main", paths: [] }
-xldr(4)> cfg3 =? Lens::over(Config.entrypoint, cfg2, {|entry| Ok(entry ++ "!")})
-> cfg3: Config = Config { name: "demo", entrypoint: "App::main!", paths: [] }
-
-Tuple path create/get/set/update:
-xldr(1)> pair = ("alice", 42)
-> pair: (String, Int) = ("alice", 42)
-xldr(2)> pair._0
-"alice"
-xldr(3)> pair2 =? Lens::set(Tuple._1, pair, 99)
-> pair2: (String, Int) = ("alice", 99)
-xldr(4)> pair3 =? Lens::over(Tuple._1, pair2, {|n| Ok(n + 1)})
-> pair3: (String, Int) = ("alice", 100)
-
-Enum path create/get/set/update:
-xldr(1)> Lens::view(BitWidth.Any, BitWidth::Any(5))
-Ok(5)
-xldr(2)> bw2 =? Lens::set(BitWidth.Any, BitWidth::Any(5), 7)
-> bw2: BitWidth = BitWidth::Any(7)
-xldr(3)> bw3 =? Lens::over(BitWidth.Any, bw2, {|n| Ok(n + 1)})
-> bw3: BitWidth = BitWidth::Any(8)
-
-Record path surface:
-- create path: `Record.field`
-- get: `value.field` or `Lens::view(Record.field, value)`
-- set: `Lens::set(Record.field, value, next)`
-- update: `Lens::over(Record.field, value, updater)`
-- update Result container: `Lens::over_result(Record.field, value, updater)`
-
-Use `docs/site/lens.md` for the longer walkthrough.
-"""
 @@autoimport
 impl Lens {
   @@doc """

@@ -909,7 +909,9 @@ impl ReplEngine {
         let canonical = self
             .visible_helper_trait_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
-        let matches = if canonical != symbol || Self::definition_doc_kind(&canonical).is_some() {
+        let matches = if let Some(matches) = self.type_owner_doc_entries(&canonical) {
+            matches
+        } else if canonical != symbol || Self::definition_doc_kind(&canonical).is_some() {
             let preferred_kind = Self::definition_doc_kind(&canonical);
             self.visible_doc_entries(&canonical, preferred_kind)
         } else if let Some(decl) = self.visible_declaration(symbol) {
@@ -948,6 +950,35 @@ impl ReplEngine {
             [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
             entries => Self::plain(Self::ambiguous_doc_lines(source_symbol, entries)),
         }
+    }
+
+    fn type_owner_doc_entries<'a>(&'a self, symbol: &str) -> Option<Vec<&'a DocEntry>> {
+        let decl = self.visible_declaration(symbol)?;
+        if !matches!(
+            decl.kind,
+            sigil::DeclarationKind::Struct
+                | sigil::DeclarationKind::Record
+                | sigil::DeclarationKind::Deferror
+                | sigil::DeclarationKind::Enum
+                | sigil::DeclarationKind::BuiltinType
+                | sigil::DeclarationKind::Trait
+        ) {
+            return None;
+        }
+
+        let mut matches = self
+            .docs
+            .iter()
+            .filter(|entry| entry.kind == DocKind::Type && entry.qualified_name == decl.fq_name)
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        matches.dedup_by(|a, b| {
+            a.qualified_name == b.qualified_name
+                && a.kind == b.kind
+                && a.signature == b.signature
+                && a.doc == b.doc
+        });
+        Some(matches)
     }
 
     fn handle_doc_typed_operator(

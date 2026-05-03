@@ -38,16 +38,6 @@ without exposing the runtime representation directly.
 """
 @@builtin type Err(Error) -> Result<$T>
 
-@@doc """
-Result module.
-Groups documentation and future helpers around `Ok(...)` / `Err(...)`.
-Return-position `Result<T, E>` notation refines function contracts, while the
-builtin type declaration itself stays `Result<$T>` in this file.
-Although the implementation uses a tagged two-branch representation, the
-language keeps `Result` distinct from the future general `Enum` surface.
-`Result` is auto-imported. `Ok(...)` / `Err(...)` belong to the `Result` module,
-but they are available without an explicit `import Result`.
-"""
 @@autoimport
 impl Result {
   defp _all_go(values: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {

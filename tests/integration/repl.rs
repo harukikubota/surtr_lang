@@ -279,6 +279,22 @@ fn repl_sig_type_owner_constructor_fallback_renders_through_cli() {
 }
 
 #[test]
+fn repl_doc_type_owner_prefers_canonical_type_docs() {
+    let output = run_repl_session(":doc Option\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("defenum Option"), "{stdout}");
+    assert!(stdout.contains("Standard `Option` enum."), "{stdout}");
+    assert!(!stdout.contains("status: undocumented"), "{stdout}");
+}
+
+#[test]
 fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
     let output = run_repl_session(":sig Duration!\n:sig Duration!()\n:sig Duration!(Duration)\n:quit\n");
     assert!(

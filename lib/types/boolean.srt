@@ -6,10 +6,6 @@ contract.
 """
 @@builtin type Boolean
 
-@@doc """
-Boolean module.
-Groups boolean-specific helpers and connective-style combinators.
-"""
 impl Boolean {
   @@doc """
   Return the logical negation of `value`.
