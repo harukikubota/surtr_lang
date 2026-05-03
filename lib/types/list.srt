@@ -197,6 +197,16 @@ impl List {
     }
   }
 
+  defp _insert_sorted(value: $A, sorted: List<$A>, cmp: ($A, $A -> Ordering)) -> List<$A> {
+    match sorted {
+      [] => [value],
+      [head, ..tail] => match cmp(value, head) {
+        Ordering::Less | Ordering::Equal => [value, ..sorted],
+        Ordering::Greater => [head, .._insert_sorted(value, tail, cmp)],
+      },
+    }
+  }
+
   defp _dedup_groups(groups: List<($A, Int)>) -> List<$A> {
     match groups {
       [] => [],
@@ -461,6 +471,30 @@ impl List {
       [] => Err(NoneError),
       [head, ..tail] => Ok(_min_by_go(tail, head, cmp)),
     }
+  }
+
+  @@doc """
+  Return a new list sorted according to `cmp`.
+  The comparator should return `Ordering::Less` when `left` should appear
+  before `right`.
+  ## REPL
+  xldr(1)> List::sort_by(["a", "abcd", "xy"], {|l, r| Compare::compare(String::len(l), String::len(r))})
+  [a, xy, abcd]
+  """
+  def sort_by(values: List<$A>, cmp: ($A, $A -> Ordering)) -> List<$A> {
+    reduce(values, [], {|acc, value|
+      _insert_sorted(value, acc, cmp)
+    })
+  }
+
+  @@doc """
+  Return a new integer list sorted in ascending order.
+  ## REPL
+  xldr(1)> List::sort([3, 1, 2, 1])
+  [1, 1, 2, 3]
+  """
+  def sort(values: List<Int>) -> List<Int> {
+    sort_by(values, {|left, right| Compare::compare(left, right)})
   }
 
   @@doc """

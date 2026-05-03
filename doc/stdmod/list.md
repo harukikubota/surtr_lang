@@ -28,6 +28,8 @@
 - `List::min(values: List<Int>) -> Result<Int, NoneError>`
 - `List::max_by(values, cmp) -> Result<$A, NoneError>`
 - `List::min_by(values, cmp) -> Result<$A, NoneError>`
+- `List::sort(values: List<Int>) -> List<Int>`
+- `List::sort_by(values, cmp) -> List<$A>`
 - `List::take(values, count) -> List<$A>`
 - `List::drop(values, count) -> List<$A>`
 - `List::take_while(values, pred) -> List<$A>`
@@ -68,6 +70,8 @@ print(to_string(List::max([1, 5, 3, 2])))
 print(to_string(List::min([1, 5, 3, 2])))
 print(to_string(List::max_by(["a", "abcd", "xy"], {|left, right| Compare::compare(String::len(left), String::len(right)) })))
 print(to_string(List::min_by(["a", "abcd", "xy"], {|left, right| Compare::compare(String::len(left), String::len(right)) })))
+print(to_string(List::sort([3, 1, 2, 1])))
+print(to_string(List::sort_by(["a", "abcd", "xy"], {|left, right| Compare::compare(String::len(left), String::len(right)) })))
 print(to_string(List::take_while([2, 4, 6, 7, 8], {|n| Int::is_even(n) })))
 print(to_string(List::drop_while([2, 4, 6, 7, 8], {|n| Int::is_even(n) })))
 print(to_string(List::span([2, 4, 6, 7, 8], {|n| Int::is_even(n) })))
@@ -80,6 +84,7 @@ print(to_string(List::zip([1, 2, 3], ["x", "y"])))
 ## Notes
 
 - 推奨される構築スタイルは引き続き `List::cons + List::reverse` です。
+- `sort_by` は任意型に使えますが、`max` / `min` / `sort` はこの段階では `Int` 向け surface のままです。
 - `append` / `concat` / `at` / `partition` / `zip` を追加しても、`List` の中心用途は先頭からの逐次処理のままです。
 
 ## Next candidates
@@ -92,8 +97,7 @@ print(to_string(List::zip([1, 2, 3], ["x", "y"])))
 
 牌計算や parser 以外でも便利な候補:
 
-- `List::sort(values) -> List<$A>`
-- `List::sort_by(values, cmp) -> List<$A>`
+- `List::enumerate_with(values, start) -> List<(Int, $A)>`
 
 設計メモ:
 
