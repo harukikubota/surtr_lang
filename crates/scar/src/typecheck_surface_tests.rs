@@ -1931,7 +1931,42 @@ mapped = Functor::map(Ok(1), &inc)"#,
 #[test]
 fn flow_apply_and_compose_operators_lower_to_trait_calls() {
     let typed = typecheck_with_builtin_prelude(
-        r#"def inc(x: Int) -> Int {
+        r#"defenum Option<$T> {
+  Some($T),
+  None,
+}
+
+impl Functor<$A, $B, Option<$B>> for Option<$A> {
+  def map(self: Self, f: ($A -> $B)) -> Option<$B> {
+    match self {
+      Option::Some(value) => Option::Some(f(value)),
+      Option::None => Option::None,
+    }
+  }
+}
+
+impl Chainable<$A, Option<$B>> for Option<$A> {
+  def chain(self: Self, f: ($A -> Option<$B>)) -> Option<$B> {
+    match self {
+      Option::Some(value) => f(value),
+      Option::None => Option::None,
+    }
+  }
+}
+
+impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
+    {|value| Functor::map(self(value), rhs)}
+  }
+}
+
+impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}
+
+def inc(x: Int) -> Int {
   x + 1
 }
 
@@ -1947,10 +1982,20 @@ def parse_list(x: Int) -> List<Int> {
   [x]
 }
 
+def maybe_parse(x: Int) -> Option<Int> {
+  Option::Some(x)
+}
+
+def maybe_show(x: Int) -> Option<String> {
+  Option::Some(to_string(x))
+}
+
 applied = 1 |> &inc
 plain = &inc >> &show_int
 lifted = &parse >* &show_int
-kleisli = &parse_list >=> {|x| [x, x + 1]}"#,
+kleisli = &parse_list >=> {|x| [x, x + 1]}
+lifted_option = &maybe_parse >* &show_int
+kleisli_option = &maybe_parse >=> &maybe_show"#,
     );
     let calls = typed
         .iter()
@@ -2026,6 +2071,32 @@ kleisli = &parse_list >=> {|x| [x, x + 1]}"#,
                 )
                 && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::List(_)))
         }));
+    assert!(calls.iter().any(|(trait_name, method_name, origin, result_ty)| {
+        trait_name.starts_with("LiftComposable<")
+            && *method_name == "lift_compose"
+            && matches!(
+                origin,
+                TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::LiftCompose,
+                    lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                    rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                }
+            )
+            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, args) if name == "Option" && matches!(args.as_slice(), [Ty::Str])))
+    }));
+    assert!(calls.iter().any(|(trait_name, method_name, origin, result_ty)| {
+        trait_name.starts_with("KleisliComposable<")
+            && *method_name == "kleisli_compose"
+            && matches!(
+                origin,
+                TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::KleisliCompose,
+                    lhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                    rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
+                }
+            )
+            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, args) if name == "Option" && matches!(args.as_slice(), [Ty::Str])))
+    }));
 }
 
 #[test]

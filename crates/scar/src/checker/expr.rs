@@ -2235,16 +2235,57 @@ impl Checker {
                     "`>*`",
                 )
             }
+            Ty::Enum(name, args) if name == "Option" && args.len() == 1 => {
+                if !self.types_compatible(&args[0], &right_in) {
+                    return Err(TypeError {
+                        message:
+                            "`>*` requires the left contextual output to match the right input type"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some(self.operator_rule_hint(
+                            "`>*`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "Left contextual output is Option<{}>; right input is {}.",
+                                self.ty_name(&args[0]),
+                                self.ty_name(&right_in)
+                            )),
+                        )),
+                    });
+                }
+                let mapped_ty = Ty::Enum("Option".into(), vec![self.resolve_ty(&right_out)]);
+                let result_ty =
+                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "LiftComposable",
+                    "lift_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(&args[0]),
+                        self.resolve_ty(&right_out),
+                        mapped_ty,
+                    ],
+                    OperatorTraitOp::LiftCompose,
+                    vec![typed_left, typed_right],
+                    result_ty,
+                    "`>*`",
+                )
+            }
             _ => Err(TypeError {
-                message: "`>*` requires Result or List on the left-hand side".into(),
+                message: "`>*` requires Result, List, or Option on the left-hand side".into(),
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`>*`",
-                    "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>)",
+                    "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
-                        "The left callable returns {}, so no Result/List container is available at this step. Use `>>` for plain composition; use `|*>` when you already have an evaluated Result value and want to map a plain RHS over it.",
+                        "The left callable returns {}, so no Result/List/Option container is available at this step. Use `>>` for plain composition; use `|*>` when you already have an evaluated contextual value and want to map a plain RHS over it.",
                         self.ty_name(&left_out)
                     )),
                 )),
@@ -2347,12 +2388,56 @@ impl Checker {
                     "`>=>`",
                 )
             }
+            (Ty::Enum(name, args), Ty::Enum(next_name, next_args))
+                if name == "Option"
+                    && next_name == "Option"
+                    && args.len() == 1
+                    && next_args.len() == 1 =>
+            {
+                if !self.types_compatible(&args[0], &right_in) {
+                    return Err(TypeError {
+                        message: "`>=>` requires matching Option payload types across both sides"
+                            .into(),
+                        span: span.clone(),
+                        hint: Some(self.operator_rule_hint(
+                            "`>=>`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> Result<C, E>) or (B -> List<C>) or (B -> Option<C>); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "Left output is Option<{}>; right input is {}.",
+                                self.ty_name(&args[0]),
+                                self.ty_name(&right_in)
+                            )),
+                        )),
+                    });
+                }
+                let chained_ty = Ty::Enum("Option".into(), vec![self.resolve_ty(&next_args[0])]);
+                let result_ty =
+                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "KleisliComposable",
+                    "kleisli_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(&args[0]),
+                        chained_ty,
+                    ],
+                    OperatorTraitOp::KleisliCompose,
+                    vec![typed_left, typed_right],
+                    result_ty,
+                    "`>=>`",
+                )
+            }
             _ => Err(TypeError {
-                message: "`>=>` requires matching Result or List context on both sides".into(),
+                message: "`>=>` requires matching Result, List, or Option context on both sides".into(),
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`>=>`",
-                    "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> Result<C, E>) or (B -> List<C>); result: (A -> Result<C, E>) or (A -> List<C>)",
+                    "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> Result<C, E>) or (B -> List<C>) or (B -> Option<C>); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
