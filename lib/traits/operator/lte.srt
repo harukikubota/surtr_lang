@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Lte` operator trait declaration.
 `Lte` models the `<=` / `lte(...)` contract.
 
@@ -6,7 +6,7 @@ Standard `Lte` operator trait declaration.
 xldr(1)> lte(1, 2)
 True
 """
-@@autoimport
+@autoimport
 deftrait Lte {
   # Return `True` when the left value is smaller or equal.
   def lte(self: Self, rhs: Self) -> Boolean

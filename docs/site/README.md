@@ -24,7 +24,7 @@ REPL は起動時に標準 module と preload を読み切る OnceRead universe 
 - [エラーハンドリング](./error-handling.md)
 - [Extractor](./extractors.md)
 - [Agents](./agents.md)
-- [言語機能 (`import`, `include`, `@@autoimport`)](./language-features.md)
+- [言語機能 (`import`, `include`, `@autoimport`)](./language-features.md)
 
 ## 補助ページ
 
@@ -35,6 +35,6 @@ REPL は起動時に標準 module と preload を読み切る OnceRead universe 
 ## 正本との関係
 
 - 利用者向けの説明は `docs/site/`
-- 標準モジュール API の一次情報は `../../lib/*.srt` の `@@doc`
+- 標準モジュール API の一次情報は `../../lib/*.srt` の `@doc`
 - 正本仕様は `../../doc/要件定義v9.md`
 - 開発者向け仕様の導線は `../dev/README.md`

@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Bootstrap module.
 
 Auto-imported root of the standard surface.
@@ -12,12 +12,12 @@ live at the top level of their corresponding files, and the abstract `Error`
 type itself lives in `error.srt`.
 """
 
-@@autoimport
+@autoimport
 # `defmod` introduces a module namespace.
 # Bootstrap is the first auto-imported standard module and acts as the fixed
 # stage-0 anchor for the loader.
 defmod Bootstrap {
-  @@doc """
+  @doc """
   Debug special form.
 
   `dbg!` is a language-provided special form for observing intermediate values.
@@ -57,9 +57,9 @@ defmod Bootstrap {
   - `x = dbg!(value)` binds `x: Unit = ()`
   - `dbg!()` is invalid
   """
-  @@intrinsic def dbg!(values: *$A) -> Unit
+  @intrinsic def dbg!(values: *$A) -> Unit
 
-  @@doc """
+  @doc """
   Bind special form.
 
   `=` is a language-provided binding form.
@@ -80,9 +80,9 @@ defmod Bootstrap {
   - `=` returns `()`
   - only total MatchBlock patterns are accepted
   """
-  @@intrinsic def =(pattern: $Pattern, value: $A) -> Unit
+  @intrinsic def =(pattern: $Pattern, value: $A) -> Unit
 
-  @@doc """
+  @doc """
   SafeBind special form.
 
   `=?` is a language-provided binding form for failure-aware destructuring.
@@ -126,9 +126,9 @@ defmod Bootstrap {
   - `MatchBlock::NoMatch` becomes an error and returns early
   - `Option` is not a SafeBind target
   """
-  @@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
+  @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
 
-  @@doc """
+  @doc """
   Match special form.
 
   `match` is a language-provided branching form for pattern-directed control
@@ -179,9 +179,9 @@ defmod Bootstrap {
   - guards must return `Boolean`
   - `match` must be exhaustive
   """
-  @@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B
+  @intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B
 
-  @@doc """
+  @doc """
   Cond special form.
 
   `cond` is a language-provided multi-branch conditional form.
@@ -220,18 +220,18 @@ defmod Bootstrap {
   - all clause bodies must have the same type
   - only the selected clause body is evaluated
   """
-  @@intrinsic def cond(clauses: CondClauses<$A>) -> $A
+  @intrinsic def cond(clauses: CondClauses<$A>) -> $A
 
   # `def` introduces a named function declaration.
   # `dummy` exists only to keep the module non-empty and to leave a minimal
   # function-shaped example in the first standard source file.
-  @@doc """
+  @doc """
   Return `()` without side effects.
   This is a minimal placeholder helper that keeps `Bootstrap` non-empty.
   """
   def dummy() { () }
 
-  @@doc """
+  @doc """
   Language-provided import macro function.
 
   `import` belongs to `Bootstrap`, but its user-facing surface is a top-level
@@ -249,9 +249,9 @@ defmod Bootstrap {
   xldr(2)> Option::is_some(wrap(1))
   True
   """
-  @@builtin def import() -> Unit
+  @builtin def import() -> Unit
 
-  @@doc """
+  @doc """
   Language-provided include macro function.
 
   `include` belongs to `Bootstrap`, but in script source its user-facing
@@ -267,41 +267,41 @@ defmod Bootstrap {
   xldr(1)> include "./path/to/module.srt"
   # loads declarations with no direct value output
   """
-  @@builtin def include(path: String) -> Unit
+  @builtin def include(path: String) -> Unit
 }
 
 # `deferror` introduces a concrete recoverable error declaration.
 # Bootstrap carries the most universally useful standard errors so they are
 # available from the first standard-library stage.
 
-@@doc """
+@doc """
 Concrete bootstrap error for "no value" situations.
 `NoneError` is the standard failure used by optional-style sugar such as `T?`.
 `T?` lowers to `Result<T, NoneError>` and is separate from `Option::None`.
 """
 deferror NoneError { "None Value." }
 
-@@doc """
+@doc """
 Concrete bootstrap error for division or modulo by zero.
 `safe_div` and `safe_mod` return this through `Err(...)` instead of trapping.
 """
 deferror ZeroDivisionError { "division by zero" }
 
-@@doc """
+@doc """
 Concrete bootstrap error for operations that require at least one list element.
 Use this when a list-specific operation cannot proceed because the input is
 empty.
 """
 deferror EmptyList { "Empty List." }
 
-@@doc """
+@doc """
 Concrete bootstrap error for index-based access outside the valid range.
 The `detail` field keeps the user-facing message flexible so the runtime can
 attach the relevant bounds information.
 """
 deferror IndexOutOfBounds(detail: String) { detail }
 
-@@doc """
+@doc """
 Concrete bootstrap error for enum-variant selector mismatch in lens access.
 `Lens::view` returns this when a variant segment does not match the runtime
 value's tag.

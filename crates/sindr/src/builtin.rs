@@ -3,7 +3,7 @@ use crate::names::{builtin_type_name, TypeName};
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
 ///
 /// Surtr source files under `lib/*.srt` may declare these builtins with
-/// `@@builtin`, but the canonical definition order and ids live here.
+/// `@builtin`, but the canonical definition order and ids live here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltinMeta {
     pub name: &'static str,
@@ -14,7 +14,7 @@ pub struct BuiltinMeta {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltinTypeMeta {
-    /// Canonical builtin type head that std-module `@@builtin type`
+    /// Canonical builtin type head that std-module `@builtin type`
     /// declarations must match exactly.
     pub name: &'static str,
     pub params: &'static [&'static str],

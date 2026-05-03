@@ -217,7 +217,7 @@ pub enum Resolved {
     /// Declaration-only Result constructor contract from std modules.
     ///
     /// The parser accepts the surface form
-    /// `@@builtin type Ok(...) -> Result<...>` / `@@builtin type Err(...) -> Result<...>`
+    /// `@builtin type Ok(...) -> Result<...>` / `@builtin type Err(...) -> Result<...>`
     /// and normalizes both into this resolved node so later phases do not need
     /// to care about the parser-only spelling trick.
     ResultCtorDecl(Span, ResolvedId, AstTy, AstTy, ResolvedDeclAttrs),

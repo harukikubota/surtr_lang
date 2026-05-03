@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Kernel module.
 
 Provides the small auto-imported standard surface for cross-cutting builtins
@@ -13,9 +13,9 @@ hello
 xldr(2)> ("alice", 42)
 ("alice", 42)
 """
-@@autoimport
+@autoimport
 defmod Kernel {
-  @@doc """
+  @doc """
   Conditional execution for side-effect-oriented code paths.
 
   The declared type is:
@@ -35,9 +35,9 @@ defmod Kernel {
   xldr(1)> if_then(True, print("flag is true"))
   flag is true
   """
-  @@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit
+  @builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit
 
-  @@doc """
+  @doc """
   Branching expression that returns one value from two alternatives.
 
   The declared type is:
@@ -61,9 +61,9 @@ defmod Kernel {
   xldr(1)> if(True, "ok", "ng")
   "ok"
   """
-  @@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
+  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
 
-  @@doc """
+  @doc """
   Pattern-aware branching expression for a single success path.
 
   The declared type is:
@@ -80,9 +80,9 @@ defmod Kernel {
   xldr(1)> if_let(Ok(1), Ok(value), to_string(value), "miss")
   "1"
   """
-  @@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B
+  @builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B
 
-  @@doc """
+  @doc """
   Pattern-aware side-effect guard for a single success path.
 
   The declared type is:
@@ -96,9 +96,9 @@ defmod Kernel {
   xldr(1)> if_let_then(Ok(1), Ok(value), print(to_string(value)))
   1
   """
-  @@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit
+  @builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit
 
-  @@doc """
+  @doc """
   Boolean predicate for pattern compatibility.
 
   The declared type is:
@@ -113,9 +113,9 @@ defmod Kernel {
   xldr(1)> is_match(Ok(1), Ok(_))
   True
   """
-  @@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean
+  @builtin def is_match(value: $A, pattern: $Pattern) -> Boolean
 
-  @@doc """
+  @doc """
   Logical conjunction with short-circuit evaluation.
 
   The declared type is:
@@ -130,9 +130,9 @@ defmod Kernel {
   xldr(1)> and(True, False)
   False
   """
-  @@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean
+  @builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean
 
-  @@doc """
+  @doc """
   Logical disjunction with short-circuit evaluation.
 
   The declared type is:
@@ -147,9 +147,9 @@ defmod Kernel {
   xldr(1)> or(False, True)
   True
   """
-  @@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean
+  @builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean
 
-  @@doc """
+  @doc """
   Guard a precondition and return `Result<Unit>`.
 
   The declared type is:
@@ -165,9 +165,9 @@ defmod Kernel {
   xldr(1)> assert(True, NoneError)
   Ok(())
   """
-  @@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>
+  @builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>
 
-  @@doc """
+  @doc """
   Validate a value and return it unchanged on success.
 
   The declared type is:
@@ -185,9 +185,9 @@ defmod Kernel {
   xldr(1)> ensure(3, {|n| n > 0}, NoneError)
   Ok(3)
   """
-  @@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>
+  @builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>
 
-  @@doc """
+  @doc """
   Observe `value` for side effects and return it unchanged.
   This is useful in pipelines for logging or metrics without changing the data.
 
@@ -201,7 +201,7 @@ defmod Kernel {
     value
   }
 
-  @@doc """
+  @doc """
   Return `value` unchanged.
 
   This is the smallest possible identity helper and is mainly useful when a
@@ -215,7 +215,7 @@ defmod Kernel {
     value
   }
 
-  @@doc """
+  @doc """
   Return a callable that ignores its input and always yields `value`.
 
   This is a small pure helper for constant-like closure behavior in pipelines and
@@ -231,7 +231,7 @@ defmod Kernel {
     {|_| value}
   }
 
-  @@doc """
+  @doc """
   Return a zero-argument callable that does nothing and yields `()`.
 
   This is useful when a callback surface needs an explicit no-op function value
@@ -247,7 +247,7 @@ defmod Kernel {
     {|| ()}
   }
 
-  @@doc """
+  @doc """
   Decompose a non-empty sequence in MatchBlock positions.
 
   `uncons(term)` is a builtin Extractor used by `=?` and `match`.
@@ -266,9 +266,9 @@ defmod Kernel {
   xldr(1)> match [1, 2] { [head, ..tail] => to_string(head), [] => "empty", }
   "1"
   """
-  @@builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>
+  @builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>
 
-  @@doc """
+  @doc """
   Print a string to stdout.
   Use `to_string(...)` first when the value is not already `String`.
   This builtin belongs under `Kernel` because printing is part of the shared
@@ -278,9 +278,9 @@ defmod Kernel {
   xldr(1)> print("hello")
   hello
   """
-  @@builtin def print(a: String) -> Unit
+  @builtin def print(a: String) -> Unit
 
-  @@doc """
+  @doc """
   Produce a debug-oriented textual representation of a value.
   Prefer this when structure is more important than presentation polish.
   Bare callable values are shown with module/name/signature metadata when it is
@@ -290,9 +290,9 @@ defmod Kernel {
   xldr(1)> ("alice", 42)
   ("alice", 42)
   """
-  @@builtin def inspect(a: $A) -> String
+  @builtin def inspect(a: $A) -> String
 
-  @@doc """
+  @doc """
   Print an `Error` value to stderr-oriented output.
   This stays under `Kernel` because it is part of the cross-cutting runtime
   surface, not an `Error`-specific helper family.
@@ -301,9 +301,9 @@ defmod Kernel {
   xldr(1)> eprint(NoneError)
   Error: NoneError
   """
-  @@builtin def eprint(err: Error) -> Unit
+  @builtin def eprint(err: Error) -> Unit
 
-  @@doc """
+  @doc """
   Request a process exit code for the current entrypoint execution.
   This is effectful and compile-unit aware, so it stays in the `Kernel`
   surface instead of a primitive-type module.
@@ -311,9 +311,9 @@ defmod Kernel {
   ## REPL
   xldr(1)> set_exit_code(7)
   """
-  @@builtin def set_exit_code(code: Int) -> Unit
+  @builtin def set_exit_code(code: Int) -> Unit
 
-  @@doc """
+  @doc """
   Return CLI arguments passed after `--` in `surtr run`.
   This allows zero-argument `main()` entrypoints to read runtime arguments
   through module-level helpers.
@@ -322,5 +322,5 @@ defmod Kernel {
   xldr(1)> project_args()
   []
   """
-  @@builtin def project_args() -> List<String>
+  @builtin def project_args() -> List<String>
 }

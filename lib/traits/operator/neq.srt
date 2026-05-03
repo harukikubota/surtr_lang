@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Neq` operator trait declaration.
 `Neq` models the `!=` / `neq(...)` contract.
 
@@ -6,7 +6,7 @@ Standard `Neq` operator trait declaration.
 xldr(1)> neq(1, 2)
 True
 """
-@@autoimport
+@autoimport
 deftrait Neq {
   # Return `True` when both values are not equal.
   def neq(self: Self, rhs: Self) -> Boolean

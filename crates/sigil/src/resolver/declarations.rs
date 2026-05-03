@@ -587,7 +587,7 @@ pub(super) fn declaration_uid_kind_map(
 ///
 /// The index key is fully-qualified name `ModulePath::Name`.
 /// Only declaration forms covered by Issue 6 are collected:
-/// `def`, `defextractor`, `@@builtin def`, `@@builtin defextractor`, `@@builtin type`,
+/// `def`, `defextractor`, `@builtin def`, `@builtin defextractor`, `@builtin type`,
 /// `defstruct`, `defrecord`, `deferror`.
 pub fn precollect_declaration_index(
     module_stages: &[Vec<StagedModuleAst>],
@@ -671,7 +671,7 @@ pub fn precollect_declaration_index(
                             _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "impl body may only contain `def` / `defextractor` / `@@builtin def` / `@@builtin defextractor` declarations"
+                                        "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` declarations"
                                             .to_string(),
                                     span: span.clone(),
                                 related_labels: Vec::new(),
@@ -786,7 +786,7 @@ pub fn precollect_declaration_index(
                             _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "trait impl body may only contain `def` / `@@builtin def` declarations"
+                                        "trait impl body may only contain `def` / `@builtin def` declarations"
                                             .to_string(),
                                     span: span.clone(),
                                     related_labels: Vec::new(),
@@ -1293,7 +1293,7 @@ impl Resolver {
                             _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "impl body may only contain `def` / `defextractor` / `@@builtin def` / `@@builtin defextractor` declarations"
+                                        "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` declarations"
                                             .to_string(),
                                     span: span.clone(),
                                 related_labels: Vec::new(),

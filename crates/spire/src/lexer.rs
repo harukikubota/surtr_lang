@@ -67,11 +67,11 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             continue;
         }
 
-        // Annotator: @@builtin, @@foo, ...
+        // Annotator: @builtin, @foo, ...
         if c == '@' {
             let start = i;
-            if i + 1 < len && chars[i + 1] == '@' {
-                i += 2; // skip '@@'
+            if i + 1 < len && (chars[i + 1].is_ascii_alphanumeric() || chars[i + 1] == '_') {
+                i += 1; // skip '@'
                 let name_start = i;
                 while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
                     i += 1;
@@ -79,7 +79,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 let name: String = chars[name_start..i].iter().collect();
                 if name.is_empty() {
                     return Err(ParseError::syntax(
-                        "Expected annotator name after '@@'",
+                        "Expected annotator name after '@'",
                         Span { start, end: i },
                     ));
                 }
@@ -101,7 +101,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
         }
 
         // Raw triple-quoted string. Body indentation is checked against the
-        // indentation of the line that starts the string, matching @@doc.
+        // indentation of the line that starts the string, matching @doc.
         if c == '"' && i + 2 < len && chars[i + 1] == '"' && chars[i + 2] == '"' {
             let (token, next) = lex_raw_triple_quoted_string(&chars, i, len)?;
             tokens.push(token);
@@ -745,21 +745,21 @@ mod tests {
 
     #[test]
     fn test_doc_string_token() {
-        let tokens = tokenize("@@doc \"\"\"\nHello\n\"\"\"").unwrap();
+        let tokens = tokenize("@doc \"\"\"\nHello\n\"\"\"").unwrap();
         assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "doc"));
         assert!(matches!(tokens[1].token, Token::DocString(ref s) if s == "\nHello\n"));
     }
 
     #[test]
     fn test_doc_string_allows_content_at_doc_indent_with_tabs() {
-        let tokens = tokenize("\t@@doc \"\"\"\n\tabcde\n\t    5\n\t\"\"\"").unwrap();
+        let tokens = tokenize("\t@doc \"\"\"\n\tabcde\n\t    5\n\t\"\"\"").unwrap();
         assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "doc"));
         assert!(matches!(tokens[1].token, Token::DocString(ref s) if s == "\nabcde\n    5\n"));
     }
 
     #[test]
     fn test_doc_string_rejects_content_shallower_than_doc_indent() {
-        let err = tokenize("\t@@doc \"\"\"\nabcde\n    5\n\t\"\"\"")
+        let err = tokenize("\t@doc \"\"\"\nabcde\n    5\n\t\"\"\"")
             .expect_err("expected doc indentation error");
         assert!(
             err.message()
@@ -898,27 +898,21 @@ mod tests {
 
     #[test]
     fn test_at_builtin_annotator_token() {
-        let tokens = tokenize("@@builtin def print(a: String) -> Unit").unwrap();
+        let tokens = tokenize("@builtin def print(a: String) -> Unit").unwrap();
         assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "builtin"));
     }
 
     #[test]
     fn test_custom_annotator_token() {
-        let tokens = tokenize("@@memo def f()").unwrap();
+        let tokens = tokenize("@memo def f()").unwrap();
         assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "memo"));
     }
 
     #[test]
-    fn test_invalid_empty_annotator_name() {
-        let err = tokenize("@@ def f()").expect_err("expected lexer error");
-        assert!(err.message().contains("Expected annotator name after '@@'"));
-    }
-
-    #[test]
     fn test_single_at_token() {
-        let tokens = tokenize("@x").unwrap();
-        assert!(matches!(tokens[0].token, Token::At));
-        assert!(matches!(tokens[1].token, Token::Ident(ref s) if s == "x"));
+        let tokens = tokenize("@x @").unwrap();
+        assert!(matches!(tokens[0].token, Token::Annotator(ref name) if name == "x"));
+        assert!(matches!(tokens[1].token, Token::At));
     }
 
     #[test]

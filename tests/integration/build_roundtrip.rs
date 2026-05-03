@@ -174,9 +174,7 @@ fn dump_supports_entry_srt_and_traces_normalized_entrypoint() {
 
     write_source(
         &source_path,
-        r#"@@entrypoint
-def auto() -> Result<()> { Ok(()) }
-
+        r#"def auto() -> Result<()> { Ok(()) }
 def launch() -> Result<()> { Ok(()) }
 "#,
     );

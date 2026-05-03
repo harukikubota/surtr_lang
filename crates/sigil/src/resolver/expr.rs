@@ -2039,7 +2039,7 @@ impl Resolver {
                         _ => {
                             return Err(ResolveError {
                                 message:
-                                    "trait impl body may only contain `def` / `@@builtin def` declarations"
+                                    "trait impl body may only contain `def` / `@builtin def` declarations"
                                         .to_string(),
                                 span: span.clone(),
                                 related_labels: Vec::new(),

@@ -16,8 +16,8 @@ dbg!(parsed, yaku, score)
 - `dbg!` は公開 builtin ではない。
 - `dbg!` は parser が認識する特殊形式とする。
 - docs / `:sig` は `lib/bootstrap.srt` に置かれた
-  `@@intrinsic def dbg!<$A>(values: *$A) -> Unit`
-  と `@@doc` だけを正本にする。
+  `@intrinsic def dbg!<$A>(values: *$A) -> Unit`
+  と `@doc` だけを正本にする。
 - この intrinsic signature は通常の callable declaration ではない。
 - 実行は専用 `Opcode` で行う。
 - 戻り値は常に `Unit` とする。
@@ -473,8 +473,8 @@ REPL の期待:
 
 - `BUILTIN_METAS` に `dbg` / `dbg_template` を追加する。
 - `BUILTIN_IMPLS` に `dbg` / `dbg_template` を追加する。
-- stdlib `.srt` に `@@builtin def dbg_template(...)` を追加する。
-- `lib/bootstrap.srt` の `@@intrinsic def dbg!...` を通常の callable builtin declaration として扱う。
+- stdlib `.srt` に `@builtin def dbg_template(...)` を追加する。
+- `lib/bootstrap.srt` の `@intrinsic def dbg!...` を通常の callable builtin declaration として扱う。
 - REPL completion symbols に `dbg_template` を出す。
 - docs export に `dbg_template` を出す。
 

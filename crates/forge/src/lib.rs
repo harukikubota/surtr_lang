@@ -77,20 +77,12 @@ mod tests {
     const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
     const TEST_MODULE_SOURCE: &str = include_str!("../../../lib/test.srt");
 
-    fn strip_test_annotations(source: &str) -> String {
-        source
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("@@test"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     fn parse_std_module_stage(
         source: &str,
         _fallback_module_path: &str,
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
-            &strip_test_annotations(source),
+            source,
             spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
         .unwrap_or_else(|err| panic!("std module {_fallback_module_path} should parse: {err:?}"));
@@ -791,7 +783,7 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
     #[test]
     fn codegen_typed_program_embeds_runtime_process_specs() {
         let typed = typed_module_program_with_builtin_prelude(
-            r#"@@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
+            r#"@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
 defagent Counter {
   @init
   def init() -> Result<Int> { Ok(41) }

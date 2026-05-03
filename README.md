@@ -102,7 +102,7 @@ cargo clean
   - [Float memo](./doc/float.md)
 - Internal docs index
   - [Internal docs guide](./docs/internal/README.md)
-- Standard-library docs live in `lib/*.srt` via `@@doc`
+- Standard-library docs live in `lib/*.srt` via `@doc`
 - Implementation contracts live in Rust doc comments under `crates/**`
 - Install guide
   - [INSTALL.md](./INSTALL.md)
@@ -125,7 +125,7 @@ Implementation notes:
 
 - `Int` uses unbounded `BigInt` semantics across the pipeline
 - runtime-internal tags stay fixed-width and separate from user-visible `Int`
-- `type` is a reserved keyword; std modules can declare builtin surfaces with `@@builtin def ...` and `@@builtin type ...`
+- `type` is a reserved keyword; std modules can declare builtin surfaces with `@builtin def ...` and `@builtin type ...`
 - std modules are split into `Bootstrap`, `Kernel`, and type-oriented modules (`Int`, `String`, `Boolean`, `Error`, `List`, `Result`, `Float`); cross-cutting builtins live under `defmod Kernel` in `kernel.srt`, and each builtin type head is declared at the top level of its corresponding `lib/*.srt`
 - closure parameter annotations are optional and match-arm LHS follows the same pattern grammar as safe-bind
 - `Float` remains implemented, but its precise contract is tracked separately in [doc/float.md](./doc/float.md)

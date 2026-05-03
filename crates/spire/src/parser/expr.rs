@@ -586,8 +586,7 @@ impl Parser<'_> {
     }
 
     fn is_timeout_modifier_start(&self) -> bool {
-        matches!(self.peek(), Token::At)
-            && matches!(self.peek_n(1), Some(Token::Ident(name)) if name == "timeout")
+        matches!(self.peek(), Token::Annotator(name) if name == "timeout")
     }
 
     fn hidden_call(&self, name: &str, args: Vec<RecordLitArg>, span: Span) -> Ast {
@@ -654,12 +653,18 @@ impl Parser<'_> {
 
     fn parse_timeout_modifier(&mut self, expr: Ast) -> Result<Ast, ParseError> {
         let start = expr.span().start;
-        self.expect(&Token::At)?;
-        let (modifier, _) = self.expect_ident()?;
+        let modifier_span = self.peek_span();
+        let Token::Annotator(modifier) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                "Expected @timeout(...)",
+                self.peek_span(),
+            ));
+        };
+        self.advance();
         if modifier != "timeout" {
             return Err(ParseError::syntax(
                 format!("Unsupported call modifier: @{modifier}"),
-                self.peek_span(),
+                modifier_span,
             ));
         }
         self.expect(&Token::LParen)?;

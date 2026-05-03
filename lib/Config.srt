@@ -8,7 +8,7 @@ defstruct Config {
 }
 
 impl Config {
-  @@doc """
+  @doc """
   Build a config with a default entrypoint and no extra paths.
   ## REPL
   xldr(1)> Config::new("App")
@@ -18,7 +18,7 @@ impl Config {
     Config { name: name, entrypoint: "Main::main", paths: [] }
   }
 
-  @@doc """
+  @doc """
   Replace the entrypoint symbol and return the updated config.
   ## REPL
   xldr(1)> Config::entry_fun(Config::new("App"), "App::main")
@@ -28,7 +28,7 @@ impl Config {
     Config { name: self.name, entrypoint: symbol, paths: self.paths }
   }
 
-  @@doc """
+  @doc """
   Append one search path and return the updated config.
   ## REPL
   xldr(1)> Config::add_path(Config::new("App"), "./lib")

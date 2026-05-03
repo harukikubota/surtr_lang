@@ -1,13 +1,13 @@
-@@doc """
+@doc """
 Standard `String` type declaration.
 Text values produced by literals, interpolation, and textual conversion use this
 head.
 The compiler validates this exact top-level declaration as the canonical
 surface shape for strings.
 """
-@@builtin type String
+@builtin type String
 
-@@doc """
+@doc """
 Concrete string-module error for `String::repeat`.
 Negative counts stay as recoverable values instead of becoming implicit
 runtime traps.
@@ -16,7 +16,7 @@ deferror NegativeRepeatCount(count: Int) {
   "repeat count must be non-negative: #{count}"
 }
 
-@@doc """
+@doc """
 Successful result shape for `String::split_once`.
 `before` is the text before the first separator match, and `after` is the
 remaining suffix after the matched separator.
@@ -25,7 +25,7 @@ defenum StringSplit {
   Split(String, String),
 }
 
-@@doc """
+@doc """
 Encoding selector for integer-based string conversion helpers.
 `Utf8` treats integers as raw UTF-8 byte values, while `Ascii` restricts the
 sequence to 7-bit ASCII.
@@ -35,7 +35,7 @@ defenum StringEncoding {
   Ascii,
 }
 
-@@doc """
+@doc """
 Concrete string-module error for `String::from_chars`.
 This keeps invalid "char list" construction explicit when the input contains
 elements that are not exactly one surface character.
@@ -44,7 +44,7 @@ deferror InvalidCharList(detail: String) {
   detail
 }
 
-@@doc """
+@doc """
 Concrete string-module error for encoding-aware integer conversion helpers.
 Used when a string cannot be represented in the selected encoding or when an
 integer sequence is not valid for restoration.
@@ -53,14 +53,14 @@ deferror InvalidStringEncoding(detail: String) {
   detail
 }
 
-@@doc """
+@doc """
 Concrete string-module error for decimal integer parsing used by `TryFrom<Int>`.
 """
 deferror InvalidIntegerLiteral(input: String) {
   "invalid integer literal: #{input}"
 }
 
-@@doc """
+@doc """
 Concrete string-module error for boolean parsing used by `TryFrom<Boolean>`.
 """
 deferror InvalidBooleanLiteral(input: String) {
@@ -202,7 +202,7 @@ impl String {
     _parse_decimal_go(tail, acc * 10 + digit, input)
   }
 
-  @@doc """
+  @doc """
   Return `True` when `value` is the empty string.
   ## REPL
   xldr(1)> String::is_empty("")
@@ -212,7 +212,7 @@ impl String {
     value == ""
   }
 
-  @@doc """
+  @doc """
   Return `True` when `value` is not the empty string.
   ## REPL
   xldr(1)> String::non_empty("a")
@@ -222,7 +222,7 @@ impl String {
     value != ""
   }
 
-  @@doc """
+  @doc """
   Return the number of surface characters in `value`.
   ## REPL
   xldr(1)> String::len("hello")
@@ -235,7 +235,7 @@ impl String {
     }
   }
 
-  @@doc """
+  @doc """
   Wrap `value` with `prefix` and `suffix`.
   ## REPL
   xldr(1)> String::surround("x", "[", "]")
@@ -252,7 +252,7 @@ impl String {
     }
   }
 
-  @@doc """
+  @doc """
   Join string elements with `separator`.
   Empty input returns the empty string.
   ## REPL
@@ -270,7 +270,7 @@ impl String {
     if(remaining == 0, acc, _repeat_go(value, remaining - 1, acc ++ value))
   }
 
-  @@doc """
+  @doc """
   Repeat `value` `count` times.
   Negative counts return `Err(NegativeRepeatCount(...))`.
   ## REPL
@@ -285,7 +285,7 @@ impl String {
     )
   }
 
-  @@doc """
+  @doc """
   Return `True` when `value` starts with `prefix`.
   The empty prefix always matches.
   ## REPL
@@ -296,7 +296,7 @@ impl String {
     Result::is_ok(String::strip_prefix(value, prefix))
   }
 
-  @@doc """
+  @doc """
   Return `True` when `value` ends with `suffix`.
   The empty suffix always matches.
   ## REPL
@@ -307,7 +307,7 @@ impl String {
     Result::is_ok(String::strip_suffix(value, suffix))
   }
 
-  @@doc """
+  @doc """
   Remove `prefix` from the start of `value`.
   Missing prefixes return `Err(NoneError)`.
   ## REPL
@@ -328,7 +328,7 @@ impl String {
     }
   }
 
-  @@doc """
+  @doc """
   Remove `suffix` from the end of `value`.
   Missing suffixes return `Err(NoneError)`.
   ## REPL
@@ -343,7 +343,7 @@ impl String {
     Ok(_from_chars_go(List::reverse(reversed_rest), ""))
   }
 
-  @@doc """
+  @doc """
   Split `value` at the first occurrence of `separator`.
   Success returns `StringSplit::Split(before, after)`.
   Missing separators return `Err(NoneError)`.
@@ -355,7 +355,7 @@ impl String {
     _split_once_go(value, separator, [])
   }
 
-  @@doc """
+  @doc """
   Return `True` when `needle` occurs anywhere inside `value`.
   The empty needle always matches.
   ## REPL
@@ -366,7 +366,7 @@ impl String {
     Result::is_ok(String::split_once(value, needle))
   }
 
-  @@doc """
+  @doc """
   Replace every non-overlapping occurrence of `from` with `to`.
   The empty `from` string leaves `value` unchanged.
   ## REPL
@@ -377,7 +377,7 @@ impl String {
     if(from == "", value, _replace_go(value, from, to))
   }
 
-  @@doc """
+  @doc """
   Split `value` at every occurrence of `separator`.
   An empty `separator` returns `chars(value)`.
   ## REPL
@@ -395,7 +395,7 @@ impl String {
     )
   }
 
-  @@doc """
+  @doc """
   Split `value` into lines.
   Lines are separated by `\n`, and a trailing `\r` in each line is removed.
   A final empty line produced by a trailing newline is omitted.
@@ -416,7 +416,7 @@ impl String {
     if(ends_with(value, "\n"), _drop_last(stripped), stripped)
   }
 
-  @@doc """
+  @doc """
   Expand `value` into a list of single-character `String` values.
   ## REPL
   xldr(1)> String::chars("ab")
@@ -429,7 +429,7 @@ impl String {
     }
   }
 
-  @@doc """
+  @doc """
   Build a string from a list of single-character strings.
   Non-character elements return `Err(InvalidCharList(...))`.
   ## REPL
@@ -441,7 +441,7 @@ impl String {
     Ok(_from_chars_go(chars, ""))
   }
 
-  @@doc """
+  @doc """
   Convert `value` into an encoding-specific integer sequence.
   `Utf8` returns raw byte values.
   `Ascii` returns 7-bit ASCII codes and rejects non-ASCII text.
@@ -449,10 +449,10 @@ impl String {
   xldr(1)> String::codepoints("AB", StringEncoding::Ascii)
   Ok([65, 66])
   """
-  @@builtin
+  @builtin
   def codepoints(value: String, encoding: StringEncoding) -> Result<List<Int>, InvalidStringEncoding>
 
-  @@doc """
+  @doc """
   Restore a string from an encoding-specific integer sequence.
   `Utf8` expects raw byte values in the range `0..255`.
   `Ascii` expects byte values in the range `0..127`.
@@ -460,10 +460,10 @@ impl String {
   xldr(1)> String::from_codepoints([65, 66], StringEncoding::Ascii)
   Ok("AB")
   """
-  @@builtin
+  @builtin
   def from_codepoints(values: List<Int>, encoding: StringEncoding) -> Result<String, InvalidStringEncoding>
 
-  @@doc """
+  @doc """
   Remove ASCII whitespace from the start of `value`.
   Trimmed characters are space, newline, tab, and carriage return.
   ## REPL
@@ -474,7 +474,7 @@ impl String {
     _from_chars_go(_trim_start_chars(chars(value)), "")
   }
 
-  @@doc """
+  @doc """
   Remove ASCII whitespace from the end of `value`.
   Trimmed characters are space, newline, tab, and carriage return.
   ## REPL
@@ -486,7 +486,7 @@ impl String {
     _from_chars_go(List::reverse(trimmed_rev), "")
   }
 
-  @@doc """
+  @doc """
   Remove ASCII whitespace from both ends of `value`.
   Trimmed characters are space, newline, tab, and carriage return.
   ## REPL
@@ -497,7 +497,7 @@ impl String {
     trim_end(trim_start(value))
   }
 
-  @@doc """
+  @doc """
   Parse `value` as a base-10 `Int`.
   Accepts an optional leading `+` or `-`.
   ## REPL
@@ -522,7 +522,7 @@ impl String {
     }
   }
 
-  @@doc """
+  @doc """
   Parse `value` as a `Boolean`.
   Accepts `True`, `False`, `true`, and `false`.
   ## REPL
@@ -539,7 +539,7 @@ impl String {
 }
 
 impl Show for String {
-  @@doc """
+  @doc """
   Return the string value unchanged.
   ## REPL
   xldr(1)> to_string("abc")
@@ -551,7 +551,7 @@ impl Show for String {
 }
 
 impl From<String> for String {
-  @@doc """
+  @doc """
   Return the value unchanged when converting `String` to `String`.
   ## REPL
   xldr(1)> from("abc", String)
@@ -563,7 +563,7 @@ impl From<String> for String {
 }
 
 impl TryFrom<Int> for String {
-  @@doc """
+  @doc """
   Parse the string as an `Int`, returning an error result on invalid input.
   ## REPL
   xldr(1)> try_from("42", Int)
@@ -575,7 +575,7 @@ impl TryFrom<Int> for String {
 }
 
 impl TryFrom<Boolean> for String {
-  @@doc """
+  @doc """
   Parse the string as a `Boolean`, returning an error result on invalid input.
   ## REPL
   xldr(1)> try_from("True", Boolean)
@@ -587,31 +587,31 @@ impl TryFrom<Boolean> for String {
 }
 
 impl Eq for String {
-  @@doc """
+  @doc """
   Return `True` when both string values are equal.
   ## REPL
   xldr(1)> eq("a", "a")
   True
   """
-  @@builtin def eq(self: Self, rhs: Self) -> Boolean
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Neq for String {
-  @@doc """
+  @doc """
   Return `True` when the string values differ.
   ## REPL
   xldr(1)> neq("a", "b")
   True
   """
-  @@builtin def neq(self: Self, rhs: Self) -> Boolean
+  @builtin def neq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Concat for String {
-  @@doc """
+  @doc """
   Return the concatenation of the two string values.
   ## REPL
   xldr(1)> concat("ab", "cd")
   "abcd"
   """
-  @@builtin def concat(self: Self, rhs: Self) -> Self
+  @builtin def concat(self: Self, rhs: Self) -> Self
 }

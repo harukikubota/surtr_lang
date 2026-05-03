@@ -1,7 +1,7 @@
 # Lens
 
 `Lens` は runtime value ではなく、compile-time にだけ存在する path capability です。  
-正本の `@@doc` は `../../lib/lens.srt` にあります。
+正本の `@doc` は `../../lib/lens.srt` にあります。
 
 ## まず API を見る
 

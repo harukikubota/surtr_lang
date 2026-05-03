@@ -181,16 +181,16 @@ impl Checker {
 
         if !shape_ok {
             let expected = match id.name.as_str() {
-                "if" => "@@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
-                "if_then" => "@@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
-                "if_let" => "@@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
-                "if_let_then" => "@@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
-                "is_match" => "@@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
-                "assert" => "@@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
-                "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
-                "recover_kind" => "@@builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>",
-                "and" => "@@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
-                "or" => "@@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                "if" => "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
+                "if_then" => "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
+                "if_let" => "@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
+                "if_let_then" => "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
+                "is_match" => "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
+                "assert" => "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
+                "ensure" => "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
+                "recover_kind" => "@builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>",
+                "and" => "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                "or" => "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 _ => unreachable!(),
             };
             return Err(TypeError {
@@ -369,8 +369,8 @@ impl Checker {
 
         if !shape_ok {
             let expected = match id.name.as_str() {
-                "Ok" => "@@builtin type Ok($T) -> Result<$T>",
-                "Err" => "@@builtin type Err(Error) -> Result<$T>",
+                "Ok" => "@builtin type Ok($T) -> Result<$T>",
+                "Err" => "@builtin type Err(Error) -> Result<$T>",
                 _ => unreachable!(),
             };
             return Err(TypeError {

@@ -74,13 +74,13 @@ fn resolve_user_with_modules(
     let mut full_stages = vec![vec![staged_module(
         "Bootstrap",
         parse_module_ast(
-            r#"@@builtin def print(a: String) -> Unit
-@@builtin def to_string(a: $A) -> String
-@@builtin def inspect(a: $A) -> String
-@@builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
-@@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
-@@builtin def eprint(err: Error) -> Unit
-@@builtin def set_exit_code(code: Int) -> Unit
+            r#"@builtin def print(a: String) -> Unit
+@builtin def to_string(a: $A) -> String
+@builtin def inspect(a: $A) -> String
+@builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
+@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+@builtin def eprint(err: Error) -> Unit
+@builtin def set_exit_code(code: Int) -> Unit
 deferror NoneError { "none" }
 deferror ZeroDivisionError { "division by zero" }
 deferror EmptyList { "Empty List." }
@@ -122,7 +122,7 @@ fn test_precollect_builtin_decl_in_module() {
     let module_stages = vec![vec![staged_module(
         "Int",
         parse_module_ast(
-            r#"@@builtin def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>"#,
+            r#"@builtin def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>"#,
             "Int",
         ),
     )]];
@@ -136,14 +136,14 @@ fn test_resolve_staged_program_keeps_process_specs() {
     let kernel = staged_module(
         "Kernel",
         parse_module_ast(
-            r#"@@builtin def __process_pid(name: String, init: (-> Result<$State>)) -> PID<$Process>
-@@builtin def __process_state(pid: PID<$Process>) -> Result<$State>
-@@builtin def __process_store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+            r#"@builtin def __process_pid(name: String, init: (-> Result<$State>)) -> PID<$Process>
+@builtin def __process_state(pid: PID<$Process>) -> Result<$State>
+@builtin def __process_store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
             "Kernel",
         ),
     );
     let ast = spire::parse_with_context(
-        r#"@@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
+        r#"@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
 defagent Counter {
   @init
   def init() -> Result<Int> { 0 }
@@ -883,7 +883,7 @@ fn test_resolve_trait_impl_builtin_method_preserves_private_name() {
 }
 
 impl Add for Int {
-  @@builtin def add(self: Self, rhs: Self) -> Self
+  @builtin def add(self: Self, rhs: Self) -> Self
 }"#,
         "Add",
     );
@@ -982,7 +982,7 @@ fn test_builtin_ref() {
 #[test]
 fn test_builtin_decl_resolution() {
     let ast = spire::parse_with_context(
-        "@@builtin def print(a: String) -> Unit",
+        "@builtin def print(a: String) -> Unit",
         spire::ParserContext::module(0, Some("Bootstrap".into()))
             .with_rules(spire::ParseRules::std_module()),
     )
@@ -1009,7 +1009,7 @@ fn test_builtin_decl_resolution() {
 #[test]
 fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
     let ast = spire::parse_with_context(
-        "@@hidden\n@@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
+        "@hidden\n@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
         spire::ParserContext::module(0, Some("Process".into()))
             .with_rules(spire::ParseRules::std_module()),
     )
@@ -1110,7 +1110,7 @@ impl User {
 #[test]
 fn test_builtin_type_decl_resolution() {
     let ast = spire::parse_with_context(
-        "@@builtin type Int",
+        "@builtin type Int",
         spire::ParserContext::module(0, Some("Bootstrap".into()))
             .with_rules(spire::ParseRules::std_module()),
     )
@@ -1134,7 +1134,7 @@ fn test_module_builtin_can_be_resolved_by_qualified_name() {
     let module_stages = vec![vec![staged_module(
         "Int",
         parse_module_ast(
-            r#"@@builtin def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>"#,
+            r#"@builtin def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>"#,
             "Int",
         ),
     )]];
@@ -1460,7 +1460,7 @@ fn test_eq_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
         "Eq",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait Eq {
   def eq(self: Self, rhs: Self) -> Boolean
 }"#,
@@ -1497,7 +1497,7 @@ fn test_neq_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
         "Neq",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait Neq {
   def neq(self: Self, rhs: Self) -> Boolean
 }"#,
@@ -1546,7 +1546,7 @@ fn test_compare_helper_resolves_via_autoimport_trait() {
         staged_module(
             "Compare",
             parse_module_ast(
-                r#"@@autoimport
+                r#"@autoimport
 deftrait Compare {
   def compare(self: Self, rhs: Self) -> Ordering
 }"#,
@@ -1587,7 +1587,7 @@ fn test_lt_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
         "Ord",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait Ord {
   def lt(self: Self, rhs: Self) -> Boolean
   def lte(self: Self, rhs: Self) -> Boolean
@@ -1627,7 +1627,7 @@ fn test_concat_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
         "Concat",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait Concat {
   def concat(self: Self, rhs: Self) -> Self
 }"#,
@@ -1664,7 +1664,7 @@ fn test_from_helper_lowers_second_arg_to_type_ref_witness() {
     let module_stages = vec![vec![staged_module(
         "From",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait From<$To> {
   def from(self: Self, to: TypeRef<$To>) -> $To
 }"#,
@@ -1707,7 +1707,7 @@ fn test_try_from_helper_named_args_are_rejected() {
     let module_stages = vec![vec![staged_module(
         "TryFrom",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait TryFrom<$To> {
   def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
 }"#,
@@ -1727,7 +1727,7 @@ fn test_try_from_helper_resolves_inside_zero_arg_closure() {
     let module_stages = vec![vec![staged_module(
         "TryFrom",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait TryFrom<$To> {
   def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
 }"#,
@@ -1780,7 +1780,7 @@ fn test_eq_wrong_arity_resolves_as_regular_app() {
     let module_stages = vec![vec![staged_module(
         "Eq",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait Eq {
   def eq(self: Self, rhs: Self) -> Boolean
 }"#,
@@ -1808,7 +1808,7 @@ fn test_concat_named_arg_resolves_as_regular_app() {
     let module_stages = vec![vec![staged_module(
         "Concat",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait Concat {
   def concat(self: Self, rhs: Self) -> Self
 }"#,
@@ -2441,6 +2441,45 @@ fn test_std_module_is_auto_imported_from_module_attribute() {
 }
 
 #[test]
+fn test_impl_type_helpers_are_auto_imported_from_owner_surface() {
+    let module_stages = vec![vec![staged_auto_import_module(
+        "User",
+        parse_module_ast(
+            r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  def greet() -> String { "hi" }
+}"#,
+            "User",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(r#"value = greet()"#, &module_stages)
+        .expect("auto-import impl owner surface should inject helpers");
+
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
+        .expect("user bind should exist");
+
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, _) => match func.as_ref() {
+                Resolved::Var(_, id) => {
+                    assert_eq!(id.name, "greet");
+                    assert_eq!(id.qualified_name.as_deref(), Some("User::greet"));
+                }
+                other => panic!("expected imported impl helper var, got {:?}", other),
+            },
+            other => panic!("expected app, got {:?}", other),
+        },
+        other => panic!("expected bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_explicit_import_of_autoimport_module_is_allowed() {
     let module_stages = vec![vec![staged_auto_import_module(
         "Prelude",
@@ -2464,7 +2503,7 @@ fn test_std_trait_method_is_auto_imported_from_trait_attribute() {
     let module_stages = vec![vec![staged_module(
         "Numeric",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait Numeric {
   def add(self: Self, rhs: Self) -> Self
 }"#,
@@ -2506,7 +2545,7 @@ fn test_explicit_import_of_autoimport_trait_is_allowed() {
     let module_stages = vec![vec![staged_module(
         "Numeric",
         parse_module_ast(
-            r#"@@autoimport
+            r#"@autoimport
 deftrait Numeric {
   def add(self: Self, rhs: Self) -> Self
 }"#,
@@ -2532,7 +2571,7 @@ fn test_autoimport_trait_helper_conflict_is_rejected() {
         staged_module(
             "Concat",
             parse_module_ast(
-                r#"@@autoimport
+                r#"@autoimport
 deftrait Concat {
   def concat(self: Self, rhs: Self) -> Self
 }"#,
@@ -2542,7 +2581,7 @@ deftrait Concat {
         staged_module(
             "Fake",
             parse_module_ast(
-                r#"@@autoimport
+                r#"@autoimport
 deftrait Fake {
   def concat(self: Self) -> Self
 }"#,

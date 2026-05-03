@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Numeric` trait declaration.
 `Numeric` provides helper functions shared by concrete numeric types.
 As with other function-bearing surfaces in Surtr, `deftrait` introduces its own

@@ -877,13 +877,13 @@ impl Parser<'_> {
 
         if attrs.doc.is_some() {
             return Err(ParseError::syntax(
-                "@@doc is not allowed before `impl Type`; attach docs to the type declaration or impl members",
+                "@doc is not allowed before `impl Type`; attach docs to the type declaration, defagent, or impl members",
                 sp.clone(),
             ));
         }
         if attrs.hidden {
             return Err(ParseError::syntax(
-                "@@hidden is not allowed before `impl Type`; use member-level visibility instead",
+                "@hidden is only allowed together with @builtin in standard/internal source",
                 sp.clone(),
             ));
         }
@@ -1086,7 +1086,7 @@ impl Parser<'_> {
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
             return Err(ParseError::syntax(
-                "@@builtin impl method declarations do not accept method type parameters",
+                "@builtin impl method declarations do not accept method type parameters",
                 type_params[0].span.clone(),
             ));
         }
@@ -1173,7 +1173,7 @@ impl Parser<'_> {
             Some(Token::LBrace)
         ) {
             return Err(ParseError::syntax(
-                "@@builtin declaration must not have a function body",
+                "@builtin declaration must not have a function body",
                 self.tokens[lookahead].span.clone(),
             ));
         }
@@ -1257,7 +1257,7 @@ impl Parser<'_> {
                 "builtin" => {
                     if saw_builtin {
                         return Err(ParseError::syntax(
-                            "@@builtin may only appear once before an impl member",
+                            "@builtin may only appear once before an impl member",
                             annotator_span,
                         ));
                     }
@@ -1266,7 +1266,7 @@ impl Parser<'_> {
                 "doc" => {
                     if attrs.doc.is_some() {
                         return Err(ParseError::syntax(
-                            "@@doc may only appear once before an impl member",
+                            "@doc may only appear once before an impl member",
                             annotator_span,
                         ));
                     }
@@ -1274,7 +1274,7 @@ impl Parser<'_> {
                         Token::DocString(text) => {
                             if Self::string_has_interpolation(&text) {
                                 return Err(ParseError::syntax(
-                                    "@@doc does not allow string interpolation",
+                                    "@doc does not allow string interpolation",
                                     self.peek_span(),
                                 ));
                             }
@@ -1286,7 +1286,7 @@ impl Parser<'_> {
                         }
                         _ => {
                             return Err(ParseError::syntax(
-                                "@@doc expects a triple-quoted doc string",
+                                "@doc expects a triple-quoted doc string",
                                 self.peek_span(),
                             ));
                         }
@@ -1295,7 +1295,7 @@ impl Parser<'_> {
                 "hidden" => {
                     if attrs.hidden {
                         return Err(ParseError::syntax(
-                            "@@hidden may only appear once before an impl member",
+                            "@hidden may only appear once before an impl member",
                             annotator_span,
                         ));
                     }
@@ -1303,7 +1303,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParseError::syntax(
-                        "Only @@doc / @@hidden / @@builtin are allowed before impl members",
+                        "Only @doc / @hidden / @builtin are allowed before impl members",
                         annotator_span,
                     ));
                 }
@@ -1320,8 +1320,21 @@ impl Parser<'_> {
 
         if saw_builtin {
             let start = start_span
+                .as_ref()
                 .map(|span| span.start)
                 .unwrap_or_else(|| self.peek_span().start);
+            if attrs.hidden
+                && !self
+                    .context
+                    .parse_rules
+                    .allowed_top_level_decl_kinds
+                    .allows(super::context::TopLevelDeclKind::BuiltinDecl)
+            {
+                return Err(ParseError::syntax(
+                    "@hidden is only allowed together with @builtin in standard/internal source",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
             return match self.peek() {
                 Token::Def if trait_impl_only => {
                     self.parse_builtin_impl_method_decl(target, start, attrs)
@@ -1331,15 +1344,15 @@ impl Parser<'_> {
                     self.parse_builtin_extractor_decl(start, attrs)
                 }
                 Token::Defextractor => Err(ParseError::syntax(
-                    "trait impl body may only contain `@@builtin def` declarations",
+                    "trait impl body may only contain `@builtin def` declarations",
                     self.peek_span(),
                 )),
                 Token::Defp => Err(ParseError::syntax(
-                    "@@builtin is not allowed before `defp` impl members",
+                    "@builtin is not allowed before `defp` impl members",
                     self.peek_span(),
                 )),
                 _ => Err(ParseError::syntax(
-                    "impl body may only contain `@@builtin def` / `@@builtin defextractor` declarations",
+                    "impl body may only contain `@builtin def` / `@builtin defextractor` declarations",
                     self.peek_span(),
                 )),
             };
@@ -2154,7 +2167,7 @@ impl Parser<'_> {
                 "builtin" => {
                     if saw_builtin {
                         return Err(ParseError::syntax(
-                            "@@builtin may only appear once before a declaration",
+                            "@builtin may only appear once before a declaration",
                             annotator_span,
                         ));
                     }
@@ -2163,13 +2176,13 @@ impl Parser<'_> {
                 "intrinsic" => {
                     if saw_intrinsic {
                         return Err(ParseError::syntax(
-                            "@@intrinsic may only appear once before a declaration",
+                            "@intrinsic may only appear once before a declaration",
                             annotator_span,
                         ));
                     }
                     if saw_builtin {
                         return Err(ParseError::syntax(
-                            "@@builtin and @@intrinsic cannot be combined",
+                            "@builtin and @intrinsic cannot be combined",
                             annotator_span,
                         ));
                     }
@@ -2179,13 +2192,13 @@ impl Parser<'_> {
                 "agent" => {
                     if agent_meta.is_some() {
                         return Err(ParseError::syntax(
-                            "@@agent may only appear once before a declaration",
+                            "@agent may only appear once before a declaration",
                             annotator_span,
                         ));
                     }
                     if saw_builtin || saw_intrinsic {
                         return Err(ParseError::syntax(
-                            "@@agent cannot be combined with @@builtin or @@intrinsic",
+                            "@agent cannot be combined with @builtin or @intrinsic",
                             annotator_span,
                         ));
                     }
@@ -2194,7 +2207,7 @@ impl Parser<'_> {
                 "doc" => {
                     if attrs.doc.is_some() {
                         return Err(ParseError::syntax(
-                            "@@doc may only appear once before a declaration",
+                            "@doc may only appear once before a declaration",
                             annotator_span,
                         ));
                     }
@@ -2203,7 +2216,7 @@ impl Parser<'_> {
                         Token::DocString(text) => {
                             if Self::string_has_interpolation(&text) {
                                 return Err(ParseError::syntax(
-                                    "@@doc does not allow string interpolation",
+                                    "@doc does not allow string interpolation",
                                     self.peek_span(),
                                 ));
                             }
@@ -2215,7 +2228,7 @@ impl Parser<'_> {
                         }
                         _ => {
                             return Err(ParseError::syntax(
-                                "@@doc expects a triple-quoted doc string",
+                                "@doc expects a triple-quoted doc string",
                                 self.peek_span(),
                             ));
                         }
@@ -2224,7 +2237,7 @@ impl Parser<'_> {
                 "autoimport" => {
                     if attrs.auto_import {
                         return Err(ParseError::syntax(
-                            "@@autoimport may only appear once before a declaration",
+                            "@autoimport may only appear once before a declaration",
                             annotator_span,
                         ));
                     }
@@ -2233,15 +2246,33 @@ impl Parser<'_> {
                 "hidden" => {
                     if attrs.hidden {
                         return Err(ParseError::syntax(
-                            "@@hidden may only appear once before a declaration",
+                            "@hidden may only appear once before a declaration",
                             annotator_span,
                         ));
                     }
                     attrs.hidden = true;
                 }
+                "entrypoint" => {
+                    return Err(ParseError::syntax(
+                        "@entrypoint has been removed",
+                        annotator_span,
+                    ));
+                }
+                "test" => {
+                    return Err(ParseError::syntax(
+                        "@test has been removed",
+                        annotator_span,
+                    ));
+                }
+                "init" | "get" | "set" => {
+                    return Err(ParseError::syntax(
+                        "@init/@get/@set are only allowed on def declarations inside defagent",
+                        annotator_span,
+                    ));
+                }
                 _ => {
                     return Err(ParseError::syntax(
-                        format!("Unknown annotator: @@{}", name),
+                        format!("Unknown annotation: @{name}"),
                         annotator_span,
                     ));
                 }
@@ -2250,20 +2281,21 @@ impl Parser<'_> {
         }
 
         let start = start_span
+            .as_ref()
             .map(|span| span.start)
             .unwrap_or_else(|| self.peek_span().start);
 
         if let Some(meta) = agent_meta {
             if saw_builtin || saw_intrinsic {
                 return Err(ParseError::syntax(
-                    "@@agent cannot be combined with @@builtin or @@intrinsic",
+                    "@agent cannot be combined with @builtin or @intrinsic",
                     self.peek_span(),
                 ));
             }
             match self.peek() {
-                Token::Defagent => self.parse_defagent(meta, start),
+                Token::Defagent => self.parse_defagent(meta, attrs, start),
                 _ => Err(ParseError::syntax(
-                    "Expected `defagent` after @@agent(...)",
+                    "Expected `defagent` after @agent(...)",
                     self.peek_span(),
                 )),
             }
@@ -2275,28 +2307,46 @@ impl Parser<'_> {
             match self.peek() {
                 Token::Def => self.parse_intrinsic_decl(intrinsic_start, attrs),
                 _ => Err(ParseError::syntax(
-                    "Expected `def` after @@intrinsic",
+                    "Expected `def` after @intrinsic",
                     self.peek_span(),
                 )),
             }
         } else if saw_builtin {
+            if attrs.hidden
+                && !self
+                    .context
+                    .parse_rules
+                    .allowed_top_level_decl_kinds
+                    .allows(super::context::TopLevelDeclKind::BuiltinDecl)
+            {
+                return Err(ParseError::syntax(
+                    "@hidden is only allowed together with @builtin in standard/internal source",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
             match self.peek() {
                 Token::Def => self.parse_builtin_decl(start, attrs),
                 Token::Defextractor => self.parse_builtin_extractor_decl(start, attrs),
                 Token::Type => self.parse_builtin_type_decl(start, attrs),
                 _ => Err(ParseError::syntax(
-                    "Expected `def`, `defextractor`, or `type` after @@builtin",
+                    "Expected `def`, `defextractor`, or `type` after @builtin",
                     self.peek_span(),
                 )),
             }
         } else {
+            if attrs.hidden {
+                return Err(ParseError::syntax(
+                    "@hidden is only allowed together with @builtin in standard/internal source",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
             match self.peek() {
                 Token::Def => self.parse_def_with_attrs(attrs, Some(start)),
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deftrait => self.parse_trait_def_with_attrs(attrs, Some(start)),
                 Token::Impl => self.parse_impl_def_with_attrs(attrs, Some(start)),
                 Token::Defagent => Err(ParseError::syntax(
-                    "`defagent` declarations must be preceded by @@agent(...)",
+                    "`defagent` declarations must be preceded by @agent(...)",
                     self.peek_span(),
                 )),
                 Token::Defstruct => self.parse_struct_def_with_attrs(attrs, Some(start)),
@@ -2306,7 +2356,7 @@ impl Parser<'_> {
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
-                    "@@doc / @@autoimport / @@hidden must annotate `def`, `defmod`, `deftrait`, `impl`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defextractor`, `@@builtin type/def/defextractor`, or `@@intrinsic def`",
+                    "@doc / @autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `defagent`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defextractor`, `@builtin type/def/defextractor`, or `@intrinsic def`",
                     self.peek_span(),
                 )),
             }
@@ -2364,7 +2414,7 @@ impl Parser<'_> {
                 "lazy" => lazy = self.parse_agent_bool_value("lazy")?,
                 _ => {
                     return Err(ParseError::syntax(
-                        format!("Unknown @@agent option: {key}"),
+                        format!("Unknown @agent option: {key}"),
                         key_span,
                     ))
                 }
@@ -2380,9 +2430,9 @@ impl Parser<'_> {
         self.expect(&Token::RParen)?;
 
         let kind =
-            kind.ok_or_else(|| ParseError::syntax("@@agent requires kind", self.peek_span()))?;
+            kind.ok_or_else(|| ParseError::syntax("@agent requires kind", self.peek_span()))?;
         let instance = instance
-            .ok_or_else(|| ParseError::syntax("@@agent requires instance", self.peek_span()))?;
+            .ok_or_else(|| ParseError::syntax("@agent requires instance", self.peek_span()))?;
 
         Ok(AgentMeta {
             kind,
@@ -2418,7 +2468,12 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_defagent(&mut self, meta: AgentMeta, start: usize) -> Result<Ast, ParseError> {
+    fn parse_defagent(
+        &mut self,
+        meta: AgentMeta,
+        attrs: DeclAttrs,
+        start: usize,
+    ) -> Result<Ast, ParseError> {
         self.expect(&Token::Defagent)?;
         let (name, _name_span) = self.expect_ident()?;
         self.skip_newlines();
@@ -2434,12 +2489,18 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            let marker = if matches!(self.peek(), Token::At) {
+            let marker = if matches!(self.peek(), Token::Annotator(name) if matches!(name.as_str(), "init" | "get" | "set")) {
                 Some(self.parse_agent_handler_marker()?)
             } else {
                 None
             };
             self.skip_newlines();
+            if marker.is_some() && !matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    "Agent handler marker must be followed by def inside defagent",
+                    self.peek_span(),
+                ));
+            }
             let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
             self.ensure_stmt_boundary(&def, true)?;
             match marker {
@@ -2509,6 +2570,7 @@ impl Parser<'_> {
                 end: end.end,
             },
             name,
+            attrs,
             meta,
             init,
             get,
@@ -2518,8 +2580,14 @@ impl Parser<'_> {
     }
 
     fn parse_agent_handler_marker(&mut self) -> Result<AgentHandlerKind, ParseError> {
-        self.expect(&Token::At)?;
-        let (name, span) = self.expect_ident()?;
+        let span = self.peek_span();
+        let Token::Annotator(name) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                "agent handler marker must be @init, @get, or @set",
+                self.peek_span(),
+            ));
+        };
+        self.advance();
         self.skip_newlines();
         match name.as_str() {
             "init" => Ok(AgentHandlerKind::Init),
@@ -2587,6 +2655,7 @@ impl Parser<'_> {
         &self,
         span: Span,
         name: Symbol,
+        mut attrs: DeclAttrs,
         meta: AgentMeta,
         init: AgentHandler,
         get: AgentHandler,
@@ -2648,7 +2717,6 @@ impl Parser<'_> {
             }
         }
 
-        let mut attrs = DeclAttrs::default();
         attrs.process_spec = Some(meta.into_process_spec(name.clone()));
         Ok(Ast::Defmod(span, name, body, attrs))
     }
@@ -2705,7 +2773,7 @@ impl Parser<'_> {
 
         if matches!(self.peek(), Token::LBrace) {
             return Err(ParseError::syntax(
-                "@@intrinsic declaration must not have a function body",
+                "@intrinsic declaration must not have a function body",
                 self.peek_span(),
             ));
         }
@@ -2722,7 +2790,7 @@ impl Parser<'_> {
             Some(Token::LBrace)
         ) {
             return Err(ParseError::syntax(
-                "@@intrinsic declaration must not have a function body",
+                "@intrinsic declaration must not have a function body",
                 self.tokens[lookahead].span.clone(),
             ));
         }
@@ -2763,7 +2831,7 @@ impl Parser<'_> {
             Some(Token::LBrace)
         ) {
             return Err(ParseError::syntax(
-                "@@builtin declaration must not have a function body",
+                "@builtin declaration must not have a function body",
                 self.tokens[lookahead].span.clone(),
             ));
         }
@@ -2804,7 +2872,7 @@ impl Parser<'_> {
             Some(Token::LBrace)
         ) {
             return Err(ParseError::syntax(
-                "@@builtin extractor declaration must not have a function body",
+                "@builtin extractor declaration must not have a function body",
                 self.tokens[lookahead].span.clone(),
             ));
         }
@@ -2834,7 +2902,7 @@ impl Parser<'_> {
         let (name, name_span) = self.expect_ident()?;
 
         // `Result` keeps `Ok` / `Err` as declaration-only constructor
-        // contracts. They intentionally live behind `@@builtin type ...` so
+        // contracts. They intentionally live behind `@builtin type ...` so
         // the std-module declaration layer stays visually uniform, even though
         // the payload that follows is function-shaped rather than type-shaped.
         if (name == "Ok" || name == "Err") && matches!(self.peek(), Token::LParen) {

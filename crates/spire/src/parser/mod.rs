@@ -30,12 +30,6 @@ pub use diagnostic::{
 pub const MAX_PARSE_NESTING: usize = 32;
 pub const MAX_PARSE_NESTING_MESSAGE: &str = "maximum parse nesting depth exceeded";
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct EntryAnnotation {
-    pub name: String,
-    pub span: Span,
-}
-
 /// Parse Surtr source text into an abstract syntax tree.
 pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
     parse_with_context(source, ParserContext::default())
@@ -81,95 +75,6 @@ fn reject_excessive_delimiter_nesting(tokens: &[Spanned<Token>]) -> Result<(), P
         }
     }
     Ok(())
-}
-
-/// Strip `@@test <expr>` annotations while preserving source span offsets.
-pub fn strip_test_annotations(source: &str) -> String {
-    let tokens = match tokenize(source) {
-        Ok(tokens) => tokens,
-        Err(_) => return source.to_string(),
-    };
-
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut i = 0usize;
-    while i < tokens.len() {
-        if let Token::Annotator(name) = &tokens[i].token {
-            if name == "test" {
-                let mut j = i + 1;
-                while j < tokens.len() && !matches!(tokens[j].token, Token::Newline | Token::Eof) {
-                    j += 1;
-                }
-                let end = if j > i + 1 {
-                    tokens[j - 1].span.end
-                } else {
-                    tokens[i].span.end
-                };
-                for ch in chars.iter_mut().take(end).skip(tokens[i].span.start) {
-                    if *ch != '\n' {
-                        *ch = ' ';
-                    }
-                }
-                i = j;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    chars.into_iter().collect::<String>()
-}
-
-/// Collect `@@entrypoint` annotations and return source with annotation tokens stripped.
-pub fn collect_entrypoint_annotations(
-    source: &str,
-) -> Result<(String, Vec<EntryAnnotation>), ParseError> {
-    let tokens = tokenize(source)?;
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut annotations = Vec::new();
-
-    let mut i = 0usize;
-    while i < tokens.len() {
-        let token = &tokens[i];
-        if let Token::Annotator(name) = &token.token {
-            if name == "entrypoint" {
-                for ch in chars.iter_mut().take(token.span.end).skip(token.span.start) {
-                    if *ch != '\n' {
-                        *ch = ' ';
-                    }
-                }
-                let mut j = i + 1;
-                while j < tokens.len() && matches!(tokens[j].token, Token::Newline) {
-                    j += 1;
-                }
-                if j >= tokens.len() || !matches!(tokens[j].token, Token::Def) {
-                    return Err(ParseError::syntax(
-                        "@@entrypoint must annotate a function definition (`def`)",
-                        token.span.clone(),
-                    ));
-                }
-                let mut k = j + 1;
-                while k < tokens.len() && matches!(tokens[k].token, Token::Newline) {
-                    k += 1;
-                }
-                let def_name = match tokens.get(k).map(|sp| &sp.token) {
-                    Some(Token::Ident(name)) => name.clone(),
-                    _ => {
-                        return Err(ParseError::syntax(
-                            "@@entrypoint must target `def <name>(...)`",
-                            tokens[j].span.clone(),
-                        ));
-                    }
-                };
-                annotations.push(EntryAnnotation {
-                    name: def_name,
-                    span: token.span.clone(),
-                });
-            }
-        }
-        i += 1;
-    }
-
-    Ok((chars.into_iter().collect::<String>(), annotations))
 }
 
 struct Parser<'a> {

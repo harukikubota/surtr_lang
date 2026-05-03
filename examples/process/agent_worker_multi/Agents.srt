@@ -1,4 +1,4 @@
-@@agent(kind: State, instance: Multi, boot: false, registry: false, lazy: false)
+@agent(kind: State, instance: Multi, boot: false, registry: false, lazy: false)
 defagent Worker {
   @init
   def init(initial_jobs: Int) -> Result<Int> {

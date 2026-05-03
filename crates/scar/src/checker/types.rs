@@ -12,7 +12,7 @@ impl Checker {
                 .into(),
             span: span.clone(),
             hint: Some(
-                "Use MatchResult only as a defextractor / @@builtin defextractor return type or inside an extractor body. Ordinary APIs should return Result, Option, or a user-defined enum explicitly."
+                "Use MatchResult only as a defextractor / @builtin defextractor return type or inside an extractor body. Ordinary APIs should return Result, Option, or a user-defined enum explicitly."
                     .into(),
             ),
         }

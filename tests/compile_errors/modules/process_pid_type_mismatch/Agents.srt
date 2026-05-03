@@ -1,4 +1,4 @@
-@@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
+@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
 defagent Counter {
   @init
   def init() -> Result<Int> {
@@ -16,7 +16,7 @@ defagent Counter {
   }
 }
 
-@@agent(kind: State, instance: Singleton, boot: true, lazy: false)
+@agent(kind: State, instance: Singleton, boot: true, lazy: false)
 defagent Clock {
   @init
   def init() -> Result<Int> {

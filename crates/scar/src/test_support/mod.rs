@@ -40,9 +40,9 @@ const KLEISLI_COMPOSABLE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/kleisli_composable.srt");
 const INT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/int.srt");
 const STRING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/string.srt");
-const REGEX_MODULE_SOURCE: &str = r#"@@builtin type Regex
-@@builtin type RegexCaptures
-@@builtin type RegexMatch
+const REGEX_MODULE_SOURCE: &str = r#"@builtin type Regex
+@builtin type RegexCaptures
+@builtin type RegexMatch
 
 impl Regex {}
 impl RegexCaptures {}
@@ -52,10 +52,10 @@ const ORDERING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/orderin
 const ERROR_MODULE_SOURCE: &str = include_str!("../../../../lib/types/error.srt");
 const LIST_MODULE_SOURCE: &str = include_str!("../../../../lib/types/list.srt");
 const OPTION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/option.srt");
-const GENERATOR_MODULE_SOURCE: &str = r#"@@builtin type Generator<$State, $Item>
+const GENERATOR_MODULE_SOURCE: &str = r#"@builtin type Generator<$State, $Item>
 
 impl Generator {}"#;
-const HASH_MAP_MODULE_SOURCE: &str = r#"@@builtin type HashMap<$V>
+const HASH_MAP_MODULE_SOURCE: &str = r#"@builtin type HashMap<$V>
 
 impl HashMap {}"#;
 const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
@@ -79,20 +79,12 @@ pub(crate) fn typecheck_with_context(
     session.typecheck_with_context(resolved, context)
 }
 
-fn strip_test_annotations(source: &str) -> String {
-    source
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("@@test"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn parse_std_module_stage(
     source: &str,
     _fallback_module_path: &str,
 ) -> Vec<sigil::StagedModuleAst> {
     let ast = spire::parse_with_context(
-        &strip_test_annotations(source),
+        source,
         spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
     )
     .expect("std module should parse");

@@ -86,7 +86,7 @@ def show_abs(x: impl Numeric) -> String {
 target-oriented trait method の witness としてだけ使います。
 
 ```surtr
-@@builtin type TypeRef<$T>
+@builtin type TypeRef<$T>
 
 deftrait From<$To> {
   def from(self: Self, to: TypeRef<$To>) -> $To

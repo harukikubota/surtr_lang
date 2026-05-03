@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Result` type declaration.
 `Result` represents success-or-error control flow as a value.
 The canonical builtin head is `Result<$T>`.
@@ -7,13 +7,13 @@ Its runtime representation is enum-like, but the language treats `Result` as a
 dedicated built-in abstraction rather than exposing it as the future general
 `Enum` surface.
 """
-@@builtin type Result<$T>
+@builtin type Result<$T>
 
-@@doc """
+@doc """
 Extractor が MatchBlock evaluator へ返す内部制御用の列挙結果。
 surface 上の canonical な型位置は `MatchResult<$Value, Error>` だが、
 error 側は抽象型 `Error` に固定される。
-`MatchResult` は `defextractor` / `@@builtin defextractor` の戻り値と
+`MatchResult` は `defextractor` / `@builtin defextractor` の戻り値と
 Extractor 本文内でだけ使える。通常 API は `Result`, `Option`, user-defined enum を返す。
 """
 defenum MatchResult<$Value> {
@@ -22,23 +22,23 @@ defenum MatchResult<$Value> {
   Err(Error),
 }
 
-@@doc """
+@doc """
 Construct the success branch of `Result`.
 This is a declaration-only surface contract for the constructor shape.
-The parser normalizes this special `@@builtin type` spelling into the internal
+The parser normalizes this special `@builtin type` spelling into the internal
 Result-constructor declaration that later phases validate.
 """
-@@builtin type Ok($T) -> Result<$T>
+@builtin type Ok($T) -> Result<$T>
 
-@@doc """
+@doc """
 Construct the failure branch of `Result`.
 Concrete `deferror` values flow through the abstract `Error` type here.
 This keeps the language surface focused on `Result` as an Either-style value
 without exposing the runtime representation directly.
 """
-@@builtin type Err(Error) -> Result<$T>
+@builtin type Err(Error) -> Result<$T>
 
-@@autoimport
+@autoimport
 impl Result {
   defp _all_go(values: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
     match values {
@@ -52,7 +52,7 @@ impl Result {
     _all_go(tail, [value, ..acc_rev])
   }
 
-  @@doc """
+  @doc """
   Helper for matching on `Result` success vs failure.
   This is not a general-purpose combinator, but it is a common enough pattern that it deserves a helper.
   The `is_ok` name is a bit of a misnomer since it returns `True` for any `Ok(...)` value, even if the inner value is an error type.
@@ -68,7 +68,7 @@ impl Result {
     }
   }
 
-  @@doc """
+  @doc """
   Helper for matching on `Result` success vs failure.
   This is not a general-purpose combinator,
   but it is a common enough pattern that it deserves a helper.
@@ -83,7 +83,7 @@ impl Result {
     Boolean::not(is_ok(result))
   }
 
-  @@doc """
+  @doc """
   Replace the error branch of a `Result` without preserving the previous cause.
 
   - `Ok(value)` stays `Ok(value)`
@@ -94,9 +94,9 @@ impl Result {
   xldr(1)> Result::map_err(Err(NoneError), EmptyList)
   Err(EmptyList("Empty List."))
   """
-  @@builtin def map_err(result: Result<$T>, err: Error) -> Result<$T>
+  @builtin def map_err(result: Result<$T>, err: Error) -> Result<$T>
 
-  @@doc """
+  @doc """
   Add a higher-level domain error on top of an existing `Err(...)`.
 
   - `Ok(value)` stays `Ok(value)`
@@ -107,9 +107,9 @@ impl Result {
   xldr(1)> Result::cause(Ok(1), EmptyList)
   Ok(1)
   """
-  @@builtin def cause(result: Result<$T>, err: Error) -> Result<$T>
+  @builtin def cause(result: Result<$T>, err: Error) -> Result<$T>
 
-  @@doc """
+  @doc """
   Sequence a `Result<$T>` with a later `Result<()>` operation.
 
   - `chain(Ok(value), Ok(()))` returns `Ok(value)`
@@ -122,9 +122,9 @@ impl Result {
   xldr(1)> Result::chain(Ok(1), Ok(()))
   Ok(1)
   """
-  @@builtin def chain(head: Result<$T>, tail: Result<()>) -> Result<$T>
+  @builtin def chain(head: Result<$T>, tail: Result<()>) -> Result<$T>
 
-  @@doc """
+  @doc """
   Recover from any error without inspecting the concrete error kind.
 
   The handler body is evaluated only when `value` is `Err(...)`; `Ok(value)`
@@ -140,7 +140,7 @@ impl Result {
     }
   }
 
-  @@doc """
+  @doc """
   Recover from one concrete error kind.
 
   This is a special form: `marker` is treated as a `deferror` kind marker and
@@ -150,9 +150,9 @@ impl Result {
   xldr(1)> Result::recover_kind(Err(NoneError), NoneError, {|_| Ok(1)})
   Ok(1)
   """
-  @@builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>
+  @builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>
 
-  @@doc """
+  @doc """
   Apply a function wrapped in `Result` to a value wrapped in `Result`.
   ## REPL
   xldr(1)> Result::lift(Ok({|n| n + 1}), Ok(1))
@@ -164,7 +164,7 @@ impl Result {
     Ok(ff(vv))
   }
 
-  @@doc """
+  @doc """
   Apply a 2-argument function wrapped in `Result` to two `Result` values.
   ## REPL
   xldr(1)> Result::lift2(Ok({|a, b| a + b}), Ok(1), Ok(2))
@@ -177,7 +177,7 @@ impl Result {
     Ok(ff(ll, rr))
   }
 
-  @@doc """
+  @doc """
   Apply a 3-argument function wrapped in `Result` to three `Result` values.
   ## REPL
   xldr(1)> Result::lift3(Ok({|a, b, c| a + b + c}), Ok(1), Ok(2), Ok(3))
@@ -191,7 +191,7 @@ impl Result {
     Ok(ff(aa, bb, cc))
   }
 
-  @@doc """
+  @doc """
   Apply a `Result`-returning function wrapped in `Result` to one `Result` value.
   ## REPL
   xldr(1)> Result::flat_lift(Ok({|n| Ok(n + 1)}), Ok(1))
@@ -203,7 +203,7 @@ impl Result {
     ff(vv)
   }
 
-  @@doc """
+  @doc """
   Apply a `Result`-returning 2-argument function wrapped in `Result`.
   ## REPL
   xldr(1)> Result::flat_lift2(Ok({|a, b| Ok(a + b)}), Ok(1), Ok(2))
@@ -220,7 +220,7 @@ impl Result {
     ff(ll, rr)
   }
 
-  @@doc """
+  @doc """
   Apply a `Result`-returning 3-argument function wrapped in `Result`.
   ## REPL
   xldr(1)> Result::flat_lift3(Ok({|a, b, c| Ok(a + b + c)}), Ok(1), Ok(2), Ok(3))
@@ -239,7 +239,7 @@ impl Result {
     ff(aa, bb, cc)
   }
 
-  @@doc """
+  @doc """
   Pipeline-friendly `lift` variant with value first.
   ## REPL
   xldr(1)> Result::with(Ok(1), Ok({|n| n + 1}))
@@ -249,7 +249,7 @@ impl Result {
     lift(f, value)
   }
 
-  @@doc """
+  @doc """
   Pipeline-friendly `lift2` variant with values first.
   ## REPL
   xldr(1)> Result::with2(Ok(1), Ok(2), Ok({|a, b| a + b}))
@@ -259,7 +259,7 @@ impl Result {
     lift2(f, left, right)
   }
 
-  @@doc """
+  @doc """
   Pipeline-friendly `lift3` variant with values first.
   ## REPL
   xldr(1)> Result::with3(Ok(1), Ok(2), Ok(3), Ok({|a, b, c| a + b + c}))
@@ -274,7 +274,7 @@ impl Result {
     lift3(f, a, b, c)
   }
 
-  @@doc """
+  @doc """
   Pipeline-friendly `flat_lift` variant with value first.
   ## REPL
   xldr(1)> Result::flat_with(Ok(1), Ok({|n| Ok(n + 1)}))
@@ -284,7 +284,7 @@ impl Result {
     flat_lift(f, value)
   }
 
-  @@doc """
+  @doc """
   Pipeline-friendly `flat_lift2` variant with values first.
   ## REPL
   xldr(1)> Result::flat_with2(Ok(1), Ok(2), Ok({|a, b| Ok(a + b)}))
@@ -298,7 +298,7 @@ impl Result {
     flat_lift2(f, left, right)
   }
 
-  @@doc """
+  @doc """
   Pipeline-friendly `flat_lift3` variant with values first.
   ## REPL
   xldr(1)> Result::flat_with3(Ok(1), Ok(2), Ok(3), Ok({|a, b, c| Ok(a + b + c)}))
@@ -313,7 +313,7 @@ impl Result {
     flat_lift3(f, a, b, c)
   }
 
-  @@doc """
+  @doc """
   Bundle two `Result` values into one tuple-shaped `Result`.
   ## REPL
   xldr(1)> Result::zip(Ok(1), Ok(2))
@@ -325,7 +325,7 @@ impl Result {
     Ok((ll, rr))
   }
 
-  @@doc """
+  @doc """
   Bundle three `Result` values into one tuple-shaped `Result`.
   ## REPL
   xldr(1)> Result::zip3(Ok(1), Ok(2), Ok(3))
@@ -338,7 +338,7 @@ impl Result {
     Ok((aa, bb, cc))
   }
 
-  @@doc """
+  @doc """
   Convert `List<Result<$A>>` into `Result<List<$A>>`.
   ## REPL
   xldr(1)> Result::all([Ok(1), Ok(2)])
@@ -348,7 +348,7 @@ impl Result {
     _all_go(values, [])
   }
 
-  @@doc """
+  @doc """
   Flatten one level of nested `Result`.
   ## REPL
   xldr(1)> Result::flatten(Ok(Ok(1)))
@@ -359,7 +359,7 @@ impl Result {
     inner
   }
 
-  @@doc """
+  @doc """
   Observe success values and return the original `Result` unchanged.
   ## REPL
   xldr(1)> Result::tap_ok(Ok(1), {|_| ()})
@@ -377,7 +377,7 @@ impl Result {
     value
   }
 
-  @@doc """
+  @doc """
   Observe failure values and return the original `Result` unchanged.
   ## REPL
   xldr(1)> Result::tap_err(Err(NoneError), {|_| ()})
@@ -395,7 +395,7 @@ impl Result {
     value
   }
 
-  @@doc """
+  @doc """
   Continue with `next` only when the left `Result` is `Ok(...)`.
   ## REPL
   xldr(1)> Result::then(Ok(1), {|| Ok(2)})
@@ -406,7 +406,7 @@ impl Result {
   }
 }
 
-@@doc """
+@doc """
 `Functor` implementation for `Result`.
 This is the source-level meaning of `value |*> f`.
 """
@@ -419,7 +419,7 @@ impl Functor<$A, $B, Result<$B>> for Result<$A> {
   }
 }
 
-@@doc """
+@doc """
 `Chainable` implementation for `Result`.
 This is the source-level meaning of `value |>= f`.
 """
@@ -432,7 +432,7 @@ impl Chainable<$A, Result<$B>> for Result<$A> {
   }
 }
 
-@@doc """
+@doc """
 `LiftComposable` implementation for `Result`-returning unary functions.
 This is the source-level meaning of `left >* right` for `Result`.
 """
@@ -442,7 +442,7 @@ impl LiftComposable<$A, $B, $C, Result<$C>> for ($A -> Result<$B>) {
   }
 }
 
-@@doc """
+@doc """
 `KleisliComposable` implementation for `Result`-returning unary functions.
 This is the source-level meaning of `left >=> right` for `Result`.
 """

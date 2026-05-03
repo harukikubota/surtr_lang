@@ -60,7 +60,7 @@ pub(crate) fn find_extractor_definition_label(
     sources: &SourceRegistry,
     extractor_name: &str,
 ) -> Option<(SourceId, Span, String)> {
-    let builtin_needle = format!("@@builtin defextractor {}(", extractor_name);
+    let builtin_needle = format!("@builtin defextractor {}(", extractor_name);
     let user_needle = format!("defextractor {}(", extractor_name);
 
     for entry in sources.entries() {

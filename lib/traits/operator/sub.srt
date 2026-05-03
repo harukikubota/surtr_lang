@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Sub` operator trait declaration.
 `Sub` models the `-` / `sub(...)` contract.
 `Sub` is intentionally not auto-imported, so helper-style calls use

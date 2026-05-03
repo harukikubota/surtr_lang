@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Ord` trait declaration.
 `Ord` is a compatibility helper trait for grouped ordering functions.
 Operator dispatch uses the per-operator `Lt`, `Lte`, `Gt`, and `Gte` traits.

@@ -174,7 +174,7 @@ REPL query grammar は `symbol | typed-call | typed-operator | expr` の共有 p
 - 対話モードでは ariadne ベースの人間向け診断を標準とする
 - 型エラーでは、可能な範囲で関数宣言や `if` / `match` の分岐位置に補助ラベルを付ける
 - REPL 診断は入力継続よりも「その入力単位で失敗してロールバックする」ことを優先する
-- `Bootstrap` / `Kernel` の明示 import や、user chunk での `@@builtin` 利用禁止も通常の compile error と同じ診断経路で表示する
+- `Bootstrap` / `Kernel` の明示 import や、user chunk での `@builtin` 利用禁止も通常の compile error と同じ診断経路で表示する
 - `:error summary` では診断の 1 行目のみ表示し、`:error full` では source snippet を含む詳細を表示する
 - REPL 診断の span / line / column は compiler 正本と同じく character offset 契約に従い、表示直前にだけ byte range へ変換する
 

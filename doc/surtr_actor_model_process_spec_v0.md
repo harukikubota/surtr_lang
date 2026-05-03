@@ -519,7 +519,7 @@ defenum ProcessCallError {
 初期フェーズでは `defagent` 1 形式に統一し、違いはメタで切る。
 
 ```surtr
-@@agent(
+@agent(
   kind: ReadOnly,
   instance: Singleton,
   boot: true,
@@ -588,7 +588,7 @@ Failed(Error)
 ### 12.1 宣言形式
 
 ```surtr
-@@agent(
+@agent(
   kind: State,
   instance: Singleton | Multi,
   boot: true | false,
@@ -912,7 +912,7 @@ RuntimeProcessSpec =
 ### 20.1 `ReadOnlyAgent`
 
 ```surtr
-@@agent(kind: ReadOnly, instance: Singleton, boot: true, lazy: true)
+@agent(kind: ReadOnly, instance: Singleton, boot: true, lazy: true)
 defagent Env {
   @init
   def init() -> Result<HashMap<String>> {
@@ -931,7 +931,7 @@ home = Env::get("HOME")
 ### 20.2 singleton `StateAgent`
 
 ```surtr
-@@agent(kind: State, instance: Singleton, boot: true, registry: true)
+@agent(kind: State, instance: Singleton, boot: true, registry: true)
 defagent ConfigStore {
   @init
   def init() -> Result<ConfigState> {

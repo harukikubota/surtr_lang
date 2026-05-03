@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Duration` data type.
 `Duration` is an opaque millisecond span used by process and task APIs.
 The field stays private so callers construct validated values through `Duration(...)`
@@ -19,7 +19,7 @@ deferror InvalidDuration(message: String) {
 }
 
 impl Duration {
-  @@doc """
+  @doc """
   Construct a `Duration` from a millisecond count.
   Negative values are rejected with `InvalidDuration`.
 
@@ -37,7 +37,7 @@ impl Duration {
     )
   }
 
-  @@doc """
+  @doc """
   Return the millisecond count stored in the duration.
 
   ## REPL
@@ -48,7 +48,7 @@ impl Duration {
     self.millis
   }
 
-  @@doc """
+  @doc """
   Subtract `rhs` from `self`.
   The `-` operator is intentionally not implemented for `Duration` because
   `Sub` must return `Self`, while duration subtraction can fail.
@@ -67,7 +67,7 @@ impl Duration {
     )
   }
 
-  @@doc """
+  @doc """
   Deconstruct a `Duration` into its millisecond count in pattern position.
 
   ## REPL
@@ -80,7 +80,7 @@ impl Duration {
 }
 
 impl Add for Duration {
-  @@doc """
+  @doc """
   Return the sum of two durations.
   ## REPL
   xldr(1)> 10ms + 20ms
@@ -92,7 +92,7 @@ impl Add for Duration {
 }
 
 impl Eq for Duration {
-  @@doc """
+  @doc """
   Return `True` when both durations have the same millisecond value.
   ## REPL
   xldr(1)> 10ms == 10ms
@@ -104,7 +104,7 @@ impl Eq for Duration {
 }
 
 impl Neq for Duration {
-  @@doc """
+  @doc """
   Return `True` when the durations differ.
   ## REPL
   xldr(1)> 10ms != 20ms
@@ -116,7 +116,7 @@ impl Neq for Duration {
 }
 
 impl Compare for Duration {
-  @@doc """
+  @doc """
   Return the three-way ordering between two durations.
   ## REPL
   xldr(1)> compare(10ms, 20ms)
@@ -132,7 +132,7 @@ impl Compare for Duration {
 }
 
 impl Ord for Duration {
-  @@doc """
+  @doc """
   Return `True` when the left duration is strictly less than the right duration.
   """
   def lt(self: Self, rhs: Self) -> Boolean {
@@ -142,7 +142,7 @@ impl Ord for Duration {
     }
   }
 
-  @@doc """
+  @doc """
   Return `True` when the left duration is less than or equal to the right duration.
   """
   def lte(self: Self, rhs: Self) -> Boolean {
@@ -152,7 +152,7 @@ impl Ord for Duration {
     }
   }
 
-  @@doc """
+  @doc """
   Return `True` when the left duration is strictly greater than the right duration.
   """
   def gt(self: Self, rhs: Self) -> Boolean {
@@ -162,7 +162,7 @@ impl Ord for Duration {
     }
   }
 
-  @@doc """
+  @doc """
   Return `True` when the left duration is greater than or equal to the right duration.
   """
   def gte(self: Self, rhs: Self) -> Boolean {
@@ -174,7 +174,7 @@ impl Ord for Duration {
 }
 
 impl Lt for Duration {
-  @@doc """
+  @doc """
   Return `True` when the left duration is strictly less than the right duration.
   """
   def lt(self: Self, rhs: Self) -> Boolean {
@@ -183,7 +183,7 @@ impl Lt for Duration {
 }
 
 impl Lte for Duration {
-  @@doc """
+  @doc """
   Return `True` when the left duration is less than or equal to the right duration.
   """
   def lte(self: Self, rhs: Self) -> Boolean {
@@ -192,7 +192,7 @@ impl Lte for Duration {
 }
 
 impl Gt for Duration {
-  @@doc """
+  @doc """
   Return `True` when the left duration is strictly greater than the right duration.
   """
   def gt(self: Self, rhs: Self) -> Boolean {
@@ -201,7 +201,7 @@ impl Gt for Duration {
 }
 
 impl Gte for Duration {
-  @@doc """
+  @doc """
   Return `True` when the left duration is greater than or equal to the right duration.
   """
   def gte(self: Self, rhs: Self) -> Boolean {
@@ -210,7 +210,7 @@ impl Gte for Duration {
 }
 
 impl Show for Duration {
-  @@doc """
+  @doc """
   Return the standard string rendering for `Duration`.
 
   ## REPL
@@ -223,7 +223,7 @@ impl Show for Duration {
 }
 
 impl TryFrom<Duration> for Int {
-  @@doc """
+  @doc """
   Convert an `Int` millisecond value into `Duration`.
 
   Prefer the literal form or constructor sugar in ordinary code.

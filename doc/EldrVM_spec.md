@@ -31,7 +31,7 @@ Eldr は次を担わない。
 - ファイル実行と `.eldr` 入出力に使う完全な実行単位
 - `opcodes`, `constants`, `type_registry`, `error_templates`, `functions` を持つ
 - `source_map` は `Option<SourceMap>` で付与する
-- `docs` は `@@doc` 由来の symbol metadata を保持する
+- `docs` は `@doc` 由来の symbol metadata を保持する
 
 ### 2.2 `BytecodeChunk`
 
@@ -198,7 +198,7 @@ Opcode は以下のカテゴリを持つ。
 ## 7. 組込み関数と型情報
 
 - 組込み関数メタデータは単一テーブルで管理する
-- `Bootstrap` module の `@@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
+- `Bootstrap` module の `@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
 - `Lens::view` / `Lens::set` / `Lens::over` / `Lens::over_result` / `Lens::compose` / Lens `/` compose は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
 - Lens の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
@@ -207,7 +207,7 @@ Opcode は以下のカテゴリを持つ。
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
-- process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@@hidden @@builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由し、StateAgent の `set` は handler が `Ok(next_state)` を返した場合のみ VM 管理 state を更新し、`Err` の場合は旧 state を保持する。
+- process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由し、StateAgent の `set` は handler が `Ok(next_state)` を返した場合のみ VM 管理 state を更新し、`Err` の場合は旧 state を保持する。
 - `Process::sleep(duration)` は runtime builtin とし、`Duration` 値を受け取って `Result<Unit>` を返す。
 - task timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す

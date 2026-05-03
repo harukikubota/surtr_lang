@@ -23,7 +23,7 @@ surtr/
 │   └── rune/              # CLI           : entrypoint
 ├── doc/                   # 正本仕様ドキュメント
 ├── docs/                  # 補助資料・公開向けガイド
-├── lib/                   # 標準モジュール source (`@@doc` を含む)
+├── lib/                   # 標準モジュール source (`@doc` を含む)
 └── tests/
     ├── spec/              # 仕様ベース成功系テスト (.srt + .expected)
     └── compile_errors/    # 仕様ベース失敗系テスト (.srt + .error)
@@ -50,7 +50,7 @@ surtr/
 - `doc/`: 正本仕様
   - `要件定義v9.md`, `EldrVM_spec.md`, `Xldr_spec.md`, `テスト方針.md`, `open-issues.md`, `Rune_observability.md`,
 - `docs/`: 補助資料・公開向けガイド
-- `lib/*.srt`: 標準モジュールの利用者向けドキュメント。`@@doc` を正本とする
+- `lib/*.srt`: 標準モジュールの利用者向けドキュメント。`@doc` を正本とする
 - `crates/**`: 実装者向け内部契約。公開境界は rustdoc で残す
 
 実装タスクの着手時は `doc/要件定義v9.md` と該当 spec を最優先で参照し、不整合があれば先に正本を更新してからコードを変更すること。
@@ -132,7 +132,7 @@ Forge は `GetField(idx)` を emit するだけでよい。
 - `import` は Elixir 風に、module の public な import 可能 member を現在 file scope へ unqualified 名で入れる仕組みとして扱う
 - 主対象は関数名・trait helper・module member であり、型名そのものを import する仕組みではない
 - `import Mod`, `import Mod::name`, `import Mod::{name1, name2}` を受理する
-- `Bootstrap` / `Kernel` / `Result` と、`@@autoimport` 付き標準 trait は auto import 対象として扱う
+- `Bootstrap` / `Kernel` / `Result` と、`@autoimport` 付き標準 trait は auto import 対象として扱う
 - 明示 `import` は同じ file 内の auto-import 名を shadow してよい
 - 明示 `import` 同士、および auto-import 同士の同名衝突は compile error とする
 - `new` と構造体名そのものは import 対象外。`import User` は無効、`User` は型/構造体 head としてそのまま解決する
@@ -147,8 +147,8 @@ Forge は `GetField(idx)` を emit するだけでよい。
 - runtime 内部 ID（tag / builtin_id / fun_idx）は固定幅の内部識別子として扱い、user-visible `Int` と混同しない
 - `Float` は実装を維持するが、厳密契約は `doc/float.md` で継続整理する
 - `type` は予約語として扱う
-- `@@builtin` の surface 宣言は標準 module 内の宣言層であり、`@@builtin def` / `@@builtin type` を受理するが、追加・変更の正本ではない
-- 標準モジュールの利用者向け説明は `lib/*.srt` の `@@doc` に載せる
+- `@builtin` の surface 宣言は標準 module 内の宣言層であり、`@builtin def` / `@builtin type` を受理するが、追加・変更の正本ではない
+- 標準モジュールの利用者向け説明は `lib/*.srt` の `@doc` に載せる
 
 ---
 

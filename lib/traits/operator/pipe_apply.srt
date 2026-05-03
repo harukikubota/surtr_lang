@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `PipeApply` flow operator trait declaration.
 `PipeApply<$A, $B>` models applying a plain unary callable to an evaluated
 value. The `|>` operator lowers through this trait.
@@ -8,7 +8,7 @@ deftrait PipeApply<$A, $B> {
   def pipe_apply(self: Self, value: $A) -> $B
 }
 
-@@doc """
+@doc """
 `PipeApply` implementation for unary functions.
 This is the source-level meaning of `value |> f`.
 """

@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Functor` trait declaration.
 `Functor<$A, $B, $Mapped>` models mapping a plain unary callable over a
 contextual value. The `|*>` operator lowers through this trait.

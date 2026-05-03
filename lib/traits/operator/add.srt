@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Add` operator trait declaration.
 `Add` models the `+` / `add(...)` contract.
 `Add` itself is always available by qualified name, but the helper surface is

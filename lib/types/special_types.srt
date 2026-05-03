@@ -2,14 +2,14 @@
 # This file intentionally has no module body; it only hosts canonical builtin
 # type heads reserved by the compiler.
 
-@@doc """
+@doc """
 Standard `Unit` type declaration.
 `Unit` is the type of `()`, typically used for effectful functions that do not
 return a meaningful value.
 """
-@@builtin type Unit
+@builtin type Unit
 
-@@doc """
+@doc """
 Compiler-reserved callable category marker for REPL and doc surfaces.
 `Closure` names the family of first-class callable values produced by function
 literals and capture forms.
@@ -22,9 +22,9 @@ surfaces.
 Treat it as a special builtin type anchor for callable documentation rather than
 as a separate nominal data type to model in user code.
 """
-@@builtin type Closure
+@builtin type Closure
 
-@@doc """
+@doc """
 Compiler-reserved `match` clause-block marker.
 Use level: intrinsic-signature-only marker.
 `MatchArms<$Scrutinee, $Result>` does not describe an ordinary first-class
@@ -34,9 +34,9 @@ surface.
 Do not use it in user-defined parameters, return types, fields, bindings, impl
 targets, or module/type declarations.
 """
-@@builtin type MatchArms<$Scrutinee, $Result>
+@builtin type MatchArms<$Scrutinee, $Result>
 
-@@doc """
+@doc """
 Compiler-reserved `cond` clause-block marker.
 Use level: intrinsic-signature-only marker.
 `CondClauses<$Result>` does not describe an ordinary first-class value.
@@ -45,9 +45,9 @@ surface.
 Do not use it in user-defined parameters, return types, fields, bindings, impl
 targets, or module/type declarations.
 """
-@@builtin type CondClauses<$Result>
+@builtin type CondClauses<$Result>
 
-@@doc """
+@doc """
 Compiler-reserved delayed-evaluation marker for special forms.
 Use level: std builtin declaration marker only.
 `Lazy<$T>` exists so builtin signatures can describe operands that the
@@ -57,10 +57,10 @@ It is not an ordinary first-class wrapper type for user data.
 Do not use it in user-defined bindings, fields, container elements, or return
 types.
 """
-@@builtin type Lazy<$T>
+@builtin type Lazy<$T>
 
 impl Show for Unit {
-  @@doc """
+  @doc """
   Return the standard string rendering for `Unit`.
   ## REPL
   xldr(1)> to_string(())
@@ -72,7 +72,7 @@ impl Show for Unit {
 }
 
 impl From<Unit> for Unit {
-  @@doc """
+  @doc """
   Return the value unchanged when converting `Unit` to `Unit`.
   ## REPL
   xldr(1)> from((), Unit)
@@ -84,7 +84,7 @@ impl From<Unit> for Unit {
 }
 
 impl From<String> for Unit {
-  @@doc """
+  @doc """
   Convert `Unit` into its standard string representation.
   ## REPL
   xldr(1)> from((), String)
@@ -96,16 +96,16 @@ impl From<String> for Unit {
 }
 
 
-@@doc """
+@doc """
 Compiler-reserved target-type witness.
 Use level: signature-only marker for target-oriented trait methods.
 `TypeRef<$T>` is not an ordinary first-class value type. It exists only to
 describe trait method parameters that need an explicit target type witness.
 Do not use it in ordinary bindings, field types, or return types.
 """
-@@builtin type TypeRef<$T>
+@builtin type TypeRef<$T>
 
-@@doc """
+@doc """
 Compiler-reserved ignored-input closure marker.
 Use level: callable surface marker only.
 `Hole` is not a first-class data type.
@@ -113,4 +113,4 @@ It exists only as the canonical builtin type behind `_` when a callable value
 intentionally accepts an input that is not observed.
 Do not use it as plain data, field, container element, or return hole.
 """
-@@builtin type Hole
+@builtin type Hole

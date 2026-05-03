@@ -159,7 +159,7 @@ target type を明示する trait では、compiler-reserved な witness type
 これは ordinary value ではなく、「どの型へ変換するか」を表すための特別な型です。
 
 ```surtr
-@@builtin type TypeRef<$T>
+@builtin type TypeRef<$T>
 
 deftrait From<$To> {
   def from(self: Self, to: TypeRef<$To>) -> $To
@@ -760,24 +760,24 @@ Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, C
   - `Int` / `Float` が共有する `add`, `sub`, `mul`, `safe_div`, `abs`, `min`, `max` の契約
 - 各 type module
   - `Int` や `String` のような型ごとの helper と説明
-  - その型自身の `@@builtin type` 宣言
+  - その型自身の `@builtin type` 宣言
 
-auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@@autoimport` が付いた標準 trait です。  
+auto import されるのは `Bootstrap`, `Kernel`、`@autoimport impl Result` の helper surface と、`@autoimport` が付いた標準 trait です。  
 他の type module も標準モジュールとして一緒にロードされますが、名前空間としては別レイヤーで保ちます。
 
-## 13. `@@doc` と source ドキュメント
+## 13. `@doc` と source ドキュメント
 
 Surtr の標準モジュールは、説明文も source に載せます。
 
 ```surtr
-@@doc """
+@doc """
 Standard `Int` type declaration.
 User-visible integer values backed by BigInt.
 """
-@@builtin type Int
+@builtin type Int
 ```
 
-この `@@doc` は単なるコメントではなく、定義に紐付いた metadata として扱われます。  
+この `@doc` は単なるコメントではなく、定義に紐付いた metadata として扱われます。  
 つまり、標準ライブラリの説明は `lib/*.srt` を開いた時点で読めるようにしておく、という設計です。
 
 利用者として押さえておくとよい点は次のとおりです。
@@ -785,7 +785,7 @@ User-visible integer values backed by BigInt.
 - canonical builtin type head は各対応 file のトップレベルに並ぶ
 - compiler-special type (`Unit`, `TypeRef<$T>`, `Hole`) は `special_types.srt` に集約される
 - 各 `defmod Name { ... }` がモジュール API になる
-- builtin type、module、関数、標準 error には `@@doc` を付けられる
+- builtin type、module、関数、標準 error には `@doc` を付けられる
 
 ## 14. `Result<T>` と `Result<T, E>` の見え方
 
@@ -827,4 +827,4 @@ value: Result<Int> = Ok(42)
 - マクロシステム拡張
 - 並列コンパイル
 
-細かい構文や外部契約を確認したい場合は、次に [言語リファレンス](./language-reference.md) を読むのがおすすめです。標準モジュールの配置や `@@doc` の約束を見たい場合は [標準ライブラリガイド](./standard-library.md) を参照してください。
+細かい構文や外部契約を確認したい場合は、次に [言語リファレンス](./language-reference.md) を読むのがおすすめです。標準モジュールの配置や `@doc` の約束を見たい場合は [標準ライブラリガイド](./standard-library.md) を参照してください。

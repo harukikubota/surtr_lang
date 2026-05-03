@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Concat` trait declaration.
 `Concat` models the `++` / `concat(...)` contract.
 The unqualified `concat(...)` helper comes from this auto-imported trait
@@ -9,7 +9,7 @@ runtime opcode.
 xldr(1)> concat("a", "b")
 "ab"
 """
-@@autoimport
+@autoimport
 deftrait Concat {
   # Combine two values using the module-specific concatenation rule.
   def concat(self: Self, rhs: Self) -> Self

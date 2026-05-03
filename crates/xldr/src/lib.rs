@@ -760,14 +760,6 @@ pub fn derive_runtime_policy(
     base.with_exit_code_policy(policy, entrypoint)
 }
 
-/// Strip `@@test <expr>` annotations while preserving source span offsets.
-///
-/// The parser does not need to process `@@test` in normal compilation flows.
-/// Replacing characters with spaces keeps diagnostics line/column stable.
-pub fn strip_test_annotations(source: &str) -> String {
-    spire::strip_test_annotations(source)
-}
-
 pub fn lower_module_source_ast(
     ast: Vec<spire::ast::Ast>,
     fallback_module_path: Option<&str>,
@@ -1307,7 +1299,7 @@ defmod B {
     #[test]
     fn lower_module_source_merges_result_ctors_into_single_impl_owner() {
         let ast = spire::parse_with_context(
-            r#"@@builtin type Ok($T) -> Result<$T>
+            r#"@builtin type Ok($T) -> Result<$T>
 
 impl Result {
   def dummy() { () }
@@ -1331,8 +1323,8 @@ impl Result {
     #[test]
     fn lower_module_source_keeps_builtin_decls_global_even_with_single_impl_owner() {
         let ast = spire::parse_with_context(
-            r#"@@builtin type Int
-@@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+            r#"@builtin type Int
+@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 
 impl Int {
   def dummy() { () }
@@ -1382,7 +1374,7 @@ defmod AppConfig {
   def dummy() { () }
 }
 
-@@doc """Missing value."""
+@doc """Missing value."""
 deferror NoneError { "None Value." }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
@@ -1411,8 +1403,8 @@ deferror NoneError { "None Value." }"#,
     #[test]
     fn collect_doc_entries_includes_special_closure_type_docs() {
         let ast = spire::parse_with_context(
-            r#"@@doc """Closure docs."""
-@@builtin type Closure"#,
+            r#"@doc """Closure docs."""
+@builtin type Closure"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
         .expect("std module source should parse");
@@ -1494,8 +1486,8 @@ deferror NoneError { "None Value." }"#,
     fn collect_doc_entries_includes_bootstrap_import_docs() {
         let ast = spire::parse_with_context(
             r#"defmod Bootstrap {
-  @@doc """Language-provided import macro function."""
-  @@builtin def import() -> Unit
+  @doc """Language-provided import macro function."""
+  @builtin def import() -> Unit
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
@@ -1526,8 +1518,8 @@ deferror NoneError { "None Value." }"#,
     fn collect_doc_entries_keeps_single_bootstrap_dbg_intrinsic_doc() {
         let ast = spire::parse_with_context(
             r#"defmod Bootstrap {
-  @@doc """Debug special form."""
-  @@intrinsic def dbg!(values: *$A) -> Unit
+  @doc """Debug special form."""
+  @intrinsic def dbg!(values: *$A) -> Unit
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
@@ -1553,14 +1545,14 @@ deferror NoneError { "None Value." }"#,
         assert_eq!(dbg_docs.len(), 1, "{dbg_docs:?}");
         assert_eq!(
             dbg_docs[0].signature.as_deref(),
-            Some("@@intrinsic def dbg!(values: *$A) -> Unit")
+            Some("@intrinsic def dbg!(values: *$A) -> Unit")
         );
     }
 
     #[test]
     fn lower_module_source_ast_keeps_process_spec_on_lowered_module() {
         let ast = spire::parse_with_context(
-            r#"@@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
+            r#"@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
 defagent Counter {
   @init
   def init() -> Result<Int> { Ok(0) }
@@ -1593,11 +1585,11 @@ defagent Counter {
     fn collect_doc_entries_keeps_bootstrap_bind_intrinsic_docs() {
         let ast = spire::parse_with_context(
             r#"defmod Bootstrap {
-  @@doc """Bind special form."""
-  @@intrinsic def =(pattern: $Pattern, value: $A) -> Unit
+  @doc """Bind special form."""
+  @intrinsic def =(pattern: $Pattern, value: $A) -> Unit
 
-  @@doc """SafeBind special form."""
-  @@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
+  @doc """SafeBind special form."""
+  @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
@@ -1623,7 +1615,7 @@ defagent Counter {
         assert_eq!(bind_docs.len(), 1, "{bind_docs:?}");
         assert_eq!(
             bind_docs[0].signature.as_deref(),
-            Some("@@intrinsic def =(pattern: $Pattern, value: $A) -> Unit")
+            Some("@intrinsic def =(pattern: $Pattern, value: $A) -> Unit")
         );
 
         let safe_bind_docs = docs
@@ -1633,14 +1625,14 @@ defagent Counter {
         assert_eq!(safe_bind_docs.len(), 1, "{safe_bind_docs:?}");
         assert_eq!(
             safe_bind_docs[0].signature.as_deref(),
-            Some("@@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit")
+            Some("@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit")
         );
     }
 
     #[test]
     fn collect_doc_entries_includes_impl_and_trait_docs() {
         let ast = spire::parse_with_context(
-            r#"@@doc """Trait docs."""
+            r#"@doc """Trait docs."""
 deftrait Numeric {
   def add(self: Self, rhs: Self) -> Self
 }
@@ -1649,7 +1641,7 @@ defstruct User {
   name: String,
 }
 
-@@doc """Numeric Int docs."""
+@doc """Numeric Int docs."""
 impl Numeric for Int {
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
@@ -1692,7 +1684,7 @@ impl Numeric for Int {
   name: String,
 }
 
-@@autoimport
+@autoimport
 impl User {
   def new(name: String) -> Self {
     User { name: name }
@@ -1728,20 +1720,20 @@ impl User {
 }
 
 impl User {
-  @@doc """Construct a new user value."""
+  @doc """Construct a new user value."""
   def new(name: String) -> Self {
     User { name: name }
   }
 
-  @@doc """Deconstruct a user value for pattern matching."""
+  @doc """Deconstruct a user value for pattern matching."""
   defextractor deconstruct(self: Self) -> MatchResult<String, Error> {
     MatchResult::Success(self.name)
   }
 }
 
-@@doc """String conversion for `Int`."""
+@doc """String conversion for `Int`."""
 impl Show for Int {
-  @@doc """Render `Int` through the standard display surface."""
+  @doc """Render `Int` through the standard display surface."""
   def to_string(self: Self) -> String {
     inspect(self)
   }
@@ -1788,12 +1780,12 @@ impl Show for Int {
     #[test]
     fn collect_doc_entries_include_struct_and_record_docs_with_head_only_signatures() {
         let ast = spire::parse_with_context(
-            r#"@@doc """User docs."""
+            r#"@doc """User docs."""
 defstruct User {
   name: String,
 }
 
-@@doc """Point docs."""
+@doc """Point docs."""
 defrecord Point(x: Float, y: Float)"#,
             spire::ParserContext::module(1, None),
         )
@@ -1834,8 +1826,8 @@ defrecord Point(x: Float, y: Float)"#,
 }
 
 impl User {
-  @@doc """Builtin helper doc."""
-  @@builtin def inspect_name(user: User) -> String
+  @doc """Builtin helper doc."""
+  @builtin def inspect_name(user: User) -> String
 }"#,
             spire::ParserContext::module(1, None),
         )
@@ -1915,20 +1907,4 @@ impl User {
         assert_eq!(user_stage[1].module_path, "Second");
     }
 
-    #[test]
-    fn strip_test_annotations_replaces_annotated_line_with_spaces() {
-        let source =
-            "defmod M {\n  @@test add(1, 2) == 3\n  def add(x: Int, y: Int) -> Int { x + y }\n}\n";
-        let stripped = strip_test_annotations(source);
-
-        assert!(!stripped.contains("@@test"));
-        assert!(stripped.contains("def add(x: Int, y: Int) -> Int { x + y }"));
-        assert_eq!(source.lines().count(), stripped.lines().count());
-    }
-
-    #[test]
-    fn strip_test_annotations_is_noop_without_annotations() {
-        let source = "defmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}\n";
-        assert_eq!(strip_test_annotations(source), source);
-    }
 }

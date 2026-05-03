@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Int` type declaration.
 User-visible integer values are backed by arbitrary-precision arithmetic across
 the pipeline.
@@ -6,9 +6,9 @@ The compiler validates this top-level head as the canonical source-level
 contract for integers, so changing the shape here is a compile error rather
 than a local library tweak.
 """
-@@builtin type Int
+@builtin type Int
 
-@@doc """
+@doc """
 Concrete integer-module error for negative bit shift counts.
 `Int::shl` and `Int::shr` return this instead of trapping when `bits < 0`.
 """
@@ -16,7 +16,7 @@ deferror NegativeShiftCount(bits: Int) {
   "shift amount must be non-negative: #{bits}"
 }
 
-@@doc """
+@doc """
 Concrete integer-module error for negative bit indexes.
 Index-based bit helpers return this instead of trapping when `index < 0`.
 """
@@ -24,7 +24,7 @@ deferror NegativeBitIndex(index: Int) {
   "bit index must be non-negative: #{index}"
 }
 
-@@doc """
+@doc """
 Fixed-width selector for integer bit helpers.
 Named variants cover common machine widths, while `Any(bits)` accepts custom
 positive widths.
@@ -38,7 +38,7 @@ defenum BitWidth {
   Any(Int),
 }
 
-@@doc """
+@doc """
 Type-safe radix marker for integer parsing helpers and diagnostics.
 """
 defenum IntBase {
@@ -48,7 +48,7 @@ defenum IntBase {
   Hex,
 }
 
-@@doc """
+@doc """
 Concrete integer-module error for invalid custom bit widths.
 `BitWidth::Any(bits)` must use a positive width.
 """
@@ -56,21 +56,21 @@ deferror InvalidBitWidth(width: Int) {
   "bit width must be positive: #{width}"
 }
 
-@@doc """
+@doc """
 Recoverable parse error for base-fixed integer parsing helpers.
 """
 deferror ParseIntError(detail: String) {
   detail
 }
 
-@@doc """
+@doc """
 Recoverable parse error for literal-syntax integer parsing helpers.
 """
 deferror ParseIntLiteralError(detail: String) {
   detail
 }
 
-@@doc """
+@doc """
 Concrete integer-module error for fixed-width bit indexes outside the available
 range.
 `index` must satisfy `0 <= index < width`.
@@ -80,7 +80,7 @@ deferror BitIndexOutOfRange(index: Int, width: Int) {
 }
 
 impl IntBase {
-  @@doc """
+  @doc """
   Return the numeric radix represented by `self`.
   """
   def radix(self: Self) -> Int {
@@ -92,7 +92,7 @@ impl IntBase {
     }
   }
 
-  @@doc """
+  @doc """
   Return the canonical source prefix for `self`.
   """
   def prefix(self: Self) -> String {
@@ -104,7 +104,7 @@ impl IntBase {
     }
   }
 
-  @@doc """
+  @doc """
   Return the human-friendly base label for diagnostics.
   """
   def label(self: Self) -> String {
@@ -118,7 +118,7 @@ impl IntBase {
 }
 
 impl Int {
-  @@doc """
+  @doc """
   Divide two values and return `Err(ZeroDivisionError)` instead of trapping.
   The success case keeps the same value type as the inputs.
   This follows the `Result`/`Either` style of representing failure as a value.
@@ -126,91 +126,91 @@ impl Int {
   xldr(1)> Int::safe_div(8, 2)
   Ok(4)
   """
-  @@builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
+  @builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
 
-  @@doc """
+  @doc """
   Compute `a mod b` for integers and return `Err(ZeroDivisionError)` on zero.
   Failure stays on the value side rather than becoming an implicit exception.
   ## REPL
   xldr(1)> Int::safe_mod(7, 3)
   Ok(1)
   """
-  @@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+  @builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 
-  @@doc """
+  @doc """
   Return the bitwise AND of `a` and `b`.
   ## REPL
   xldr(1)> Int::bit_and(6, 3)
   2
   """
-  @@builtin
+  @builtin
   def bit_and(a: Int, b: Int) -> Int
 
-  @@doc """
+  @doc """
   Return the bitwise OR of `a` and `b`.
   ## REPL
   xldr(1)> Int::bit_or(6, 3)
   7
   """
-  @@builtin
+  @builtin
   def bit_or(a: Int, b: Int) -> Int
 
-  @@doc """
+  @doc """
   Return the bitwise XOR of `a` and `b`.
   ## REPL
   xldr(1)> Int::bit_xor(6, 3)
   5
   """
-  @@builtin
+  @builtin
   def bit_xor(a: Int, b: Int) -> Int
 
-  @@doc """
+  @doc """
   Return the bitwise complement of `value`.
   ## REPL
   xldr(1)> Int::bit_not(0)
   -1
   """
-  @@builtin
+  @builtin
   def bit_not(value: Int) -> Int
 
-  @@doc """
+  @doc """
   Return whether the bit at `index` is set on `value`.
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
   ## REPL
   xldr(1)> Int::test_bit(4, 2)
   Ok(True)
   """
-  @@builtin
+  @builtin
   def test_bit(value: Int, index: Int) -> Result<Boolean, NegativeBitIndex>
 
-  @@doc """
+  @doc """
   Return `value` with the bit at `index` set.
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
   ## REPL
   xldr(1)> Int::set_bit(0, 1)
   Ok(2)
   """
-  @@builtin
+  @builtin
   def set_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
 
-  @@doc """
+  @doc """
   Return `value` with the bit at `index` cleared.
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
   ## REPL
   xldr(1)> Int::clear_bit(7, 1)
   Ok(5)
   """
-  @@builtin
+  @builtin
   def clear_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
 
-  @@doc """
+  @doc """
   Return `value` with the bit at `index` toggled.
   Negative bit indexes return `Err(NegativeBitIndex(...))`.
   ## REPL
   xldr(1)> Int::toggle_bit(5, 0)
   Ok(4)
   """
-  @@builtin
+  @builtin
   def toggle_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
 
   defp _apply_parse_sign(value: Int, sign: Int) -> Int {
@@ -373,7 +373,7 @@ impl Int {
     }
   }
 
-  @@doc """
+  @doc """
   Parse base-10 text as an `Int`.
   This is an alias for `Int::parse_dec`.
   """
@@ -381,7 +381,7 @@ impl Int {
     Int::parse_dec(text)
   }
 
-  @@doc """
+  @doc """
   Parse base-10 digits as an `Int`.
   Accepts an optional leading `+` or `-`.
   """
@@ -400,7 +400,7 @@ impl Int {
     }
   }
 
-  @@doc """
+  @doc """
   Parse base-16 digits as an `Int`.
   Prefixes such as `0x` are not accepted here.
   """
@@ -419,7 +419,7 @@ impl Int {
     }
   }
 
-  @@doc """
+  @doc """
   Parse base-8 digits as an `Int`.
   Prefixes such as `0o` are not accepted here.
   """
@@ -438,7 +438,7 @@ impl Int {
     }
   }
 
-  @@doc """
+  @doc """
   Parse base-2 digits as an `Int`.
   Prefixes such as `0b` are not accepted here.
   """
@@ -457,7 +457,7 @@ impl Int {
     }
   }
 
-  @@doc """
+  @doc """
   Parse Surtr integer literal syntax from text.
   Accepts plain decimal, `0d`, `0x`, `0o`, and `0b` forms.
   """
@@ -522,7 +522,7 @@ impl Int {
     )
   }
 
-  @@doc """
+  @doc """
   Resolve a `BitWidth` selector to its concrete bit count.
   `BitWidth::Any(bits)` accepts only positive widths.
   ## REPL
@@ -541,7 +541,7 @@ impl Int {
     }
   }
 
-  @@doc """
+  @doc """
   Return the all-ones mask for `width`.
   For example, `W8` returns `255`.
   ## REPL
@@ -553,7 +553,7 @@ impl Int {
     Ok(_mask_bits(bits))
   }
 
-  @@doc """
+  @doc """
   Wrap `value` into the unsigned range represented by `width`.
   ## REPL
   xldr(1)> Int::wrap_unsigned(-1, BitWidth::W8)
@@ -564,7 +564,7 @@ impl Int {
     Ok(_wrap_unsigned_bits(value, bits))
   }
 
-  @@doc """
+  @doc """
   Wrap `value` into the signed two's-complement range represented by `width`.
   ## REPL
   xldr(1)> Int::wrap_signed(255, BitWidth::W8)
@@ -578,7 +578,7 @@ impl Int {
     Ok(if(unsigned >= sign_bit, unsigned - modulus, unsigned))
   }
 
-  @@doc """
+  @doc """
   Return the fixed-width bitwise complement of `value`.
   `value` is first wrapped into the unsigned range of `width`.
   ## REPL
@@ -592,7 +592,7 @@ impl Int {
     Ok(bit_xor(width_mask, wrapped))
   }
 
-  @@doc """
+  @doc """
   Return whether the fixed-width bit at `index` is set on `value`.
   Indexes must satisfy `0 <= index < width`.
   ## REPL
@@ -607,7 +607,7 @@ impl Int {
     Ok(bit_and(wrapped, bit_mask) != 0)
   }
 
-  @@doc """
+  @doc """
   Return `value` with the fixed-width bit at `index` set.
   Indexes must satisfy `0 <= index < width`.
   ## REPL
@@ -622,7 +622,7 @@ impl Int {
     Ok(bit_or(wrapped, bit_mask))
   }
 
-  @@doc """
+  @doc """
   Return `value` with the fixed-width bit at `index` cleared.
   Indexes must satisfy `0 <= index < width`.
   ## REPL
@@ -638,7 +638,7 @@ impl Int {
     Ok(bit_and(wrapped, clear_mask))
   }
 
-  @@doc """
+  @doc """
   Return `value` with the fixed-width bit at `index` toggled.
   Indexes must satisfy `0 <= index < width`.
   ## REPL
@@ -653,7 +653,7 @@ impl Int {
     Ok(bit_xor(wrapped, bit_mask))
   }
 
-  @@doc """
+  @doc """
   Shift `value` left inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   ## REPL
@@ -667,7 +667,7 @@ impl Int {
     Ok(_wrap_unsigned_bits(wrapped * _pow2(shift), width_size))
   }
 
-  @@doc """
+  @doc """
   Shift `value` right logically inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   ## REPL
@@ -681,7 +681,7 @@ impl Int {
     Ok(_shr_logical_bits(wrapped, shift, width_size))
   }
 
-  @@doc """
+  @doc """
   Rotate `value` left inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   ## REPL
@@ -698,7 +698,7 @@ impl Int {
     Ok(bit_or(left, right))
   }
 
-  @@doc """
+  @doc """
   Rotate `value` right inside the unsigned range represented by `width`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   ## REPL
@@ -715,27 +715,27 @@ impl Int {
     Ok(bit_or(left, right))
   }
 
-  @@doc """
+  @doc """
   Shift `value` left by `bits`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   ## REPL
   xldr(1)> Int::shl(3, 2)
   Ok(12)
   """
-  @@builtin
+  @builtin
   def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
 
-  @@doc """
+  @doc """
   Shift `value` right by `bits`.
   Negative shift counts return `Err(NegativeShiftCount(...))`.
   ## REPL
   xldr(1)> Int::shr(12, 2)
   Ok(3)
   """
-  @@builtin
+  @builtin
   def shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
 
-  @@doc """
+  @doc """
   Return the absolute value of `value`.
   ## REPL
   xldr(1)> Int::abs(-4)
@@ -745,7 +745,7 @@ impl Int {
     if(value < 0, 0 - value, value)
   }
 
-  @@doc """
+  @doc """
   Return the smaller of `a` and `b`.
   ## REPL
   xldr(1)> Int::min(1, 2)
@@ -755,7 +755,7 @@ impl Int {
     if(a <= b, a, b)
   }
 
-  @@doc """
+  @doc """
   Return the larger of `a` and `b`.
   ## REPL
   xldr(1)> Int::max(1, 2)
@@ -765,7 +765,7 @@ impl Int {
     if(a >= b, a, b)
   }
 
-  @@doc """
+  @doc """
   Return `-1`, `0`, or `1` depending on the sign of `value`.
   ## REPL
   xldr(1)> Int::sign(-3)
@@ -775,7 +775,7 @@ impl Int {
     if(value < 0, -1, if(value > 0, 1, 0))
   }
 
-  @@doc """
+  @doc """
   Return `True` when `value` is divisible by two.
   ## REPL
   xldr(1)> Int::is_even(4)
@@ -788,7 +788,7 @@ impl Int {
     }
   }
 
-  @@doc """
+  @doc """
   Return `True` when `value` is not divisible by two.
   ## REPL
   xldr(1)> Int::is_odd(5)
@@ -803,37 +803,37 @@ impl Int {
 }
 
 impl Add for Int {
-  @@doc """
+  @doc """
   Return the sum of the two integer values.
   ## REPL
   xldr(1)> Add::add(1, 2)
   3
   """
-  @@builtin def add(self: Self, rhs: Self) -> Self
+  @builtin def add(self: Self, rhs: Self) -> Self
 }
 
 impl Sub for Int {
-  @@doc """
+  @doc """
   Return the difference of the two integer values.
   ## REPL
   xldr(1)> Sub::sub(5, 2)
   3
   """
-  @@builtin def sub(self: Self, rhs: Self) -> Self
+  @builtin def sub(self: Self, rhs: Self) -> Self
 }
 
 impl Mul for Int {
-  @@doc """
+  @doc """
   Return the product of the two integer values.
   ## REPL
   xldr(1)> Mul::mul(3, 4)
   12
   """
-  @@builtin def mul(self: Self, rhs: Self) -> Self
+  @builtin def mul(self: Self, rhs: Self) -> Self
 }
 
 impl Numeric for Int {
-  @@doc """
+  @doc """
   Divide by `rhs`, returning `Err(ZeroDivisionError)` for zero divisors.
   ## REPL
   xldr(1)> safe_div(8, 2)
@@ -843,7 +843,7 @@ impl Numeric for Int {
     Int::safe_div(self, rhs)
   }
 
-  @@doc """
+  @doc """
   Return the absolute value of the integer.
   ## REPL
   xldr(1)> abs(-3)
@@ -853,7 +853,7 @@ impl Numeric for Int {
     Int::abs(self)
   }
 
-  @@doc """
+  @doc """
   Return the smaller of the two integer values.
   ## REPL
   xldr(1)> min(1, 2)
@@ -863,7 +863,7 @@ impl Numeric for Int {
     Int::min(self, rhs)
   }
 
-  @@doc """
+  @doc """
   Return the larger of the two integer values.
   ## REPL
   xldr(1)> max(1, 2)
@@ -875,7 +875,7 @@ impl Numeric for Int {
 }
 
 impl Show for Int {
-  @@doc """
+  @doc """
   Return the standard string rendering for `Int`.
   ## REPL
   xldr(1)> to_string(42)
@@ -887,7 +887,7 @@ impl Show for Int {
 }
 
 impl From<Int> for Int {
-  @@doc """
+  @doc """
   Return the value unchanged when converting `Int` to `Int`.
   ## REPL
   xldr(1)> from(42, Int)
@@ -899,7 +899,7 @@ impl From<Int> for Int {
 }
 
 impl From<String> for Int {
-  @@doc """
+  @doc """
   Convert `Int` into its standard string representation.
   ## REPL
   xldr(1)> from(42, String)
@@ -911,27 +911,27 @@ impl From<String> for Int {
 }
 
 impl Eq for Int {
-  @@doc """
+  @doc """
   Return `True` when both integer values are equal.
   ## REPL
   xldr(1)> eq(2, 2)
   True
   """
-  @@builtin def eq(self: Self, rhs: Self) -> Boolean
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Neq for Int {
-  @@doc """
+  @doc """
   Return `True` when the integer values differ.
   ## REPL
   xldr(1)> neq(2, 3)
   True
   """
-  @@builtin def neq(self: Self, rhs: Self) -> Boolean
+  @builtin def neq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Compare for Int {
-  @@doc """
+  @doc """
   Return the three-way ordering between the two integer values.
   ## REPL
   xldr(1)> compare(1, 2)
@@ -947,7 +947,7 @@ impl Compare for Int {
 }
 
 impl Ord for Int {
-  @@doc """
+  @doc """
   Return `True` when the left integer is strictly less than the right integer.
   ## REPL
   xldr(1)> lt(1, 2)
@@ -960,7 +960,7 @@ impl Ord for Int {
     }
   }
 
-  @@doc """
+  @doc """
   Return `True` when the left integer is less than or equal to the right integer.
   ## REPL
   xldr(1)> lte(2, 2)
@@ -973,7 +973,7 @@ impl Ord for Int {
     }
   }
 
-  @@doc """
+  @doc """
   Return `True` when the left integer is strictly greater than the right integer.
   ## REPL
   xldr(1)> gt(3, 2)
@@ -986,7 +986,7 @@ impl Ord for Int {
     }
   }
 
-  @@doc """
+  @doc """
   Return `True` when the left integer is greater than or equal to the right integer.
   ## REPL
   xldr(1)> gte(2, 2)
@@ -1001,41 +1001,41 @@ impl Ord for Int {
 }
 
 impl Lt for Int {
-  @@doc """
+  @doc """
   Return `True` when the left integer is strictly less than the right integer.
   ## REPL
   xldr(1)> lt(1, 2)
   True
   """
-  @@builtin def lt(self: Self, rhs: Self) -> Boolean
+  @builtin def lt(self: Self, rhs: Self) -> Boolean
 }
 
 impl Lte for Int {
-  @@doc """
+  @doc """
   Return `True` when the left integer is less than or equal to the right integer.
   ## REPL
   xldr(1)> lte(2, 2)
   True
   """
-  @@builtin def lte(self: Self, rhs: Self) -> Boolean
+  @builtin def lte(self: Self, rhs: Self) -> Boolean
 }
 
 impl Gt for Int {
-  @@doc """
+  @doc """
   Return `True` when the left integer is strictly greater than the right integer.
   ## REPL
   xldr(1)> gt(3, 2)
   True
   """
-  @@builtin def gt(self: Self, rhs: Self) -> Boolean
+  @builtin def gt(self: Self, rhs: Self) -> Boolean
 }
 
 impl Gte for Int {
-  @@doc """
+  @doc """
   Return `True` when the left integer is greater than or equal to the right integer.
   ## REPL
   xldr(1)> gte(2, 2)
   True
   """
-  @@builtin def gte(self: Self, rhs: Self) -> Boolean
+  @builtin def gte(self: Self, rhs: Self) -> Boolean
 }

@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Ordering` enum.
 Represents the three-way result of an ordering comparison.
 This is the shared result type used by the `Compare` trait, while boolean
@@ -15,7 +15,7 @@ defenum Ordering {
 }
 
 impl Show for Ordering {
-  @@doc """
+  @doc """
   Return the standard string rendering for `Ordering`.
   ## REPL
   xldr(1)> to_string(Ordering::Less)
@@ -27,7 +27,7 @@ impl Show for Ordering {
 }
 
 impl Eq for Ordering {
-  @@doc """
+  @doc """
   Return `True` when both ordering values are equal.
   ## REPL
   xldr(1)> eq(Ordering::Less, Ordering::Less)
@@ -39,7 +39,7 @@ impl Eq for Ordering {
 }
 
 impl Neq for Ordering {
-  @@doc """
+  @doc """
   Return `True` when the ordering values differ.
   ## REPL
   xldr(1)> neq(Ordering::Less, Ordering::Greater)

@@ -478,7 +478,7 @@ pub(crate) fn find_runtime_builtin_definition_label(
     sources: &SourceRegistry,
     builtin_name: &str,
 ) -> Option<(SourceId, Span, String)> {
-    let builtin_needle = format!("@@builtin def {}(", builtin_name);
+    let builtin_needle = format!("@builtin def {}(", builtin_name);
     let user_needle = format!("def {}(", builtin_name);
     for entry in sources.entries() {
         let lines = line_spans(&entry.source);

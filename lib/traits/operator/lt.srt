@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Lt` operator trait declaration.
 `Lt` models the `<` / `lt(...)` contract.
 
@@ -6,7 +6,7 @@ Standard `Lt` operator trait declaration.
 xldr(1)> lt(1, 2)
 True
 """
-@@autoimport
+@autoimport
 deftrait Lt {
   # Return `True` when the left value is strictly smaller.
   def lt(self: Self, rhs: Self) -> Boolean

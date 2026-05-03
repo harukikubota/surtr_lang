@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Gte` operator trait declaration.
 `Gte` models the `>=` / `gte(...)` contract.
 
@@ -6,7 +6,7 @@ Standard `Gte` operator trait declaration.
 xldr(1)> gte(2, 1)
 True
 """
-@@autoimport
+@autoimport
 deftrait Gte {
   # Return `True` when the left value is greater or equal.
   def gte(self: Self, rhs: Self) -> Boolean

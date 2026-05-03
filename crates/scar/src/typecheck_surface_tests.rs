@@ -1555,27 +1555,27 @@ fn kernel_and_contract_rejects_eager_signature() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Kernel",
         r#"defmod Kernel {
-  @@builtin def and(left: Boolean, right: Boolean) -> Boolean
+  @builtin def and(left: Boolean, right: Boolean) -> Boolean
 }"#,
     )])
     .expect_err("eager signature should violate canonical contract");
     assert!(err
         .message
-        .contains("@@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean"));
+        .contains("@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean"));
 }
 
 #[test]
 fn special_form_builtin_decl_must_live_under_kernel() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Boolean",
-        r#"@@builtin type Boolean
+        r#"@builtin type Boolean
 
 impl Boolean {
   def not(value: Boolean) -> Boolean {
 if(value, False, True)
   }
 
-  @@builtin def and(left: Boolean, right: Boolean) -> Boolean
+  @builtin def and(left: Boolean, right: Boolean) -> Boolean
 }"#,
     )])
     .expect_err("special-form declaration outside Kernel must fail");
@@ -1589,7 +1589,7 @@ fn kernel_does_not_allow_removed_concat_builtin() {
     let module_stages = std_module_stages_with_overrides(&[(
         "Kernel",
         r#"defmod Kernel {
-  @@builtin def concat(left: $A, right: $A) -> String
+  @builtin def concat(left: $A, right: $A) -> String
 }"#,
     )]);
     let declaration_index =
@@ -2986,7 +2986,7 @@ fn from_and_try_from_impls_are_mutually_exclusive() {
     let overrides = [
         (
             "String",
-            r#"@@builtin type String
+            r#"@builtin type String
 
 defenum StringEncoding {
   Utf8,
@@ -2998,10 +2998,10 @@ deferror InvalidStringEncoding(detail: String) {
 }
 
 impl String {
-  @@builtin
+  @builtin
   def codepoints(value: String, encoding: StringEncoding) -> Result<List<Int>, InvalidStringEncoding>
 
-  @@builtin
+  @builtin
   def from_codepoints(values: List<Int>, encoding: StringEncoding) -> Result<String, InvalidStringEncoding>
 }
 
@@ -3073,7 +3073,7 @@ fn process_self_is_rejected_outside_process_context() {
 #[test]
 fn process_self_typechecks_inside_process_handler() {
     typecheck_module_source_result(
-        r#"@@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
+        r#"@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
 defagent Counter {
   @init
   def init() -> Result<Int> { Ok(0) }
@@ -3093,7 +3093,7 @@ defagent Counter {
 #[test]
 fn typecheck_staged_program_keeps_process_specs() {
     let ast = spire::parse_with_context(
-        r#"@@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
+        r#"@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
 defagent Counter {
   @init
   def init() -> Result<Int> { Ok(0) }

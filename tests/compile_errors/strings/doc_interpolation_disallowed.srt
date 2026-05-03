@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 hello #{name}
 """
 def main() -> Unit {

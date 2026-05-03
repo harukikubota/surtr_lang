@@ -35,7 +35,7 @@ defmod MahjongNormalize {
 }
 
 defmod MahjongDomain {
-  @@doc """
+  @doc """
   文字列入力を麻雀ドメインの検証済み手牌へ変換する入口。
   関数演算子 `>=>` で parse -> normalize -> validate を直列化する。
   """

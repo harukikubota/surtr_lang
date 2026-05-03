@@ -1,6 +1,6 @@
 # Language Features
 
-ここでは `import`, `include`, `@@autoimport` をまとめます。
+ここでは `import`, `include`, `@autoimport` をまとめます。
 
 ## `import`
 
@@ -36,9 +36,9 @@ include "./src/helper.srt"
 - file-based composition 用
 - REPL top-level ではなく source file 側で使う前提
 
-## `@@autoimport`
+## `@autoimport`
 
-`@@autoimport` は標準 surface のうち「最初から見えてよい宣言」に付ける属性です。
+`@autoimport` は標準 surface のうち「最初から見えてよい宣言」に付ける属性です。
 
 標準ライブラリでは次が代表です。
 
@@ -47,9 +47,9 @@ include "./src/helper.srt"
 
 module と trait では意味合いが少し違います。
 
-- `@@autoimport defmod`
+- `@autoimport defmod`
   - module member を最初から見える standard surface に入れる
-- `@@autoimport deftrait`
+- `@autoimport deftrait`
   - trait method helper alias を unqualified で使えるようにする
 
 trait 側で重要なのは、autoimport される helper が「別の関数定義」ではないことです。  

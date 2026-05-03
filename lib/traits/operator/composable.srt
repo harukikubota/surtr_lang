@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Composable` flow operator trait declaration.
 `Composable<$A, $B, $C>` models plain unary function composition. The `>>`
 operator lowers through this trait.
@@ -8,7 +8,7 @@ deftrait Composable<$A, $B, $C> {
   def compose(self: Self, rhs: ($B -> $C)) -> ($A -> $C)
 }
 
-@@doc """
+@doc """
 `Composable` implementation for unary functions.
 This is the source-level meaning of `left >> right`.
 """

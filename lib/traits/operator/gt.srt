@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Gt` operator trait declaration.
 `Gt` models the `>` / `gt(...)` contract.
 
@@ -6,7 +6,7 @@ Standard `Gt` operator trait declaration.
 xldr(1)> gt(2, 1)
 True
 """
-@@autoimport
+@autoimport
 deftrait Gt {
   # Return `True` when the left value is strictly greater.
   def gt(self: Self, rhs: Self) -> Boolean

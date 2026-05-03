@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Chainable` trait declaration.
 `Chainable<$A, $Chained>` models chaining a contextual unary callable after a
 contextual value. The `|>=` operator lowers through this trait.

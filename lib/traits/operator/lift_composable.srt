@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `LiftComposable` flow operator trait declaration.
 `LiftComposable<$A, $B, $C, $Mapped>` models composing a contextual unary
 callable with a plain unary callable. The `>*` operator lowers through this

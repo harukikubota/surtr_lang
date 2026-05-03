@@ -44,7 +44,7 @@ impl Parser<'_> {
             Token::Def | Token::Defp => self.parse_def()?,
             Token::Defagent => {
                 return Err(ParseError::syntax(
-                    "`defagent` declarations must be preceded by @@agent(...)",
+                    "`defagent` declarations must be preceded by @agent(...)",
                     self.peek_span(),
                 ))
             }

@@ -388,22 +388,22 @@ pub enum Ast {
         DeclAttrs,
     ),
 
-    /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
+    /// Builtin declaration: `@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
 
-    /// Display-only intrinsic declaration: `@@intrinsic def dbg!(values: *$A) -> Unit`
+    /// Display-only intrinsic declaration: `@intrinsic def dbg!(values: *$A) -> Unit`
     IntrinsicDecl(Span, Symbol, String, DeclAttrs),
 
     BuiltinExtractorDecl(Span, Symbol, ExtractorParam, AstTy, DeclAttrs),
 
-    /// Builtin type declaration: `@@builtin type Int`
+    /// Builtin type declaration: `@builtin type Int`
     BuiltinTypeDecl(Span, BuiltinTypeHead, DeclAttrs),
 
     /// Declaration-only Result constructor contracts used by std modules.
     ///
     /// Surface syntax is intentionally special-cased:
-    /// `@@builtin type Ok($T) -> Result<$T>`
-    /// `@@builtin type Err(Error) -> Result<$T>`
+    /// `@builtin type Ok($T) -> Result<$T>`
+    /// `@builtin type Err(Error) -> Result<$T>`
     ///
     /// These are not real type declarations, but this syntax keeps them in the
     /// same declaration layer as the other std-module builtin contracts.

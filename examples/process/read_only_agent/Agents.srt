@@ -1,4 +1,4 @@
-@@agent(kind: ReadOnly, instance: Singleton, boot: true, lazy: false)
+@agent(kind: ReadOnly, instance: Singleton, boot: true, lazy: false)
 defagent Env {
   @init
   def init() -> Result<String> {

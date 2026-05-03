@@ -14,7 +14,7 @@ defrecord SuitBranchMatrix(
 )
 
 defmod MahjongExtractor {
-  @@doc """
+  @doc """
   ExtractedMeld を順子として分解する pattern-side API。
   `match meld { sequence(tile_id, suit, rank) => ... }` の形で使う。
   """
@@ -25,7 +25,7 @@ defmod MahjongExtractor {
     }
   }
 
-  @@doc """
+  @doc """
   ExtractedMeld を刻子として分解する pattern-side API。
   `match meld { triplet(tile_id, suit, rank) => ... }` の形で使う。
   """
@@ -151,7 +151,7 @@ defmod MahjongExtractor {
     Ok(_prepend_to_all(_triplet_meld(head), branches))
   }
 
-  @@doc """
+  @doc """
   再帰分解（順子+刻子）:
   入力を `(mentsu, unresolved)` の枝リストとして返す探索関数。
   """
@@ -192,7 +192,7 @@ defmod MahjongExtractor {
     }
   }
 
-  @@doc """
+  @doc """
   再帰分解（刻子のみ）:
   字牌側の枝探索。
   """

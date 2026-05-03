@@ -3,7 +3,7 @@
 このページは、Surtr の標準モジュール構成を利用者向けにまとめたものです。
 
 標準モジュールは単なる補助ファイルではなく、language surface の一部です。  
-`lib/*.srt` に書かれた `@@doc` は source 上の説明であり、将来的には `.eldr` の `Docs` chunk からも参照できる前提で扱います。
+`lib/*.srt` に書かれた `@doc` は source 上の説明であり、将来的には `.eldr` の `Docs` chunk からも参照できる前提で扱います。
 
 Surtr 全体では、関数は常に何らかの namespace に属します。標準ライブラリでもこの方針は同じです。
 
@@ -20,7 +20,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
 ```
 
-このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@@autoimport` が付いた標準 trait です。  
+このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
 他の標準モジュールは標準モジュールとして同梱されますが、名前空間としては明示 import 前提です。
 
 ## 2. 各モジュールの役割
@@ -37,7 +37,7 @@ Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, T
 そのうえで、`NoneError` や `ZeroDivisionError` のような universally useful な
 concrete error は、最初の標準ステージから使えるようここに置きます。
 同時に、`import` / `include` のような language-provided macro surface も
-`Bootstrap` module 配下の `@@builtin def` として source に残します。
+`Bootstrap` module 配下の `@builtin def` として source に残します。
 ただし surface 構文では引き続き top-level 専用の special form として扱います。
 
 ### `Kernel`
@@ -78,7 +78,7 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 
 各 type module には 2 つの層があります。
 
-1. file top-level の `@@builtin type ...`
+1. file top-level の `@builtin type ...`
 2. `defmod Name { ... }` の module API
 
 この分離により、「型そのものの compiler 契約」と「その型の helper / docs / 将来 API」を同じ file に置きつつ、役割は混ぜずに管理できます。
@@ -92,31 +92,31 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 - `Numeric` は `safe_div`, `abs`, `min`, `max` の helper capability を表す
 - `+`, `-`, `*` は `Add` / `Sub` / `Mul` dispatch を通るが、runtime には trait object を導入しない
 
-## 3. `@@builtin type` の契約
+## 3. `@builtin type` の契約
 
 標準型宣言は、各対応 file のトップレベルで canonical shape を宣言します。
 
 ```surtr
 // special_types.srt
-@@builtin type Unit
+@builtin type Unit
 
 // special_types.srt
-@@builtin type TypeRef<$T>
+@builtin type TypeRef<$T>
 
 // special_types.srt
-@@builtin type Hole
+@builtin type Hole
 
 // int.srt
-@@builtin type Int
+@builtin type Int
 
 // list.srt
-@@builtin type List<$A>
+@builtin type List<$A>
 
 // hash_map.srt
-@@builtin type HashMap<$V>
+@builtin type HashMap<$V>
 
 // result.srt
-@@builtin type Result<$T>
+@builtin type Result<$T>
 ```
 
 compiler はこの head 自体を契約として扱います。  
@@ -170,37 +170,37 @@ compiler-special type の詳しい説明は `./special-types.md` を参照して
 利用者が見る surface contract は、専用の builtin type と専用 constructor contract です。
 
 ```surtr
-@@builtin type Ok($T) -> Result<$T>
-@@builtin type Err(Error) -> Result<$T>
+@builtin type Ok($T) -> Result<$T>
+@builtin type Err(Error) -> Result<$T>
 ```
 
 この 2 行は通常の関数本体付き `def` ではなく、compiler が特別扱いする declaration-only contract です。
 
-## 5. `@@doc` の使い方
+## 5. `@doc` の使い方
 
-標準モジュールの説明は `@@doc """..."""` で source に直接載せます。
+標準モジュールの説明は `@doc """..."""` で source に直接載せます。
 
 ```surtr
-@@doc """
+@doc """
 Standard `String` type declaration.
 Text values produced by literals, interpolation, and textual conversion use this
 head.
 """
-@@builtin type String
+@builtin type String
 
-@@doc """
+@doc """
 String module.
 Groups string-oriented helpers.
 """
 defmod String {
-  @@doc """
+  @doc """
   Placeholder while the module API grows.
   """
   def dummy() { () }
 }
 ```
 
-`@@doc` を source に置く利点は次のとおりです。
+`@doc` を source に置く利点は次のとおりです。
 
 - 標準モジュールと説明文がずれにくい
 - dump や REPL の docs UI に同じ情報を流せる
@@ -245,9 +245,9 @@ defmod String {
 - cross-cutting runtime builtin value を足すときは `kernel.srt` の `defmod Kernel` と shared builtin metadata の両方を更新する
 - `Numeric` surface を増やすときは `numeric.srt` の trait 宣言、各 concrete impl、Scar の trait dispatch、Forge の lowering を同時に更新する
 - `if` / `assert` / `and` / `eq` のような compiler-handled helper を足すときは `kernel.srt` と resolver/checker の canonical contract を同時に更新する
-- builtin type を変えるときは、対応する `lib/*.srt` の `@@builtin type` と compiler 側の canonical contract を同時に更新する
+- builtin type を変えるときは、対応する `lib/*.srt` の `@builtin type` と compiler 側の canonical contract を同時に更新する
 - `Result` constructor contract を変えるときは `result.srt` の `Ok` / `Err` 宣言と checker 側の canonical rule を同時に更新する
-- module API を足すときは `defmod Name` に実装し、まず `@@doc` を先に書く
+- module API を足すときは `defmod Name` に実装し、まず `@doc` を先に書く
 
 ## 8. `List` helper surface
 
@@ -333,7 +333,7 @@ ret = List::reverse(acc)
 `HashMap` は key を `String` に固定した immutable map です。
 
 ```surtr
-@@builtin type HashMap<$V>
+@builtin type HashMap<$V>
 ```
 
 公開 surface は次で固定されています。
@@ -362,9 +362,9 @@ ret = List::reverse(acc)
 `Result` module は constructor contract と、よく使う variant 判定 helper の置き場です。
 
 ```surtr
-@@builtin type Result<$T>
-@@builtin type Ok($T) -> Result<$T>
-@@builtin type Err(Error) -> Result<$T>
+@builtin type Result<$T>
+@builtin type Ok($T) -> Result<$T>
+@builtin type Err(Error) -> Result<$T>
 ```
 
 現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `>*`, `>=>` の言語構文と型規則ですが、
@@ -391,8 +391,8 @@ defenum Option<$T> {
 `Process` / `Task` のような副作用系モジュールは、public helper と runtime/internal builtin を分けて読みます。  
 `IO` と `Random` は現時点では public builtin をそのまま surface に出しており、hidden shim 経由ではありません。
 
-- public API は通常の `def` / `impl Type` / `@@doc` に現れる
-- `@@hidden __*` builtin は compiler/runtime 接続用で、利用者向け API 一覧には含めない
+- public API は通常の `def` / `impl Type` / `@doc` に現れる
+- `@hidden __*` builtin は compiler/runtime 接続用で、利用者向け API 一覧には含めない
 
 特に `|>` や trait helper の docs では public surface を正本とし、hidden builtin 名を直接使う前提にはしません。
 
@@ -424,7 +424,7 @@ user.nickname
 path capability です。
 
 ```surtr
-@@builtin type Lens<$S, $A>
+@builtin type Lens<$S, $A>
 ```
 
 読み方は次です。

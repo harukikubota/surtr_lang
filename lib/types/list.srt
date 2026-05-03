@@ -1,13 +1,13 @@
-@@doc """
+@doc """
 Standard `List` type declaration.
 `List` is the homogeneous sequence type used by list literals and list
 patterns.
 The canonical builtin head is `List<$A>`, and the compiler validates that exact
 shape at this file's top level.
 """
-@@builtin type List<$A>
+@builtin type List<$A>
 
-@@doc """
+@doc """
 Stepper for `List::reduce_while`.
 `Resume(next)` continues with the next accumulator, while `Stop(done)` ends the
 reduction immediately.
@@ -18,7 +18,7 @@ defenum ReduceStep<$A> {
 }
 
 impl List {
-  @@doc """
+  @doc """
   Prepend one element onto the front of a list.
   `cons` is the canonical value-level constructor for list growth.
   ## REPL
@@ -29,7 +29,7 @@ impl List {
     [head, ..tail]
   }
 
-  @@doc """
+  @doc """
   Return the first element of a list, or `Err(NoneError)` for `[]`.
   ## REPL
   xldr(1)> List::first([1, 2])
@@ -42,7 +42,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Return the last element of a list, or `Err(NoneError)` for `[]`.
   ## REPL
   xldr(1)> List::last([1, 2])
@@ -55,7 +55,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Return the number of elements in a list.
   This stays a core helper so the runtime can keep the O(1) handle-based length
   contract.
@@ -63,7 +63,7 @@ impl List {
   xldr(1)> List::len([1, 2, 3])
   3
   """
-  @@builtin def len(values: List<$A>) -> Int
+  @builtin def len(values: List<$A>) -> Int
 
   defp _list_reverse_go(values: List<$A>, acc: List<$A>) -> List<$A> {
     match values {
@@ -194,7 +194,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Append `right` after `left`.
   This keeps the left-to-right order of both lists.
   ## REPL
@@ -208,7 +208,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Map each element to a list and concatenate the results.
   ## REPL
   xldr(1)> List::flat_map([1, 2], {|n| [n, n + 10]})
@@ -222,7 +222,7 @@ impl List {
     )
   }
 
-  @@doc """
+  @doc """
   Concatenate a list of lists into one list.
   ## REPL
   xldr(1)> List::concat([[1, 2], [3]])
@@ -235,7 +235,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Reverse the order of a list.
   ## REPL
   xldr(1)> List::reverse([1, 2, 3])
@@ -245,7 +245,7 @@ impl List {
     _list_reverse_go(values, [])
   }
 
-  @@doc """
+  @doc """
   Return the element at `index`.
   Negative indices and out-of-range access return `Err(IndexOutOfBounds(...))`.
   ## REPL
@@ -257,7 +257,7 @@ impl List {
     if(index < 0, _index_out_of_bounds(index, value_len), _at_go(values, index, index, value_len))
   }
 
-  @@doc """
+  @doc """
   Fold a list from left to right.
   ## REPL
   xldr(1)> List::reduce([1, 2, 3], 0, {|acc, n| acc + n})
@@ -270,7 +270,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Fold a list from left to right with early exit.
   ## REPL
   xldr(1)> List::reduce_while([1, 2, 3], 0, {|acc, n| if(acc + n < 3, ReduceStep::Resume(acc + n), ReduceStep::Stop(acc + n))})
@@ -286,7 +286,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Map a plain unary callable over each element and keep the list shape.
   This matches the semantics of `|*>` on `List`.
   ## REPL
@@ -301,7 +301,7 @@ impl List {
     )
   }
 
-  @@doc """
+  @doc """
   Keep only the elements that satisfy `pred`.
   ## REPL
   xldr(1)> List::filter([1, 2, 3], {|n| Int::is_even(n)})
@@ -315,7 +315,7 @@ impl List {
     )
   }
 
-  @@doc """
+  @doc """
   Return the first element that satisfies `pred`.
   ## REPL
   xldr(1)> List::find([1, 2, 3], {|n| n > 1})
@@ -328,7 +328,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Return the first successful mapped value.
   ## REPL
   xldr(1)> List::find_map([1, 2, 3], {|n| if(n > 1, Ok(to_string(n)), Err(NoneError))})
@@ -344,7 +344,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Return `True` when at least one element satisfies `pred`.
   ## REPL
   xldr(1)> List::any([1, 2, 3], {|n| n > 2})
@@ -357,7 +357,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Return `True` when every element satisfies `pred`.
   ## REPL
   xldr(1)> List::all([2, 4], {|n| Int::is_even(n)})
@@ -370,7 +370,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Count how many elements satisfy `pred`.
   ## REPL
   xldr(1)> List::count([1, 2, 3], {|n| n > 1})
@@ -382,7 +382,7 @@ impl List {
     })
   }
 
-  @@doc """
+  @doc """
   Sum all integer elements in a list.
   Empty lists return `0`.
   ## REPL
@@ -395,7 +395,7 @@ impl List {
     })
   }
 
-  @@doc """
+  @doc """
   Return the largest element in a list.
   Requires `Compare` for the element type.
   Empty lists return `Err(NoneError)`.
@@ -407,7 +407,7 @@ impl List {
     max_by(values, {|left, right| Compare::compare(left, right)})
   }
 
-  @@doc """
+  @doc """
   Return the smallest element in a list.
   Requires `Compare` for the element type.
   Empty lists return `Err(NoneError)`.
@@ -419,7 +419,7 @@ impl List {
     min_by(values, {|left, right| Compare::compare(left, right)})
   }
 
-  @@doc """
+  @doc """
   Return the largest element according to `cmp`.
   `cmp(left, right)` must return `Ordering::Greater` when `left` should win.
   Empty lists return `Err(NoneError)`.
@@ -434,7 +434,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Return the smallest element according to `cmp`.
   `cmp(left, right)` must return `Ordering::Less` when `left` should win.
   Empty lists return `Err(NoneError)`.
@@ -449,7 +449,7 @@ impl List {
     }
   }
 
-  @@doc """
+  @doc """
   Return a new list sorted according to `cmp`.
   The comparator should return `Ordering::Less` when `left` should appear
   before `right`.
@@ -464,7 +464,7 @@ impl List {
     })
   }
 
-  @@doc """
+  @doc """
   Return a new list sorted in ascending order.
   Requires `Compare` for the element type.
   ## REPL
@@ -475,7 +475,7 @@ impl List {
     sort_by(values, {|left, right| Compare::compare(left, right)})
   }
 
-  @@doc """
+  @doc """
   Keep at most the first `count` elements.
   `count <= 0` returns `[]`.
   ## REPL
@@ -486,7 +486,7 @@ impl List {
     _take_go(values, count)
   }
 
-  @@doc """
+  @doc """
   Skip the first `count` elements.
   `count <= 0` returns the input unchanged.
   ## REPL
@@ -497,7 +497,7 @@ impl List {
     _drop_go(values, count)
   }
 
-  @@doc """
+  @doc """
   Keep the longest prefix whose elements satisfy `pred`.
   ## REPL
   xldr(1)> List::take_while([1, 2, 3], {|n| n < 3})
@@ -507,7 +507,7 @@ impl List {
     _take_while_go(values, pred)
   }
 
-  @@doc """
+  @doc """
   Drop the longest prefix whose elements satisfy `pred`.
   ## REPL
   xldr(1)> List::drop_while([1, 2, 3], {|n| n < 3})
@@ -517,7 +517,7 @@ impl List {
     _drop_while_go(values, pred)
   }
 
-  @@doc """
+  @doc """
   Split a list into the longest matching prefix and the remaining suffix.
   ## REPL
   xldr(1)> List::span([1, 2, 3], {|n| n < 3})
@@ -527,7 +527,7 @@ impl List {
     (take_while(values, pred), drop_while(values, pred))
   }
 
-  @@doc """
+  @doc """
   Split a list into elements that satisfy `pred` and the rest.
   Both output lists keep the original order.
   ## REPL
@@ -538,16 +538,16 @@ impl List {
     _partition_go(values, pred)
   }
 
-  @@doc """
+  @doc """
   Count repeated values while keeping first-seen group order.
   Requires `Eq` for the element type and returns `(value, count)` tuples.
   ## REPL
   xldr(1)> List::group_count([1, 1, 2, 2, 2])
   [(1, 2), (2, 3)]
   """
-  @@builtin def group_count(values: List<$A>) -> List<($A, Int)>
+  @builtin def group_count(values: List<$A>) -> List<($A, Int)>
 
-  @@doc """
+  @doc """
   Remove duplicate values while keeping the first-seen order.
   ## REPL
   xldr(1)> List::dedup([1, 1, 2, 2, 3])
@@ -557,17 +557,17 @@ impl List {
     _dedup_groups(group_count(values))
   }
 
-  @@doc """
+  @doc """
   Pair elements from two lists until either side runs out.
   Each output element is a `(left, right)` tuple.
   ## REPL
   xldr(1)> List::zip([1, 2], ["a", "b"])
   [(1, "a"), (2, "b")]
   """
-  @@builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
+  @builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
 }
 
-@@doc """
+@doc """
 `Functor` implementation for `List`.
 This is the source-level meaning of `values |*> f`.
 """
@@ -577,7 +577,7 @@ impl Functor<$A, $B, List<$B>> for List<$A> {
   }
 }
 
-@@doc """
+@doc """
 `Chainable` implementation for `List`.
 This is the source-level meaning of `values |>= f`.
 """
@@ -587,7 +587,7 @@ impl Chainable<$A, List<$B>> for List<$A> {
   }
 }
 
-@@doc """
+@doc """
 `LiftComposable` implementation for `List`-returning unary functions.
 This is the source-level meaning of `left >* right` for `List`.
 """
@@ -597,7 +597,7 @@ impl LiftComposable<$A, $B, $C, List<$C>> for ($A -> List<$B>) {
   }
 }
 
-@@doc """
+@doc """
 `KleisliComposable` implementation for `List`-returning unary functions.
 This is the source-level meaning of `left >=> right` for `List`.
 """

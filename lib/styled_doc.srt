@@ -1,6 +1,6 @@
 import String::repeat;
 
-@@doc """
+@doc """
 Colors supported by the StyledDoc helper.
 """
 defenum StyledDocColor {
@@ -30,7 +30,7 @@ defrecord StyledDocLine(segments: List<StyledDocSegment>)
 
 defrecord StyledDocDoc(lines: List<StyledDocLine>)
 
-@@doc """
+@doc """
 Structured document helpers for plain and ANSI-styled rendering.
 """
 defmod StyledDoc {

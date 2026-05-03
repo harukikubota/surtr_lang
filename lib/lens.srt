@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Lens` type declaration.
 `Lens<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
 Lens values are consumed in the same scope via `Lens::view/set/over/over_result` and are not
@@ -37,11 +37,11 @@ or `Err(...)`.
 Private field paths follow the same visibility rules as ordinary field access.
 Outside the allowed scope, `User.secret`-style path roots are compile errors.
 """
-@@builtin type Lens<$S, $A>
+@builtin type Lens<$S, $A>
 
-@@autoimport
+@autoimport
 impl Lens {
-  @@doc """
+  @doc """
   View the focus at `lens` from `source`.
   The declared contract is `Result`-shaped; the compiler refines this in
   Stage1 based on path context.
@@ -76,9 +76,9 @@ impl Lens {
   xldr(1)> Lens::view(BitWidth.Any, BitWidth::Any(5))
   Ok(5)
   """
-  @@builtin def view(lens: Lens<$S, $A>, source: $S) -> Result<$A>
+  @builtin def view(lens: Lens<$S, $A>, source: $S) -> Result<$A>
 
-  @@doc """
+  @doc """
   Replace the focus at `lens` in `source` with `value`.
   Returns the updated source wrapped in `Result`.
 
@@ -107,9 +107,9 @@ impl Lens {
   xldr(1)> bw2 =? Lens::set(BitWidth.Any, BitWidth::Any(5), 7)
   > bw2: BitWidth = BitWidth::Any(7)
   """
-  @@builtin def set(lens: Lens<$S, $A>, source: $S, value: $A) -> Result<$S>
+  @builtin def set(lens: Lens<$S, $A>, source: $S, value: $A) -> Result<$S>
 
-  @@doc """
+  @doc """
   Update the focus at `lens` in `source` with `update_fun`.
   `update_fun` receives the current focus and returns `Result<$A>`.
 
@@ -137,9 +137,9 @@ impl Lens {
   xldr(1)> bw2 =? Lens::over(BitWidth.Any, BitWidth::Any(7), {|n| Ok(n + 1)})
   > bw2: BitWidth = BitWidth::Any(8)
   """
-  @@builtin def over(lens: Lens<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
+  @builtin def over(lens: Lens<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
 
-  @@doc """
+  @doc """
   Update a `Result<$A>` focus as a whole.
   `update_fun` receives the entire current `Result<$A>` and returns
   `Result<Result<$A>>`.
@@ -150,9 +150,9 @@ impl Lens {
   `update_fun` must return `Result`.
   If `update_fun` returns `Err(...)`, that error is propagated as-is.
   """
-  @@builtin def over_result(lens: Lens<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
+  @builtin def over_result(lens: Lens<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
 
-  @@doc """
+  @doc """
   Compose two lens paths in sequence.
   `compose(outer, inner)` focuses from `S` to `B` via `A`.
   `outer / inner` is equivalent operator sugar.
@@ -179,10 +179,10 @@ impl Lens {
   path2 = outer / inner
   path = Lens::compose(outer, inner)
   """
-  @@builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
+  @builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
 }
 
-@@doc """
+@doc """
 `Compose` implementation for nested `Lens` paths.
 This is the source-level meaning of `left / right` for Lens values.
 
@@ -190,10 +190,10 @@ The compiler still lowers Lens composition at compile time in Stage1, but the
 surface contract is expressed through `Compose::compose`.
 """
 impl Compose<Lens<$A, $B>, Lens<$S, $B>> for Lens<$S, $A> {
-  @@doc """
+  @doc """
   Compose the receiver path before `rhs`.
   `left / right` and `Compose::compose(left, right)` follow this contract.
   `Lens::compose(left, right)` remains the canonical helper form.
   """
-  @@builtin def compose(self: Self, rhs: Lens<$A, $B>) -> Lens<$S, $B>
+  @builtin def compose(self: Self, rhs: Lens<$A, $B>) -> Lens<$S, $B>
 }

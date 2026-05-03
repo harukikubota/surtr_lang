@@ -82,12 +82,12 @@ fn test_private_field_modifier_is_preserved() {
 #[test]
 fn test_doc_attributes_parse_for_struct_and_record_decls() {
     let ast = parse_with_context(
-        r#"@@doc """User docs."""
+        r#"@doc """User docs."""
 defstruct User {
   name: String,
 }
 
-@@doc """Point docs."""
+@doc """Point docs."""
 defrecord Point(x: Float, y: Float)"#,
         ParserContext::module(1, None),
     )
@@ -114,8 +114,8 @@ defrecord Point(x: Float, y: Float)"#,
 
 #[test]
 fn test_duplicate_doc_annotation_reports_later_span_for_struct_decl() {
-    let src = r#"@@doc """first"""
-@@doc """second"""
+    let src = r#"@doc """first"""
+@doc """second"""
 defstruct User {
   name: String,
 }"#;
@@ -123,14 +123,14 @@ defstruct User {
         .expect_err("duplicate struct doc annotation should fail");
     assert!(err
         .message()
-        .contains("@@doc may only appear once before a declaration"));
+        .contains("@doc may only appear once before a declaration"));
 
-    let duplicate_offset = src.find(r#"@@doc """second""""#).expect("second @@doc");
+    let duplicate_offset = src.find(r#"@doc """second""""#).expect("second @doc");
     assert_eq!(
         err.span(),
         &Span {
             start: duplicate_offset,
-            end: duplicate_offset + "@@doc".len(),
+            end: duplicate_offset + "@doc".len(),
         }
     );
 }
@@ -143,18 +143,18 @@ fn test_impl_member_rejects_autoimport_annotation() {
 }
 
 impl User {
-  @@autoimport
+  @autoimport
   def normalize(self) -> Self {
     self
   }
 }"#,
         ParserContext::module(1, None),
     )
-    .expect_err("@@autoimport impl member should be rejected");
+    .expect_err("@autoimport impl member should be rejected");
 
     assert!(err
         .message()
-        .contains("Only @@doc / @@hidden / @@builtin are allowed before impl members"));
+        .contains("Only @doc / @hidden / @builtin are allowed before impl members"));
 }
 
 #[test]
@@ -182,10 +182,10 @@ fn test_intrinsic_dbg_decl_parses_in_std_module() {
     context.parse_rules = ParseRules::permissive_for_tests();
     let ast = parse_with_context(
         r#"defmod Bootstrap {
-  @@doc """
+  @doc """
   Debug special form.
   """
-  @@intrinsic def dbg!(values: *$A) -> Unit
+  @intrinsic def dbg!(values: *$A) -> Unit
 }"#,
         context,
     )
@@ -197,7 +197,7 @@ fn test_intrinsic_dbg_decl_parses_in_std_module() {
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "dbg!");
-                    assert_eq!(signature, "@@intrinsic def dbg!(values: *$A) -> Unit");
+                    assert_eq!(signature, "@intrinsic def dbg!(values: *$A) -> Unit");
                     assert!(attrs
                         .doc
                         .as_deref()
@@ -216,10 +216,10 @@ fn test_intrinsic_decl_preserves_source_text_verbatim() {
     context.parse_rules = ParseRules::permissive_for_tests();
     let ast = parse_with_context(
         r#"defmod Bootstrap {
-  @@doc """
+  @doc """
   Debug special form.
   """
-  @@intrinsic def dbg!<$A>(values: *$A) -> Unit
+  @intrinsic def dbg!<$A>(values: *$A) -> Unit
 }"#,
         context,
     )
@@ -228,7 +228,7 @@ fn test_intrinsic_decl_preserves_source_text_verbatim() {
     match &ast[0] {
         Ast::Defmod(_, _, body, _) => match &body[0] {
             Ast::IntrinsicDecl(_, _, signature, _) => {
-                assert_eq!(signature, "@@intrinsic def dbg!<$A>(values: *$A) -> Unit");
+                assert_eq!(signature, "@intrinsic def dbg!<$A>(values: *$A) -> Unit");
             }
             other => panic!("Expected IntrinsicDecl, got {other:?}"),
         },
@@ -242,10 +242,10 @@ fn test_intrinsic_bind_decl_parses_in_std_module() {
     context.parse_rules = ParseRules::permissive_for_tests();
     let ast = parse_with_context(
         r#"defmod Bootstrap {
-  @@doc """
+  @doc """
   Bind special form.
   """
-  @@intrinsic def =(pattern: $Pattern, value: $A) -> Unit
+  @intrinsic def =(pattern: $Pattern, value: $A) -> Unit
 }"#,
         context,
     )
@@ -259,7 +259,7 @@ fn test_intrinsic_bind_decl_parses_in_std_module() {
                     assert_eq!(intrinsic_name, "=");
                     assert_eq!(
                         signature,
-                        "@@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"
+                        "@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"
                     );
                     assert!(attrs
                         .doc
@@ -279,10 +279,10 @@ fn test_intrinsic_safebind_decl_parses_in_std_module() {
     context.parse_rules = ParseRules::permissive_for_tests();
     let ast = parse_with_context(
         r#"defmod Bootstrap {
-  @@doc """
+  @doc """
   SafeBind special form.
   """
-  @@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
+  @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
 }"#,
         context,
     )
@@ -296,7 +296,7 @@ fn test_intrinsic_safebind_decl_parses_in_std_module() {
                     assert_eq!(intrinsic_name, "=?");
                     assert_eq!(
                         signature,
-                        "@@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"
+                        "@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"
                     );
                     assert!(attrs
                         .doc
@@ -316,10 +316,10 @@ fn test_intrinsic_match_decl_parses_in_std_module() {
     context.parse_rules = ParseRules::permissive_for_tests();
     let ast = parse_with_context(
         r#"defmod Bootstrap {
-  @@doc """
+  @doc """
   Match special form.
   """
-  @@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B
+  @intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B
 }"#,
         context,
     )
@@ -333,7 +333,7 @@ fn test_intrinsic_match_decl_parses_in_std_module() {
                     assert_eq!(intrinsic_name, "match");
                     assert_eq!(
                         signature,
-                        "@@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"
+                        "@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"
                     );
                     assert!(attrs
                         .doc
@@ -353,10 +353,10 @@ fn test_intrinsic_cond_decl_parses_in_std_module() {
     context.parse_rules = ParseRules::permissive_for_tests();
     let ast = parse_with_context(
         r#"defmod Bootstrap {
-  @@doc """
+  @doc """
   Cond special form.
   """
-  @@intrinsic def cond(clauses: CondClauses<$A>) -> $A
+  @intrinsic def cond(clauses: CondClauses<$A>) -> $A
 }"#,
         context,
     )
@@ -370,7 +370,7 @@ fn test_intrinsic_cond_decl_parses_in_std_module() {
                     assert_eq!(intrinsic_name, "cond");
                     assert_eq!(
                         signature,
-                        "@@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
+                        "@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
                     );
                     assert!(attrs
                         .doc
@@ -643,11 +643,11 @@ impl User {
 #[test]
 fn test_impl_parses_and_keeps_builtin_methods() {
     let ast = parse_with_context(
-        r#"@@builtin type Int
+        r#"@builtin type Int
 
 impl Int {
-  @@doc """Builtin int helper."""
-  @@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+  @doc """Builtin int helper."""
+  @builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 }"#,
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
@@ -744,7 +744,7 @@ fn test_trait_impl_parses_and_keeps_methods() {
 fn test_trait_impl_accepts_builtin_def_method() {
     let ast = parse_with_context(
         r#"impl Add for Int {
-  @@builtin def add(self: Self, rhs: Self) -> Self
+  @builtin def add(self: Self, rhs: Self) -> Self
 }"#,
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
@@ -768,25 +768,25 @@ fn test_trait_impl_accepts_builtin_def_method() {
 fn test_trait_impl_rejects_builtin_defp_method() {
     let err = parse_with_context(
         r#"impl Add for Int {
-  @@builtin defp add(self: Self, rhs: Self) -> Self
+  @builtin defp add(self: Self, rhs: Self) -> Self
 }"#,
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
     .expect_err("trait impl builtin private method should be rejected");
     assert!(err
         .message()
-        .contains("@@builtin is not allowed before `defp` impl members"));
+        .contains("@builtin is not allowed before `defp` impl members"));
 }
 
 #[test]
 fn test_doc_attributes_parse_for_trait_and_trait_impl_decls() {
     let ast = parse_with_context(
-        r#"@@doc """Trait docs."""
+        r#"@doc """Trait docs."""
 deftrait Numeric {
   def add(self: Self, rhs: Self) -> Self
 }
 
-@@doc """Impl docs."""
+@doc """Impl docs."""
 impl Show for User {
   def to_string(self: Self) -> String {
     "user"
@@ -817,7 +817,7 @@ impl Show for User {
 #[test]
 fn test_doc_attribute_rejected_for_impl_block() {
     let err = parse_with_context(
-        r#"@@doc """Impl docs."""
+        r#"@doc """Impl docs."""
 impl User {
   def new(name: String) -> Self {
     User { name: name }
@@ -825,17 +825,17 @@ impl User {
 }"#,
         ParserContext::module(1, None),
     )
-    .expect_err("@@doc on impl block should be rejected");
+    .expect_err("@doc on impl block should be rejected");
 
     assert!(err
         .message()
-        .contains("@@doc is not allowed before `impl Type`; attach docs to the type declaration or impl members"));
+        .contains("@doc is not allowed before `impl Type`; attach docs to the type declaration, defagent, or impl members"));
 }
 
 #[test]
 fn test_hidden_attribute_rejected_for_impl_block() {
     let err = parse_with_context(
-        r#"@@hidden
+        r#"@hidden
 impl User {
   def new(name: String) -> Self {
     User { name: name }
@@ -843,17 +843,17 @@ impl User {
 }"#,
         ParserContext::module(1, None),
     )
-    .expect_err("@@hidden on impl block should be rejected");
+    .expect_err("@hidden on impl block should be rejected");
 
     assert!(err
         .message()
-        .contains("@@hidden is not allowed before `impl Type`; use member-level visibility instead"));
+        .contains("@hidden is only allowed together with @builtin in standard/internal source"));
 }
 
 #[test]
 fn test_autoimport_attribute_allowed_for_impl_block() {
     let ast = parse_with_context(
-        r#"@@autoimport
+        r#"@autoimport
 impl User {
   def new(name: String) -> Self {
     User { name: name }
@@ -861,7 +861,7 @@ impl User {
 }"#,
         ParserContext::module(1, None),
     )
-    .expect("@@autoimport on impl block should parse");
+    .expect("@autoimport on impl block should parse");
 
     match &ast[0] {
         Ast::ImplDef(_, target, _, attrs) => {
@@ -873,6 +873,44 @@ impl User {
 }
 
 #[test]
+fn test_removed_entrypoint_annotation_is_rejected() {
+    let err = parse_with_context(
+        r#"@entrypoint
+def main() -> Int { 0 }"#,
+        ParserContext::project(0),
+    )
+    .expect_err("@entrypoint should be rejected");
+
+    assert!(err.message().contains("@entrypoint has been removed"));
+}
+
+#[test]
+fn test_removed_test_annotation_is_rejected() {
+    let err = parse_with_context(
+        r#"@test
+def sample() -> Int { 0 }"#,
+        ParserContext::project(0),
+    )
+    .expect_err("@test should be rejected");
+
+    assert!(err.message().contains("@test has been removed"));
+}
+
+#[test]
+fn test_agent_handler_marker_is_rejected_outside_defagent() {
+    let err = parse_with_context(
+        r#"@init
+def init() -> Int { 0 }"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@init outside defagent should be rejected");
+
+    assert!(err
+        .message()
+        .contains("@init/@get/@set are only allowed on def declarations inside defagent"));
+}
+
+#[test]
 fn test_doc_attributes_parse_for_impl_methods() {
     let ast = parse_with_context(
         r#"defstruct User {
@@ -880,12 +918,12 @@ fn test_doc_attributes_parse_for_impl_methods() {
 }
 
 impl User {
-  @@doc """Construct a user."""
+  @doc """Construct a user."""
   def new(name: String) -> Self {
     User { name: name }
   }
 
-  @@doc """Normalize the user."""
+  @doc """Normalize the user."""
   def normalize(self) -> Self {
     self
   }
@@ -1009,7 +1047,7 @@ impl User {
 fn test_doc_attributes_parse_for_trait_impl_methods() {
     let ast = parse_with_context(
         r#"impl Show for Int {
-  @@doc """Format the integer."""
+  @doc """Format the integer."""
   def to_string(self: Self) -> String {
     inspect(self)
   }
@@ -1216,7 +1254,7 @@ fn test_defmod_rejects_matcharms_builtin_type_name() {
 #[test]
 fn test_builtin_decl() {
     let ast = parse_with_context(
-        "@@builtin def to_string(a: $A) -> String",
+        "@builtin def to_string(a: $A) -> String",
         ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
     )
     .expect("std module should accept builtin declarations");
@@ -1238,7 +1276,7 @@ fn test_builtin_decl() {
 #[test]
 fn test_builtin_type_decl() {
     let ast = parse_with_context(
-        "@@builtin\ntype Int",
+        "@builtin\ntype Int",
         ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
     )
     .expect("std module should accept builtin type declarations");
@@ -1252,7 +1290,7 @@ fn test_builtin_type_decl() {
 #[test]
 fn test_hidden_annotates_builtin_decl() {
     let ast = parse_with_context(
-        "@@hidden\n@@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
+        "@hidden\n@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
         ParserContext::module(1, Some("Process".into())).with_rules(ParseRules::std_module()),
     )
     .expect("hidden + builtin def should parse");
@@ -1267,21 +1305,21 @@ fn test_hidden_annotates_builtin_decl() {
 #[test]
 fn test_hidden_duplicate_is_error() {
     let err = parse_with_context(
-        "@@hidden\n@@hidden\n@@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
+        "@hidden\n@hidden\n@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
         ParserContext::module(1, Some("Process".into())).with_rules(ParseRules::std_module()),
     )
     .expect_err("duplicate hidden should fail");
     assert!(err
         .message()
-        .contains("@@hidden may only appear once before a declaration"));
+        .contains("@hidden may only appear once before a declaration"));
 }
 
 #[test]
 fn test_hidden_builtin_impl_member_parses() {
     let ast = parse_with_context(
         r#"impl Task {
-  @@hidden
-  @@builtin def __task_call(body: (-> Result<$A>)) -> Result<$A>
+  @hidden
+  @builtin def __task_call(body: (-> Result<$A>)) -> Result<$A>
 }"#,
         ParserContext::module(1, Some("Task".into())).with_rules(ParseRules::std_module()),
     )
@@ -1318,7 +1356,7 @@ fn test_duration_literal_lowers_to_internal_struct_lit() {
 #[test]
 fn test_doc_annotates_builtin_type_decl() {
     let ast = parse_with_context(
-        "@@doc \"\"\"\nBuiltin Int.\n\"\"\"\n@@builtin type Int",
+        "@doc \"\"\"\nBuiltin Int.\n\"\"\"\n@builtin type Int",
         ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
     )
     .expect("doc + builtin type should parse");
@@ -1333,7 +1371,7 @@ fn test_doc_annotates_builtin_type_decl() {
 #[test]
 fn test_doc_annotates_defmod() {
     let ast = parse_with_context(
-            "@@doc \"\"\"Kernel docs\"\"\"\ndefmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}",
+            "@doc \"\"\"Kernel docs\"\"\"\ndefmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}",
             ParserContext::module(1, None),
         )
         .expect("doc + defmod should parse");
@@ -1348,7 +1386,7 @@ fn test_doc_annotates_defmod() {
 #[test]
 fn test_autoimport_annotates_defmod() {
     let ast = parse_with_context(
-        "@@autoimport\ndefmod Kernel { def add(x: Int, y: Int) -> Int { x + y } }",
+        "@autoimport\ndefmod Kernel { def add(x: Int, y: Int) -> Int { x + y } }",
         ParserContext::module(1, None),
     )
     .expect("autoimport + defmod should parse");
@@ -1363,7 +1401,7 @@ fn test_autoimport_annotates_defmod() {
 #[test]
 fn test_doc_annotates_deferror() {
     let ast = parse_with_context(
-        "@@doc \"\"\"Missing value error\"\"\"\ndeferror NoneError { \"None Value.\" }",
+        "@doc \"\"\"Missing value error\"\"\"\ndeferror NoneError { \"None Value.\" }",
         ParserContext::module(1, None),
     )
     .expect("doc + deferror should parse");
@@ -1377,14 +1415,14 @@ fn test_doc_annotates_deferror() {
 
 #[test]
 fn test_doc_requires_following_declaration() {
-    let err = parse("@@doc \"\"\"dangling\"\"\"").expect_err("expected parse error");
+    let err = parse("@doc \"\"\"dangling\"\"\"").expect_err("expected parse error");
     assert!(err.message().contains("declaration"));
 }
 
 #[test]
 fn test_builtin_type_decl_preserves_generic_head() {
     let ast = parse_with_context(
-        "@@builtin type Result<$T>",
+        "@builtin type Result<$T>",
         ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
     )
     .expect("generic builtin type should parse");
@@ -1398,12 +1436,12 @@ fn test_builtin_type_decl_preserves_generic_head() {
 #[test]
 fn test_std_module_result_ctor_decls_are_accepted() {
     let ast = parse_with_context(
-        r#"@@doc """
+        r#"@doc """
 Construct the success branch.
 """
 def Ok($T) -> Result<$T>
 
-@@doc """
+@doc """
 Construct the error branch.
 """
 def Err(Error) -> Result<$T>"#,
@@ -1427,15 +1465,15 @@ def Err(Error) -> Result<$T>"#,
 #[test]
 fn test_std_module_result_ctor_builtin_type_contracts_are_accepted() {
     let ast = parse_with_context(
-        r#"@@doc """
+        r#"@doc """
 Construct the success branch.
 """
-@@builtin type Ok($T) -> Result<$T>
+@builtin type Ok($T) -> Result<$T>
 
-@@doc """
+@doc """
 Construct the error branch.
 """
-@@builtin type Err(Error) -> Result<$T>"#,
+@builtin type Err(Error) -> Result<$T>"#,
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
     .expect("result constructor builtin contracts should parse in std modules");
@@ -1461,7 +1499,7 @@ fn test_type_keyword_cannot_be_used_as_function_name() {
 
 #[test]
 fn test_builtin_decl_with_body_is_error() {
-    let err = parse("@@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
+    let err = parse("@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
     assert!(err.message().contains("must not have a function body"));
 }
 
@@ -1469,7 +1507,7 @@ fn test_builtin_decl_with_body_is_error() {
 fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
     let ast = parse_with_context(
         r#"defmod Kernel {
-  @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
+  @builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
 }"#,
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
@@ -1492,8 +1530,8 @@ fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
 fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
     let ast = parse_with_context(
         r#"defmod Bootstrap {
-  @@builtin def import() -> Unit
-  @@builtin def include(path: String) -> Unit
+  @builtin def import() -> Unit
+  @builtin def include(path: String) -> Unit
 }"#,
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
@@ -1519,8 +1557,8 @@ fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
 
 #[test]
 fn test_unknown_annotator_is_error() {
-    let err = parse("@@memo def f()").expect_err("error");
-    assert!(err.message().contains("Unknown annotator: @@memo"));
+    let err = parse("@memo def f()").expect_err("error");
+    assert!(err.message().contains("Unknown annotation: @memo"));
 }
 
 #[test]
@@ -2571,11 +2609,11 @@ fn test_triple_quoted_string_dedents_from_starting_line_indent() {
 
 #[test]
 fn test_doc_attribute_rejects_interpolation() {
-    let err = parse("@@doc \"\"\"\nhello #{name}\n\"\"\"\ndef main() -> Unit { () }")
-        .expect_err("@@doc interpolation must fail");
+    let err = parse("@doc \"\"\"\nhello #{name}\n\"\"\"\ndef main() -> Unit { () }")
+        .expect_err("@doc interpolation must fail");
     assert!(
         err.message()
-            .contains("@@doc does not allow string interpolation"),
+            .contains("@doc does not allow string interpolation"),
         "unexpected error: {}",
         err.message()
     );
@@ -3541,7 +3579,7 @@ fn test_defmod_body_rejects_non_function_declarations() {
 #[test]
 fn test_module_compile_unit_rejects_builtin_decl() {
     let err = parse_with_context(
-        "@@builtin def print(a: String) -> Unit",
+        "@builtin def print(a: String) -> Unit",
         ParserContext::module(1, None),
     )
     .expect_err("user module compile unit should reject builtin declarations");
@@ -3552,7 +3590,7 @@ fn test_module_compile_unit_rejects_builtin_decl() {
 
 #[test]
 fn test_module_compile_unit_rejects_builtin_type_decl() {
-    let err = parse_with_context("@@builtin type Int", ParserContext::module(1, None))
+    let err = parse_with_context("@builtin type Int", ParserContext::module(1, None))
         .expect_err("user module compile unit should reject builtin type declarations");
     assert!(err
         .message()
@@ -3562,7 +3600,7 @@ fn test_module_compile_unit_rejects_builtin_type_decl() {
 #[test]
 fn test_std_module_compile_unit_accepts_builtin_decl() {
     let ast = parse_with_context(
-        "defmod Bootstrap { @@builtin def print(a: String) -> Unit }",
+        "defmod Bootstrap { @builtin def print(a: String) -> Unit }",
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
     .expect("std module compile unit should accept builtin declarations");
@@ -3575,7 +3613,7 @@ fn test_std_module_compile_unit_accepts_builtin_decl() {
 #[test]
 fn test_std_module_compile_unit_accepts_builtin_type_decl() {
     let ast = parse_with_context(
-        "defmod Bootstrap { @@builtin type Int }",
+        "defmod Bootstrap { @builtin type Int }",
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
     .expect("std module compile unit should accept builtin type declarations");
@@ -3706,7 +3744,8 @@ fn test_many_top_level_declarations_parse_successfully() {
 #[test]
 fn test_defagent_lowering_preserves_runtime_process_spec() {
     let ast = parse_with_context(
-        r#"@@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
+        r#"@doc """Counter agent docs."""
+@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
 defagent Counter {
   @init
   def init() -> Result<Int> { Ok(0) }
@@ -3724,6 +3763,7 @@ defagent Counter {
     match &ast[0] {
         Ast::Defmod(_, name, body, attrs) => {
             assert_eq!(name, "Counter");
+            assert_eq!(attrs.doc.as_deref(), Some("Counter agent docs."));
             let process_spec = attrs
                 .process_spec
                 .as_ref()
@@ -3782,7 +3822,7 @@ defagent Counter {
 #[test]
 fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
     let ast = parse_with_context(
-        r#"@@agent(kind: State, instance: Multi, boot: false, lazy: false)
+        r#"@agent(kind: State, instance: Multi, boot: false, lazy: false)
 defagent Worker {
   @init
   def init(seed: Int) -> Result<Int> { Ok(seed) }

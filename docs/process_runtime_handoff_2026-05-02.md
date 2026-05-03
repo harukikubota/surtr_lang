@@ -15,7 +15,7 @@
 
 主な到達点は次のとおりです。
 
-- `@@agent(...) defagent` を parser で受理し、既存パイプラインに流せる `defmod` 相当へ lowering する。
+- `@agent(...) defagent` を parser で受理し、既存パイプラインに流せる `defmod` 相当へ lowering する。
 - `ReadOnlyAgent` の直接 `get` と `StateAgent` の `pid/get/set` surface を動作させる。
 - `Value::Pid` と VM 内部の `ProcessRuntime` を追加し、singleton process と state を VM 所有データとして保持する。
 - `__process_pid`, `__process_spawn`, `__process_state`, `__process_store` を VM 特権 builtin として追加する。

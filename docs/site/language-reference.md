@@ -476,7 +476,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 - `impl Trait for Type` は trait 実装 namespace を作る
 - script / REPL の top-level `def` は暗黙の擬似 module に入る
 
-一方で `defstruct` / `defrecord` / `deferror` / `defenum` / `@@builtin type` は
+一方で `defstruct` / `defrecord` / `deferror` / `defenum` / `@builtin type` は
 関数 namespace の内側ではなく、top-level 宣言名として直接見えます。
 
 ### 標準モジュール
@@ -489,7 +489,7 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt
 
 ### auto import
 
-- `Bootstrap`, `Kernel`, `Result` と `@@autoimport` 付き標準 trait は auto import 対象
+- `Bootstrap`, `Kernel`, `Result` と `@autoimport` 付き標準 trait は auto import 対象
 - `Bootstrap` / `Kernel` の明示 `import` は compile error
 - それ以外の標準モジュールは auto import しない
 
@@ -515,19 +515,19 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt
 
 ```surtr
 // kernel.srt
-@@builtin type Unit
+@builtin type Unit
 
 // int.srt
-@@builtin type Int
+@builtin type Int
 
 // list.srt
-@@builtin type List<$A>
+@builtin type List<$A>
 
 // hash_map.srt
-@@builtin type HashMap<$V>
+@builtin type HashMap<$V>
 
 // result.srt
-@@builtin type Result<$T>
+@builtin type Result<$T>
 ```
 
 `Unit`, `TypeRef<$T>`, `Hole` は `special_types.srt` に集約します。
@@ -549,9 +549,9 @@ import Kernel;
 import Kernel::print;
 ```
 
-## 10. `@@builtin` と `@@doc`
+## 10. `@builtin` と `@doc`
 
-`@@builtin def ...` は標準モジュール source でのみ使えます。
+`@builtin def ...` は標準モジュール source でのみ使えます。
 
 - user script では使えない
 - user module では使えない
@@ -559,17 +559,17 @@ import Kernel::print;
 
 これは「builtin をユーザーが追加するための構文」ではなく、「処理系内の共有 builtin テーブルを Surtr source 側から宣言するための構文」です。
 
-`@@builtin type ...` も同じく標準モジュール source 専用です。  
+`@builtin type ...` も同じく標準モジュール source 専用です。  
 各標準 module file の top-level に置いて、compiler が canonical head と照合します。
 
-`@@doc """..."""` は `defmod` / `def` / `deferror` / `@@builtin type` / `@@builtin def` の直前に置けます。  
+`@doc """..."""` は `defmod` / `def` / `deferror` / `@builtin type` / `@builtin def` の直前に置けます。  
 標準ライブラリではこの仕組みを使って source に API 説明を埋め込みます。
 
 `Result` には declaration-only の special constructor head もあります。
 
 ```surtr
-@@builtin type Ok($T) -> Result<$T>
-@@builtin type Err(Error) -> Result<$T>
+@builtin type Ok($T) -> Result<$T>
+@builtin type Err(Error) -> Result<$T>
 ```
 
 これらは通常の関数本体付き `def` ではなく、標準モジュール `result.srt` で compiler が特別扱いする surface contract です。
@@ -578,11 +578,11 @@ import Kernel::print;
 
 ```surtr
 defmod Bootstrap {
-  @@doc """Language-provided import macro function."""
-  @@builtin def import() -> Unit
+  @doc """Language-provided import macro function."""
+  @builtin def import() -> Unit
 
-  @@doc """Language-provided include macro function."""
-  @@builtin def include(path: String) -> Unit
+  @doc """Language-provided include macro function."""
+  @builtin def include(path: String) -> Unit
 }
 ```
 

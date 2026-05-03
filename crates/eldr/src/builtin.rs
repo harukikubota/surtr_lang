@@ -2732,10 +2732,10 @@ mod tests {
             .map(str::trim)
             .collect();
 
-        // For each @@builtin annotation, find the associated def signature.
+        // For each @builtin annotation, find the associated def signature.
         // Annotation order is flexible:
-        // - `@@builtin def ...` can appear inline
-        // - `@@builtin` can appear on its own line before a following `def`
+        // - `@builtin def ...` can appear inline
+        // - `@builtin` can appear on its own line before a following `def`
         //
         // We intentionally scan raw source text here instead of depending on
         // parser lowering details, because this test is meant to guard the
@@ -2745,8 +2745,8 @@ mod tests {
         let mut i = 0;
         while i < all_lines.len() {
             let line = all_lines[i];
-            if let Some(rest) = line.strip_prefix("@@builtin def ") {
-                // Inline form: @@builtin def name(params) -> ret
+            if let Some(rest) = line.strip_prefix("@builtin def ") {
+                // Inline form: @builtin def name(params) -> ret
                 let entry = parse_def_signature(rest);
                 if let Some(meta) = builtin_meta_by_name(&entry.0) {
                     // Keep only declarations that map to a concrete runtime
@@ -2757,7 +2757,7 @@ mod tests {
                         entries.push(entry);
                     }
                 }
-            } else if line == "@@builtin" {
+            } else if line == "@builtin" {
                 // Standalone form: find the next `def` line.
                 let mut j = i + 1;
                 while j < all_lines.len() {
@@ -2780,7 +2780,7 @@ mod tests {
         // The stdlib declaration layer intentionally exposes only the
         // user-surface builtins. Some runtime builtins (for example the
         // trait-backed `to_string`) remain in `BUILTIN_METAS` without a
-        // matching `@@builtin def` surface declaration.
+        // matching `@builtin def` surface declaration.
         //
         // So this test verifies:
         // - every declared builtin surface matches `BUILTIN_METAS`
@@ -2806,7 +2806,7 @@ mod tests {
 
         assert!(
             !entry_map.contains_key("to_string"),
-            "to_string is trait-backed and should not be declared via @@builtin def"
+            "to_string is trait-backed and should not be declared via @builtin def"
         );
     }
 

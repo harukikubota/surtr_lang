@@ -1,13 +1,13 @@
-@@doc """
+@doc """
 Standard `Boolean` type declaration.
 Represents `True` and `False`, the values used by `if` and boolean `match`.
 This exact top-level declaration is part of the compiler-checked builtin type
 contract.
 """
-@@builtin type Boolean
+@builtin type Boolean
 
 impl Boolean {
-  @@doc """
+  @doc """
   Return the logical negation of `value`.
   ## REPL
   xldr(1)> Boolean::not(True)
@@ -17,7 +17,7 @@ impl Boolean {
     if(value, False, True)
   }
 
-  @@doc """
+  @doc """
   Return `True` when exactly one input is `True`.
   ## REPL
   xldr(1)> Boolean::xor(True, False)
@@ -27,7 +27,7 @@ impl Boolean {
     if(left, not(right), right)
   }
 
-  @@doc """
+  @doc """
   Return `True` when both inputs have the same truth value.
   ## REPL
   xldr(1)> Boolean::eqv(True, True)
@@ -37,7 +37,7 @@ impl Boolean {
     if(left, right, not(right))
   }
 
-  @@doc """
+  @doc """
   Return material implication `left -> right`.
   ## REPL
   xldr(1)> Boolean::implies(True, False)
@@ -49,7 +49,7 @@ impl Boolean {
 }
 
 impl Show for Boolean {
-  @@doc """
+  @doc """
   Return the standard string rendering for `Boolean`.
   ## REPL
   xldr(1)> to_string(True)
@@ -61,7 +61,7 @@ impl Show for Boolean {
 }
 
 impl From<Boolean> for Boolean {
-  @@doc """
+  @doc """
   Return the value unchanged when converting `Boolean` to `Boolean`.
   ## REPL
   xldr(1)> from(True, Boolean)
@@ -73,7 +73,7 @@ impl From<Boolean> for Boolean {
 }
 
 impl From<String> for Boolean {
-  @@doc """
+  @doc """
   Convert `Boolean` into its standard string representation.
   ## REPL
   xldr(1)> from(True, String)
@@ -85,21 +85,21 @@ impl From<String> for Boolean {
 }
 
 impl Eq for Boolean {
-  @@doc """
+  @doc """
   Return `True` when both boolean values are equal.
   ## REPL
   xldr(1)> eq(True, True)
   True
   """
-  @@builtin def eq(self: Self, rhs: Self) -> Boolean
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Neq for Boolean {
-  @@doc """
+  @doc """
   Return `True` when the boolean values differ.
   ## REPL
   xldr(1)> neq(True, False)
   True
   """
-  @@builtin def neq(self: Self, rhs: Self) -> Boolean
+  @builtin def neq(self: Self, rhs: Self) -> Boolean
 }

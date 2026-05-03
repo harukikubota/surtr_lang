@@ -32,7 +32,7 @@ Surtr の標準モジュールは language surface の一部です。
 
 ## auto import されるもの
 
-auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@@autoimport` が付いた標準 trait です。  
+auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
 それ以外の標準モジュールは同梱されますが、名前空間としては明示 import 前提です。
 
 ## REPL で見える最小例
@@ -61,7 +61,7 @@ xldr(2)>
 
 ## 躓きやすいポイント
 
-- auto import されるのは `Bootstrap`, `Kernel`, `Result` と `@@autoimport` 付き標準 trait だけで、他の標準モジュールは明示 `import` 前提です。
+- auto import されるのは `Bootstrap`, `Kernel`, `Result` と `@autoimport` 付き標準 trait だけで、他の標準モジュールは明示 `import` 前提です。
 - `Lens` は標準モジュールに見えても runtime value ではなく、compile-time only capability です。
 - `Ord` は互換 helper で、新しい比較 API の正本は `Compare` です。
 - REPL は OnceRead universe なので、読み込み後に trait universe を増分更新する前提ではありません。

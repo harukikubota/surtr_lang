@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard heterogenous compose operator trait declaration.
 `Compose<$Rhs, $Out>` models the `/` operator for values whose composition
 changes the RHS and output types.

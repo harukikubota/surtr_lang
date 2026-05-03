@@ -417,7 +417,7 @@ pub struct Bytecode {
     pub dbg_templates: Vec<DbgTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub source_map: Option<SourceMap>,
-    /// Symbol-level documentation carried from `@@doc` through `.eldr`.
+    /// Symbol-level documentation carried from `@doc` through `.eldr`.
     #[serde(default)]
     pub docs: Vec<DocEntry>,
     #[serde(default)]

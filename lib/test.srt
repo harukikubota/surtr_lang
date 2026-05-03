@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Recoverable assertion failure raised by the test DSL.
 """
 deferror TestAssertionFailed(detail: String) {
@@ -7,18 +7,18 @@ deferror TestAssertionFailed(detail: String) {
 
 import StyledDoc;
 
-@@doc """
+@doc """
 Test DSL helpers consumed by `surtr test`.
 """
 defmod Test {
-  @@builtin def __test_push(kind: String, name: String) -> Unit
-  @@builtin def __test_pop() -> Unit
-  @@builtin def __test_pass(name: String) -> Unit
-  @@builtin def __test_fail(name: String, detail: String) -> Unit
-  @@builtin def __test_fail_error(name: String, err: Error) -> Unit
-  @@builtin def __test_fail_current(detail: String) -> Unit
-  @@builtin def __test_capture_stdout() -> List<String>
-  @@builtin def __test_capture_stderr() -> List<String>
+  @builtin def __test_push(kind: String, name: String) -> Unit
+  @builtin def __test_pop() -> Unit
+  @builtin def __test_pass(name: String) -> Unit
+  @builtin def __test_fail(name: String, detail: String) -> Unit
+  @builtin def __test_fail_error(name: String, err: Error) -> Unit
+  @builtin def __test_fail_current(detail: String) -> Unit
+  @builtin def __test_capture_stdout() -> List<String>
+  @builtin def __test_capture_stderr() -> List<String>
 
   defp _fail(detail: String) -> Result<()> {
     Err(TestAssertionFailed(detail))
@@ -124,7 +124,7 @@ defmod Test {
     assert_eq(expected, StyledDoc::to_ansi(doc))
   }
 
-  @@doc """
+  @doc """
   Drain captured stdout lines produced since the previous capture read.
   Current contract:
   - buffer is per-VM (safe across parallel Rust test processes)
@@ -135,7 +135,7 @@ defmod Test {
     __test_capture_stdout()
   }
 
-  @@doc """
+  @doc """
   Drain captured stderr lines produced since the previous capture read.
   Shares the same drain semantics and script-local cursor model as `capture_stdout`.
   """
@@ -143,14 +143,14 @@ defmod Test {
     __test_capture_stderr()
   }
 
-  @@doc """
+  @doc """
   Assert captured stdout lines equal expected lines.
   """
   def assert_stdout_eq(expected: List<String>) -> Result<()> {
     assert_eq(expected, __test_capture_stdout())
   }
 
-  @@doc """
+  @doc """
   Assert captured stderr lines equal expected lines.
   """
   def assert_stderr_eq(expected: List<String>) -> Result<()> {

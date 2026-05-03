@@ -284,8 +284,6 @@
   - 非停止プログラムに step / fuel budget を導入するか、CLI / REPL / library execution のどこで設定するかを決める。
   - 退避ケース:
     - 再帰関数 `loop()` を budget 超過として安定停止させる契約
-- std module の `@@builtin` と `@@test` 共存
-  - 標準モジュール内で `@@builtin type` / `@@builtin def` と `@@test` annotation の共存を許すかを決める。
   - 現状の正本テストは `lib/tests/*.srt` 側へ分離している。
 - FuncLiteral surface の将来拡張
   - backtick capture / qualified path / operator capture は実装済み前提とし、それを超える surface 追加だけを reopen 対象にする。

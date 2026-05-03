@@ -1,11 +1,11 @@
-@@doc """
+@doc """
 Opaque seeded random generator state.
 `RandomGenerator` values are returned by `Random::seed` and threaded through
 `Random::next_*` helpers. The display form is intentionally opaque.
 """
-@@builtin type RandomGenerator
+@builtin type RandomGenerator
 
-@@doc """
+@doc """
 Concrete random-module error for empty half-open ranges.
 Random integer helpers require `start < end`.
 """
@@ -13,7 +13,7 @@ deferror InvalidRandomRange(start: Int, end: Int) {
   "random range must be non-empty: #{start}..#{end}"
 }
 
-@@doc """
+@doc """
 Random module.
 Provides integer random helpers over half-open ranges.
 
@@ -22,34 +22,34 @@ Provides integer random helpers over half-open ranges.
 can be threaded through ordinary Surtr values.
 """
 defmod Random {
-  @@doc """
+  @doc """
   Create a repeatable generator from an integer seed.
   The exact generated sequence is implementation-defined within Surtr.
   ## REPL
   xldr(1)> Random::seed(1)
   RandomGenerator(<opaque>)
   """
-  @@builtin def seed(seed: Int) -> RandomGenerator
+  @builtin def seed(seed: Int) -> RandomGenerator
 
-  @@doc """
+  @doc """
   Return a host-seeded integer in `0 <= n < end`.
   `end <= 0` returns `Err(InvalidRandomRange(0, end))`.
   ## REPL
   xldr(1)> Random::int_until(10)
   Ok(7)
   """
-  @@builtin def int_until(end: Int) -> Result<Int, InvalidRandomRange>
+  @builtin def int_until(end: Int) -> Result<Int, InvalidRandomRange>
 
-  @@doc """
+  @doc """
   Return a host-seeded integer in `start <= n < end`.
   Empty or reversed ranges return `Err(InvalidRandomRange(start, end))`.
   ## REPL
   xldr(1)> Random::int_range(-3, 3)
   Ok(1)
   """
-  @@builtin def int_range(start: Int, end: Int) -> Result<Int, InvalidRandomRange>
+  @builtin def int_range(start: Int, end: Int) -> Result<Int, InvalidRandomRange>
 
-  @@doc """
+  @doc """
   Return a repeatable integer in `0 <= n < end` and the next generator state.
   `end <= 0` returns `Err(InvalidRandomRange(0, end))`.
   ## REPL
@@ -57,9 +57,9 @@ defmod Random {
   xldr(2)> Random::next_int_until(rng, 10)
   Ok((7, RandomGenerator(<opaque>)))
   """
-  @@builtin def next_int_until(rng: RandomGenerator, end: Int) -> Result<(Int, RandomGenerator), InvalidRandomRange>
+  @builtin def next_int_until(rng: RandomGenerator, end: Int) -> Result<(Int, RandomGenerator), InvalidRandomRange>
 
-  @@doc """
+  @doc """
   Return a repeatable integer in `start <= n < end` and the next generator
   state. Empty or reversed ranges return `Err(InvalidRandomRange(start, end))`.
   ## REPL
@@ -67,5 +67,5 @@ defmod Random {
   xldr(2)> Random::next_int_range(rng, -3, 3)
   Ok((1, RandomGenerator(<opaque>)))
   """
-  @@builtin def next_int_range(rng: RandomGenerator, start: Int, end: Int) -> Result<(Int, RandomGenerator), InvalidRandomRange>
+  @builtin def next_int_range(rng: RandomGenerator, start: Int, end: Int) -> Result<(Int, RandomGenerator), InvalidRandomRange>
 }

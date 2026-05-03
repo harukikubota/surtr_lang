@@ -356,7 +356,7 @@ trait 化しない。
 
 方針:
 
-- public API と `@@hidden __*` builtin を docs 上で分離する
+- public API と `@hidden __*` builtin を docs 上で分離する
 - `Task::call` / `async` / `launch` / `cast` は `Result` 文脈に固定し、operator trait へ寄せない
 
 ### `StyledDoc`
@@ -662,7 +662,7 @@ impl Decode<User> for Json { ... }
 
 作業:
 
-- `@@hidden __*` builtin は public API 一覧から分離する
+- `@hidden __*` builtin は public API 一覧から分離する
 - user-facing helper と compiler/runtime internal surface の境界を明記する
 
 ### 7. trait 系エラーメッセージ改善
@@ -707,7 +707,7 @@ impl Decode<User> for Json { ... }
 - 新規標準 API が「制約なし」「`*_by`」「単一 trait bound」のどれかに分類される
 - `Result` は整理対象外として明確に扱われる
 - `List` / `Option` / primitive owner API の整理対象が作業単位に分解されている
-- docs と `lib/*.srt` の `@@doc` が同じレベル感で説明される
+- docs と `lib/*.srt` の `@doc` が同じレベル感で説明される
 - trait dispatch failure で標準 impl / user impl の implemented list を一貫して表示できる
 - `run` / `check` / REPL / JSON diagnostic で trait hint が同じ方針で保持される
 - REPL は OnceRead universe 前提で、trait impl index の動的更新を要求しない

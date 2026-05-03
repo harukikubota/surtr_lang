@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `Mul` operator trait declaration.
 `Mul` models the `*` / `mul(...)` contract.
 `Mul` is intentionally not auto-imported, so helper-style calls use

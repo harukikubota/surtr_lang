@@ -3,7 +3,7 @@ defstruct Project {
 }
 
 impl Project {
-  @@doc """
+  @doc """
   Construct a project from the provided entry configurations.
   ## REPL
   xldr(1)> Project::new([])
@@ -13,7 +13,7 @@ impl Project {
     Project { entries: entries }
   }
 
-  @@doc """
+  @doc """
   Return the runtime project arguments supplied by the host.
   ## REPL
   xldr(1)> Project::args()
@@ -23,7 +23,7 @@ impl Project {
     Kernel::project_args()
   }
 
-  @@doc """
+  @doc """
   Construct an empty project value.
   ## REPL
   xldr(1)> Project::empty()
@@ -33,7 +33,7 @@ impl Project {
     Project::new([])
   }
 
-  @@doc """
+  @doc """
   Build a project by applying the configuration builder to an empty project.
   ## REPL
   xldr(1)> Project::config({|project| project})
@@ -43,7 +43,7 @@ impl Project {
     builder(Project::empty())
   }
 
-  @@doc """
+  @doc """
   Append one configured entrypoint to the project.
   ## REPL
   xldr(1)> Project::entrypoint(Project::empty(), "App", {|cfg| cfg})

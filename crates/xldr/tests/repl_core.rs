@@ -612,7 +612,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let bind_doc = doc_text(&bind_doc);
     assert!(bind_doc.contains("Bootstrap::="), "{bind_doc}");
     assert!(
-        bind_doc.contains("@@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"),
+        bind_doc.contains("@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"),
         "{bind_doc}"
     );
     assert!(bind_doc.contains("Bind special form."), "{bind_doc}");
@@ -621,7 +621,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let safe_bind_doc = doc_text(&safe_bind_doc);
     assert!(safe_bind_doc.contains("Bootstrap::=?"), "{safe_bind_doc}");
     assert!(
-        safe_bind_doc.contains("@@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"),
+        safe_bind_doc.contains("@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"),
         "{safe_bind_doc}"
     );
     assert!(
@@ -665,14 +665,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let bind_sig = signature_text(&bind_sig);
     assert_eq!(
         bind_sig.trim(),
-        "@@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"
+        "@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"
     );
 
     let safe_bind_sig = engine.handle_line(":sig =?");
     let safe_bind_sig = signature_text(&safe_bind_sig);
     assert_eq!(
         safe_bind_sig.trim(),
-        "@@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"
+        "@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"
     );
 
     let match_sig = engine.handle_line(":sig match");
@@ -1163,7 +1163,7 @@ fn core_dbg_docs_and_signatures_resolve_from_bootstrap_source() {
     let sig = engine.handle_line(":sig dbg!");
     let rendered = signature_text(&sig);
     assert!(
-        rendered.contains("@@intrinsic def dbg!(values: *$A) -> Unit"),
+        rendered.contains("@intrinsic def dbg!(values: *$A) -> Unit"),
         "{rendered}"
     );
 }
@@ -1179,7 +1179,7 @@ fn core_dbg_typed_call_queries_use_special_form_pseudo_application() {
 
     let sig = engine.handle_line(":sig dbg!(1, \"x\")");
     let sig = signature_text(&sig);
-    assert_eq!(sig.trim(), "@@intrinsic def dbg!(values: *$A) -> Unit");
+    assert_eq!(sig.trim(), "@intrinsic def dbg!(values: *$A) -> Unit");
 }
 
 #[test]
@@ -1213,7 +1213,7 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     assert!(config_doc.contains("Config"), "{config_doc}");
     assert!(config_doc.contains("defstruct Config"), "{config_doc}");
     assert!(config_doc.contains("undocumented"), "{config_doc}");
-    assert!(config_doc.contains("@@doc"), "{config_doc}");
+    assert!(config_doc.contains("@doc"), "{config_doc}");
 
     let style_doc = engine.handle_line(":doc StyledDocStyle");
     let style_doc = doc_text(&style_doc);

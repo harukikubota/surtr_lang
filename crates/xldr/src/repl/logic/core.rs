@@ -1080,12 +1080,12 @@ impl ReplEngine {
         let signature = self.declaration_signature(decl);
         let source_snippet = if let Some(signature) = &signature {
             format!(
-                "`{}` resolves in the current scope, but it does not have an `@@doc` entry yet.\nAdd `@@doc` immediately before the declaration.\nExample:\n@@doc \"\"\"\nDescribe `{}` here.\n\"\"\"\n{}",
+                "`{}` resolves in the current scope, but it does not have an `@doc` entry yet.\nAdd `@doc` immediately before the declaration.\nExample:\n@doc \"\"\"\nDescribe `{}` here.\n\"\"\"\n{}",
                 decl.fq_name, decl.name, signature
             )
         } else {
             format!(
-                "`{}` resolves in the current scope, but it does not have an `@@doc` entry yet.\nAdd `@@doc` at the declaration site.\nExample:\n@@doc \"\"\"\nDescribe `{}` here.\n\"\"\"",
+                "`{}` resolves in the current scope, but it does not have an `@doc` entry yet.\nAdd `@doc` at the declaration site.\nExample:\n@doc \"\"\"\nDescribe `{}` here.\n\"\"\"",
                 decl.fq_name, decl.name
             )
         };
@@ -1473,8 +1473,8 @@ impl ReplEngine {
     fn signature_matches_callee(signature: &str, callee: &str) -> bool {
         signature.starts_with(&format!("{callee}("))
             || signature.contains(&format!("::{callee}("))
-            || signature.starts_with(&format!("@@intrinsic def {callee}<"))
-            || signature.starts_with(&format!("@@intrinsic def {callee}("))
+            || signature.starts_with(&format!("@intrinsic def {callee}<"))
+            || signature.starts_with(&format!("@intrinsic def {callee}("))
     }
 
     fn find_signature(&self, symbol: &str) -> Option<(String, String)> {
@@ -4539,10 +4539,9 @@ fn parse_stage_modules_parallel(
                 std::thread::Builder::new()
                     .stack_size(STAGE_PARSE_WORKER_STACK_SIZE)
                     .spawn_scoped(scope, move || {
-                        let raw_module_source = sources.source(module.source_id).unwrap_or("");
-                        let module_source = crate::strip_test_annotations(raw_module_source);
+                        let module_source = sources.source(module.source_id).unwrap_or("");
                         let parsed = spire::parse_with_context(
-                            &module_source,
+                            module_source,
                             spire::ParserContext::module(module.source_id.0, None)
                                 .with_rules(derive_parse_rules(module.source_kind)),
                         )

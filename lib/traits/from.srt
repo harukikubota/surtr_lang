@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `From` trait declaration.
 `From<$To>` models infallible conversion from `Self` into `$To`.
 The `to: TypeRef<$To>` parameter is a signature-level witness slot and is not
@@ -10,7 +10,7 @@ auto-imported when the standard prelude is loaded.
 xldr(1)> from(42, String)
 "42"
 """
-@@autoimport
+@autoimport
 deftrait From<$To> {
   # Convert the value into the requested target type.
   def from(self: Self, to: TypeRef<$To>) -> $To

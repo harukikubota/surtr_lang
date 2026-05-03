@@ -473,14 +473,13 @@ fn lib_module_path_from_path(path: &Path) -> String {
 }
 
 pub fn derive_primary_module_path(source: &str) -> Option<String> {
-    let stripped = crate::strip_test_annotations(source);
     let ast = spire::parse_with_context(
-        &stripped,
+        source,
         spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
     )
     .or_else(|_| {
         spire::parse_with_context(
-            &stripped,
+            source,
             spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
     })
@@ -1127,9 +1126,8 @@ mod tests {
     }
 
     #[test]
-    fn derive_primary_module_path_ignores_test_annotations() {
-        let source = r#"@@test 1 == 1
-defmod Math {
+    fn derive_primary_module_path_reads_module_definition() {
+        let source = r#"defmod Math {
   def add(x: Int, y: Int) -> Int { x + y }
 }"#;
         assert_eq!(derive_primary_module_path(source).as_deref(), Some("Math"));

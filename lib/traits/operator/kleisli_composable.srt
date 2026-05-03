@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Standard `KleisliComposable` flow operator trait declaration.
 `KleisliComposable<$A, $B, $Chained>` models composing two contextual unary
 callables. The `>=>` operator lowers through this trait.

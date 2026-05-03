@@ -678,34 +678,21 @@ pub(crate) fn prepare_script_compile_plan(
     source: &str,
     cli_entry: Option<&str>,
 ) -> Result<ScriptCompilePlan, ScriptPlanError> {
-    let source_without_tests = spire::strip_test_annotations(source);
-    let (source_for_parse, annotations) = collect_entrypoint_annotations(&source_without_tests)?;
-    let (source_for_parse, include_directives) = match collect_include_directives(&source_for_parse)
+    let (source_for_parse, include_directives) = match collect_include_directives(source)
     {
         Ok(collected) => collected,
         Err(err) => {
-            if xldr::derive_primary_module_path(&source_for_parse).is_some() {
-                (source_for_parse, Vec::new())
+            if xldr::derive_primary_module_path(source).is_some() {
+                (source.to_string(), Vec::new())
             } else {
                 return Err(err);
             }
         }
     };
 
-    if annotations.len() > 1 {
-        let second = &annotations[1];
-        return Err(ScriptPlanError::new(
-            format!(
-                "multiple @@entrypoint annotations are not allowed (already declared as `{}`)",
-                annotations[0].name
-            ),
-            second.span.clone(),
-        ));
-    }
-
     let selected_entry_name = match cli_entry {
         Some(name) => Some(name.to_string()),
-        None => annotations.first().map(|a| a.name.clone()),
+        None => None,
     };
 
     let normalized_entrypoint = selected_entry_name.as_ref().map(|name| {
@@ -718,13 +705,6 @@ pub(crate) fn prepare_script_compile_plan(
         normalized_entrypoint,
         include_directives,
     })
-}
-
-pub(crate) fn collect_entrypoint_annotations(
-    source: &str,
-) -> Result<(String, Vec<spire::EntryAnnotation>), ScriptPlanError> {
-    spire::collect_entrypoint_annotations(source)
-        .map_err(|e| ScriptPlanError::new(e.message().to_string(), e.span().clone()))
 }
 
 fn collect_include_directives(
@@ -787,38 +767,13 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_entrypoint_annotations, diagnostic_location_for_span, is_direct_module_source,
-        load_error_span, module_source_collection_error_as_rune_error, prepare_script_compile_plan,
+        diagnostic_location_for_span, is_direct_module_source, load_error_span,
+        module_source_collection_error_as_rune_error, prepare_script_compile_plan,
         source_id_for_span,
     };
     use crate::error::RuneError;
     use spire::ast::{Ast, Span};
     use xldr::{SourceKind, StagedModule};
-
-    #[test]
-    fn collect_entrypoint_annotations_strips_annotator_and_keeps_def() {
-        let source = "@@entrypoint\ndef start() -> Result<()> { Ok(()) }\n";
-        let (sanitized, annotations) =
-            collect_entrypoint_annotations(source).expect("annotation parsing must succeed");
-        assert_eq!(annotations.len(), 1);
-        assert_eq!(annotations[0].name, "start");
-        assert!(sanitized.contains("def start() -> Result<()> { Ok(()) }"));
-        assert!(!sanitized.contains("@@entrypoint"));
-    }
-
-    #[test]
-    fn script_compile_plan_uses_cli_entry_over_annotation() {
-        let source = "@@entrypoint\ndef auto() -> Result<()> { Ok(()) }\n";
-        let plan = prepare_script_compile_plan("sample.srt", source, Some("manual"))
-            .expect("compile plan must succeed");
-        assert_eq!(plan.selected_entry_name.as_deref(), Some("manual"));
-        assert_eq!(
-            plan.normalized_entrypoint
-                .as_ref()
-                .map(|e| e.qualified_symbol.as_str()),
-            Some("__Script::sample::manual")
-        );
-    }
 
     #[test]
     fn script_compile_plan_extracts_include_directives() {
