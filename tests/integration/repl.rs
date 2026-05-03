@@ -455,6 +455,38 @@ fn repl_renders_top_level_lens_compose_expressions() {
 }
 
 #[test]
+fn repl_reports_actionable_trait_helper_inference_error_for_annotated_closure() {
+    let output = run_repl_session(
+        "f: (String, String -> Unit) = {|x: String, y: String| concat(x, y)}\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&combined);
+    assert!(
+        combined.contains(
+            "REPL could not use the current closure constraints to resolve trait helper `concat`."
+        ),
+        "expected actionable REPL helper inference error, got:\n{}",
+        combined
+    );
+    assert!(
+        combined.contains("Known here: x: String, y: String, expected return: Unit."),
+        "expected inferred constraint details in REPL error, got:\n{}",
+        combined
+    );
+}
+
+#[test]
 fn repl_eprint_reports_generation_site_line() {
     let output = run_repl_session(
         "err_result: Result<Int> = Err(NoneError)\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",

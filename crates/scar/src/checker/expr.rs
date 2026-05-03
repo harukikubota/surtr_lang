@@ -15,6 +15,66 @@ fn combine_hint_parts(parts: &[Option<String>]) -> Option<String> {
 }
 
 impl Checker {
+    fn is_repl_chunk(&self) -> bool {
+        self.runtime_policy == RuntimeSourcePolicy::repl_chunk()
+    }
+
+    fn trait_helper_name_from_resolved<'a>(&self, node: &'a Resolved) -> Option<&'a str> {
+        let Resolved::App(_, func, _) = node else {
+            return None;
+        };
+        let Resolved::Var(_, id) = func.as_ref() else {
+            return None;
+        };
+        if self.function_ids_by_name.contains_key(&id.name) {
+            return None;
+        }
+        self.trait_methods_by_qualified_name
+            .values()
+            .any(|(_, method_name)| method_name == &id.name)
+            .then_some(id.name.as_str())
+    }
+
+    fn rewrite_repl_closure_helper_error(
+        &self,
+        params: &[ResolvedClosureParam],
+        param_tys: &[Ty],
+        expected: Option<&Ty>,
+        body: &Resolved,
+        err: TypeError,
+    ) -> TypeError {
+        if !self.is_repl_chunk() || !err.message.starts_with("Argument type mismatch: expected Unit")
+        {
+            return err;
+        }
+
+        let Some(helper_name) = self.trait_helper_name_from_resolved(body) else {
+            return err;
+        };
+
+        let mut known_parts = params
+            .iter()
+            .zip(param_tys.iter())
+            .map(|(param, ty)| format!("{}: {}", param.id.name, self.ty_name(ty)))
+            .collect::<Vec<_>>();
+        if let Some(Ty::Func(_, ret)) = expected {
+            known_parts.push(format!("expected return: {}", self.ty_name(ret)));
+        }
+
+        TypeError {
+            message: format!(
+                "REPL could not use the current closure constraints to resolve trait helper `{}`. Known here: {}.",
+                helper_name,
+                known_parts.join(", ")
+            ),
+            span: err.span,
+            hint: Some(
+                "REPL checks this line in isolation. Use a concrete expression such as `x ++ y`, or move the definition to a file where whole-file inference is available."
+                    .into(),
+            ),
+        }
+    }
+
     pub(super) fn match_result_value_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             message: "MatchResult values are extractor-only and can only be constructed inside extractor definitions"
@@ -3945,7 +4005,9 @@ impl Checker {
                 self.function_return_ty = Some(expected_ret.as_ref().clone());
             }
             let profile = self.profiler.start();
-            let typed_body = self.check_node(body)?;
+            let typed_body = self.check_node(body).map_err(|err| {
+                self.rewrite_repl_closure_helper_error(params, &param_tys, expected, body, err)
+            })?;
             self.profiler.finish(ProfileEvent::ClosureBody, profile);
             if matches!(typed_body.ty, Ty::Lens(_, _)) {
                 return Err(TypeError {
@@ -3959,6 +4021,28 @@ impl Checker {
             // The closure result type is needed immediately for inference, but
             // the body tree itself is normalized by the enclosing typed node.
             let body_ty = self.resolve_ty(&typed_body.ty);
+            if let Some(Ty::Func(_, expected_ret)) = expected {
+                let expected_ret = self.resolve_ty(expected_ret);
+                if matches!(expected_ret, Ty::Unit) && !self.types_compatible(&expected_ret, &body_ty)
+                {
+                    let err = TypeError {
+                        message: format!(
+                            "Argument type mismatch: expected {}, got {}",
+                            self.ty_name(&expected_ret),
+                            self.ty_name(&body_ty)
+                        ),
+                        span: typed_body.span.clone(),
+                        hint: None,
+                    };
+                    return Err(self.rewrite_repl_closure_helper_error(
+                        params,
+                        &param_tys,
+                        expected,
+                        body,
+                        err,
+                    ));
+                }
+            }
 
             let param_tys = typed_params
                 .iter()
