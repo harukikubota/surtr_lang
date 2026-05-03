@@ -1584,8 +1584,8 @@ impl Checker {
                     ),
                     span: span.clone(),
                     hint: Some(format!(
-                        "Define `impl {} {{ def new(...) -> Self {{ ... }} }}`.",
-                        id.name
+                        "Define `impl {} {{ def new(...) -> Self {{ ... }} }}` or `impl {} {{ def new(...) -> Result<Self, Error> {{ ... }} }}`.",
+                        id.name, id.name
                     )),
                 });
             };
@@ -1618,10 +1618,15 @@ impl Checker {
             let typed_args =
                 self.typecheck_user_function_args(span, new_uid, &params, args, None)?;
             let expected_self_ty = Ty::Struct(id.name.clone(), def.fields.clone());
-            if !self.types_compatible(&expected_self_ty, &ret_ty) {
+            let returns_self = self.types_compatible(&expected_self_ty, &ret_ty);
+            let returns_result_self = match self.resolve_ty(&ret_ty) {
+                Ty::Result(ok, _) => self.types_compatible(&expected_self_ty, ok.as_ref()),
+                _ => false,
+            };
+            if !(returns_self || returns_result_self) {
                 return Err(TypeError {
                     message: format!(
-                        "`{}` must return Self ({}), got {}",
+                        "`{}` must return Self ({}) or Result<Self, E>, got {}",
                         new_name,
                         self.ty_name(&expected_self_ty),
                         self.ty_name(&ret_ty)

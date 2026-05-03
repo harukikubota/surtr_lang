@@ -2,6 +2,39 @@ use super::*;
 use sindr::builtin::builtin_type_meta_by_name;
 
 impl Checker {
+    fn struct_new_contract_error(
+        &self,
+        struct_name: &str,
+        span: &Span,
+        actual: Option<&Ty>,
+    ) -> TypeError {
+        let actual_suffix = actual
+            .map(|ty| format!("; got {}", self.ty_name(ty)))
+            .unwrap_or_default();
+        TypeError {
+            message: format!(
+                "Struct `{}::{}` `new` must return Self or Result<Self, E>{}",
+                struct_name, "new", actual_suffix
+            ),
+            span: span.clone(),
+            hint: Some(format!(
+                "Define `impl {} {{ def new(...) -> Self {{ ... }} }}` or `impl {} {{ def new(...) -> Result<Self, Error> {{ ... }} }}`.",
+                struct_name, struct_name
+            )),
+        }
+    }
+
+    fn struct_new_return_allowed(&mut self, expected_self_ty: &Ty, ret_ty: &Ty) -> bool {
+        let resolved_ret = self.resolve_ty(ret_ty);
+        if self.types_compatible(expected_self_ty, &resolved_ret) {
+            return true;
+        }
+        match resolved_ret {
+            Ty::Result(ok, _) => self.types_compatible(expected_self_ty, ok.as_ref()),
+            _ => false,
+        }
+    }
+
     pub(super) fn predeclare_error_types(&mut self, stmts: &[Resolved]) {
         for stmt in stmts {
             if let Resolved::DeferrorDef(_, id, _, _) = stmt {
@@ -561,34 +594,72 @@ impl Checker {
     }
 
     pub(super) fn ensure_struct_impl_new_contract(
-        &self,
+        &mut self,
         stmts: &[Resolved],
     ) -> Result<(), TypeError> {
-        let mut struct_decl_spans: HashMap<String, Span> = HashMap::new();
+        let mut struct_defs: HashMap<String, (Span, Ty)> = HashMap::new();
         let mut structs_with_new: HashSet<String> = HashSet::new();
 
         for stmt in stmts {
-            match stmt {
-                Resolved::StructDef(_, id, _) => {
-                    struct_decl_spans.insert(id.name.clone(), id.span.clone());
-                }
-                Resolved::Def(_, id, _, _, _, _, _) => {
-                    if let Some((target, method)) = Self::split_impl_method_id(id) {
-                        if method == "new" {
-                            structs_with_new.insert(target);
-                        }
-                    }
-                }
-                _ => {}
+            if let Resolved::StructDef(_, id, fields) = stmt {
+                let expected_self_ty = Ty::Struct(
+                    id.name.clone(),
+                    fields
+                        .iter()
+                        .map(|field| {
+                            Ok((
+                                field.name.clone(),
+                                self.resolve_ast_ty_in_context(
+                                    &field.ty,
+                                    TypeSyntaxContext::General,
+                                )?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, TypeError>>()?,
+                );
+                struct_defs.insert(id.name.clone(), (id.span.clone(), expected_self_ty));
             }
         }
 
-        for (struct_name, span) in struct_decl_spans {
+        for stmt in stmts {
+            let Resolved::Def(_, id, _, _, _, _, _) = stmt else {
+                continue;
+            };
+            if let Some((target, method)) = Self::split_impl_method_id(id) {
+                if method == "new" {
+                    structs_with_new.insert(target.clone());
+                    let Some((span, expected_self_ty)) = struct_defs.get(&target) else {
+                        continue;
+                    };
+                    let Some(method_ty) = self.env.lookup_var(id.unique_id) else {
+                        continue;
+                    };
+                    let ret_ty = match self.resolve_ty(method_ty) {
+                        Ty::UserFunc { ret, .. }
+                        | Ty::BuiltinFunc { ret, .. }
+                        | Ty::Func(_, ret) => *ret,
+                        other => {
+                            return Err(self.struct_new_contract_error(
+                                &target,
+                                span,
+                                Some(&other),
+                            ))
+                        }
+                    };
+                    if !self.struct_new_return_allowed(expected_self_ty, &ret_ty) {
+                        return Err(self.struct_new_contract_error(&target, span, Some(&ret_ty)));
+                    }
+                }
+            }
+        }
+
+        for (struct_name, (span, _)) in struct_defs {
             if !structs_with_new.contains(&struct_name) {
                 return Err(TypeError {
                     message: format!(
-                        "Struct `{}` must define `new` in its impl block (e.g. `impl {} {{ def new(...) -> Self {{ ... }} }}`)",
+                        "Struct `{}` must define `new` in its impl block (e.g. `impl {} {{ def new(...) -> Self {{ ... }} }}` or `impl {} {{ def new(...) -> Result<Self, Error> {{ ... }} }}`)",
                         struct_name, struct_name
+                        , struct_name
                     ),
                     span,
                     hint: None,

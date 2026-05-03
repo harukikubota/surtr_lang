@@ -2074,6 +2074,100 @@ user = User("alice")"#,
 }
 
 #[test]
+fn struct_new_accepts_result_self_return_type() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct Duration {
+  private millis: Int,
+}
+impl Duration {
+  def new(value: Int) -> Result<Self, Error> {
+    Ok(Duration { millis: value })
+  }
+}
+value: Result<Duration> = Duration(10)"#,
+    );
+    let typed = typecheck(resolved).expect("Result<Self, Error> constructor should pass");
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("expected binding");
+    assert!(matches!(
+        &rhs.ty,
+        Ty::Result(ok, err)
+            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Duration")
+                && matches!(err.as_ref(), Ty::Error)
+    ));
+}
+
+#[test]
+fn struct_new_rejects_non_self_return_type() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Int {
+    1
+  }
+}"#,
+    );
+    let err = typecheck(resolved).expect_err("non-Self constructor return must fail");
+    assert!(err
+        .message
+        .contains("`new` must return Self or Result<Self, E>"));
+}
+
+#[test]
+fn struct_new_rejects_result_non_self_payload() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Result<List<Self>, Error> {
+    Ok([User { name: name }])
+  }
+}"#,
+    );
+    let err = typecheck(resolved).expect_err("Result payload must be Self");
+    assert!(err
+        .message
+        .contains("`new` must return Self or Result<Self, E>"));
+}
+
+#[test]
+fn struct_constructor_call_accepts_result_return_type() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct Duration {
+  private millis: Int,
+}
+impl Duration {
+  def new(value: Int) -> Result<Self, Error> {
+    Ok(Duration { millis: value })
+  }
+}
+dur = Duration(10)"#,
+    );
+    let typed = typecheck(resolved).expect("constructor call should accept Result<Self>");
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("expected binding");
+    assert!(matches!(
+        &rhs.ty,
+        Ty::Result(ok, err)
+            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Duration")
+                && matches!(err.as_ref(), Ty::Error)
+    ));
+}
+
+#[test]
 fn struct_literal_is_rejected_outside_impl_body() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
