@@ -235,10 +235,11 @@ value |> (make_normalizer(10)) # => make_normalizer(10)(value)
 
 #### `|*>` 文脈 map
 
-`|*>` は `Result` または `List` の中の値だけを変換します。
+`|*>` は `Result`、`List`、または `Option` の中の値だけを変換します。
 
 - `Result<A> |*> (A -> B)` は `Result<B>`
 - `List<A> |*> (A -> B)` は `List<B>`
+- `Option<A> |*> (A -> B)` は `Option<B>`
 - 右辺が call 式なら、文脈内部の値が第一引数へ注入される
 
 ```surtr
@@ -247,14 +248,15 @@ Ok(1) |*> add(2)            # => Ok(add(1, 2))
 ```
 
 `|*>` の右辺は plain function である必要があります。  
-`A -> Result<B>` や `A -> List<B>` のような文脈付き関数は受けません。
+`A -> Result<B>`、`A -> List<B>`、`A -> Option<B>` のような文脈付き関数は受けません。
 
 #### `|>=` 文脈 bind
 
-`|>=` は `Result` / `List` の文脈を維持したまま次の段階へ接続します。
+`|>=` は `Result` / `List` / `Option` の文脈を維持したまま次の段階へ接続します。
 
 - `Result<A> |>= (A -> Result<B>)`
 - `List<A> |>= (A -> List<B>)`
+- `Option<A> |>= (A -> Option<B>)`
 
 ```surtr
 Ok(11) |>= require_at_least(10)
@@ -280,7 +282,7 @@ pipeline = &trim >> &render
 
 #### `>*` Lifted 合成
 
-`>*` は `Result` / `List` を返す関数の後ろへ pure function を接続します。
+`>*` は `Result` / `List` / `Option` を返す関数の後ろへ pure function を接続します。
 
 ```surtr
 pipeline = &parse >* &render
@@ -288,13 +290,14 @@ pipeline = &parse >* &render
 
 - `Result` なら `(A -> Result<B>) >* (B -> C)`
 - `List` なら `(A -> List<B>) >* (B -> C)`
+- `Option` なら `(A -> Option<B>) >* (B -> C)`
 
 右辺は plain function でなければなりません。これも compose なので、左右とも関数値に限ります。
 `parse() >* render()` は不許可です。
 
 #### `>=>` Kleisli 合成
 
-`>=>` は `Result` / `List` を返す関数同士を合成します。
+`>=>` は `Result` / `List` / `Option` を返す関数同士を合成します。
 
 ```surtr
 pipeline = &parse >=> &validate
@@ -302,6 +305,7 @@ pipeline = &parse >=> &validate
 
 - `Result` なら `(A -> Result<B>) >=> (B -> Result<C>)`
 - `List` なら `(A -> List<B>) >=> (B -> List<C>)`
+- `Option` なら `(A -> Option<B>) >=> (B -> Option<C>)`
 
 これも compose なので、左右とも関数値に限ります。
 `parse() >=> validate()` は不許可です。
@@ -320,7 +324,7 @@ value: Int =? parse_int("1")
 - `pattern =? Result<T, E>` は `Ok` を束縛し、`Err` を早期伝播する
 - `pattern =? expr` は SafeBind 対象の失敗しうるパターン入力を扱う
 - 現時点の対象は `Result`、`List`、`String`
-- `Option` は SafeBind 対象ではない。`Option::to_result(value, err)` で明示的に変換してから使う
+- `Option` は SafeBind 対象ではない。`from(value, Result)` で明示的に変換してから使う
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
 #### 共通制約

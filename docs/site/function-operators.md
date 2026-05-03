@@ -84,7 +84,7 @@ print(to_string(4 |> {|x| x * 10}))
 
 ## `|*>` 文脈 map
 
-`|*>` は `Result` または `List` の中身だけを pure function で変換します。
+`|*>` は `Result`、`List`、または `Option` の中身だけを pure function で変換します。
 
 ```surtr
 Ok(1) |*> add(2)
@@ -96,6 +96,7 @@ users |*> &User::get_name
 
 - `Result<A> |*> (A -> B) -> Result<B>`
 - `List<A> |*> (A -> B) -> List<B>`
+- `Option<A> |*> (A -> B) -> Option<B>`
 
 `Result` のときは `Err` をそのまま通します。  
 右辺は plain function である必要があり、`A -> Result<B>` は受けません。
@@ -119,8 +120,9 @@ Ok(" 42 ") |*> String::trim() |>= try_from(Int)
 
 - `Result<A> |>= (A -> Result<B>) -> Result<B>`
 - `List<A> |>= (A -> List<B>) -> List<B>`
+- `Option<A> |>= (A -> Option<B>) -> Option<B>`
 
-`Result` なら `Err` を伝播し、`List` なら各要素から返った `List` をつなげるイメージです。
+`Result` なら `Err` を伝播し、`List` なら各要素から返った `List` をつなげ、`Option` なら `None` をそのまま通します。
 
 ```surtr
 def neighbors(n: Int) -> List<Int> { [n - 1, n, n + 1] }
@@ -223,7 +225,7 @@ value: Int =? try_from("1", Int)
 - `List`
 - `String`
 
-`Option` は対象外なので、必要なら `Option::to_result` で `Result` へ変換してから使います。
+`Option` は `=?` の対象外なので、必要なら `from(value, Result)` で `Result` へ変換してから使います。
 たとえば `num: Int =? Option::Some(1)` はエラーです。
 
 `=?` も trait 演算子ではなく、language-level binding form です。
