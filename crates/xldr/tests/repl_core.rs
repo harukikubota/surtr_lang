@@ -224,6 +224,19 @@ fn core_reuses_deferred_tuple_lens_bindings_between_inputs() {
 }
 
 #[test]
+fn core_static_impl_methods_keep_runtime_arity_in_sync() {
+    let mut engine = engine();
+
+    let gen_range = engine.handle_line("Generator::to_list(Generator::range(1, 3))");
+    assert!(!gen_range.should_exit);
+    assert!(rendered_text(&gen_range).contains("[1, 2, 3]"));
+
+    let codepoints = engine.handle_line("String::codepoints(\"a\", StringEncoding::Ascii)");
+    assert!(!codepoints.should_exit);
+    assert!(rendered_text(&codepoints).contains("Ok([97])"));
+}
+
+#[test]
 fn core_renders_top_level_lens_compose_expressions_without_codegen_leak() {
     let mut engine = engine();
 

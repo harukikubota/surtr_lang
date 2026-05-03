@@ -4051,6 +4051,13 @@ impl ReplEngine {
 
 impl ReplEngine {
     fn sync_scar_fun_index_with_vm(&mut self) {
+        self.scar_session
+            .reconcile_function_indices(self.vm.bytecode().functions.iter().filter_map(|entry| {
+                entry
+                    .qualified_name
+                    .as_deref()
+                    .map(|qualified_name| (qualified_name, entry.fun_idx))
+            }));
         let next_fun_idx = self
             .vm
             .bytecode()

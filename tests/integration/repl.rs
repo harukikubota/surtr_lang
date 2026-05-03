@@ -186,6 +186,24 @@ fn repl_pipe_stdin_prints_prompts_and_eval_output() {
 }
 
 #[test]
+fn repl_static_impl_methods_keep_declared_arity() {
+    let output = run_repl_session(
+        "print(to_string(Generator::to_list(Generator::range(1, 3))))\nprint(to_string(String::codepoints(\"a\", StringEncoding::Ascii)))\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("[1, 2, 3]"), "{stdout}");
+    assert!(stdout.contains("Ok([97])"), "{stdout}");
+    assert!(!stdout.contains("Call arity mismatch"), "{stdout}");
+}
+
+#[test]
 fn repl_colorizes_sig_command_signature() {
     let output = run_repl_session_with_color(":sig print\n:quit\n");
     assert!(
