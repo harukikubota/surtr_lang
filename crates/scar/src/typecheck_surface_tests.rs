@@ -2272,6 +2272,59 @@ pair = Pair(first: 1, first: 2)"#,
 }
 
 #[test]
+fn struct_literal_field_shorthand_typechecks() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+impl User {
+  def new(name: String, age: Int) -> Self {
+User { name, age }
+  }
+}
+user = User("alice", 20)"#,
+    );
+    typecheck(resolved).expect("struct shorthand should typecheck");
+}
+
+#[test]
+fn struct_literal_field_shorthand_mixed_with_explicit_typechecks() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+impl User {
+  def rename(self, name: String, next_age: Int) -> Self {
+User { name, age: next_age }
+  }
+
+  def new(name: String, age: Int) -> Self {
+    User::rename(User { name, age }, name, age)
+  }
+}"#,
+    );
+    typecheck(resolved).expect("mixed struct shorthand should typecheck");
+}
+
+#[test]
+fn struct_literal_field_shorthand_rejects_duplicate_fields() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct User {
+  name: String,
+}
+impl User {
+  def new(name: String) -> Self {
+User { name, name: name }
+  }
+}"#,
+    );
+    let err = typecheck(resolved).expect_err("duplicate shorthand field must fail");
+    assert!(err.message.contains("Duplicate field 'name' in User"));
+}
+
+#[test]
 fn struct_requires_impl_new() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {

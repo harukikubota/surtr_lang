@@ -1381,7 +1381,10 @@ impl Checker {
                     }
                     if self.trait_matches_short_name(trait_name, "Concat") {
                         return Err(TypeError {
-                            message: format!("++ requires (String, String), got ({}, {})", left_ty, right_ty),
+                            message: format!(
+                                "++ requires (String, String), got ({}, {})",
+                                left_ty, right_ty
+                            ),
                             span: arg.span.clone(),
                             hint: trait_hint(self),
                         });

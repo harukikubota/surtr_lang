@@ -499,6 +499,52 @@ print(to_string(renamed.age))"#,
     );
 }
 
+fn struct_literal_field_shorthand_matches_explicit_form() {
+    assert_output(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+}
+
+user = User("alice", 30)
+print(to_string(user))
+print(to_string(user.name))
+print(to_string(user.age))"#,
+        &["User(name: alice, age: 30)", "alice", "30"],
+    );
+}
+
+fn struct_literal_field_shorthand_can_mix_with_explicit_fields() {
+    assert_output(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+
+  def with_age(self: Self, name: String, next_age: Int) -> Self {
+    User { name, age: next_age }
+  }
+}
+
+user = User("alice", 30)
+updated = User::with_age(user, "bob", 31)
+print(to_string(updated.name))
+print(to_string(updated.age))"#,
+        &["bob", "31"],
+    );
+}
+
 fn struct_constructor_sugar_mixed_named_positional_error() {
     assert_compile_error(
         r#"defstruct User {
@@ -1053,6 +1099,14 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "struct_property_update_via_associated_functions",
             struct_property_update_via_associated_functions as fn(),
+        ),
+        (
+            "struct_literal_field_shorthand_matches_explicit_form",
+            struct_literal_field_shorthand_matches_explicit_form as fn(),
+        ),
+        (
+            "struct_literal_field_shorthand_can_mix_with_explicit_fields",
+            struct_literal_field_shorthand_can_mix_with_explicit_fields as fn(),
         ),
         (
             "struct_constructor_sugar_mixed_named_positional_error",

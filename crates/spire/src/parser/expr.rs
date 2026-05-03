@@ -605,7 +605,11 @@ impl Parser<'_> {
     }
 
     fn duration_literal(&self, value: Ast, span: Span) -> Ast {
-        Ast::InternalStructLit(span, "Duration".into(), vec![("millis".into(), value)])
+        Ast::InternalStructLit(
+            span,
+            "Duration".into(),
+            vec![crate::ast::StructLitField::Explicit("millis".into(), value)],
+        )
     }
 
     fn std_hidden_ref(&self, span: Span, name: Symbol) -> Ast {
@@ -864,8 +868,9 @@ impl Parser<'_> {
             }
         }
 
-        // Struct literal: Name { field: val, ... }
+        // Struct literal: Name { field: val, shorthand, ... }
         if is_uppercase && matches!(self.peek(), Token::LBrace) {
+            use crate::ast::StructLitField;
             self.advance();
             self.skip_newlines();
             let mut fields = Vec::new();
@@ -873,9 +878,13 @@ impl Parser<'_> {
                 loop {
                     self.skip_newlines();
                     let (field_name, _) = self.expect_ident()?;
-                    self.expect(&Token::Colon)?;
-                    let val = self.parse_non_assignment_expr()?;
-                    fields.push((field_name, val));
+                    if matches!(self.peek(), Token::Colon) {
+                        self.advance();
+                        let val = self.parse_non_assignment_expr()?;
+                        fields.push(StructLitField::Explicit(field_name, val));
+                    } else {
+                        fields.push(StructLitField::Shorthand(field_name));
+                    }
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
                         self.advance();

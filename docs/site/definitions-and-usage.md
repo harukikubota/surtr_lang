@@ -50,12 +50,22 @@ deferror InvalidPort(port: Int) { "invalid port" }
 ```surtr
 impl User {
   def new(name: String, age: Int) -> Self {
-    User { name: name, age: age }
+    User { name, age }
   }
 }
 ```
 
 呼び出し側は `Type::method(...)` で読みます。
+
+`defstruct` の内部再構築では field shorthand も使えます。
+
+```surtr
+impl User {
+  def with_age(self: Self, next_age: Int) -> Self {
+    User { name: self.name, age: next_age }
+  }
+}
+```
 
 `new`、構造体リテラル、`deconstruct`、private field、property access のまとまった説明は
 `./structs.md` にあります。

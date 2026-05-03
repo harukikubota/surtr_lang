@@ -859,6 +859,94 @@ impl User {
 }
 
 #[test]
+fn test_struct_literal_field_shorthand_parses() {
+    let ast = parse_with_context(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("impl with struct shorthand should parse");
+
+    let impl_node = ast
+        .iter()
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .expect("expected impl node");
+    match impl_node {
+        Ast::ImplDef(_, _, methods, _) => match &methods[0] {
+            Ast::Def(_, _, _, _, _, body, _) => match body.as_ref() {
+                Ast::Block(_, stmts) => match &stmts[0] {
+                    Ast::StructLit(_, _, fields) => {
+                        assert!(matches!(
+                            fields.as_slice(),
+                            [
+                                StructLitField::Shorthand(name),
+                                StructLitField::Shorthand(age)
+                            ] if name == "name" && age == "age"
+                        ));
+                    }
+                    other => panic!("Expected StructLit, got {:?}", other),
+                },
+                other => panic!("Expected block body, got {:?}", other),
+            },
+            other => panic!("Expected Def, got {:?}", other),
+        },
+        other => panic!("Expected ImplDef, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_struct_literal_field_shorthand_mixed_with_explicit_parses() {
+    let ast = parse_with_context(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def update(self, name: String, next_age: Int) -> Self {
+    User { name, age: next_age }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("mixed struct shorthand should parse");
+
+    let impl_node = ast
+        .iter()
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .expect("expected impl node");
+    match impl_node {
+        Ast::ImplDef(_, _, methods, _) => match &methods[0] {
+            Ast::Def(_, _, _, _, _, body, _) => match body.as_ref() {
+                Ast::Block(_, stmts) => match &stmts[0] {
+                    Ast::StructLit(_, _, fields) => {
+                        assert!(matches!(
+                            fields.as_slice(),
+                            [
+                                StructLitField::Shorthand(name),
+                                StructLitField::Explicit(age, Ast::Var(_, next_age))
+                            ] if name == "name" && age == "age" && next_age == "next_age"
+                        ));
+                    }
+                    other => panic!("Expected StructLit, got {:?}", other),
+                },
+                other => panic!("Expected block body, got {:?}", other),
+            },
+            other => panic!("Expected Def, got {:?}", other),
+        },
+        other => panic!("Expected ImplDef, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_doc_attributes_parse_for_trait_impl_methods() {
     let ast = parse_with_context(
         r#"impl Show for Int {
@@ -1160,7 +1248,11 @@ fn test_duration_literal_lowers_to_internal_struct_lit() {
         ast.as_slice(),
         [Ast::InternalStructLit(_, name, fields)]
             if name == "Duration"
-                && matches!(fields.as_slice(), [(field, Ast::Lit(_, Lit::Int(value)))] if field == "millis" && *value == int(100))
+                && matches!(
+                    fields.as_slice(),
+                    [StructLitField::Explicit(field, Ast::Lit(_, Lit::Int(value)))]
+                        if field == "millis" && *value == int(100)
+                )
     ));
 }
 

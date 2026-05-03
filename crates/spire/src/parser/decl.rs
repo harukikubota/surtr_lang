@@ -214,7 +214,12 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
             name,
             fields
                 .into_iter()
-                .map(|(field, expr)| (field, rewrite_process_self_refs(expr)))
+                .map(|field| match field {
+                    StructLitField::Explicit(field, expr) => {
+                        StructLitField::Explicit(field, rewrite_process_self_refs(expr))
+                    }
+                    StructLitField::Shorthand(field) => StructLitField::Shorthand(field),
+                })
                 .collect(),
         ),
         Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
@@ -222,7 +227,12 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
             name,
             fields
                 .into_iter()
-                .map(|(field, expr)| (field, rewrite_process_self_refs(expr)))
+                .map(|field| match field {
+                    StructLitField::Explicit(field, expr) => {
+                        StructLitField::Explicit(field, rewrite_process_self_refs(expr))
+                    }
+                    StructLitField::Shorthand(field) => StructLitField::Shorthand(field),
+                })
                 .collect(),
         ),
         Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(

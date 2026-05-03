@@ -1047,15 +1047,64 @@ fn test_duration_literal_resolves_as_compiler_generated_struct_lit() {
         Resolved::StructLit(_, id, fields) => {
             assert_eq!(id.name, "Duration");
             assert!(id.compiler_generated);
-            assert!(
-                matches!(fields.as_slice(), [(name, Resolved::Lit(_, spire::ast::Lit::Int(value)))] if name == "millis" && *value == sindr::primitives::int(100))
-            );
+            assert!(matches!(
+                fields.as_slice(),
+                [ResolvedStructLitField::Explicit(name, Resolved::Lit(_, spire::ast::Lit::Int(value)))]
+                    if name == "millis" && *value == sindr::primitives::int(100)
+            ));
         }
         other => panic!(
             "Expected compiler-generated Duration struct literal, got {:?}",
             other
         ),
     }
+}
+
+#[test]
+fn test_struct_literal_shorthand_resolves_to_same_named_local() {
+    let ast = spire::parse_with_context(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+}"#,
+        spire::ParserContext::module(0, None),
+    )
+    .expect("struct shorthand should parse");
+    let mut resolver = Resolver::new();
+    let resolved = resolver
+        .resolve_program(ast)
+        .expect("struct shorthand should resolve");
+    let lowered = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, body, _)
+                if id.qualified_name.as_deref() == Some("User::new") =>
+            {
+                Some(body.as_ref())
+            }
+            _ => None,
+        })
+        .expect("expected impl method body");
+
+    let Resolved::Block(_, stmts) = lowered else {
+        panic!("expected block body");
+    };
+    let Resolved::StructLit(_, _, fields) = &stmts[0] else {
+        panic!("expected struct literal");
+    };
+    assert!(matches!(
+        fields.as_slice(),
+        [
+            ResolvedStructLitField::Shorthand(name, Resolved::Var(_, id1)),
+            ResolvedStructLitField::Shorthand(age, Resolved::Var(_, id2))
+        ] if name == "name" && age == "age" && id1.name == "name" && id2.name == "age"
+    ));
 }
 
 #[test]

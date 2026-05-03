@@ -968,7 +968,12 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             name,
             fields
                 .into_iter()
-                .map(|(name, expr)| (name, shift_ast_span(expr, delta)))
+                .map(|field| match field {
+                    StructLitField::Explicit(name, expr) => {
+                        StructLitField::Explicit(name, shift_ast_span(expr, delta))
+                    }
+                    StructLitField::Shorthand(name) => StructLitField::Shorthand(name),
+                })
                 .collect(),
         ),
         Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
@@ -976,7 +981,12 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             name,
             fields
                 .into_iter()
-                .map(|(name, expr)| (name, shift_ast_span(expr, delta)))
+                .map(|field| match field {
+                    StructLitField::Explicit(name, expr) => {
+                        StructLitField::Explicit(name, shift_ast_span(expr, delta))
+                    }
+                    StructLitField::Shorthand(name) => StructLitField::Shorthand(name),
+                })
                 .collect(),
         ),
         Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(

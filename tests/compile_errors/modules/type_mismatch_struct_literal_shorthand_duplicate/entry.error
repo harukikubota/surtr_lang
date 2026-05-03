@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Duplicate field 'name' in User

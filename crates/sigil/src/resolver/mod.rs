@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{
     Ast, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit,
-    RecordLitArg, Span, Visibility,
+    RecordLitArg, Span, StructLitField, Visibility,
 };
 
 use crate::error::{ResolveError, ResolveErrorLabel};
@@ -372,8 +372,13 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         }
         Resolved::StructLit(_, id, fields) => {
             rebase_resolved_id(id, base, offset);
-            for (_, expr) in fields {
-                rebase_resolved_node(expr, base, offset);
+            for field in fields {
+                match field {
+                    ResolvedStructLitField::Explicit(_, expr)
+                    | ResolvedStructLitField::Shorthand(_, expr) => {
+                        rebase_resolved_node(expr, base, offset);
+                    }
+                }
             }
         }
         Resolved::ConstructorCall(_, id, args) => {

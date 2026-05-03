@@ -8,5 +8,3 @@ impl User {
     User { name, age }
   }
 }
-
-defrecord Point(x: Float, y: Float)

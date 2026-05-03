@@ -284,13 +284,18 @@ impl Resolver {
                 Ok(())
             }
             Ast::StructLit(_, _, fields) | Ast::InternalStructLit(_, _, fields) => {
-                for (_, expr) in fields {
-                    self.collect_capture_placeholders(
-                        expr,
-                        allow_placeholders,
-                        inside_placeholder_capture,
-                        used,
-                    )?;
+                for field in fields {
+                    match field {
+                        StructLitField::Explicit(_, expr) => {
+                            self.collect_capture_placeholders(
+                                expr,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                                used,
+                            )?;
+                        }
+                        StructLitField::Shorthand(_) => {}
+                    }
                 }
                 Ok(())
             }
@@ -688,8 +693,8 @@ impl Resolver {
                 name,
                 fields
                     .into_iter()
-                    .map(|(name, expr)| {
-                        Ok((
+                    .map(|field| match field {
+                        StructLitField::Explicit(name, expr) => Ok(StructLitField::Explicit(
                             name,
                             self.rewrite_capture_placeholders(
                                 expr,
@@ -697,7 +702,8 @@ impl Resolver {
                                 allow_placeholders,
                                 inside_placeholder_capture,
                             )?,
-                        ))
+                        )),
+                        StructLitField::Shorthand(name) => Ok(StructLitField::Shorthand(name)),
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?,
             )),
@@ -706,8 +712,8 @@ impl Resolver {
                 name,
                 fields
                     .into_iter()
-                    .map(|(name, expr)| {
-                        Ok((
+                    .map(|field| match field {
+                        StructLitField::Explicit(name, expr) => Ok(StructLitField::Explicit(
                             name,
                             self.rewrite_capture_placeholders(
                                 expr,
@@ -715,7 +721,8 @@ impl Resolver {
                                 allow_placeholders,
                                 inside_placeholder_capture,
                             )?,
-                        ))
+                        )),
+                        StructLitField::Shorthand(name) => Ok(StructLitField::Shorthand(name)),
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?,
             )),
@@ -905,9 +912,12 @@ impl Resolver {
                         .or_else(|| Self::pipe_slot_span(&arm.body))
                 })
             }),
-            Ast::StructLit(_, _, fields) | Ast::InternalStructLit(_, _, fields) => fields
-                .iter()
-                .find_map(|(_, expr)| Self::pipe_slot_span(expr)),
+            Ast::StructLit(_, _, fields) | Ast::InternalStructLit(_, _, fields) => {
+                fields.iter().find_map(|field| match field {
+                    StructLitField::Explicit(_, expr) => Self::pipe_slot_span(expr),
+                    StructLitField::Shorthand(_) => None,
+                })
+            }
             Ast::ConstructorCall(_, _, args) => args.iter().find_map(|arg| match arg {
                 RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => {
                     Self::pipe_slot_span(expr)
@@ -2289,7 +2299,15 @@ impl Resolver {
                 };
                 let resolved_fields = field_vals
                     .into_iter()
-                    .map(|(name, expr)| Ok((name, self.resolve_node(expr)?)))
+                    .map(|field| match field {
+                        StructLitField::Explicit(name, expr) => Ok(
+                            ResolvedStructLitField::Explicit(name, self.resolve_node(expr)?),
+                        ),
+                        StructLitField::Shorthand(name) => Ok(ResolvedStructLitField::Shorthand(
+                            name.clone(),
+                            self.resolve_node(Ast::Var(span.clone(), name))?,
+                        )),
+                    })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 Ok(Resolved::StructLit(span, rid, resolved_fields))
             }
@@ -2309,7 +2327,15 @@ impl Resolver {
                 };
                 let resolved_fields = field_vals
                     .into_iter()
-                    .map(|(name, expr)| Ok((name, self.resolve_node(expr)?)))
+                    .map(|field| match field {
+                        StructLitField::Explicit(name, expr) => Ok(
+                            ResolvedStructLitField::Explicit(name, self.resolve_node(expr)?),
+                        ),
+                        StructLitField::Shorthand(name) => Ok(ResolvedStructLitField::Shorthand(
+                            name.clone(),
+                            self.resolve_node(Ast::Var(span.clone(), name))?,
+                        )),
+                    })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 Ok(Resolved::StructLit(span, rid, resolved_fields))
             }

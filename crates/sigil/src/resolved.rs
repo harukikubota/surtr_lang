@@ -29,6 +29,12 @@ pub struct ResolvedProcessSpec {
     pub set_uid: Option<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ResolvedStructLitField {
+    Explicit(Symbol, Resolved),
+    Shorthand(Symbol, Resolved),
+}
+
 /// Resolved AST — every identifier carries a unique_id.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Resolved {
@@ -110,8 +116,8 @@ pub enum Resolved {
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
 
-    /// Struct literal: `User { name: "alice", age: 30 }`
-    StructLit(Span, ResolvedId, Vec<(Symbol, Resolved)>),
+    /// Struct literal: `User { name: "alice", age, active: is_active }`
+    StructLit(Span, ResolvedId, Vec<ResolvedStructLitField>),
 
     /// Constructor call: `Point(1.0, 2.0)`
     ConstructorCall(Span, ResolvedId, Vec<ResolvedRecordLitArg>),

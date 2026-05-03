@@ -13,7 +13,7 @@ defstruct User {
 
 impl User {
   def new(name: String, age: Int) -> Self {
-    User { name: name, age: age }
+    User { name, age }
   }
 }
 ```
@@ -52,13 +52,31 @@ user = User(name: "alice", age: 30)
 ## 構造体リテラル
 
 ```surtr
-User { name: name, age: age }
+User { name, age }
 ```
 
 `Type { ... }` 形式の構造体リテラルは、`impl Type` の同型メソッド本体内でのみ使えます。  
 外側の通常コードから `User { ... }` を直接作るのではなく、`User(...)` または `User::new(...)` を通します。
 
 この制約により、構築の公開入口は `new` に固定されます。
+
+field 名と同じ名前のローカル変数・引数・`self` 由来の値を入れるだけなら、shorthand を使えます。
+
+```surtr
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+
+  def with_age(self: Self, next_age: Int) -> Self {
+    User { name: self.name, age: next_age }
+  }
+}
+```
+
+- `User { name }` は `User { name: name }` の sugar
+- shorthand と明示 field は混在可能
+- shorthand は struct literal 専用で、`User(...)` の named argument や pattern には広がらない
 
 `inspect(...)` / `to_string(...)` もこの公開 surface に合わせます。
 
@@ -88,7 +106,7 @@ defstruct User {
 
 impl User {
   def new(name: String, age: Int) -> Self {
-    User { name: name, age: age }
+    User { name, age }
   }
 
   defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
@@ -194,7 +212,7 @@ next =? Lens::over(User.nickname, user, normalize_name)
 ```surtr
 impl User {
   def with_age(self: Self, age: Int) -> Self {
-    User { name: self.name, age: age }
+    User { name: self.name, age }
   }
 }
 ```

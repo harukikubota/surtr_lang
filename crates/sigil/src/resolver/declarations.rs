@@ -370,7 +370,12 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             name,
             fields
                 .into_iter()
-                .map(|(field_name, expr)| (field_name, rewrite_self_ast(expr, target)))
+                .map(|field| match field {
+                    StructLitField::Explicit(field_name, expr) => {
+                        StructLitField::Explicit(field_name, rewrite_self_ast(expr, target))
+                    }
+                    StructLitField::Shorthand(field_name) => StructLitField::Shorthand(field_name),
+                })
                 .collect(),
         ),
         Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
@@ -378,7 +383,12 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             name,
             fields
                 .into_iter()
-                .map(|(field_name, expr)| (field_name, rewrite_self_ast(expr, target)))
+                .map(|field| match field {
+                    StructLitField::Explicit(field_name, expr) => {
+                        StructLitField::Explicit(field_name, rewrite_self_ast(expr, target))
+                    }
+                    StructLitField::Shorthand(field_name) => StructLitField::Shorthand(field_name),
+                })
                 .collect(),
         ),
         Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(

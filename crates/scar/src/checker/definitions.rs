@@ -1169,7 +1169,7 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
-        field_vals: &[(String, Resolved)],
+        field_vals: &[ResolvedStructLitField],
     ) -> Result<TypedNode, TypeError> {
         let def = self
             .env
@@ -1200,7 +1200,11 @@ impl Checker {
         let tag = def.tag;
 
         let mut seen = HashSet::new();
-        for (name, _) in field_vals {
+        for field in field_vals {
+            let name = match field {
+                ResolvedStructLitField::Explicit(name, _)
+                | ResolvedStructLitField::Shorthand(name, _) => name,
+            };
             if !def.fields.iter().any(|(field_name, _)| field_name == name) {
                 return Err(TypeError {
                     message: format!("Unknown field '{}' in {}", name, id.name),
@@ -1219,15 +1223,22 @@ impl Checker {
 
         let mut typed_fields = Vec::new();
         for (def_name, def_ty) in &def.fields {
-            let (_, resolved_val) =
-                field_vals
-                    .iter()
-                    .find(|(n, _)| n == def_name)
-                    .ok_or_else(|| TypeError {
-                        message: format!("Missing field '{}' in {}", def_name, id.name),
-                        span: span.clone(),
-                        hint: None,
-                    })?;
+            let resolved_val = field_vals
+                .iter()
+                .find_map(|field| match field {
+                    ResolvedStructLitField::Explicit(name, resolved_val)
+                    | ResolvedStructLitField::Shorthand(name, resolved_val)
+                        if name == def_name =>
+                    {
+                        Some(resolved_val)
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| TypeError {
+                    message: format!("Missing field '{}' in {}", def_name, id.name),
+                    span: span.clone(),
+                    hint: None,
+                })?;
             let typed_val = self.check_node(resolved_val)?;
             if self.ty_contains_lens(&typed_val.ty) {
                 return Err(TypeError {

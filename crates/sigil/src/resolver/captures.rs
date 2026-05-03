@@ -159,8 +159,13 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         Resolved::FieldAccess(_, expr, _) => collect_captures_inner(expr, bound, free),
         Resolved::TypeRefWitness(_, _) => {}
         Resolved::StructLit(_, _, fields) => {
-            for (_, expr) in fields {
-                collect_captures_inner(expr, bound, free);
+            for field in fields {
+                match field {
+                    ResolvedStructLitField::Explicit(_, expr)
+                    | ResolvedStructLitField::Shorthand(_, expr) => {
+                        collect_captures_inner(expr, bound, free);
+                    }
+                }
             }
         }
         Resolved::ConstructorCall(_, _, args) => {

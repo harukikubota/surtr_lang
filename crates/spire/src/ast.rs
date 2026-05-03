@@ -223,6 +223,12 @@ pub enum RecordLitArg {
     Named(Symbol, Ast),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructLitField {
+    Explicit(Symbol, Ast),
+    Shorthand(Symbol),
+}
+
 /// Interpolated string fragment.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InterpolatedPart {
@@ -340,11 +346,11 @@ pub enum Ast {
     /// Record definition: `defrecord Point(x: Float, y: Float)`
     RecordDef(Span, Symbol, Vec<RecordField>, DeclAttrs),
 
-    /// Struct literal: `User { name: "alice", age: 30 }`
-    StructLit(Span, Symbol, Vec<(Symbol, Ast)>),
+    /// Struct literal: `User { name: "alice", age, active: is_active }`
+    StructLit(Span, Symbol, Vec<StructLitField>),
 
     /// Compiler-generated struct literal used for syntax sugars such as `100ms`.
-    InternalStructLit(Span, Symbol, Vec<(Symbol, Ast)>),
+    InternalStructLit(Span, Symbol, Vec<StructLitField>),
 
     /// Constructor call: `Point(1.0, 2.0)` or `Point(x: 1.0, y: 2.0)`
     ConstructorCall(Span, Symbol, Vec<RecordLitArg>),

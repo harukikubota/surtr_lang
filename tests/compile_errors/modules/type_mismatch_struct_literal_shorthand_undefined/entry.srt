@@ -1,0 +1,3 @@
+def build(age: Int) -> User {
+  User { name, age }
+}
