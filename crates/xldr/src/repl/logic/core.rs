@@ -2705,6 +2705,7 @@ impl ReplEngine {
             Ty::Unit => "Unit".into(),
             Ty::Hole => "_".into(),
             Ty::List(inner) => format!("List<{}>", Self::ty_to_string(inner)),
+            Ty::Lazy(inner) => format!("Lazy<{}>", Self::ty_to_string(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", Self::ty_to_string(inner)),
             Ty::Pid(name) => format!("PID<{}>", name),
             Ty::Lens(source, focus) => {

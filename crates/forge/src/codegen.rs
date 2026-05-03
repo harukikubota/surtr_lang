@@ -1539,6 +1539,7 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Unit => "Unit".into(),
         Ty::Hole => "_".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
+        Ty::Lazy(inner) => format!("Lazy<{}>", ty_to_string(inner)),
         Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
         Ty::Pid(name) => format!("PID<{}>", name),
         Ty::Lens(source, focus) => {
