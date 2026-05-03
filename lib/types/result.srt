@@ -10,11 +10,12 @@ dedicated built-in abstraction rather than exposing it as the future general
 @builtin type Result<$T>
 
 @doc """
-Extractor が MatchBlock evaluator へ返す内部制御用の列挙結果。
-surface 上の canonical な型位置は `MatchResult<$Value, Error>` だが、
-error 側は抽象型 `Error` に固定される。
-`MatchResult` は `defextractor` / `@builtin defextractor` の戻り値と
-Extractor 本文内でだけ使える。通常 API は `Result`, `Option`, user-defined enum を返す。
+Internal control result returned from extractor evaluation inside MatchBlock.
+The canonical surface type position is `MatchResult<$Value, Error>`, with the
+error side fixed to the abstract `Error` type.
+`MatchResult` is only valid as the return type of `defextractor` /
+`@builtin defextractor` and inside extractor bodies. Ordinary APIs should
+return `Result`, `Option`, or a user-defined enum instead.
 """
 defenum MatchResult<$Value> {
   Success($Value),
@@ -414,7 +415,7 @@ impl Functor<$A, $B, Result<$B>> for Result<$A> {
   def map(self: Self, f: ($A -> $B)) -> Result<$B> {
     match self {
       Ok(value) => Ok(f(value)),
-      Err(err) => Err(err),
+      _ => self,
     }
   }
 }
@@ -427,7 +428,7 @@ impl Chainable<$A, Result<$B>> for Result<$A> {
   def chain(self: Self, f: ($A -> Result<$B>)) -> Result<$B> {
     match self {
       Ok(value) => f(value),
-      Err(err) => Err(err),
+      _ => self,
     }
   }
 }

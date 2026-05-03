@@ -22,9 +22,10 @@ def parse_port(text: String) -> Result<Int> {
 
 ```surtr
 def parse_port(text: String) -> Result<Int> {
-  match try_from(text, Int) {
+  parsed = try_from(text, Int)
+  match parsed {
     Ok(value) => if(value > 0, Ok(value), Err(InvalidPort(value))),
-    Err(err) => Err(err),
+    _ => parsed,
   }
 }
 ```
@@ -96,9 +97,10 @@ def parse_and_increment(text: String) -> Result<Int> {
 
 ```surtr
 def parse_and_increment(text: String) -> Result<Int> {
-  match try_from(text, Int) {
+  parsed = try_from(text, Int)
+  match parsed {
     Ok(value) => Ok(value + 1),
-    Err(err) => Err(err),
+    _ => parsed,
   }
 }
 ```
@@ -117,12 +119,16 @@ def load_pair(a: String, b: String) -> Result<Int> {
 
 ```surtr
 def load_pair(a: String, b: String) -> Result<Int> {
-  match try_from(a, Int) {
-    Ok(left) => match try_from(b, Int) {
+  left_result = try_from(a, Int)
+  match left_result {
+    Ok(left) => {
+      right_result = try_from(b, Int)
+      match right_result {
       Ok(right) => safe_div(left + right, 2),
-      Err(err) => Err(err),
+      _ => right_result,
+    }
     },
-    Err(err) => Err(err),
+    _ => left_result,
   }
 }
 ```
@@ -142,9 +148,10 @@ Ok(10) |*> add(1)
 `match` へ読み下すと次です。
 
 ```surtr
-match Ok(10) {
+mapped = Ok(10)
+match mapped {
   Ok(value) => Ok(add(value, 1)),
-  Err(err) => Err(err),
+  _ => mapped,
 }
 ```
 
@@ -159,9 +166,10 @@ try_from("42", Int) |>= require_at_least(10)
 `match` へ読み下すと次です。
 
 ```surtr
-match try_from("42", Int) {
+parsed = try_from("42", Int)
+match parsed {
   Ok(value) => require_at_least(value, 10),
-  Err(err) => Err(err),
+  _ => parsed,
 }
 ```
 
@@ -177,9 +185,10 @@ pipeline = &parse_int >* &to_string
 
 ```surtr
 def pipeline(x: String) -> Result<String> {
-  match parse_int(x) {
+  parsed = parse_int(x)
+  match parsed {
     Ok(value) => Ok(to_string(value)),
-    Err(err) => Err(err),
+    _ => parsed,
   }
 }
 ```
@@ -196,9 +205,10 @@ pipeline = &parse_int >=> &require_small
 
 ```surtr
 def pipeline(x: String) -> Result<Int> {
-  match parse_int(x) {
+  parsed = parse_int(x)
+  match parsed {
     Ok(value) => require_small(value),
-    Err(err) => Err(err),
+    _ => parsed,
   }
 }
 ```
@@ -223,10 +233,11 @@ def read_with_default(text: String) -> Int {
 
 ```surtr
 def parse_or_zero(text: String) -> Result<Int> {
-  match try_from(text, Int) {
+  parsed = try_from(text, Int)
+  match parsed {
     Ok(value) => Ok(value),
     Err(NoneError) => Ok(0),
-    Err(err) => Err(err),
+    _ => parsed,
   }
 }
 ```

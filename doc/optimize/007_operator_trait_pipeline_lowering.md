@@ -35,7 +35,7 @@ impl Functor<$A, $B, Result<$B>> for Result<$A> {
   def map(self: Self, f: ($A -> $B)) -> Result<$B> {
     match self {
       Ok(value) => Ok(f(value)),
-      Err(err) => Err(err),
+      _ => self,
     }
   }
 }
@@ -44,7 +44,7 @@ impl Chainable<$A, Result<$B>> for Result<$A> {
   def chain(self: Self, f: ($A -> Result<$B>)) -> Result<$B> {
     match self {
       Ok(value) => f(value),
-      Err(err) => Err(err),
+      _ => self,
     }
   }
 }
@@ -119,8 +119,8 @@ pub enum OperatorTraitOp {
 - callsite origin が `Operator`
 - selected impl が標準 `Result` impl
 - 標準 `Result` impl body が期待する canonical match shape と一致する
-- `PipeMap` は `Err(err) => Err(err)` と `Ok(value) => Ok(rhs(value))` の形である
-- `PipeBind` は `Err(err) => Err(err)` と `Ok(value) => rhs(value)` の形である
+- `PipeMap` は `_ => self` と `Ok(value) => Ok(rhs(value))` の形である
+- `PipeBind` は `_ => self` と `Ok(value) => rhs(value)` の形である
 - rewrite 前後で observable error span と source map の primary span が変わらない
 
 明示的な `Functor::map(...)` / `Chainable::chain(...)` 呼び出しは `origin = Explicit` とし、v1 では最適化候補にしない。
