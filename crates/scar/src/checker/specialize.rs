@@ -6,6 +6,7 @@ impl Checker {
         stmts: Vec<TypedNode>,
     ) -> Result<Vec<TypedNode>, TypeError> {
         let mut defs_by_fun_idx = HashMap::new();
+        defs_by_fun_idx.extend(self.specializable_defs.clone());
         for stmt in &stmts {
             if let Some(fun_idx) = Self::def_fun_idx(stmt) {
                 defs_by_fun_idx.insert(fun_idx, stmt.clone());
@@ -30,6 +31,7 @@ impl Checker {
         for stmt in stmts {
             if let Some(fun_idx) = Self::def_fun_idx(&stmt) {
                 if needs_specialization.contains(&fun_idx) {
+                    self.specializable_defs.insert(fun_idx, stmt);
                     continue;
                 }
             }

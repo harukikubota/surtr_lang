@@ -356,6 +356,12 @@ pub(super) fn cached_compile_prefix(
             .map_err(|e| format!("phase=typecheck; message={}", e))?;
         let bytecode = forge::codegen_typed_program(typed)
             .map_err(|e| format!("phase=codegen; message={}", e))?;
+        scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
+            entry
+                .qualified_name
+                .as_deref()
+                .map(|qualified_name| (qualified_name, entry.fun_idx))
+        }));
         Arc::new(CachedCompilePrefix {
             module_asts: cached_modules.module_asts,
             declaration_index: cached_modules.declaration_index,

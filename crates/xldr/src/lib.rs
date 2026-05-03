@@ -864,7 +864,7 @@ pub struct DefaultStdlibSnapshot {
     pub default_stage_count: usize,
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 1;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStdlibSemanticEnvelope {
@@ -974,6 +974,12 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
             file_name: "<stdlib>".into(),
             message: e.message,
         })?;
+    scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
+        entry
+            .qualified_name
+            .as_deref()
+            .map(|qualified_name| (qualified_name, entry.fun_idx))
+    }));
     bytecode.docs = docs.clone();
     let next_fun_idx = bytecode
         .functions

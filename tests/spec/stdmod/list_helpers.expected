@@ -10,9 +10,15 @@ Err(IndexOutOfBounds("index -1 out of bounds for len 2"))
 10
 Ok(5)
 Ok(1)
+Ok(3.25)
+Ok(1.5)
+Err(NoneError("None Value."))
+Err(NoneError("None Value."))
 Ok(abcd)
 Ok(a)
 [1, 1, 2, 3]
+[1.5, 1.5, 2.0, 3.25]
+[]
 [a, xy, abcd]
 [b, a, cd, xy]
 [1, 2]

@@ -714,7 +714,10 @@ impl Decode<User> for Json { ... }
 
 ## 残タスク
 
-- `List::sort<$A: Compare>`、`List::max<$A: Compare>`、`List::min<$A: Compare>` の汎化
 - `List::sum<$A: Numeric>` の汎化要否の判断
 - `group_count<$A: Eq>` / `dedup<$A: Eq>` の明示 bound を current parser / checker 制約の範囲で surface に出すかの判断
 - `Compose` / `Composable` の命名整理を本当に進めるかの別件判断
+
+今回完了:
+
+- `List::sort<$A: Compare>`、`List::max<$A: Compare>`、`List::min<$A: Compare>` の汎化

@@ -697,6 +697,58 @@ impl Checker {
         }
     }
 
+    fn argument_type_mismatch_message(&self, expected: &Ty, actual: &Ty) -> String {
+        if let Some(message) = self.bound_mismatch_message(expected, actual) {
+            return message;
+        }
+        format!(
+            "Argument type mismatch: expected {}, got {}",
+            self.ty_name(expected),
+            self.ty_name(actual)
+        )
+    }
+
+    fn bound_mismatch_message(&self, expected: &Ty, actual: &Ty) -> Option<String> {
+        match (self.resolve_ty(expected), self.resolve_ty(actual)) {
+            (Ty::Var(var), actual_ty) => {
+                let bounds = self.tyvar_bound_names(var);
+                if !bounds.is_empty() && !self.ty_satisfies_bounds(&actual_ty, &bounds) {
+                    Some(format!(
+                        "Argument type mismatch: expected {} implementing {}, got {}",
+                        self.ty_name(expected),
+                        bounds.join(" + "),
+                        self.ty_name(&actual_ty)
+                    ))
+                } else {
+                    None
+                }
+            }
+            (Ty::List(expected_inner), Ty::List(actual_inner))
+            | (Ty::TypeRef(expected_inner), Ty::TypeRef(actual_inner)) => {
+                self.bound_mismatch_message(&expected_inner, &actual_inner)
+            }
+            (Ty::Tuple(expected_items), Ty::Tuple(actual_items)) => expected_items
+                .iter()
+                .zip(actual_items.iter())
+                .find_map(|(expected_item, actual_item)| {
+                    self.bound_mismatch_message(expected_item, actual_item)
+                }),
+            (Ty::Func(expected_params, expected_ret), Ty::Func(actual_params, actual_ret)) => {
+                expected_params
+                    .iter()
+                    .zip(actual_params.iter())
+                    .find_map(|(expected_param, actual_param)| {
+                        self.bound_mismatch_message(expected_param, actual_param)
+                    })
+                    .or_else(|| self.bound_mismatch_message(&expected_ret, &actual_ret))
+            }
+            (Ty::Result(expected_ok, expected_err), Ty::Result(actual_ok, actual_err)) => self
+                .bound_mismatch_message(&expected_ok, &actual_ok)
+                .or_else(|| self.bound_mismatch_message(&expected_err, &actual_err)),
+            _ => None,
+        }
+    }
+
     fn compose_function_value_hint(&self, typed: &TypedNode, op_name: &str) -> String {
         if let TypedInner::App(func, _) = &typed.node {
             let signature = self
@@ -2742,11 +2794,7 @@ impl Checker {
                     && !self.types_compatible(expected_ty, &typed.ty)
                 {
                     return Err(TypeError {
-                        message: format!(
-                            "Argument type mismatch: expected {}, got {}",
-                            self.ty_name(expected_ty),
-                            self.ty_name(&typed.ty)
-                        ),
+                        message: self.argument_type_mismatch_message(expected_ty, &typed.ty),
                         span: typed.span.clone(),
                         hint: callable_hint.map(str::to_string),
                     });
@@ -2782,11 +2830,7 @@ impl Checker {
                 && !self.types_compatible(expected_ty, &typed.ty)
             {
                 return Err(TypeError {
-                    message: format!(
-                        "Argument type mismatch: expected {}, got {}",
-                        self.ty_name(expected_ty),
-                        self.ty_name(&typed.ty)
-                    ),
+                    message: self.argument_type_mismatch_message(expected_ty, &typed.ty),
                     span: typed.span.clone(),
                     hint: callable_hint.map(str::to_string),
                 });

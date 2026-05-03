@@ -24,11 +24,11 @@
 - `List::all(values, pred) -> Boolean`
 - `List::count(values, pred) -> Int`
 - `List::sum(values: List<Int>) -> Int`
-- `List::max(values: List<Int>) -> Result<Int, NoneError>`
-- `List::min(values: List<Int>) -> Result<Int, NoneError>`
+- `List::max(values: List<$A>) -> Result<$A, NoneError>` (`$A: Compare`)
+- `List::min(values: List<$A>) -> Result<$A, NoneError>` (`$A: Compare`)
 - `List::max_by(values, cmp) -> Result<$A, NoneError>`
 - `List::min_by(values, cmp) -> Result<$A, NoneError>`
-- `List::sort(values: List<Int>) -> List<Int>`
+- `List::sort(values: List<$A>) -> List<$A>` (`$A: Compare`)
 - `List::sort_by(values, cmp) -> List<$A>`
 - `List::take(values, count) -> List<$A>`
 - `List::drop(values, count) -> List<$A>`
@@ -68,9 +68,12 @@ print(to_string(List::last([1, 2, 3])))
 print(to_string(List::at([10, 20, 30], 1)))
 print(to_string(List::max([1, 5, 3, 2])))
 print(to_string(List::min([1, 5, 3, 2])))
+print(to_string(List::max([1.5, 3.25, 2.0])))
+print(to_string(List::min([1.5, 3.25, 2.0])))
 print(to_string(List::max_by(["a", "abcd", "xy"], {|left, right| Compare::compare(String::len(left), String::len(right)) })))
 print(to_string(List::min_by(["a", "abcd", "xy"], {|left, right| Compare::compare(String::len(left), String::len(right)) })))
 print(to_string(List::sort([3, 1, 2, 1])))
+print(to_string(List::sort([3.25, 1.5, 2.0, 1.5])))
 print(to_string(List::sort_by(["a", "abcd", "xy"], {|left, right| Compare::compare(String::len(left), String::len(right)) })))
 print(to_string(List::take_while([2, 4, 6, 7, 8], {|n| Int::is_even(n) })))
 print(to_string(List::drop_while([2, 4, 6, 7, 8], {|n| Int::is_even(n) })))
@@ -84,7 +87,8 @@ print(to_string(List::zip([1, 2, 3], ["x", "y"])))
 ## Notes
 
 - 推奨される構築スタイルは引き続き `List::cons + List::reverse` です。
-- `sort_by` は任意型に使えますが、`max` / `min` / `sort` はこの段階では `Int` 向け surface のままです。
+- `sort_by` は引き続き任意 comparator を受け取り、`max` / `min` / `sort` は `Compare` 実装型に使えます。
+- `sum` は今回も `Int` 専用のままで、`group_count` / `dedup` の明示 bound surface はまだ未整理です。
 - `append` / `concat` / `at` / `partition` / `zip` を追加しても、`List` の中心用途は先頭からの逐次処理のままです。
 
 ## Next candidates

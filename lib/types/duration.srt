@@ -124,9 +124,9 @@ impl Compare for Duration {
   """
   def compare(self: Self, rhs: Self) -> Ordering {
     if(
-      self < rhs,
+      self.millis < rhs.millis,
       Ordering::Less,
-      if(self > rhs, Ordering::Greater, Ordering::Equal),
+      if(self.millis > rhs.millis, Ordering::Greater, Ordering::Equal),
     )
   }
 }

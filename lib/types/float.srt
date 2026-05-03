@@ -183,9 +183,9 @@ impl Compare for Float {
   """
   def compare(self: Self, rhs: Self) -> Ordering {
     if(
-      self < rhs,
+      Lt::lt(self, rhs),
       Ordering::Less,
-      if(self > rhs, Ordering::Greater, Ordering::Equal),
+      if(Gt::gt(self, rhs), Ordering::Greater, Ordering::Equal),
     )
   }
 }

@@ -6,20 +6,20 @@ use spire::ast::{BinOp, Lit, ProcessSpec, Span, Visibility};
 use crate::types::Ty;
 
 /// A fully typed AST node.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedNode {
     pub ty: Ty,
     pub span: Span,
     pub node: TypedInner,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedProgram {
     pub nodes: Vec<TypedNode>,
     pub process_specs: Vec<TypedProcessSpec>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedProcessSpec {
     pub module_path: String,
     pub process_name: String,
@@ -42,20 +42,20 @@ impl From<ResolvedProcessSpec> for TypedProcessSpec {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedDbgArg {
     pub span: Span,
     pub ty_name: String,
     pub expr: TypedNode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ListHelperRef {
     Builtin(u16),
     User(u32),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ComposeFlavor {
     Plain,
     ResultMap,
@@ -64,14 +64,14 @@ pub enum ComposeFlavor {
     ListBind { helper: ListHelperRef },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedTypeParam {
     pub name: String,
     pub ty_var: u32,
     pub bound: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TraitDispatch {
     Pending,
     Static(TraitDispatchTarget),
@@ -84,7 +84,7 @@ pub enum TraitDispatchTarget {
     UserFunction { name: String, fun_idx: u32 },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TraitCallOrigin {
     Explicit,
     Operator {
@@ -94,7 +94,7 @@ pub enum TraitCallOrigin {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OperatorTraitOp {
     PipeApply,
     PipeMap,
@@ -151,7 +151,7 @@ pub enum TypedLensOverMode {
 }
 
 /// Inner structure of a typed node.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedInner {
     Lit(Lit),
     Var(ResolvedId),
@@ -280,14 +280,14 @@ pub enum TypedInner {
 }
 
 /// Interpolated string fragment (typed).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedInterpolatedPart {
     Text(String),
     Expr(Box<TypedNode>),
 }
 
 /// Pattern in a binding (typed).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedPattern {
     Var(Ty, ResolvedId),
     As(Ty, Box<TypedPattern>, ResolvedId),
@@ -314,7 +314,7 @@ pub enum TypedPattern {
 }
 
 /// Match pattern (typed).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedMatchPattern {
     Binding(ResolvedId),
     /// `inner @ alias`
@@ -356,7 +356,7 @@ pub enum TypedMatchPattern {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedMatchArm {
     pub pattern: TypedMatchPattern,
     pub guard: Option<TypedNode>,
@@ -364,20 +364,20 @@ pub struct TypedMatchArm {
 }
 
 /// Function parameter (typed).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedFunParam {
     pub id: ResolvedId,
     pub ty: Ty,
 }
 
 /// Typed closure parameter.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedClosureParam {
     pub id: ResolvedId,
     pub ty: Ty,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedEnumVariantDef {
     pub tag: u32,
     pub constructor_name: String,

@@ -770,6 +770,25 @@ b = double(1.5)"#,
     }
 
     #[test]
+    fn compare_bound_list_helpers_emit_specialized_functions() {
+        let bytecode = codegen_source(
+            r#"largest = List::max([1, 3, 2])
+smallest = List::min([1.5, 3.25, 2.0])
+sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
+        );
+
+        let function_names = bytecode
+            .functions
+            .iter()
+            .filter_map(|entry| entry.qualified_name.as_deref())
+            .collect::<Vec<_>>();
+
+        assert!(function_names.contains(&"List::max"));
+        assert!(function_names.contains(&"List::min"));
+        assert!(function_names.contains(&"List::sort"));
+    }
+
+    #[test]
     fn codegen_typed_program_embeds_runtime_process_specs() {
         let typed = typed_module_program_with_builtin_prelude(
             r#"@@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)

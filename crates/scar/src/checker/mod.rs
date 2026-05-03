@@ -823,6 +823,7 @@ pub struct ScarCheckpoint {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    specializable_defs: HashMap<u32, TypedNode>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -838,6 +839,7 @@ pub struct ScarSession {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    specializable_defs: HashMap<u32, TypedNode>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -852,6 +854,7 @@ struct CheckerParts {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    specializable_defs: HashMap<u32, TypedNode>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -868,6 +871,7 @@ impl ScarSession {
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
+            specializable_defs: HashMap::new(),
             traits: HashMap::new(),
             trait_impls: HashMap::new(),
             trait_impl_index_by_base_trait: HashMap::new(),
@@ -911,6 +915,7 @@ impl ScarSession {
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
+            self.specializable_defs.clone(),
             self.traits.clone(),
             self.trait_impls.clone(),
             self.trait_impl_index_by_base_trait.clone(),
@@ -926,6 +931,7 @@ impl ScarSession {
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
+            specializable_defs,
             traits,
             trait_impls,
             trait_impl_index_by_base_trait,
@@ -938,6 +944,7 @@ impl ScarSession {
         self.user_func_params = user_func_params;
         self.impl_method_uids = impl_method_uids;
         self.function_ids_by_name = function_ids_by_name;
+        self.specializable_defs = specializable_defs;
         self.traits = traits;
         self.trait_impls = trait_impls;
         self.trait_impl_index_by_base_trait = trait_impl_index_by_base_trait;
@@ -954,6 +961,7 @@ impl ScarSession {
             user_func_params: self.user_func_params.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
+            specializable_defs: self.specializable_defs.clone(),
             traits: self.traits.clone(),
             trait_impls: self.trait_impls.clone(),
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
@@ -969,6 +977,7 @@ impl ScarSession {
         self.user_func_params = checkpoint.user_func_params;
         self.impl_method_uids = checkpoint.impl_method_uids;
         self.function_ids_by_name = checkpoint.function_ids_by_name;
+        self.specializable_defs = checkpoint.specializable_defs;
         self.traits = checkpoint.traits;
         self.trait_impls = checkpoint.trait_impls;
         self.trait_impl_index_by_base_trait = checkpoint.trait_impl_index_by_base_trait;
@@ -978,9 +987,451 @@ impl ScarSession {
 
     pub fn ensure_next_fun_idx_at_least(&mut self, next_fun_idx: u32) {
         // REPL runtime is the source of truth for currently materialized
-        // function indices. Keep Scar aligned exactly so newly inferred
-        // callable indices continue to match VM function entries.
-        self.env.next_fun_idx = next_fun_idx;
+        // function indices. Never move Scar backwards because stdlib
+        // checkpoints may also reserve indices for delayed specializations.
+        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+    }
+
+    pub fn reconcile_function_indices<'a, I>(&mut self, functions: I)
+    where
+        I: IntoIterator<Item = (&'a str, u32)>,
+    {
+        let function_indices = functions.into_iter().collect::<HashMap<_, _>>();
+        let mut next_fun_idx = function_indices
+            .values()
+            .copied()
+            .max()
+            .map(|idx| idx + 1)
+            .unwrap_or(self.env.next_fun_idx);
+        let mut specializable_rekeys = Vec::new();
+        let mut fun_idx_rewrites = HashMap::new();
+        for (qualified_name, id) in &self.function_ids_by_name {
+            let old_fun_idx = match self.env.vars.get(&id.unique_id) {
+                Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
+                _ => None,
+            };
+            let fun_idx = if let Some(fun_idx) = function_indices.get(qualified_name.as_str()) {
+                *fun_idx
+            } else if let Some(old_fun_idx) = self.specializable_fun_idx_for_name(qualified_name) {
+                let new_fun_idx = next_fun_idx;
+                next_fun_idx += 1;
+                specializable_rekeys.push((old_fun_idx, new_fun_idx));
+                new_fun_idx
+            } else {
+                continue;
+            };
+            if let Some(Ty::UserFunc {
+                fun_idx: stored_fun_idx,
+                ..
+            }) = self.env.vars.get_mut(&id.unique_id)
+            {
+                if let Some(old_fun_idx) = old_fun_idx {
+                    fun_idx_rewrites.insert(old_fun_idx, fun_idx);
+                }
+                *stored_fun_idx = fun_idx;
+            }
+        }
+        for (old_fun_idx, new_fun_idx) in specializable_rekeys {
+            if let Some(mut def) = self.specializable_defs.remove(&old_fun_idx) {
+                Self::set_def_fun_idx(&mut def, new_fun_idx);
+                self.specializable_defs.insert(new_fun_idx, def);
+            }
+        }
+        for def in self.specializable_defs.values_mut() {
+            Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
+        }
+        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+    }
+
+    fn specializable_fun_idx_for_name(&self, qualified_name: &str) -> Option<u32> {
+        self.specializable_defs.iter().find_map(|(fun_idx, def)| {
+            (Self::def_qualified_name(def).as_deref() == Some(qualified_name)).then_some(*fun_idx)
+        })
+    }
+
+    fn def_qualified_name(def: &TypedNode) -> Option<String> {
+        match &def.node {
+            TypedInner::Def(_, id, ..) | TypedInner::ExtractorDef(_, id, ..) => {
+                Some(id.qualified_name.clone().unwrap_or_else(|| id.name.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn set_def_fun_idx(def: &mut TypedNode, new_fun_idx: u32) {
+        match &mut def.node {
+            TypedInner::Def(fun_idx, ..) | TypedInner::ExtractorDef(fun_idx, ..) => {
+                *fun_idx = new_fun_idx;
+            }
+            _ => {}
+        }
+    }
+
+    fn rewrite_fun_indices_in_ty(ty: &mut Ty, rewrites: &HashMap<u32, u32>) {
+        match ty {
+            Ty::List(inner) | Ty::TypeRef(inner) => {
+                Self::rewrite_fun_indices_in_ty(inner, rewrites)
+            }
+            Ty::Tuple(items) => {
+                for item in items {
+                    Self::rewrite_fun_indices_in_ty(item, rewrites);
+                }
+            }
+            Ty::Func(params, ret) => {
+                for param in params {
+                    Self::rewrite_fun_indices_in_ty(param, rewrites);
+                }
+                Self::rewrite_fun_indices_in_ty(ret, rewrites);
+            }
+            Ty::Lens(source, focus) => {
+                Self::rewrite_fun_indices_in_ty(source, rewrites);
+                Self::rewrite_fun_indices_in_ty(focus, rewrites);
+            }
+            Ty::BuiltinFunc { params, ret, .. } => {
+                for param in params {
+                    Self::rewrite_fun_indices_in_ty(param, rewrites);
+                }
+                Self::rewrite_fun_indices_in_ty(ret, rewrites);
+            }
+            Ty::UserFunc {
+                fun_idx,
+                params,
+                ret,
+                ..
+            } => {
+                if let Some(new_fun_idx) = rewrites.get(fun_idx) {
+                    *fun_idx = *new_fun_idx;
+                }
+                for param in params {
+                    Self::rewrite_fun_indices_in_ty(param, rewrites);
+                }
+                Self::rewrite_fun_indices_in_ty(ret, rewrites);
+            }
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => {
+                for (_, field_ty) in fields {
+                    Self::rewrite_fun_indices_in_ty(field_ty, rewrites);
+                }
+            }
+            Ty::Enum(_, args) => {
+                for arg in args {
+                    Self::rewrite_fun_indices_in_ty(arg, rewrites);
+                }
+            }
+            Ty::Result(ok, err) => {
+                Self::rewrite_fun_indices_in_ty(ok, rewrites);
+                Self::rewrite_fun_indices_in_ty(err, rewrites);
+            }
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Pid(_)
+            | Ty::Hole
+            | Ty::Var(_)
+            | Ty::Error => {}
+        }
+    }
+
+    fn rewrite_fun_indices_in_dispatch(dispatch: &mut TraitDispatch, rewrites: &HashMap<u32, u32>) {
+        if let TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) = dispatch {
+            if let Some(new_fun_idx) = rewrites.get(fun_idx) {
+                *fun_idx = *new_fun_idx;
+            }
+        }
+    }
+
+    fn rewrite_fun_indices_in_lens_path(path: &mut TypedLensPath, rewrites: &HashMap<u32, u32>) {
+        Self::rewrite_fun_indices_in_ty(&mut path.source_ty, rewrites);
+        Self::rewrite_fun_indices_in_ty(&mut path.focus_ty, rewrites);
+    }
+
+    fn rewrite_fun_indices_in_pending_lens_path(
+        path: &mut PendingLensPath,
+        rewrites: &HashMap<u32, u32>,
+    ) {
+        if let Some(source_ty_hint) = &mut path.source_ty_hint {
+            Self::rewrite_fun_indices_in_ty(source_ty_hint, rewrites);
+        }
+    }
+
+    fn rewrite_fun_indices_in_node(node: &mut TypedNode, rewrites: &HashMap<u32, u32>) {
+        Self::rewrite_fun_indices_in_ty(&mut node.ty, rewrites);
+        match &mut node.node {
+            TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
+            TypedInner::App(func, args) => {
+                Self::rewrite_fun_indices_in_node(func, rewrites);
+                for arg in args {
+                    Self::rewrite_fun_indices_in_node(arg, rewrites);
+                }
+            }
+            TypedInner::TraitCall {
+                receiver_ty,
+                dispatch,
+                origin,
+                args,
+                ..
+            } => {
+                Self::rewrite_fun_indices_in_ty(receiver_ty, rewrites);
+                Self::rewrite_fun_indices_in_dispatch(dispatch, rewrites);
+                if let TraitCallOrigin::Operator { lhs_ty, rhs_ty, .. } = origin {
+                    Self::rewrite_fun_indices_in_ty(lhs_ty, rewrites);
+                    Self::rewrite_fun_indices_in_ty(rhs_ty, rewrites);
+                }
+                for arg in args {
+                    Self::rewrite_fun_indices_in_node(arg, rewrites);
+                }
+            }
+            TypedInner::InjectCall(func, args) => {
+                Self::rewrite_fun_indices_in_node(func, rewrites);
+                for arg in args {
+                    Self::rewrite_fun_indices_in_node(arg, rewrites);
+                }
+            }
+            TypedInner::Block(stmts)
+            | TypedInner::ListLiteral(stmts)
+            | TypedInner::TupleLiteral(stmts) => {
+                for stmt in stmts {
+                    Self::rewrite_fun_indices_in_node(stmt, rewrites);
+                }
+            }
+            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs) => {
+                Self::rewrite_fun_indices_in_pattern(pattern, rewrites);
+                Self::rewrite_fun_indices_in_node(rhs, rewrites);
+            }
+            TypedInner::BinOp(_, left, right)
+            | TypedInner::Pipe(left, right)
+            | TypedInner::Compose(_, left, right)
+            | TypedInner::ListCons(left, right) => {
+                Self::rewrite_fun_indices_in_node(left, rewrites);
+                Self::rewrite_fun_indices_in_node(right, rewrites);
+            }
+            TypedInner::InterpolatedStr(parts) => {
+                for part in parts {
+                    if let TypedInterpolatedPart::Expr(expr) = part {
+                        Self::rewrite_fun_indices_in_node(expr, rewrites);
+                    }
+                }
+            }
+            TypedInner::Dbg(args) => {
+                for arg in args {
+                    Self::rewrite_fun_indices_in_node(&mut arg.expr, rewrites);
+                }
+            }
+            TypedInner::If(cond, then_node, else_node) => {
+                Self::rewrite_fun_indices_in_node(cond, rewrites);
+                Self::rewrite_fun_indices_in_node(then_node, rewrites);
+                if let Some(else_node) = else_node {
+                    Self::rewrite_fun_indices_in_node(else_node, rewrites);
+                }
+            }
+            TypedInner::Assert(left, right) => {
+                Self::rewrite_fun_indices_in_node(left, rewrites);
+                Self::rewrite_fun_indices_in_node(right, rewrites);
+            }
+            TypedInner::Ensure(left, middle, right) => {
+                Self::rewrite_fun_indices_in_node(left, rewrites);
+                Self::rewrite_fun_indices_in_node(middle, rewrites);
+                Self::rewrite_fun_indices_in_node(right, rewrites);
+            }
+            TypedInner::RecoverKind(value, _, handler) => {
+                Self::rewrite_fun_indices_in_node(value, rewrites);
+                Self::rewrite_fun_indices_in_node(handler, rewrites);
+            }
+            TypedInner::Match(scrutinee, arms) => {
+                Self::rewrite_fun_indices_in_node(scrutinee, rewrites);
+                for arm in arms {
+                    Self::rewrite_fun_indices_in_match_arm(arm, rewrites);
+                }
+            }
+            TypedInner::FieldAccess(value, _)
+            | TypedInner::Semi(value)
+            | TypedInner::Capture(value, _) => {
+                Self::rewrite_fun_indices_in_node(value, rewrites);
+            }
+            TypedInner::LensPath(path) => Self::rewrite_fun_indices_in_lens_path(path, rewrites),
+            TypedInner::PendingLensPath(path) => {
+                Self::rewrite_fun_indices_in_pending_lens_path(path, rewrites);
+            }
+            TypedInner::LensView {
+                source,
+                path,
+                source_is_result: _,
+            } => {
+                Self::rewrite_fun_indices_in_node(source, rewrites);
+                Self::rewrite_fun_indices_in_lens_path(path, rewrites);
+            }
+            TypedInner::LensSet {
+                source,
+                path,
+                value,
+                source_is_result: _,
+                mode: _,
+            } => {
+                Self::rewrite_fun_indices_in_node(source, rewrites);
+                Self::rewrite_fun_indices_in_lens_path(path, rewrites);
+                Self::rewrite_fun_indices_in_node(value, rewrites);
+            }
+            TypedInner::LensOver {
+                source,
+                path,
+                update_fun,
+                source_is_result: _,
+                mode: _,
+            } => {
+                Self::rewrite_fun_indices_in_node(source, rewrites);
+                Self::rewrite_fun_indices_in_lens_path(path, rewrites);
+                Self::rewrite_fun_indices_in_node(update_fun, rewrites);
+            }
+            TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
+                for field in fields {
+                    Self::rewrite_fun_indices_in_node(field, rewrites);
+                }
+            }
+            TypedInner::DeferrorDef(_, _, _, params, body) => {
+                for param in params {
+                    Self::rewrite_fun_indices_in_fun_param(param, rewrites);
+                }
+                Self::rewrite_fun_indices_in_node(body, rewrites);
+            }
+            TypedInner::Def(_, _, type_params, params, ret_ty, body, _) => {
+                for type_param in type_params {
+                    let _ = type_param;
+                }
+                for param in params {
+                    Self::rewrite_fun_indices_in_fun_param(param, rewrites);
+                }
+                Self::rewrite_fun_indices_in_ty(ret_ty, rewrites);
+                Self::rewrite_fun_indices_in_node(body, rewrites);
+            }
+            TypedInner::ExtractorDef(_, _, type_params, param, ret_ty, body, _) => {
+                for type_param in type_params {
+                    let _ = type_param;
+                }
+                Self::rewrite_fun_indices_in_fun_param(param, rewrites);
+                Self::rewrite_fun_indices_in_ty(ret_ty, rewrites);
+                Self::rewrite_fun_indices_in_node(body, rewrites);
+            }
+            TypedInner::Closure(params, _, body) => {
+                for param in params {
+                    Self::rewrite_fun_indices_in_closure_param(param, rewrites);
+                }
+                Self::rewrite_fun_indices_in_node(body, rewrites);
+            }
+            TypedInner::EnumDef(_, _)
+            | TypedInner::TraitDef(_, _)
+            | TypedInner::TraitImplDef(_, _)
+            | TypedInner::BuiltinExtractorDecl(_, _, _)
+            | TypedInner::StructDef(_, _, _, _)
+            | TypedInner::RecordDef(_, _, _, _) => {}
+        }
+    }
+
+    fn rewrite_fun_indices_in_pattern(pattern: &mut TypedPattern, rewrites: &HashMap<u32, u32>) {
+        match pattern {
+            TypedPattern::Var(ty, _)
+            | TypedPattern::As(ty, _, _)
+            | TypedPattern::Wildcard(ty)
+            | TypedPattern::ListNil(ty)
+            | TypedPattern::ListCons(ty, _, _)
+            | TypedPattern::IntLit(ty, _)
+            | TypedPattern::StrLit(ty, _)
+            | TypedPattern::BoolLit(ty, _)
+            | TypedPattern::DurationLit(ty, _)
+            | TypedPattern::Tuple(ty, _)
+            | TypedPattern::ResultOk(ty, _) => Self::rewrite_fun_indices_in_ty(ty, rewrites),
+            TypedPattern::Extractor {
+                input_ty,
+                extractor_ty,
+                seq_tys,
+                ..
+            } => {
+                Self::rewrite_fun_indices_in_ty(input_ty, rewrites);
+                Self::rewrite_fun_indices_in_ty(extractor_ty, rewrites);
+                for ty in seq_tys {
+                    Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                }
+            }
+        }
+        match pattern {
+            TypedPattern::As(_, inner, _) | TypedPattern::ResultOk(_, inner) => {
+                Self::rewrite_fun_indices_in_pattern(inner, rewrites);
+            }
+            TypedPattern::ListCons(_, head, tail) => {
+                Self::rewrite_fun_indices_in_pattern(head, rewrites);
+                Self::rewrite_fun_indices_in_pattern(tail, rewrites);
+            }
+            TypedPattern::Tuple(_, items) => {
+                for item in items {
+                    Self::rewrite_fun_indices_in_pattern(item, rewrites);
+                }
+            }
+            TypedPattern::Extractor { items, .. } => {
+                for item in items {
+                    Self::rewrite_fun_indices_in_pattern(item, rewrites);
+                }
+            }
+            TypedPattern::Var(_, _)
+            | TypedPattern::Wildcard(_)
+            | TypedPattern::ListNil(_)
+            | TypedPattern::IntLit(_, _)
+            | TypedPattern::StrLit(_, _)
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {}
+        }
+    }
+
+    fn rewrite_fun_indices_in_match_pattern(
+        pattern: &mut TypedMatchPattern,
+        rewrites: &HashMap<u32, u32>,
+    ) {
+        match pattern {
+            TypedMatchPattern::As(inner, _) => {
+                Self::rewrite_fun_indices_in_match_pattern(inner, rewrites)
+            }
+            TypedMatchPattern::Or(items) | TypedMatchPattern::Tuple(items) => {
+                for item in items {
+                    Self::rewrite_fun_indices_in_match_pattern(item, rewrites);
+                }
+            }
+            TypedMatchPattern::Constructor { fields, .. }
+            | TypedMatchPattern::Extractor { items: fields, .. } => {
+                for field in fields {
+                    Self::rewrite_fun_indices_in_match_pattern(field, rewrites);
+                }
+            }
+            TypedMatchPattern::ListCons(head, tail) => {
+                Self::rewrite_fun_indices_in_match_pattern(head, rewrites);
+                Self::rewrite_fun_indices_in_match_pattern(tail, rewrites);
+            }
+            TypedMatchPattern::Binding(_)
+            | TypedMatchPattern::Wildcard
+            | TypedMatchPattern::BoolLit(_)
+            | TypedMatchPattern::IntLit(_)
+            | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::DurationLit(_)
+            | TypedMatchPattern::ErrorKind(_)
+            | TypedMatchPattern::ListNil => {}
+        }
+    }
+
+    fn rewrite_fun_indices_in_match_arm(arm: &mut TypedMatchArm, rewrites: &HashMap<u32, u32>) {
+        Self::rewrite_fun_indices_in_match_pattern(&mut arm.pattern, rewrites);
+        if let Some(guard) = &mut arm.guard {
+            Self::rewrite_fun_indices_in_node(guard, rewrites);
+        }
+        Self::rewrite_fun_indices_in_node(&mut arm.body, rewrites);
+    }
+
+    fn rewrite_fun_indices_in_fun_param(param: &mut TypedFunParam, rewrites: &HashMap<u32, u32>) {
+        Self::rewrite_fun_indices_in_ty(&mut param.ty, rewrites);
+    }
+
+    fn rewrite_fun_indices_in_closure_param(
+        param: &mut TypedClosureParam,
+        rewrites: &HashMap<u32, u32>,
+    ) {
+        Self::rewrite_fun_indices_in_ty(&mut param.ty, rewrites);
     }
 }
 
@@ -1002,6 +1453,7 @@ struct Checker {
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
+    specializable_defs: HashMap<u32, TypedNode>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
     runtime_policy: RuntimeSourcePolicy,
@@ -1029,6 +1481,7 @@ impl Checker {
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
+            specializable_defs: HashMap::new(),
             substitutions: HashMap::new(),
             tyvar_bounds: HashMap::new(),
             runtime_policy: context.runtime_policy,
@@ -1050,6 +1503,7 @@ impl Checker {
         user_func_params: HashMap<u32, Vec<String>>,
         impl_method_uids: HashMap<String, u32>,
         function_ids_by_name: HashMap<String, ResolvedId>,
+        specializable_defs: HashMap<u32, TypedNode>,
         traits: HashMap<String, TraitInfo>,
         trait_impls: HashMap<(String, String), TraitImplInfo>,
         trait_impl_index_by_base_trait: TraitImplIndex,
@@ -1069,6 +1523,7 @@ impl Checker {
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
+            specializable_defs,
             substitutions: HashMap::new(),
             tyvar_bounds,
             runtime_policy: context.runtime_policy,
@@ -1092,6 +1547,7 @@ impl Checker {
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
+            self.specializable_defs.clone(),
             self.traits.clone(),
             self.trait_impls.clone(),
             self.trait_impl_index_by_base_trait.clone(),
@@ -1194,6 +1650,7 @@ impl Checker {
             user_func_params: self.user_func_params,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
+            specializable_defs: self.specializable_defs,
             traits: self.traits,
             trait_impls: self.trait_impls,
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait,
