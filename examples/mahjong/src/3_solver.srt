@@ -36,9 +36,7 @@ defmod MahjongSolver {
   }
 
   defp _contains_id(ids: List<Int>, target: Int) -> Boolean {
-    List::any(ids, {|id|
-      id == target
-    })
+    List::any(ids, &`==`(&1, target))
   }
 
   defp _remove_first(ids: List<Int>, target: Int) -> Result<List<Int>> {
@@ -66,14 +64,30 @@ defmod MahjongSolver {
     )
   }
 
+  defp _remove_sequence(ids: List<Int>, start_id: Int) -> Result<List<Int>> {
+    ids
+      |> _remove_first(start_id)
+      |>= _remove_first(start_id + 1)
+      |>= _remove_first(start_id + 2)
+  }
+
+  defp _removal_keeps_meldable(ids: List<Int>, target: Int, count: Int) -> Boolean {
+    match _remove_n(ids, target, count) {
+      Ok(rest) => _can_form_melds(rest),
+      Err(_) => False,
+    }
+  }
+
+  defp _sequence_removal_keeps_meldable(ids: List<Int>, head: Int) -> Boolean {
+    match _remove_sequence(ids, head) {
+      Ok(rest) => _can_form_melds(rest),
+      Err(_) => False,
+    }
+  }
+
   defp _is_seven_pairs(ids: List<Int>) -> Boolean {
     groups = List::group_count(ids)
-    and(
-      List::len(groups) == 7,
-      List::all(groups, {|entry|
-        entry._1 == 2
-      }),
-    )
+    and(List::len(groups) == 7, List::all(groups, {|entry| entry._1 == 2}))
   }
 
   defp _kokushi_required_ids() -> List<Int> {
@@ -86,13 +100,9 @@ defmod MahjongSolver {
     and(
       List::len(groups) == 13,
       and(
-        List::all(required, {|need|
-          _contains_id(ids, need)
-        }),
+        List::all(required, &_contains_id(ids, &1)),
         and(
-          List::count(groups, {|entry|
-            entry._1 == 2
-          }) == 1,
+          List::count(groups, {|entry| entry._1 == 2}) == 1,
           List::all(groups, {|entry|
             or(entry._1 == 1, entry._1 == 2)
           }),
@@ -122,13 +132,8 @@ defmod MahjongSolver {
       [] => True,
       [head, .._] => {
         as_triplet = if(
-          List::count(ids, {|id|
-            id == head
-          }) >= 3,
-          match _remove_n(ids, head, 3) {
-            Ok(rest) => _can_form_melds(rest),
-            Err(_) => False,
-          },
+          List::count(ids, &`==`(&1, head)) >= 3,
+          _removal_keeps_meldable(ids, head, 3),
           False,
         )
         if(as_triplet, True, _can_form_head_as_sequence(ids, head))
@@ -144,16 +149,7 @@ defmod MahjongSolver {
         third = head + 2
         if(
           and(_contains_id(ids, second), _contains_id(ids, third)),
-          match _remove_first(ids, head) {
-            Ok(rest1) => match _remove_first(rest1, second) {
-              Ok(rest2) => match _remove_first(rest2, third) {
-                Ok(rest3) => _can_form_melds(rest3),
-                Err(_) => False,
-              },
-              Err(_) => False,
-            },
-            Err(_) => False,
-          },
+          _sequence_removal_keeps_meldable(ids, head),
           False,
         )
       },
@@ -167,10 +163,7 @@ defmod MahjongSolver {
       [entry, ..tail] => {
         pair_ok = if(
           entry._1 >= 2,
-          match _remove_n(ids, entry._0, 2) {
-            Ok(rest) => _can_form_melds(rest),
-            Err(_) => False,
-          },
+          _removal_keeps_meldable(ids, entry._0, 2),
           False,
         )
         if(pair_ok, True, _has_standard_with_pair(ids, tail))

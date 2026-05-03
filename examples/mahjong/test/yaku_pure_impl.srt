@@ -1,15 +1,15 @@
+import MahjongExtractor::sequence
+import MahjongExtractor::triplet
+import MahjongDomain::parse_valid_hand14
+
 defmod MahjongYakuPureTest {
   defp _judge_ids(raw: String) -> Result<List<String>> {
-    parsed =? MahjongParser::parse_hand14(raw)
-    normalized =? MahjongNormalize::normalize_hand14(parsed)
-    valid =? MahjongNormalize::validate_hand14(normalized)
-    MahjongJudge::judge_hand(valid)
+    valid =? parse_valid_hand14(raw)
+    valid |> MahjongJudge::judge_hand()
   }
 
   defp _has_yaku(ids: List<String>, yaku_id: String) -> Boolean {
-    List::any(ids, {|id|
-      id == yaku_id
-    })
+    List::any(ids, &`==`(&1, yaku_id))
   }
 
   defp _assert_expected(hand: String, ids: List<String>, expected: List<String>) -> Result<()> {
@@ -72,15 +72,15 @@ defmod MahjongYakuPureTest {
   }
 
   defp _is_sequence(meld: ExtractedMeld) -> Boolean {
-    match meld.kind {
-      ExtractMeldKind::Sequence => True,
+    match meld {
+      sequence(_, _, _) => True,
       _ => False,
     }
   }
 
   defp _is_triplet(meld: ExtractedMeld) -> Boolean {
-    match meld.kind {
-      ExtractMeldKind::Triplet => True,
+    match meld {
+      triplet(_, _, _) => True,
       _ => False,
     }
   }
@@ -99,7 +99,10 @@ defmod MahjongYakuPureTest {
 
   defp _branch_has_two_sequence_start(branch: ExtractBranch, start_rank: Int) -> Boolean {
     List::count(branch.mentsu, {|meld|
-      and(_is_sequence(meld), meld.rank == start_rank)
+      match meld {
+        sequence(_, _, rank) => rank == start_rank,
+        _ => False,
+      }
     }) >= 2
   }
 

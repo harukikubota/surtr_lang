@@ -14,6 +14,28 @@ defrecord SuitBranchMatrix(
 )
 
 defmod MahjongExtractor {
+  @@doc """
+  ExtractedMeld を順子として分解する pattern-side API。
+  `match meld { sequence(tile_id, suit, rank) => ... }` の形で使う。
+  """
+  defextractor sequence(meld: ExtractedMeld) -> MatchResult<(Int, Int, Int), Error> {
+    match meld.kind {
+      ExtractMeldKind::Sequence => MatchResult::Success((meld.tile_id, meld.suit_index, meld.rank)),
+      _ => MatchResult::NoMatch,
+    }
+  }
+
+  @@doc """
+  ExtractedMeld を刻子として分解する pattern-side API。
+  `match meld { triplet(tile_id, suit, rank) => ... }` の形で使う。
+  """
+  defextractor triplet(meld: ExtractedMeld) -> MatchResult<(Int, Int, Int), Error> {
+    match meld.kind {
+      ExtractMeldKind::Triplet => MatchResult::Success((meld.tile_id, meld.suit_index, meld.rank)),
+      _ => MatchResult::NoMatch,
+    }
+  }
+
   defp _insert_sorted(ids: List<Int>, value: Int) -> List<Int> {
     match ids {
       [] => [value],
@@ -28,9 +50,7 @@ defmod MahjongExtractor {
   }
 
   defp _contains_id(ids: List<Int>, target: Int) -> Boolean {
-    List::any(ids, {|id|
-      id == target
-    })
+    List::any(ids, &`==`(&1, target))
   }
 
   defp _remove_first(ids: List<Int>, target: Int) -> Result<List<Int>> {
@@ -59,9 +79,14 @@ defmod MahjongExtractor {
   }
 
   defp _id_count(ids: List<Int>, target: Int) -> Int {
-    List::count(ids, {|id|
-      id == target
-    })
+    List::count(ids, &`==`(&1, target))
+  }
+
+  defp _remove_sequence(ids: List<Int>, start_id: Int) -> Result<List<Int>> {
+    ids
+      |> _remove_first(start_id)
+      |>= _remove_first(start_id + 1)
+      |>= _remove_first(start_id + 2)
   }
 
   defp _triplet_meld(id: Int) -> ExtractedMeld {
@@ -108,6 +133,24 @@ defmod MahjongExtractor {
     })
   }
 
+  defp _suited_triplet_branches(input: List<Int>, head: Int) -> Result<List<ExtractBranch>> {
+    rest =? _remove_n(input, head, 3)
+    branches =? suited_branches(rest)
+    Ok(_prepend_to_all(_triplet_meld(head), branches))
+  }
+
+  defp _suited_sequence_branches(input: List<Int>, head: Int) -> Result<List<ExtractBranch>> {
+    rest =? _remove_sequence(input, head)
+    branches =? suited_branches(rest)
+    Ok(_prepend_to_all(_sequence_meld(head), branches))
+  }
+
+  defp _honor_triplet_branches(input: List<Int>, head: Int) -> Result<List<ExtractBranch>> {
+    rest =? _remove_n(input, head, 3)
+    branches =? honor_branches(rest)
+    Ok(_prepend_to_all(_triplet_meld(head), branches))
+  }
+
   @@doc """
   再帰分解（順子+刻子）:
   入力を `(mentsu, unresolved)` の枝リストとして返す探索関数。
@@ -116,42 +159,24 @@ defmod MahjongExtractor {
     match input {
       [] => Ok([ExtractBranch(mentsu: [], unresolved: [])]),
       [head, ..tail] => {
-        triplet_branches = if(
+        triplet_branches =? if(
           _id_count(input, head) >= 3,
-          match _remove_n(input, head, 3) {
-            Ok(rest) => {
-              branches =? suited_branches(rest)
-              _prepend_to_all(_triplet_meld(head), branches)
-            },
-            Err(_) => [],
-          },
-          [],
+          _suited_triplet_branches(input, head),
+          Ok([]),
         )
 
-        sequence_branches = if(
+        sequence_branches =? if(
           MahjongTypes::can_start_sequence_id(head),
           {
             second = head + 1
             third = head + 2
             if(
               and(_contains_id(input, second), _contains_id(input, third)),
-              match _remove_first(input, head) {
-                Ok(rest1) => match _remove_first(rest1, second) {
-                  Ok(rest2) => match _remove_first(rest2, third) {
-                    Ok(rest3) => {
-                      branches =? suited_branches(rest3)
-                      _prepend_to_all(_sequence_meld(head), branches)
-                    },
-                    Err(_) => [],
-                  },
-                  Err(_) => [],
-                },
-                Err(_) => [],
-              },
-              [],
+              _suited_sequence_branches(input, head),
+              Ok([]),
             )
           },
-          [],
+          Ok([]),
         )
 
         tail_branches =? suited_branches(tail)
@@ -175,16 +200,10 @@ defmod MahjongExtractor {
     match input {
       [] => Ok([ExtractBranch(mentsu: [], unresolved: [])]),
       [head, ..tail] => {
-        triplet_branches = if(
+        triplet_branches =? if(
           _id_count(input, head) >= 3,
-          match _remove_n(input, head, 3) {
-            Ok(rest) => {
-              branches =? honor_branches(rest)
-              _prepend_to_all(_triplet_meld(head), branches)
-            },
-            Err(_) => [],
-          },
-          [],
+          _honor_triplet_branches(input, head),
+          Ok([]),
         )
 
         tail_branches =? honor_branches(tail)
@@ -337,8 +356,8 @@ defmod MahjongExtractor {
     match melds {
       [] => [],
       [head, ..tail] => {
-        current = match head.kind {
-          ExtractMeldKind::Sequence => if(head.suit_index == suit_index, [head.rank], []),
+        current = match head {
+          sequence(_, meld_suit, rank) => if(meld_suit == suit_index, [rank], []),
           _ => [],
         }
         List::concat([current, _sequence_starts_go(tail, suit_index)])

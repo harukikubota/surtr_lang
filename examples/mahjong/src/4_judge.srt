@@ -1,19 +1,16 @@
 import MahjongSolver::solve_winning_shapes
 import MahjongExtractor::extract_standard_shapes
 import MahjongExtractor::sequence_starts_by_suit
+import MahjongExtractor::triplet
 import MahjongYakuCatalog::registry
 
 defmod MahjongJudge {
   defp _id_count(ids: List<Int>, target: Int) -> Int {
-    List::count(ids, {|id|
-      id == target
-    })
+    List::count(ids, &`==`(&1, target))
   }
 
   defp _has_shape(shapes: List<String>, target: String) -> Boolean {
-    List::any(shapes, {|shape|
-      shape == target
-    })
+    List::any(shapes, &`==`(&1, target))
   }
 
   defp _is_terminal_or_honor(tile: Tile) -> Boolean {
@@ -30,15 +27,11 @@ defmod MahjongJudge {
   }
 
   defp _count_rank(ranks: List<Int>, target: Int) -> Int {
-    List::count(ranks, {|rank|
-      rank == target
-    })
+    List::count(ranks, &`==`(&1, target))
   }
 
   defp _has_rank(ranks: List<Int>, target: Int) -> Boolean {
-    List::any(ranks, {|rank|
-      rank == target
-    })
+    List::any(ranks, &`==`(&1, target))
   }
 
   defp _has_double_sequence_in_starts(starts: List<Int>) -> Boolean {
@@ -80,8 +73,8 @@ defmod MahjongJudge {
 
   defp _shape_has_toitoi(shape: ExtractedShape) -> Boolean {
     List::all(shape.melds, {|meld|
-      match meld.kind {
-        ExtractMeldKind::Triplet => True,
+      match meld {
+        triplet(_, _, _) => True,
         _ => False,
       }
     })
@@ -137,9 +130,10 @@ defmod MahjongJudge {
   defp _sum_han_go(ids: List<String>, table: HashMap<Yaku>, acc: Int) -> Result<Int> {
     match ids {
       [] => Ok(acc),
-      [head, ..tail] => match HashMap::get(table, head) {
-        Ok(yaku) => _sum_han_go(tail, table, acc + yaku.han),
-        Err(_) => Err(HandValidationError("unknown yaku id: " ++ head)),
+      [head, ..tail] => {
+        yaku =? HashMap::get(table, head)
+          |> map_err(HandValidationError("unknown yaku id: " ++ head))
+        _sum_han_go(tail, table, acc + yaku.han)
       },
     }
   }

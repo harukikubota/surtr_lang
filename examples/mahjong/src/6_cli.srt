@@ -1,6 +1,4 @@
-import MahjongParser::parse_hand14
-import MahjongNormalize::normalize_hand14
-import MahjongNormalize::validate_hand14
+import MahjongDomain::parse_valid_hand14
 import MahjongJudge::judge_hand
 import MahjongScore::score_hand14
 import MahjongYakuCatalog::resolve_many
@@ -53,9 +51,7 @@ defmod MahjongCli {
 
   def run(args: List<String>) -> Result<()> {
     raw = _pick_raw(args)
-    parsed =? parse_hand14(raw)
-    normalized =? normalize_hand14(parsed)
-    valid =? validate_hand14(normalized)
+    valid =? parse_valid_hand14(raw)
     yaku_ids =? judge_hand(valid)
     yakus =? resolve_many(yaku_ids)
     score =? score_hand14(valid)
