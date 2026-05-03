@@ -32,7 +32,18 @@ def double_if_small(value: Int) -> Option<Int> {
   if(value < 10, Option::Some(value * 2), Option::None)
 }
 
+def maybe_inc(value: Int) -> Option<Int> {
+  if(value < 10, Option::Some(value + 1), Option::None)
+}
+
+lifted = &maybe_inc >* &inc
+chained = &maybe_inc >=> &double_if_small
+
 print(inspect(some |*> inc()))
 print(inspect(none |*> inc()))
 print(inspect(some |>= double_if_small()))
 print(inspect(none |>= double_if_small()))
+print(inspect(lifted(7)))
+print(inspect(lifted(10)))
+print(inspect(chained(4)))
+print(inspect(chained(10)))

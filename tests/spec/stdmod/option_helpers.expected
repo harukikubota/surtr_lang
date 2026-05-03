@@ -14,3 +14,7 @@ Option::Some(8)
 Option::None
 Option::Some(14)
 Option::None
+Option::Some(9)
+Option::None
+Option::Some(10)
+Option::None

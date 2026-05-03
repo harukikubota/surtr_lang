@@ -28,3 +28,13 @@ impl LiftComposable<$A, $B, $C, List<$C>> for ($A -> List<$B>) {
     {|value| Functor::map(self(value), rhs)}
   }
 }
+
+@@doc """
+`LiftComposable` implementation for `Option`-returning unary functions.
+This is the source-level meaning of `left >* right` for `Option`.
+"""
+impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
+    {|value| Functor::map(self(value), rhs)}
+  }
+}

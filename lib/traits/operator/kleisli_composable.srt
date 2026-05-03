@@ -27,3 +27,13 @@ impl KleisliComposable<$A, $B, List<$C>> for ($A -> List<$B>) {
     {|value| Chainable::chain(self(value), rhs)}
   }
 }
+
+@@doc """
+`KleisliComposable` implementation for `Option`-returning unary functions.
+This is the source-level meaning of `left >=> right` for `Option`.
+"""
+impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}
