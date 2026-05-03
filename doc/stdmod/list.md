@@ -1,7 +1,7 @@
 # List module
 
 `List` は逐次処理を中心にした標準モジュールです。
-今回の拡張では、既存の fold/map 系に加えて集約 helper と prefix/suffix helper を追加します。
+今回の拡張では、既存の fold/map 系に加えて集約 helper、prefix/suffix helper、比較ベースの sort helper を追加します。
 
 ## Exported functions
 

@@ -201,8 +201,8 @@ impl List {
     match sorted {
       [] => [value],
       [head, ..tail] => match cmp(value, head) {
-        Ordering::Less | Ordering::Equal => [value, ..sorted],
-        Ordering::Greater => [head, .._insert_sorted(value, tail, cmp)],
+        Ordering::Less => [value, ..sorted],
+        Ordering::Equal | Ordering::Greater => [head, .._insert_sorted(value, tail, cmp)],
       },
     }
   }
@@ -477,6 +477,7 @@ impl List {
   Return a new list sorted according to `cmp`.
   The comparator should return `Ordering::Less` when `left` should appear
   before `right`.
+  Equal keys keep their original input order.
   ## REPL
   xldr(1)> List::sort_by(["a", "abcd", "xy"], {|l, r| Compare::compare(String::len(l), String::len(r))})
   [a, xy, abcd]
