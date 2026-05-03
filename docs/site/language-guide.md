@@ -531,7 +531,7 @@ chars = ["a".."c"]     # => Ok([a, b, c])
 ```
 
 `Int` range はそのまま `List<Int>` になり、`String` range は char validation を伴うので `Result<List<String>, Error>` になります。
-constant literal は compile-time に畳まれますが、変数 endpoint の場合でも surface は同じで、runtime では既存の `Generator::range` / `Generator::range_char` を使って評価されます。
+constant literal は compile-time に畳まれますが、surface 契約は変わりません。`String` endpoint が不正な場合は literal でも変数でも `Generator::range_char` と同じ `InvalidCharRange` が runtime に返ります。
 
 ここでの単位元は `[]` です。  
 Surtr は一般化された `pure` を置かず、`[]` と `List::cons` / `[x]` をはっきり分けています。

@@ -1,5 +1,29 @@
 use super::harness::{assert_compile_error, assert_output};
+use crate::common;
 use crate::support;
+use std::process::Stdio;
+
+fn assert_runtime_error_via_cli(source: &str, expected_substr: &str) {
+    let temp = common::unique_temp_dir("range-literal-runtime-error");
+    let source_path = temp.join("main.srt");
+    common::write_source(&source_path, source);
+
+    let output = common::surtr_command()
+        .current_dir(&temp)
+        .arg("run")
+        .arg("main.srt")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("surtr run should execute");
+
+    let stderr = common::normalize_text(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains(expected_substr),
+        "expected stderr containing `{expected_substr}`\nstdout:\n{}\nstderr:\n{stderr}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
 
 fn bindings_basic_print() {
     assert_output("num = 10\nnum2 = 5\nprint(to_string(num))", &["10"]);
@@ -134,12 +158,25 @@ fn range_literal_rejects_mixed_endpoint_types() {
     assert_compile_error(r#"bad = [1.."c"]"#, "range literal endpoints must both be Int or both be String");
 }
 
-fn range_literal_rejects_empty_string_literal_endpoint() {
-    assert_compile_error(r#"bad = ["".."c"]"#, "range literal start must be a single char");
+fn range_literal_empty_string_literal_endpoint_uses_runtime_invalid_char_range() {
+    assert_runtime_error_via_cli(
+        r#"print(to_string(["".."c"]))"#,
+        "InvalidCharRange: start must be a single char",
+    );
 }
 
-fn range_literal_rejects_multichar_string_literal_endpoint() {
-    assert_compile_error(r#"bad = ["ab".."c"]"#, "range literal start must be a single char");
+fn range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range() {
+    assert_runtime_error_via_cli(
+        r#"print(to_string(["ab".."c"]))"#,
+        "InvalidCharRange: start must be a single char",
+    );
+}
+
+fn range_literal_multichar_string_literal_stop_uses_runtime_invalid_char_range() {
+    assert_runtime_error_via_cli(
+        r#"print(to_string(["q".."aaa"]))"#,
+        "InvalidCharRange: stop must be a single char",
+    );
 }
 
 fn arithmetic_int_ops() {
@@ -1251,12 +1288,16 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             range_literal_rejects_mixed_endpoint_types as fn(),
         ),
         (
-            "range_literal_rejects_empty_string_literal_endpoint",
-            range_literal_rejects_empty_string_literal_endpoint as fn(),
+            "range_literal_empty_string_literal_endpoint_uses_runtime_invalid_char_range",
+            range_literal_empty_string_literal_endpoint_uses_runtime_invalid_char_range as fn(),
         ),
         (
-            "range_literal_rejects_multichar_string_literal_endpoint",
-            range_literal_rejects_multichar_string_literal_endpoint as fn(),
+            "range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range",
+            range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range as fn(),
+        ),
+        (
+            "range_literal_multichar_string_literal_stop_uses_runtime_invalid_char_range",
+            range_literal_multichar_string_literal_stop_uses_runtime_invalid_char_range as fn(),
         ),
         (
             "function_definition_minimal",

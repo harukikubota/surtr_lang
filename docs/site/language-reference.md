@@ -342,7 +342,7 @@ value: Int =? parse_int("1")
 - `[String..String]` は `Result<List<String>, Error>`
 - `String` endpoint は single ASCII char として扱う
 - constant endpoint は compile-time に fold される
-- `""` や `"ab"` のような constant string endpoint は compile error
+- `""` や `"ab"` のような不正な string endpoint は `Generator::range_char` と同じく runtime に `InvalidCharRange` になる
 - `[head, ..tail]` とは別構文で、range form は comma を持たない
 
 #### 共通制約

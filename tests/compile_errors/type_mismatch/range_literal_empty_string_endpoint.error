@@ -1,2 +1,0 @@
-phase: typecheck
-contains: range literal start must be a single char

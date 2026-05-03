@@ -4591,7 +4591,11 @@ impl Checker {
                     Self::typed_string_literal_value(&typed_start),
                     Self::typed_string_literal_value(&typed_stop),
                 ) {
-                    return self.fold_string_range_literal(span, &start_str, &stop_str);
+                    if let Some((start_cp, stop_cp)) =
+                        Self::foldable_string_range_endpoints(&start_str, &stop_str)
+                    {
+                        return Ok(self.fold_string_range_literal(span, start_cp, stop_cp));
+                    }
                 }
                 self.lower_string_range_runtime(span, start.clone(), stop.clone())
             }
@@ -4641,14 +4645,7 @@ impl Checker {
         }
     }
 
-    fn fold_string_range_literal(
-        &mut self,
-        span: &Span,
-        start: &str,
-        stop: &str,
-    ) -> Result<TypedNode, TypeError> {
-        let start_cp = Self::single_ascii_range_endpoint(start, "start", span)?;
-        let stop_cp = Self::single_ascii_range_endpoint(stop, "stop", span)?;
+    fn fold_string_range_literal(&mut self, span: &Span, start_cp: u8, stop_cp: u8) -> TypedNode {
         let mut elems = Vec::new();
         let mut current = start_cp;
         while current <= stop_cp {
@@ -4665,41 +4662,30 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::ListLiteral(elems),
         };
-        Ok(TypedNode {
+        TypedNode {
             ty: Ty::Result(Box::new(Ty::List(Box::new(Ty::Str))), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::ConstructorCall(0, vec![list_node]),
-        })
+        }
     }
 
-    fn single_ascii_range_endpoint(
-        value: &str,
-        label: &str,
-        span: &Span,
-    ) -> Result<u8, TypeError> {
+    fn foldable_string_range_endpoints(start: &str, stop: &str) -> Option<(u8, u8)> {
+        Some((
+            Self::single_ascii_range_endpoint_value(start)?,
+            Self::single_ascii_range_endpoint_value(stop)?,
+        ))
+    }
+
+    fn single_ascii_range_endpoint_value(value: &str) -> Option<u8> {
         let mut chars = value.chars();
-        let Some(ch) = chars.next() else {
-            return Err(TypeError {
-                message: format!("range literal {label} must be a single char"),
-                span: span.clone(),
-                hint: Some("Use a one-character string literal such as \"a\".".into()),
-            });
-        };
+        let ch = chars.next()?;
         if chars.next().is_some() {
-            return Err(TypeError {
-                message: format!("range literal {label} must be a single char"),
-                span: span.clone(),
-                hint: Some("Use a one-character string literal such as \"a\".".into()),
-            });
+            return None;
         }
         if !ch.is_ascii() {
-            return Err(TypeError {
-                message: format!("range literal {label} must be a single ASCII char"),
-                span: span.clone(),
-                hint: Some("Non-constant String ranges run through Generator::range_char at runtime, but constant literals are limited to ASCII in v1.".into()),
-            });
+            return None;
         }
-        Ok(ch as u8)
+        Some(ch as u8)
     }
 
     fn runtime_helper_id(&self, qualified_name: &str, span: &Span) -> Result<ResolvedId, TypeError> {
