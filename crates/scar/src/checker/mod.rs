@@ -587,55 +587,62 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
 
     fn parse_type(&mut self) -> Result<Ty, String> {
         self.skip_ws();
-        if self.consume("(") {
+        let mut ty = if self.consume("(") {
             self.skip_ws();
             if self.consume(")") {
-                return Ok(Ty::Unit);
-            }
-            if self.consume("->") {
+                Ty::Unit
+            } else if self.consume("->") {
                 let ret = self.parse_type()?;
                 self.skip_ws();
                 self.expect(")")?;
-                return Ok(Ty::Func(Vec::new(), Box::new(ret)));
-            }
-
-            let first = self.parse_type()?;
-            self.skip_ws();
-            let mut items = vec![first];
-            while self.consume(",") {
-                items.push(self.parse_type()?);
-                self.skip_ws();
-            }
-            if self.consume("->") {
-                let ret = self.parse_type()?;
-                self.skip_ws();
-                self.expect(")")?;
-                return Ok(Ty::Func(items, Box::new(ret)));
-            }
-            self.expect(")")?;
-            return if items.len() == 1 {
-                Ok(items.pop().expect("single grouped type"))
+                Ty::Func(Vec::new(), Box::new(ret))
             } else {
-                Ok(Ty::Tuple(items))
-            };
-        }
-
-        let ident = self.parse_ident()?;
-        self.skip_ws();
-        if self.consume("<") {
-            let mut args = vec![self.parse_type()?];
-            loop {
+                let first = self.parse_type()?;
                 self.skip_ws();
-                if self.consume(">") {
-                    break;
+                let mut items = vec![first];
+                while self.consume(",") {
+                    items.push(self.parse_type()?);
+                    self.skip_ws();
                 }
-                self.expect(",")?;
-                args.push(self.parse_type()?);
+                if self.consume("->") {
+                    let ret = self.parse_type()?;
+                    self.skip_ws();
+                    self.expect(")")?;
+                    Ty::Func(items, Box::new(ret))
+                } else {
+                    self.expect(")")?;
+                    if items.len() == 1 {
+                        items.pop().expect("single grouped type")
+                    } else {
+                        Ty::Tuple(items)
+                    }
+                }
             }
-            return self.build_generic_type(&ident, args);
-        }
+        } else {
+            let ident = self.parse_ident()?;
+            self.skip_ws();
+            if self.consume("<") {
+                let mut args = vec![self.parse_type()?];
+                loop {
+                    self.skip_ws();
+                    if self.consume(">") {
+                        break;
+                    }
+                    self.expect(",")?;
+                    args.push(self.parse_type()?);
+                }
+                self.build_generic_type(&ident, args)?
+            } else {
+                self.build_named_type(&ident)?
+            }
+        };
 
-        self.build_named_type(&ident)
+        self.skip_ws();
+        while self.consume("?") {
+            ty = Ty::Result(Box::new(ty), Box::new(Ty::Error));
+            self.skip_ws();
+        }
+        Ok(ty)
     }
 
     fn build_named_type(&mut self, ident: &str) -> Result<Ty, String> {

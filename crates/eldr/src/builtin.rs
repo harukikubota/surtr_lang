@@ -214,6 +214,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_lens_over,
     },
     BuiltinImpl {
+        name: "over_result",
+        func: builtin_lens_over_result,
+    },
+    BuiltinImpl {
         name: "__test_capture_stdout",
         func: builtin_test_capture_stdout,
     },
@@ -1388,6 +1392,12 @@ fn builtin_lens_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeErr
 fn builtin_lens_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Lens::over should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_lens_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Lens::over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 

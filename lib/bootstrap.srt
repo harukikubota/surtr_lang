@@ -276,8 +276,8 @@ defmod Bootstrap {
 
 @@doc """
 Concrete bootstrap error for "no value" situations.
-`NoneError` is the standard failure used by optional-style sugar such as `T?`
-and `None`.
+`NoneError` is the standard failure used by optional-style sugar such as `T?`.
+`T?` lowers to `Result<T, NoneError>` and is separate from `Option::None`.
 """
 deferror NoneError { "None Value." }
 

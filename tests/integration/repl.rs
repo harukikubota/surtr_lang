@@ -363,7 +363,7 @@ fn repl_human_diagnostic_stays_on_stderr() {
 #[test]
 fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     let output = run_repl_session(
-        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\n:sig pair._1\n:sig Lens::view(Tuple._1, pair)\n:sig Lens::set(Tuple._1, pair, 3)\n:sig Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)})\n:sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)\n:quit\n",
+        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Lens::view(Tuple._1, pair)\n:sig Lens::set(Tuple._1, pair, 3)\n:sig Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)})\n:sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -390,6 +390,12 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     assert!(
         stdout.contains(
             "Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)}): Result<(String, Int), Error>"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)}): Result<(Result<Int, Error>, String), Error>"
         ),
         "{stdout}"
     );

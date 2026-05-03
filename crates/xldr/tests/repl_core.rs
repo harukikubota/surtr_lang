@@ -1113,6 +1113,23 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
         "{over_sig}"
     );
 
+    let result_pair = engine.handle_line("result_pair = (Ok(2), \"ok\")");
+    let result_pair_text = rendered_text(&result_pair);
+    assert!(result_pair_text.contains("result_pair"), "{result_pair_text}");
+
+    let over_result_sig = engine
+        .handle_line(":sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})");
+    let over_result_sig = signature_text(&over_result_sig);
+    assert!(over_result_sig.contains("defined:"), "{over_result_sig}");
+    assert!(over_result_sig.contains("Lens::over_result("), "{over_result_sig}");
+    assert!(over_result_sig.contains("specialized:"), "{over_result_sig}");
+    assert!(
+        over_result_sig.contains(
+            "Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)}): Result<(Result<Int, Error>, String), Error>"
+        ),
+        "{over_result_sig}"
+    );
+
     let compose_sig =
         engine.handle_line(":sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)");
     let compose_sig = signature_text(&compose_sig);

@@ -111,6 +111,15 @@ impl Checker {
         Ok(Ty::Pid(self.pid_marker_from_ast(&args[0])?))
     }
 
+    fn ast_ty_is_none_error_marker(ast_ty: &AstTy) -> bool {
+        match ast_ty {
+            AstTy::Named(_, name) | AstTy::Generic(_, name, _) => {
+                Self::surface_type_name(name) == "NoneError"
+            }
+            _ => false,
+        }
+    }
+
     fn pid_marker_from_ast(&self, ast_ty: &AstTy) -> Result<String, TypeError> {
         match ast_ty {
             AstTy::Named(_, name) => Ok(name.clone()),
@@ -503,13 +512,21 @@ impl Checker {
                     let ok =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     let err = if args.len() == 2 {
-                        if context != TypeSyntaxContext::FunctionReturn {
+                        let allow_none_error_surface =
+                            context != TypeSyntaxContext::FunctionReturn
+                                && Self::ast_ty_is_none_error_marker(&args[1]);
+                        if context != TypeSyntaxContext::FunctionReturn
+                            && !allow_none_error_surface
+                        {
                             return Err(TypeError {
                                 message:
                                     "Result<T, E> is only allowed in function return signatures."
                                         .into(),
                                 span: span.clone(),
-                                hint: Some("Use Result<T> in local code.".into()),
+                                hint: Some(
+                                    "Use Result<T> in local code, or Result<T, NoneError> / T? for optional-style values."
+                                        .into(),
+                                ),
                             });
                         }
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::ErrorMarker)?
@@ -2070,22 +2087,26 @@ impl Checker {
                 path,
                 value,
                 source_is_result,
+                mode,
             } => TypedInner::LensSet {
                 source: Box::new(self.resolve_typed_node(*source)),
                 path: self.resolve_typed_lens_path(path),
                 value: Box::new(self.resolve_typed_node(*value)),
                 source_is_result,
+                mode,
             },
             TypedInner::LensOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
+                mode,
             } => TypedInner::LensOver {
                 source: Box::new(self.resolve_typed_node(*source)),
                 path: self.resolve_typed_lens_path(path),
                 update_fun: Box::new(self.resolve_typed_node(*update_fun)),
                 source_is_result,
+                mode,
             },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,

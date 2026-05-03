@@ -350,6 +350,81 @@ Lens::over(User.name, user, {|name| name})"#,
 }
 
 #[test]
+fn optional_type_annotation_matches_result_none_error() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord Boxed(
+  value: Int?,
+)
+boxed = Boxed(Ok(1))
+same: Result<Int, NoneError> = boxed.value"#,
+    );
+    assert!(!typed.is_empty());
+}
+
+#[test]
+fn lens_set_accepts_plain_value_for_result_focus() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(score: Result<Int>)
+user = User(Err(NoneError))
+Lens::set(User.score, user, 3)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(
+        &last.ty,
+        scar::types::Ty::Result(ok, err)
+            if matches!(ok.as_ref(), scar::types::Ty::Record(name, _) if name == "User")
+                && matches!(err.as_ref(), scar::types::Ty::Error)
+    ));
+}
+
+#[test]
+fn lens_over_accepts_success_updater_for_result_focus() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(score: Result<Int>)
+user = User(Ok(1))
+Lens::over(User.score, user, {|score| Ok(score + 1)})"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.node, TypedInner::LensOver { .. }));
+}
+
+#[test]
+fn lens_over_rejects_result_container_updater_for_result_focus() {
+    let err = typecheck_with_rules(
+        r#"defrecord User(score: Result<Int>)
+user = User(Ok(1))
+Lens::over(User.score, user, {|score| Ok(Ok(score))})"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("Result container updater should fail for Lens::over");
+    assert!(err
+        .message
+        .contains("Lens::over update function output mismatch"));
+}
+
+#[test]
+fn lens_over_result_requires_result_container_updater() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(score: Result<Int>)
+user = User(Ok(1))
+Lens::over_result(User.score, user, {|score| Ok(score)})"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.node, TypedInner::LensOver { .. }));
+
+    let err = typecheck_with_rules(
+        r#"defrecord User(score: Result<Int>)
+user = User(Ok(1))
+Lens::over_result(User.score, user, {|score| Ok(1)})"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("plain success updater should fail for Lens::over_result");
+    assert!(err
+        .message
+        .contains("Lens::over_result update function output mismatch"));
+}
+
+#[test]
 fn lens_standalone_tuple_root_is_rejected() {
     let err = resolve_with_builtin_prelude_result(
         r#"pair = (1, "one")
@@ -2568,7 +2643,22 @@ fn from_and_try_from_impls_are_mutually_exclusive() {
             "String",
             r#"@@builtin type String
 
-impl String {}
+defenum StringEncoding {
+  Utf8,
+  Ascii,
+}
+
+deferror InvalidStringEncoding(detail: String) {
+  detail
+}
+
+impl String {
+  @@builtin
+  def codepoints(value: String, encoding: StringEncoding) -> Result<List<Int>, InvalidStringEncoding>
+
+  @@builtin
+  def from_codepoints(values: List<Int>, encoding: StringEncoding) -> Result<String, InvalidStringEncoding>
+}
 
 impl Show for String {
   def to_string(self: Self) -> String {

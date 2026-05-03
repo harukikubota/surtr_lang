@@ -6,7 +6,9 @@ use diagnostics::{SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
-use scar::typed::{TraitCallOrigin, TypedInner, TypedLensPath, TypedLensSegment, TypedNode};
+use scar::typed::{
+    TraitCallOrigin, TypedInner, TypedLensOverMode, TypedLensPath, TypedLensSegment, TypedNode,
+};
 use scar::types::Ty;
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
@@ -2040,9 +2042,15 @@ impl ReplEngine {
                 source,
                 path,
                 update_fun,
+                mode,
                 ..
             } => format!(
-                "Lens::over({}, {}, {})",
+                "{}({}, {}, {})",
+                if matches!(mode, TypedLensOverMode::FocusResult) {
+                    "Lens::over_result"
+                } else {
+                    "Lens::over"
+                },
                 Self::render_typed_lens_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
                 Self::typed_source_expr_name(update_fun).unwrap_or("<update>".to_string())

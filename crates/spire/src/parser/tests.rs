@@ -2659,6 +2659,21 @@ fn test_parenthesized_single_type_annotation_is_rejected() {
 }
 
 #[test]
+fn test_optional_type_annotation_lowers_to_result_none_error() {
+    let ast = parse("value: Int? = input").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, args)), rhs) => {
+            assert_eq!(name, "Result");
+            assert_eq!(args.len(), 2);
+            assert!(matches!(&args[0], AstTy::Named(_, inner) if inner == "Int"));
+            assert!(matches!(&args[1], AstTy::Named(_, inner) if inner == "NoneError"));
+            assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "input"));
+        }
+        other => panic!("Expected optional type bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_field_access() {
     let ast = parse("user.name").unwrap();
     assert!(matches!(&ast[0], Ast::FieldAccess(_, _, ref f) if f == "name"));

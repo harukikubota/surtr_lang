@@ -7,6 +7,42 @@ use super::Parser;
 impl Parser<'_> {
     // ── Type annotation parsing ──
 
+    fn ast_ty_span(ty: &AstTy) -> &Span {
+        match ty {
+            AstTy::Named(span, _)
+            | AstTy::ImplTrait(span, _)
+            | AstTy::Generic(span, _, _)
+            | AstTy::Tuple(span, _)
+            | AstTy::Func(span, _, _) => span,
+        }
+    }
+
+    fn wrap_optional_ty(&self, inner: AstTy, end: usize) -> AstTy {
+        let start = Self::ast_ty_span(&inner).start;
+        AstTy::Generic(
+            Span { start, end },
+            "Result".to_string(),
+            vec![
+                inner,
+                AstTy::Named(
+                    Span {
+                        start,
+                        end,
+                    },
+                    "NoneError".to_string(),
+                ),
+            ],
+        )
+    }
+
+    fn parse_optional_type_suffix(&mut self, mut ty: AstTy) -> AstTy {
+        while matches!(self.peek(), Token::Question) {
+            let end = self.advance().span.end;
+            ty = self.wrap_optional_ty(ty, end);
+        }
+        ty
+    }
+
     pub(super) fn parse_type(&mut self) -> Result<AstTy, ParseError> {
         self.parse_type_in_impl_context(self.impl_target_stack.last().cloned())
     }
@@ -27,14 +63,14 @@ impl Parser<'_> {
                     let ret = parser.parse_type_in_impl_context(impl_target.clone())?;
                     parser.skip_newlines();
                     let end = parser.expect(&Token::RParen)?;
-                    return Ok(AstTy::Func(
+                    return Ok(parser.parse_optional_type_suffix(AstTy::Func(
                         Span {
                             start: sp.start,
                             end: end.end,
                         },
                         Vec::new(),
                         Box::new(ret),
-                    ));
+                    )));
                 }
 
                 let mut params = Vec::new();
@@ -60,14 +96,14 @@ impl Parser<'_> {
                     let ret = parser.parse_type_in_impl_context(impl_target.clone())?;
                     parser.skip_newlines();
                     let end = parser.expect(&Token::RParen)?;
-                    return Ok(AstTy::Func(
+                    return Ok(parser.parse_optional_type_suffix(AstTy::Func(
                         Span {
                             start: sp.start,
                             end: end.end,
                         },
                         params,
                         Box::new(ret),
-                    ));
+                    )));
                 }
 
                 let end = parser.expect(&Token::RParen)?;
@@ -86,13 +122,13 @@ impl Parser<'_> {
                         },
                     ));
                 }
-                Ok(AstTy::Tuple(
+                Ok(parser.parse_optional_type_suffix(AstTy::Tuple(
                     Span {
                         start: sp.start,
                         end: end.end,
                     },
                     params,
-                ))
+                )))
             });
         }
 
@@ -103,50 +139,50 @@ impl Parser<'_> {
             if name == "$Self" {
                 return Err(ParseError::syntax("Invalid type variable name: $Self", sp));
             }
-            return Ok(AstTy::Named(
+            return Ok(self.parse_optional_type_suffix(AstTy::Named(
                 Span {
                     start: sp.start,
                     end: end.end,
                 },
                 name,
-            ));
+            )));
         }
 
         if matches!(self.peek(), Token::Unit) {
             let end = self.advance().span.clone();
-            return Ok(AstTy::Named(
+            return Ok(self.parse_optional_type_suffix(AstTy::Named(
                 Span {
                     start: sp.start,
                     end: end.end,
                 },
                 "Unit".to_string(),
-            ));
+            )));
         }
 
         if matches!(self.peek(), Token::Impl) {
             self.advance();
             self.skip_newlines();
             let (trait_name, trait_span) = self.expect_qualified_ident(2, "trait")?;
-            return Ok(AstTy::ImplTrait(
+            return Ok(self.parse_optional_type_suffix(AstTy::ImplTrait(
                 Span {
                     start: sp.start,
                     end: trait_span.end,
                 },
                 trait_name,
-            ));
+            )));
         }
 
         // Named type, possibly with type args: Result<Int>, List<Int>, Option<Int>, ...
         let (name, name_span) = self.expect_qualified_ident(2, "type")?;
         if name == "Self" {
             if impl_target.is_some() {
-                return Ok(AstTy::Named(
+                return Ok(self.parse_optional_type_suffix(AstTy::Named(
                     Span {
                         start: sp.start,
                         end: name_span.end,
                     },
                     "Self".to_string(),
-                ));
+                )));
             }
             return Err(ParseError::syntax(
                 "`Self` can only be used inside impl methods",
@@ -171,24 +207,24 @@ impl Parser<'_> {
                     parser.skip_newlines();
                 }
                 let end = parser.expect_type_gt()?;
-                Ok(AstTy::Generic(
+                Ok(parser.parse_optional_type_suffix(AstTy::Generic(
                     Span {
                         start: sp.start,
                         end: end.end,
                     },
                     name,
                     args,
-                ))
+                )))
             });
         }
 
-        Ok(AstTy::Named(
+        Ok(self.parse_optional_type_suffix(AstTy::Named(
             Span {
                 start: sp.start,
                 end: name_span.end,
             },
             name,
-        ))
+        )))
     }
 
     pub(super) fn is_self_type(ty: &AstTy) -> bool {

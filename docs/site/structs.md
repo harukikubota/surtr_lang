@@ -21,6 +21,10 @@ impl User {
 `defstruct` は名前付きフィールドを持つデータ型です。  
 `impl User` は `User` 専用の namespace で、構築 helper や分解 helper を置きます。
 
+欠損可能 field を持たせるときは、まず `T?` を検討してください。
+`T?` は `Option<T>` ではなく `Result<T, NoneError>` に下がるため、Lens 更新や
+`Result` を返す helper 関数と直接つながります。
+
 ## 構築ルール
 
 `defstruct` には `new` が必須です。
@@ -152,6 +156,38 @@ print(to_string(user.age))
 - `value.field` は `defstruct` / `defrecord` で使える
 - enum 値に対する field access はない
 - field の更新は代入ではなく、新しい値を組み立てる helper か Lens API で扱う
+
+### `Option<T>` field と `T?` field の使い分け
+
+field を「値として optional に持つだけ」なら `Option<T>` でも問題ありません。
+ただし、構造体 field を `Lens` で取り出して `Result`-returning helper へ流したい場合は
+`T?` の方が更新パイプを短く保てます。
+
+```surtr
+defstruct User {
+  nickname: Option<String>,
+}
+
+next =
+  user.nickname
+  |> from(Result)
+  |>= normalize_name
+  |> from(Option)
+```
+
+上のように `Option<T>` field は `Result` パイプへ入る前に `Option -> Result`、
+戻すときに `Result -> Option` の変換が要ります。
+
+```surtr
+defstruct User {
+  nickname: String?,
+}
+
+next =? Lens::over(User.nickname, user, normalize_name)
+```
+
+`nickname: String?` なら field 自体が `Result<String, NoneError>` と同じなので、
+`Lens::set` / `Lens::over` / `Lens::over_result` とそのまま噛み合います。
 
 たとえば `impl User` 内で `with_age` を定義して再構築できます。
 

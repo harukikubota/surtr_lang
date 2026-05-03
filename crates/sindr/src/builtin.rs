@@ -260,6 +260,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Lens<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
     },
     BuiltinMeta {
+        name: "over_result",
+        arity: 3,
+        sig_str: "(Lens<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
+    },
+    BuiltinMeta {
         name: "__test_capture_stdout",
         arity: 0,
         sig_str: "() -> List<String>",

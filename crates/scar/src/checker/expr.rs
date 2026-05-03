@@ -2667,6 +2667,7 @@ impl Checker {
                 "Lens::compose" => Some("compose"),
                 "Lens::set" => Some("set"),
                 "Lens::over" => Some("over"),
+                "Lens::over_result" => Some("over_result"),
                 _ => None,
             };
         }
@@ -2674,6 +2675,7 @@ impl Checker {
             // Keep legacy fallback for Stage1 names.
             "view" => Some("view"),
             "compose" => Some("compose"),
+            "over_result" => Some("over_result"),
             _ => None,
         }
     }
@@ -2932,18 +2934,40 @@ impl Checker {
             &typed_source.ty,
         )?;
 
-        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
-        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
-            return Err(TypeError {
-                message: format!(
-                    "Lens::set value type mismatch: expected {}, got {}",
-                    self.ty_name(&path.focus_ty),
-                    self.ty_name(&typed_value.ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        }
+        let resolved_focus_ty = self.resolve_ty(&path.focus_ty);
+        let (typed_value, mode) = if let Ty::Result(ok, _) = &resolved_focus_ty {
+            let typed_value = self.check_node(value_expr)?;
+            if self.types_compatible(&path.focus_ty, &typed_value.ty) {
+                (typed_value, TypedLensSetMode::Exact)
+            } else if self.types_compatible(ok.as_ref(), &typed_value.ty) {
+                (typed_value, TypedLensSetMode::WrapPlainResult)
+            } else {
+                return Err(TypeError {
+                    message: format!(
+                        "Lens::set value type mismatch: expected {} or {}, got {}",
+                        self.ty_name(&path.focus_ty),
+                        self.ty_name(ok.as_ref()),
+                        self.ty_name(&typed_value.ty)
+                    ),
+                    span: typed_value.span.clone(),
+                    hint: None,
+                });
+            }
+        } else {
+            let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
+            if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "Lens::set value type mismatch: expected {}, got {}",
+                        self.ty_name(&path.focus_ty),
+                        self.ty_name(&typed_value.ty)
+                    ),
+                    span: typed_value.span.clone(),
+                    hint: None,
+                });
+            }
+            (typed_value, TypedLensSetMode::Exact)
+        };
 
         Ok(TypedNode {
             ty: Ty::Result(
@@ -2956,6 +2980,7 @@ impl Checker {
                 path,
                 value: Box::new(typed_value),
                 source_is_result,
+                mode,
             },
         })
     }
@@ -3004,53 +3029,8 @@ impl Checker {
         )?;
 
         let typed_update = self.check_node(update_expr)?;
-        let (in_ty, out_ty) = self.unary_function_parts(&typed_update.ty, "Lens::over", span)?;
-        if !self.types_compatible(&path.focus_ty, &in_ty) {
-            return Err(TypeError {
-                message: format!(
-                    "Lens::over update function input mismatch: expected {}, got {}",
-                    self.ty_name(&path.focus_ty),
-                    self.ty_name(&in_ty)
-                ),
-                span: typed_update.span.clone(),
-                hint: None,
-            });
-        }
-
-        let (out_ok, out_err) = match self.resolve_ty(&out_ty) {
-            Ty::Result(ok, err) => (ok.as_ref().clone(), err.as_ref().clone()),
-            _ => {
-                return Err(TypeError {
-                    message: format!(
-                        "Lens::over update function must return Result<...>, got {}",
-                        self.ty_name(&out_ty)
-                    ),
-                    span: typed_update.span.clone(),
-                    hint: None,
-                });
-            }
-        };
-        if !self.types_compatible(&path.focus_ty, &out_ok) {
-            return Err(TypeError {
-                message: format!(
-                    "Lens::over update function output mismatch: expected {}, got {}",
-                    self.ty_name(&path.focus_ty),
-                    self.ty_name(&out_ok)
-                ),
-                span: typed_update.span.clone(),
-                hint: None,
-            });
-        }
-        if !self.types_compatible(&Ty::Error, &out_err) {
-            return Err(TypeError {
-                message: format!(
-                    "Lens::over update function error type must be Error-compatible, got {}",
-                    self.ty_name(&out_err)
-                ),
-                span: typed_update.span.clone(),
-                hint: None,
-            });
-        }
+        let mode =
+            self.check_lens_over_callable("Lens::over", span, &path.focus_ty, &typed_update, false)?;
 
         Ok(TypedNode {
             ty: Ty::Result(
@@ -3063,8 +3043,173 @@ impl Checker {
                 path,
                 update_fun: Box::new(typed_update),
                 source_is_result,
+                mode,
             },
         })
+    }
+
+    fn check_lens_over_result_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args.len() != 3 {
+            return Err(TypeError {
+                message: format!("Lens::over_result expects 3 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: "Lens::over_result does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(update_expr) = &args[2] else {
+            unreachable!("validated argument form above")
+        };
+
+        let (typed_source, source_is_result, source_value_ty) =
+            self.check_lens_source_value("Lens::over_result", source_expr)?;
+        let path = self.check_lens_path_argument(
+            span,
+            "Lens::over_result",
+            path_expr,
+            &source_value_ty,
+            &typed_source.ty,
+        )?;
+
+        if !matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _)) {
+            return Err(TypeError {
+                message: format!(
+                    "Lens::over_result requires Result focus, got {}",
+                    self.ty_name(&path.focus_ty)
+                ),
+                span: span.clone(),
+                hint: Some("Use Lens::over for plain focus updates.".into()),
+            });
+        }
+
+        let typed_update = self.check_node(update_expr)?;
+        let mode = self.check_lens_over_callable(
+            "Lens::over_result",
+            span,
+            &path.focus_ty,
+            &typed_update,
+            true,
+        )?;
+
+        Ok(TypedNode {
+            ty: Ty::Result(
+                Box::new(self.resolve_ty(&source_value_ty)),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::LensOver {
+                source: Box::new(typed_source),
+                path,
+                update_fun: Box::new(typed_update),
+                source_is_result,
+                mode,
+            },
+        })
+    }
+
+    fn check_lens_over_callable(
+        &mut self,
+        op_name: &str,
+        span: &Span,
+        focus_ty: &Ty,
+        typed_update: &TypedNode,
+        require_result_focus: bool,
+    ) -> Result<TypedLensOverMode, TypeError> {
+        let (in_ty, out_ty) = self.unary_function_parts(&typed_update.ty, op_name, span)?;
+        let resolved_focus_ty = self.resolve_ty(focus_ty);
+        let value_focus_ty = match &resolved_focus_ty {
+            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+            _ => None,
+        };
+
+        let mode = if require_result_focus {
+            TypedLensOverMode::FocusResult
+        } else if let Some(value_focus_ty) = &value_focus_ty {
+            if self.types_compatible(value_focus_ty, &in_ty) {
+                TypedLensOverMode::FocusValue
+            } else {
+                TypedLensOverMode::FocusResult
+            }
+        } else {
+            TypedLensOverMode::FocusValue
+        };
+
+        let expected_input_ty = match (&mode, &value_focus_ty) {
+            (TypedLensOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
+            _ => &resolved_focus_ty,
+        };
+        if !self.types_compatible(expected_input_ty, &in_ty) {
+            return Err(TypeError {
+                message: format!(
+                    "{op_name} update function input mismatch: expected {}, got {}",
+                    self.ty_name(expected_input_ty),
+                    self.ty_name(&in_ty)
+                ),
+                span: typed_update.span.clone(),
+                hint: None,
+            });
+        }
+
+        let (out_ok, out_err) = match self.resolve_ty(&out_ty) {
+            Ty::Result(ok, err) => (ok.as_ref().clone(), err.as_ref().clone()),
+            _ => {
+                return Err(TypeError {
+                    message: format!(
+                        "{op_name} update function must return Result<...>, got {}",
+                        self.ty_name(&out_ty)
+                    ),
+                    span: typed_update.span.clone(),
+                    hint: None,
+                });
+            }
+        };
+        let expected_output_ty = match (&mode, &value_focus_ty) {
+            (TypedLensOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
+            _ => &resolved_focus_ty,
+        };
+        if !self.types_compatible(expected_output_ty, &out_ok) {
+            return Err(TypeError {
+                message: format!(
+                    "{op_name} update function output mismatch: expected {}, got {}",
+                    self.ty_name(expected_output_ty),
+                    self.ty_name(&out_ok)
+                ),
+                span: typed_update.span.clone(),
+                hint: None,
+            });
+        }
+        if !self.types_compatible(&Ty::Error, &out_err) {
+            return Err(TypeError {
+                message: format!(
+                    "{op_name} update function error type must be Error-compatible, got {}",
+                    self.ty_name(&out_err)
+                ),
+                span: typed_update.span.clone(),
+                hint: None,
+            });
+        }
+
+        Ok(mode)
     }
 
     fn try_check_lens_intrinsic_app(
@@ -3078,6 +3223,7 @@ impl Checker {
             Some("compose") => Ok(Some(self.check_lens_compose_intrinsic(span, args)?)),
             Some("set") => Ok(Some(self.check_lens_set_intrinsic(span, args)?)),
             Some("over") => Ok(Some(self.check_lens_over_intrinsic(span, args)?)),
+            Some("over_result") => Ok(Some(self.check_lens_over_result_intrinsic(span, args)?)),
             _ => Ok(None),
         }
     }

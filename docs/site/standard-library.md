@@ -381,8 +381,21 @@ defenum Option<$T> {
 ```
 
 `Option` は `=?`、`|*>`、`|>=`、`>*`、`>=>` の `Result` / `List` 文脈サポートを受けません。
-失敗伝播へ載せたい場合は `Option::to_result(value, err)`、値として分岐したい場合は `match` を使います。
-`Option::from_result(value)` は `Err(_)` を `None` に畳み込む明示変換です。
+失敗伝播へ載せたい場合は `from(value, Result)`、値として分岐したい場合は `match` を使います。
+`from(value, Option)` は `Err(_)` を `None` に畳み込む明示変換です。
+
+データ型の field で欠損を表したい場合は、`Option<T>` より `T?` を先に検討してください。
+`T?` は `Result<T, NoneError>` に下がるので、Lens 更新や `Result` を返す helper と直接つながります。
+
+```surtr
+user.nickname
+|> from(Result)
+|>= normalize_name
+|> from(Option)
+```
+
+`Option<T>` field を `Result` パイプへ流すと、上のような往復変換が必要です。
+`nickname: String?` なら field 自体が `Result` 系なので、この変換を省けます。
 
 ## 12. `Lens` module の位置づけ
 
@@ -508,6 +521,17 @@ user2 =? Lens::over(User.name, user, {|name|
 - `update_fun` は `A -> Result<A>` を返す必要がある
 - `Err(...)` を返したらそのまま伝播する
 - 返り値は常に `Result<S>`
+
+focus が `Result<A>` のとき、`over` は `Ok(value)` の payload だけを更新します。
+`Err(err)` の場合は updater を呼ばず、その field をそのまま残します。
+
+### `Lens::over_result`
+
+`Lens::over_result(lens, source, update_fun)` は `Result<A>` focus 全体を更新します。
+
+- `update_fun` は `Result<A> -> Result<Result<A>>`
+- `Ok(...)` と `Err(...)` の両方を明示的に作り直したい場面向け
+- successful payload だけ触りたいなら `over` の方が軽い
 
 ### `Lens::compose`
 

@@ -606,6 +606,31 @@ print(to_string(lift_and_expand("bind") |*> wrap_bracket()))"#,
     );
 }
 
+fn lens_result_helpers_support_set_over_and_over_result() {
+    assert_output(
+        r#"defrecord User(score: Result<Int>)
+
+user1 = User(Err(NoneError))
+user2 =? Lens::set(User.score, user1, 3)
+print("set:" ++ inspect(user2.score))
+
+user3 =? Lens::over(User.score, user2, {|score| Ok(score + 1)})
+print("over ok:" ++ inspect(user3.score))
+
+user4 =? Lens::over(User.score, user1, {|score| Ok(score + 1)})
+print("skip:" ++ inspect(user4.score))
+
+user5 =? Lens::over_result(User.score, user1, {|score: Result<Int>| Ok(Ok(9))})
+print("over_result:" ++ inspect(user5.score))"#,
+        &[
+            "set:Ok(Ok(3))",
+            "over ok:Ok(Ok(4))",
+            "skip:Ok(Err(NoneError(\"None Value.\")))",
+            "over_result:Ok(Ok(9))",
+        ],
+    );
+}
+
 fn language_goal_combined() {
     assert_output(
         r#"num = 10
@@ -744,6 +769,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "list_pipeline_usecase_expand_and_present_keywords",
             list_pipeline_usecase_expand_and_present_keywords as fn(),
+        ),
+        (
+            "lens_result_helpers_support_set_over_and_over_result",
+            lens_result_helpers_support_set_over_and_over_result as fn(),
         ),
         ("language_goal_combined", language_goal_combined as fn()),
     ];

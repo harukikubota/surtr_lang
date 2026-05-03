@@ -473,7 +473,9 @@ def pick() -> Result<Int> {
 通常の user code では `Result<T>` を返す関数の中で使います。
 現在きちんと使える対象は `Result`、`List`、`String` です。
 `Option` は標準 enum として存在しますが、`=?` や Result 文脈の関数演算子では特別扱いしません。
-必要な場合は `Option::to_result(value, err)` で明示的に `Result` へ変換します。
+必要な場合は `from(value, Result)` で明示的に `Result` へ変換します。
+欠損を field として持ちつつ Result パイプへそのまま流したい場合は、
+`Option<T>` より `T?` を使う方が自然です。
 そのため `num: Int =? Option::Some(1)` はエラーです。
 
 ```surtr

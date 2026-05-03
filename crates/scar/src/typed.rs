@@ -131,6 +131,18 @@ pub struct TypedLensPath {
     pub segments: Vec<TypedLensSegment>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TypedLensSetMode {
+    Exact,
+    WrapPlainResult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TypedLensOverMode {
+    FocusValue,
+    FocusResult,
+}
+
 /// Inner structure of a typed node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedInner {
@@ -185,6 +197,7 @@ pub enum TypedInner {
         path: TypedLensPath,
         value: Box<TypedNode>,
         source_is_result: bool,
+        mode: TypedLensSetMode,
     },
 
     /// Lens over application with compile-time path metadata.
@@ -193,6 +206,7 @@ pub enum TypedInner {
         path: TypedLensPath,
         update_fun: Box<TypedNode>,
         source_is_result: bool,
+        mode: TypedLensOverMode,
     },
 
     /// Struct literal — tag + field values (in definition order)

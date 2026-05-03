@@ -560,6 +560,7 @@ impl Checker {
                 path,
                 value,
                 source_is_result,
+                mode,
             } => TypedInner::LensSet {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
@@ -579,12 +580,14 @@ impl Checker {
                     generated_defs,
                 )?),
                 source_is_result,
+                mode,
             },
             TypedInner::LensOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
+                mode,
             } => TypedInner::LensOver {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
@@ -604,6 +607,7 @@ impl Checker {
                     generated_defs,
                 )?),
                 source_is_result,
+                mode,
             },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
@@ -1328,6 +1332,7 @@ impl Checker {
                 path,
                 value,
                 source_is_result,
+                mode,
             } => TypedInner::LensSet {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
                 path: TypedLensPath {
@@ -1338,12 +1343,14 @@ impl Checker {
                 },
                 value: Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 source_is_result,
+                mode,
             },
             TypedInner::LensOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
+                mode,
             } => TypedInner::LensOver {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
                 path: TypedLensPath {
@@ -1354,6 +1361,7 @@ impl Checker {
                 },
                 update_fun: Box::new(self.substitute_typed_node_with_mapping(*update_fun, mapping)),
                 source_is_result,
+                mode,
             },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,

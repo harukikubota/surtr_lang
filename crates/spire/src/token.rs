@@ -56,6 +56,7 @@ pub enum Token {
     Colon,          // :
     At,             // @
     Dot,            // .
+    Question,       // ?
     DotDot,         // ..
     FatArrow,       // =>
     Arrow,          // ->

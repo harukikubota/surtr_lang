@@ -409,6 +409,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             ',' => Token::Comma,
             ':' => Token::Colon,
             '.' => Token::Dot,
+            '?' => Token::Question,
             ';' => Token::Semicolon,
             '|' => Token::Pipe,
             '&' => Token::Amp,

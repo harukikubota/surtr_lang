@@ -1430,8 +1430,15 @@ struct PendingInjectCall {
 
 #[derive(Debug, Clone, Copy)]
 enum LensUpdateLeaf {
-    Set { value_slot: u32 },
-    Over { update_fun_slot: u32 },
+    Set {
+        value_slot: u32,
+        wrap_plain_result: bool,
+    },
+    Over {
+        update_fun_slot: u32,
+        mode: TypedLensOverMode,
+        focus_is_result: bool,
+    },
 }
 
 struct Codegen {
@@ -2468,16 +2475,18 @@ impl Codegen {
                 path,
                 value,
                 source_is_result,
+                mode,
             } => {
-                self.emit_lens_set(node, source, path, value, *source_is_result)?;
+                self.emit_lens_set(node, source, path, value, *source_is_result, *mode)?;
             }
             TypedInner::LensOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
+                mode,
             } => {
-                self.emit_lens_over(node, source, path, update_fun, *source_is_result)?;
+                self.emit_lens_over(node, source, path, update_fun, *source_is_result, *mode)?;
             }
 
             TypedInner::StructLit(tag, fields) => {
@@ -2708,6 +2717,7 @@ impl Codegen {
         path: &TypedLensPath,
         value: &TypedNode,
         source_is_result: bool,
+        mode: TypedLensSetMode,
     ) -> Result<(), CodegenError> {
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
@@ -2724,7 +2734,10 @@ impl Codegen {
             source_slot,
             path,
             source_is_result,
-            LensUpdateLeaf::Set { value_slot },
+            LensUpdateLeaf::Set {
+                value_slot,
+                wrap_plain_result: matches!(mode, TypedLensSetMode::WrapPlainResult),
+            },
         )
     }
 
@@ -2735,6 +2748,7 @@ impl Codegen {
         path: &TypedLensPath,
         update_fun: &TypedNode,
         source_is_result: bool,
+        mode: TypedLensOverMode,
     ) -> Result<(), CodegenError> {
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
@@ -2751,7 +2765,11 @@ impl Codegen {
             source_slot,
             path,
             source_is_result,
-            LensUpdateLeaf::Over { update_fun_slot },
+            LensUpdateLeaf::Over {
+                update_fun_slot,
+                mode,
+                focus_is_result: matches!(path.focus_ty, Ty::Result(_, _)),
+            },
         )
     }
 
@@ -2986,37 +3004,99 @@ impl Codegen {
         failure_end: Label,
     ) -> Result<(), CodegenError> {
         match leaf {
-            LensUpdateLeaf::Set { value_slot } => {
-                self.emit(Opcode::LoadLocal(value_slot));
+            LensUpdateLeaf::Set {
+                value_slot,
+                wrap_plain_result,
+            } => {
+                if wrap_plain_result {
+                    let ok_tag = self.add_constant(Constant::Tag(0));
+                    self.emit(Opcode::LoadConst(ok_tag));
+                    self.emit(Opcode::LoadLocal(value_slot));
+                    self.emit(Opcode::StructNew { field_count: 1 });
+                } else {
+                    self.emit(Opcode::LoadLocal(value_slot));
+                }
                 self.emit(Opcode::StoreLocal(current_slot));
             }
-            LensUpdateLeaf::Over { update_fun_slot } => {
-                self.emit(Opcode::LoadLocal(update_fun_slot));
-                self.emit(Opcode::LoadLocal(current_slot));
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
-                let update_result_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::StoreLocal(update_result_slot));
+            LensUpdateLeaf::Over {
+                update_fun_slot,
+                mode,
+                focus_is_result,
+            } => {
+                match (mode, focus_is_result) {
+                    (TypedLensOverMode::FocusValue, true) => {
+                        self.emit(Opcode::LoadLocal(current_slot));
+                        self.emit(Opcode::GetTag);
+                        let err_tag = self.add_constant(Constant::Tag(1));
+                        self.emit(Opcode::LoadConst(err_tag));
+                        self.emit(Opcode::EqTag);
 
-                self.emit(Opcode::LoadLocal(update_result_slot));
-                self.emit(Opcode::GetTag);
-                let err_tag = self.add_constant(Constant::Tag(1));
-                self.emit(Opcode::LoadConst(err_tag));
-                self.emit(Opcode::EqTag);
+                        let ok_label = self.fresh_label();
+                        let continue_label = self.fresh_label();
+                        self.emit_jump_if_false(ok_label);
+                        self.emit_jump(continue_label);
 
-                let ok_label = self.fresh_label();
-                self.emit_jump_if_false(ok_label);
-                self.emit(Opcode::LoadLocal(update_result_slot));
-                self.emit_jump(failure_end);
+                        self.patch_label(ok_label);
+                        self.emit(Opcode::LoadLocal(update_fun_slot));
+                        self.emit(Opcode::LoadLocal(current_slot));
+                        self.emit(Opcode::GetField { field_index: 0 });
+                        self.emit(Opcode::CallClosure {
+                            arity: 1,
+                            span_start: span.start as u32,
+                            span_end: span.end as u32,
+                        });
+                        let update_result_slot = self.state.next_slot;
+                        self.state.next_slot += 1;
+                        self.emit(Opcode::StoreLocal(update_result_slot));
 
-                self.patch_label(ok_label);
-                self.emit(Opcode::LoadLocal(update_result_slot));
-                self.emit(Opcode::GetField { field_index: 0 });
-                self.emit(Opcode::StoreLocal(current_slot));
+                        self.emit(Opcode::LoadLocal(update_result_slot));
+                        self.emit(Opcode::GetTag);
+                        self.emit(Opcode::LoadConst(err_tag));
+                        self.emit(Opcode::EqTag);
+
+                        let update_ok_label = self.fresh_label();
+                        self.emit_jump_if_false(update_ok_label);
+                        self.emit(Opcode::LoadLocal(update_result_slot));
+                        self.emit_jump(failure_end);
+
+                        self.patch_label(update_ok_label);
+                        let ok_tag = self.add_constant(Constant::Tag(0));
+                        self.emit(Opcode::LoadConst(ok_tag));
+                        self.emit(Opcode::LoadLocal(update_result_slot));
+                        self.emit(Opcode::GetField { field_index: 0 });
+                        self.emit(Opcode::StructNew { field_count: 1 });
+                        self.emit(Opcode::StoreLocal(current_slot));
+                        self.patch_label(continue_label);
+                    }
+                    _ => {
+                        self.emit(Opcode::LoadLocal(update_fun_slot));
+                        self.emit(Opcode::LoadLocal(current_slot));
+                        self.emit(Opcode::CallClosure {
+                            arity: 1,
+                            span_start: span.start as u32,
+                            span_end: span.end as u32,
+                        });
+                        let update_result_slot = self.state.next_slot;
+                        self.state.next_slot += 1;
+                        self.emit(Opcode::StoreLocal(update_result_slot));
+
+                        self.emit(Opcode::LoadLocal(update_result_slot));
+                        self.emit(Opcode::GetTag);
+                        let err_tag = self.add_constant(Constant::Tag(1));
+                        self.emit(Opcode::LoadConst(err_tag));
+                        self.emit(Opcode::EqTag);
+
+                        let ok_label = self.fresh_label();
+                        self.emit_jump_if_false(ok_label);
+                        self.emit(Opcode::LoadLocal(update_result_slot));
+                        self.emit_jump(failure_end);
+
+                        self.patch_label(ok_label);
+                        self.emit(Opcode::LoadLocal(update_result_slot));
+                        self.emit(Opcode::GetField { field_index: 0 });
+                        self.emit(Opcode::StoreLocal(current_slot));
+                    }
+                }
             }
         }
         Ok(())

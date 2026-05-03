@@ -8,7 +8,13 @@
 - `Lens::view(lens, source)`
 - `Lens::set(lens, source, value)`
 - `Lens::over(lens, source, update_fun)`
+- `Lens::over_result(lens, source, update_fun)`
 - `Lens::compose(outer, inner)`
+
+`T?` は `Result<T, NoneError>` に下がるため、optional-looking な field でも
+Lens では `Result` focus として扱われます。
+そのため `Result` を返す helper とつないで更新したい field には
+`Option<T>` より `T?` の方が自然です。
 
 ## tuple path
 
@@ -69,6 +75,14 @@ name_lens = User.name
 - `Lens::set(User.name, user, "bob")` で置き換える
 - `Lens::over(User.age, user, {|age| Ok(age + 1) })` で更新する
 
+`Result` field に対しては次も使えます。
+
+- `Lens::set(User.nickname, user, "bob")`
+- `Lens::over(User.nickname, user, normalize)`
+- `Lens::over_result(User.nickname, user, rewrite_result)`
+
+`nickname: String?` なら、`Lens::set(...)` の plain `"bob"` は `Ok("bob")` として格納されます。
+
 ## record path
 
 ```surtr
@@ -99,6 +113,7 @@ add_lens = Expr.Add
 - `Lens::view(Expr.Add, expr)` は `Result<...>` になる
 - 現在値が別 variant なら `Err(...)` になる
 - `set` / `over` でも同じく variant mismatch が失敗になる
+- `over_result` は `Result` focus 全体を書き換えたいときに使う
 
 ## compose
 
@@ -129,6 +144,28 @@ profile_name = Lens::compose(User.profile, Profile.name)
 # or
 profile_name = User.profile.name
 ```
+
+## `Result` focus の更新
+
+`Lens::set` と `Lens::over` は `Result<A>` focus に対して少し ergonomic です。
+
+- `set` は plain `A` も受け取り、`Ok(A)` を格納する
+- `over` は `A -> Result<A>` updater を受け取り、`Ok(value)` の payload だけ更新する
+- `over_result` は `Result<A> -> Result<Result<A>>` updater を受け取り、`Ok(...)` / `Err(...)` をまとめて更新する
+
+```surtr
+defstruct User {
+  nickname: String?,
+}
+
+normalized =? Lens::over(User.nickname, user, {|name|
+  Ok(String::trim(name))
+})
+```
+
+`Option<T>` field でも同じ更新はできますが、`Result` helper とつなぐたびに
+`Option -> Result -> Option` の往復変換が必要になります。
+`./structs.md` と `./standard-library.md` の `Option` 節も参照してください。
 
 ## 制約
 
@@ -161,3 +198,4 @@ lens = User.password
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできません。
 - `Tuple._0` のような tuple root は、`Lens` 文脈なしで単独に置くと失敗します。
 - `Lens` を closure capture や runtime container に運ぶのではなく、`Lens::view(...)` 済みの値を運ぶのが基本です。
+- `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。

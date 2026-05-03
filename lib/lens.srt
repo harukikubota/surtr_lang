@@ -1,11 +1,16 @@
 @@doc """
 Standard `Lens` type declaration.
 `Lens<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
-Lens values are consumed in the same scope via `Lens::view/set/over` and are not
+Lens values are consumed in the same scope via `Lens::view/set/over/over_result` and are not
 transported as runtime values across function boundaries.
 
 Use `Lens` when you want to describe "where" inside a value the compiler should
 look or update.
+When a struct or record field should participate in Result-style update flows,
+prefer `T?` or `Result<T, NoneError>` over `Option<T>`.
+That keeps the field aligned with `set`, `over`, `over_result`, `=?`, and
+ordinary `Result`-returning helper functions without repeated container
+conversion.
 
 - `Type.segment` builds a path itself
 - `value.segment` is sugar for applying the corresponding path to `value`
@@ -35,13 +40,13 @@ Outside the allowed scope, `User.secret`-style path roots are compile errors.
 @@doc """
 Lens module.
 Provides compiler-managed path access/update intrinsics:
-`view`, `set`, `over`, `compose`.
+`view`, `set`, `over`, `over_result`, `compose`.
 
 Typical workflow:
 
 1. Build a path with `Type.segment` or `Lens::compose(...)`
 2. Read with `Lens::view(...)` or `value.segment`
-3. Update with `Lens::set(...)` or `Lens::over(...)`
+3. Update with `Lens::set(...)`, `Lens::over(...)`, or `Lens::over_result(...)`
 
 ## REPL
 Struct path create/get/set/update:
@@ -77,6 +82,7 @@ Record path surface:
 - get: `value.field` or `Lens::view(Record.field, value)`
 - set: `Lens::set(Record.field, value, next)`
 - update: `Lens::over(Record.field, value, updater)`
+- update Result container: `Lens::over_result(Record.field, value, updater)`
 
 Use `docs/site/lens.md` for the longer walkthrough.
 """
@@ -124,6 +130,10 @@ impl Lens {
   Returns the updated source wrapped in `Result`.
 
   Use `set` when you already have the replacement value.
+  When the focus is `Result<$A>`, `set` also accepts a plain `$A` and stores it
+  as `Ok($A)`.
+  This is especially useful for `T?` fields because `T?` lowers to
+  `Result<T, NoneError>`.
 
   For nested updates, compose the path first:
 
@@ -151,6 +161,11 @@ impl Lens {
   `update_fun` receives the current focus and returns `Result<$A>`.
 
   Use `over` when the new value depends on the current focused value.
+  When the focus is `Result<$A>`, `over` updates only the successful payload:
+  `Ok(value)` calls the updater with `value`, while `Err(err)` skips the updater
+  and leaves the field unchanged.
+  This makes `Result`-backed fields compose directly with ordinary
+  `A -> Result<A>` update helpers.
 
   `update_fun` must return `Result`.
   If `update_fun` returns `Err(...)`, that error is propagated as-is.
@@ -170,6 +185,19 @@ impl Lens {
   > bw2: BitWidth = BitWidth::Any(8)
   """
   @@builtin def over(lens: Lens<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
+
+  @@doc """
+  Update a `Result<$A>` focus as a whole.
+  `update_fun` receives the entire current `Result<$A>` and returns
+  `Result<Result<$A>>`.
+
+  Use `over_result` when you want to rewrite `Ok(...)` and `Err(...)` directly.
+  Use plain `over` when you only want to transform the successful payload.
+
+  `update_fun` must return `Result`.
+  If `update_fun` returns `Err(...)`, that error is propagated as-is.
+  """
+  @@builtin def over_result(lens: Lens<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
 
   @@doc """
   Compose two lens paths in sequence.
