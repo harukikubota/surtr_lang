@@ -2,7 +2,7 @@
 
 現在の Surtr における末尾呼び出し最適化（TCO）の適用範囲メモです。
 
-この文書は「今の実装で何が TCO 対象になるか」を手早く確認するための補助資料です。正本の VM 契約は [../../doc/EldrVM_spec.md](../../doc/EldrVM_spec.md)、導入時の作業ログは [../../doc/optimize/001_tail_call_optimization.md](../../doc/optimize/001_tail_call_optimization.md) を参照してください。
+この文書は「今の実装で何が TCO 対象になるか」を手早く確認するための補助資料です。正本の VM 契約は [../dev/EldrVM_spec.md](../dev/EldrVM_spec.md)、導入時の作業ログは [../../doc/optimize/001_tail_call_optimization.md](../../doc/optimize/001_tail_call_optimization.md) を参照してください。
 
 ## 要点
 

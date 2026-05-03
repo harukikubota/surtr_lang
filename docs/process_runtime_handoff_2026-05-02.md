@@ -20,7 +20,7 @@
 - `Value::Pid` と VM 内部の `ProcessRuntime` を追加し、singleton process と state を VM 所有データとして保持する。
 - `__process_pid`, `__process_spawn`, `__process_state`, `__process_store` を VM 特権 builtin として追加する。
 - `Task.call/async/launch/cast` の surface を `lib/process.srt` に追加し、現時点では同期 builtin 経由で実行できるようにする。
-- 仕様補足として `doc/surtr_actor_model_process_spec_v0.md` と `doc/surtr_vm_process_modification_scope_v0.md` を追加し、`doc/EldrVM_spec.md` に PID と隠し builtin の位置づけを追記する。
+- 仕様補足として `doc/surtr_actor_model_process_spec_v0.md` と `doc/surtr_vm_process_modification_scope_v0.md` を追加し、`docs/dev/EldrVM_spec.md` に PID と隠し builtin の位置づけを追記する。
 - `examples/process/**` と `tests/spec/**`, `tests/compile_errors/**` に動作サンプルと回帰テストを追加する。
 
 ## 主要ファイル

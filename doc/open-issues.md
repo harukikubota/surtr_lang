@@ -1,7 +1,7 @@
 # Surtr Open Issues
 
 > 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
-> 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、VM 契約は `doc/EldrVM_spec.md`、REPL 契約は `doc/Xldr_spec.md` を正本とする。
+> 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。
 
 最終更新日: 2026-04-30
 
@@ -163,7 +163,7 @@
   - 実装上は安定しているが、user-facing display としてその形式を正本化するかは未確定のままである。
 - 未確定点:
   - quoted form を正式仕様にするか、より自然な表示へ変えるか
-  - 仕様化する場合に `doc/EldrVM_spec.md` と rustdoc のどちらを正本にするか
+  - 仕様化する場合に `docs/dev/EldrVM_spec.md` と rustdoc のどちらを正本にするか
 - 受け入れ条件:
   - 採用した表示形式が docs とテストで一致する。
   - `Value::Error` の表示契約が将来ぶれない。
@@ -227,7 +227,7 @@
   - warning を導入するか
   - 導入する場合の severity、文言、lint 体系との接続
 - 受け入れ条件:
-  - warning 導入有無が `doc/要件定義v9.md` と `doc/テスト方針.md` で一貫する。
+  - warning 導入有無が `doc/要件定義v9.md` と `docs/dev/テスト方針.md` で一貫する。
   - warning を入れても成功ケースを compile error にしない。
 - テスト方針:
   - warning 導入時は diagnostics の human / JSON 出力を integration で固定する。
@@ -259,7 +259,7 @@
   - `entries(map)` などの surface を v1.x で増やすか
   - runtime 内部表現を `Vec<(String, Value)>` のまま維持するか、補助 index を併設するか
 - 受け入れ条件:
-  - 採用方針が `doc/要件定義v9.md` / `doc/EldrVM_spec.md` / `doc/テスト方針.md` の3点で矛盾しない。
+  - 採用方針が `doc/要件定義v9.md` / `docs/dev/EldrVM_spec.md` / `docs/dev/テスト方針.md` の3点で矛盾しない。
   - surface を増やす場合は std module と builtin metadata の整合が取れる。
 - テスト方針:
   - literal 導入時は `unit/spire` / `unit/forge` / `spec` を同時に固定する。

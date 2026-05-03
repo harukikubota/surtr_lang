@@ -100,5 +100,5 @@ print(inspect(Regex::group_names(rx)))
 ## どこを見るか
 
 - source 上の一次情報: `../../lib/regex.srt`
-- 実装寄りメモ: `../../doc/stdmod/regex.md`
+- source 上の一次情報: `../../lib/types/regex.srt`
 - `Result` の扱い: `./error-handling.md`

@@ -35,9 +35,9 @@
   - `sum_non_tail_10000`
 - `tests/integration/language_features.rs`
   - tail recursion / mutual recursion / match arm / non-tail recursion の観測テストを追加
-- `doc/EldrVM_spec.md`
+- `docs/dev/EldrVM_spec.md`
   - tail-position call の frame reuse 契約を追記
-- `doc/Rune_observability.md`
+- `docs/dev/Rune_observability.md`
   - `tail_calls_optimized` を追記
 
 ## 計測ケース

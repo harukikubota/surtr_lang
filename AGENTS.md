@@ -38,22 +38,24 @@ surtr/
 | ファイル | 内容 |
 |---|---|
 | `doc/要件定義v9.md`           | 言語仕様・コンパイラ設計の全体定義 |
-| `doc/EldrVM_spec.md`         | VM仕様書 |
-| `doc/テスト方針.md`            | テストの分離方法・レイヤー |
+| `docs/dev/EldrVM_spec.md`   | VM仕様書 |
+| `docs/dev/テスト方針.md`    | テストの分離方法・レイヤー |
 | `doc/float.md`               | `Float` の暫定仕様メモ |
-| `doc/Rune_observability.md`  | `Rune` / `Eldr` の観測系オプション設計 |
+| `docs/dev/Rune_observability.md` | `Rune` / `Eldr` の観測系オプション設計 |
 
 ---
 
 ## Documentation Workflow
 
-- `doc/`: 正本仕様
-  - `要件定義v9.md`, `EldrVM_spec.md`, `Xldr_spec.md`, `テスト方針.md`, `open-issues.md`, `Rune_observability.md`,
+- `docs/dev/`: 開発者向け正本仕様
+  - `EldrVM_spec.md`, `Xldr_spec.md`, `テスト方針.md`, `Rune_observability.md`
+- `doc/`: draft、開発アイデア、タスク入力、tmp ファイル置き場
+  - `要件定義v9.md`, `open-issues.md`, `float.md` など
 - `docs/`: 補助資料・公開向けガイド
 - `lib/*.srt`: 標準モジュールの利用者向けドキュメント。`@doc` を正本とする
 - `crates/**`: 実装者向け内部契約。公開境界は rustdoc で残す
 
-実装タスクの着手時は `doc/要件定義v9.md` と該当 spec を最優先で参照し、不整合があれば先に正本を更新してからコードを変更すること。
+実装タスクの着手時は `doc/要件定義v9.md` と `docs/dev/` 配下の該当 spec を最優先で参照し、不整合があれば先に正本を更新してからコードを変更すること。
 
 ---
 
@@ -272,7 +274,7 @@ Error: TypeMismatch
   - 例: `tmux attach -t surtr-repl`
 - セッション継続運用時は detach 手順も併記する
   - 例: `Ctrl-b` → `d`
-- REPL 関連改修（`crates/xldr/**`, `crates/rune/**` の REPL 経路, `doc/Xldr_spec.md`, REPL 統合テスト）ではこのフローを必ず適用する
+- REPL 関連改修（`crates/xldr/**`, `crates/rune/**` の REPL 経路, `docs/dev/Xldr_spec.md`, REPL 統合テスト）ではこのフローを必ず適用する
 
 ---
 
