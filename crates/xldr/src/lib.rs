@@ -1364,6 +1364,41 @@ deferror NoneError { "None Value." }"#,
     }
 
     #[test]
+    fn bundled_kernel_source_marks_kernel_module_autoimport() {
+        let ast = spire::parse_with_context(
+            include_str!("../../../lib/kernel.srt"),
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .expect("kernel source should parse as a std module");
+
+        let lowered = lower_module_source_ast(ast, None);
+        assert!(lowered
+            .iter()
+            .any(|module| module.module_path == "Kernel" && module.auto_import));
+    }
+
+    #[test]
+    fn bundled_special_types_source_declares_lazy_builtin_type() {
+        let ast = spire::parse_with_context(
+            include_str!("../../../lib/types/special_types.srt"),
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .expect("special types source should parse as a std module");
+
+        let lowered = lower_module_source_ast(ast, Some("SpecialTypes"));
+        assert!(lowered.iter().any(|module| {
+            module.module_path == "SpecialTypes"
+                && module.ast.iter().any(|stmt| {
+                    matches!(
+                        stmt,
+                        spire::ast::Ast::BuiltinTypeDecl(_, head, _)
+                            if head.name == "Lazy"
+                    )
+                })
+        }));
+    }
+
+    #[test]
     fn collect_doc_entries_includes_bootstrap_import_docs() {
         let ast = spire::parse_with_context(
             r#"defmod Bootstrap {

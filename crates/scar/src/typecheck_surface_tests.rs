@@ -1523,9 +1523,7 @@ guard = assert(False, make_error(True))"#,
 fn kernel_and_contract_rejects_eager_signature() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Kernel",
-        r#"@@builtin type Lazy<$T>
-
-defmod Kernel {
+        r#"defmod Kernel {
   @@builtin def and(left: Boolean, right: Boolean) -> Boolean
 }"#,
     )])

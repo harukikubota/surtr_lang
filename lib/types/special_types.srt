@@ -47,6 +47,18 @@ targets, or module/type declarations.
 """
 @@builtin type CondClauses<$Result>
 
+@@doc """
+Compiler-reserved delayed-evaluation marker for special forms.
+Use level: std builtin declaration marker only.
+`Lazy<$T>` exists so builtin signatures can describe operands that the
+language evaluates conditionally, such as `if`, `and`, `or`, and related
+special forms.
+It is not an ordinary first-class wrapper type for user data.
+Do not use it in user-defined bindings, fields, container elements, or return
+types.
+"""
+@@builtin type Lazy<$T>
+
 impl Show for Unit {
   @@doc """
   Return the standard string rendering for `Unit`.
