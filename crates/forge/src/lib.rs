@@ -6,8 +6,8 @@ pub mod registry;
 
 pub use codegen::{
     codegen, codegen_typed_program, compose_bytecode_with_chunk, BindingInfo, ChunkMeta,
-    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplTypeKind,
-    TypeDefDisplay,
+    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplLensInfo,
+    ReplLensSegmentInfo, ReplTypeKind, TypeDefDisplay,
 };
 
 #[cfg(test)]

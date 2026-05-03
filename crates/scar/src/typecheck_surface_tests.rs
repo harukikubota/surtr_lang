@@ -482,6 +482,32 @@ Lens::view(Tuple._0, pair)"#,
 }
 
 #[test]
+fn deferred_tuple_lens_binding_can_be_reused_by_lens_intrinsics() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"pair = ("alice", 42)
+lens = Tuple._1
+Lens::view(lens, pair)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Int));
+    assert!(matches!(last.node, TypedInner::LensView { .. }));
+}
+
+#[test]
+fn deferred_tuple_lens_binding_can_compose_before_consumption() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord Profile(name: String)
+pair = (Profile("alice"), 42)
+outer = Tuple._0
+path = outer / Profile.name
+Lens::view(path, pair)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Str));
+    assert!(matches!(last.node, TypedInner::LensView { .. }));
+}
+
+#[test]
 fn lens_tuple_type_root_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
@@ -544,10 +570,10 @@ fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
 }
 
 #[test]
-fn lens_tuple_type_root_without_context_is_rejected() {
-    let err = typecheck_with_rules("Tuple._0", RuntimeSourcePolicy::script())
-        .expect_err("Tuple._0 without context should fail");
-    assert!(err.message.contains("requires Lens type context"));
+fn lens_tuple_type_root_without_context_can_bind_as_deferred_path() {
+    let typed = typecheck_with_builtin_prelude("lens = Tuple._0");
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Unit));
 }
 
 #[test]
@@ -2487,7 +2513,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::SafeBind(_, rhs)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
-            TypedInner::LensPath(_) => false,
+            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => has_pending_trait_call(source),
             TypedInner::LensSet { source, value, .. } => {
                 has_pending_trait_call(source) || has_pending_trait_call(value)

@@ -1,0 +1,3 @@
+pair = ("alice", 42)
+lens = Tuple._1
+print(to_string(Lens::view(lens, pair)))

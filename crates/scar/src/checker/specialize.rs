@@ -539,6 +539,7 @@ impl Checker {
                 index,
             ),
             TypedInner::LensPath(path) => TypedInner::LensPath(path),
+            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(path),
             TypedInner::LensView {
                 source,
                 path,
@@ -1057,6 +1058,11 @@ impl Checker {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
             }
+            TypedInner::PendingLensPath(path) => {
+                if let Some(source_ty_hint) = &path.source_ty_hint {
+                    self.collect_bound_tyvars_in_ty(source_ty_hint, ordered, seen);
+                }
+            }
             TypedInner::LensView { source, path, .. } => {
                 self.collect_bound_tyvars_in_node(source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
@@ -1313,6 +1319,14 @@ impl Checker {
                 may_fail: path.may_fail,
                 segments: path.segments,
             }),
+            TypedInner::PendingLensPath(path) => {
+                TypedInner::PendingLensPath(PendingLensPath {
+                    source_ty_hint: path
+                        .source_ty_hint
+                        .map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
+                    segments: path.segments,
+                })
+            }
             TypedInner::LensView {
                 source,
                 path,
@@ -1789,7 +1803,7 @@ impl Checker {
                     })
             }
             TypedInner::FieldAccess(expr, _) => Self::typed_node_has_pending_trait_call(expr),
-            TypedInner::LensPath(_) => false,
+            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => Self::typed_node_has_pending_trait_call(source),
             TypedInner::LensSet { source, value, .. } => {
                 Self::typed_node_has_pending_trait_call(source)

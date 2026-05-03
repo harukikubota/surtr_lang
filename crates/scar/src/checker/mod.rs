@@ -425,6 +425,12 @@ enum StoredConstValue {
     LensPath(TypedLensPath),
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum StoredLensPath {
+    Concrete(TypedLensPath),
+    Pending(PendingLensPath),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConstMeta {
     name: String,
@@ -813,6 +819,7 @@ type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
 pub struct ScarCheckpoint {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
+    lens_bindings: HashMap<u32, StoredLensPath>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -827,6 +834,7 @@ pub struct ScarCheckpoint {
 pub struct ScarSession {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
+    lens_bindings: HashMap<u32, StoredLensPath>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -840,6 +848,7 @@ pub struct ScarSession {
 struct CheckerParts {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
+    lens_bindings: HashMap<u32, StoredLensPath>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -855,6 +864,7 @@ impl ScarSession {
         Self {
             env: initialize_env(),
             consts: HashMap::new(),
+            lens_bindings: HashMap::new(),
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
@@ -897,6 +907,7 @@ impl ScarSession {
         let mut checker = Checker::with_env_and_params(
             self.env.clone(),
             self.consts.clone(),
+            self.lens_bindings.clone(),
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
@@ -911,6 +922,7 @@ impl ScarSession {
         let CheckerParts {
             env,
             consts,
+            lens_bindings,
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
@@ -922,6 +934,7 @@ impl ScarSession {
         } = checker.into_parts();
         self.env = env;
         self.consts = consts;
+        self.lens_bindings = lens_bindings;
         self.user_func_params = user_func_params;
         self.impl_method_uids = impl_method_uids;
         self.function_ids_by_name = function_ids_by_name;
@@ -937,6 +950,7 @@ impl ScarSession {
         ScarCheckpoint {
             env: self.env.clone(),
             consts: self.consts.clone(),
+            lens_bindings: self.lens_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
@@ -951,6 +965,7 @@ impl ScarSession {
     pub fn rollback(&mut self, checkpoint: ScarCheckpoint) {
         self.env = checkpoint.env;
         self.consts = checkpoint.consts;
+        self.lens_bindings = checkpoint.lens_bindings;
         self.user_func_params = checkpoint.user_func_params;
         self.impl_method_uids = checkpoint.impl_method_uids;
         self.function_ids_by_name = checkpoint.function_ids_by_name;
@@ -982,7 +997,7 @@ struct Checker {
     current_impl_struct_target: Option<String>,
     in_extractor_body: bool,
     closure_depth: usize,
-    lens_bindings: HashMap<u32, TypedLensPath>,
+    lens_bindings: HashMap<u32, StoredLensPath>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
@@ -1031,6 +1046,7 @@ impl Checker {
     fn with_env_and_params(
         env: TypeEnv,
         consts: HashMap<u32, ConstMeta>,
+        lens_bindings: HashMap<u32, StoredLensPath>,
         user_func_params: HashMap<u32, Vec<String>>,
         impl_method_uids: HashMap<String, u32>,
         function_ids_by_name: HashMap<String, ResolvedId>,
@@ -1048,7 +1064,7 @@ impl Checker {
             current_impl_struct_target: None,
             in_extractor_body: false,
             closure_depth: 0,
-            lens_bindings: HashMap::new(),
+            lens_bindings,
             consts,
             user_func_params,
             impl_method_uids,
@@ -1072,6 +1088,7 @@ impl Checker {
         let mut checker = Checker::with_env_and_params(
             env,
             self.consts.clone(),
+            self.lens_bindings.clone(),
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
@@ -1173,6 +1190,7 @@ impl Checker {
         CheckerParts {
             env: self.env,
             consts: self.consts,
+            lens_bindings: self.lens_bindings,
             user_func_params: self.user_func_params,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,

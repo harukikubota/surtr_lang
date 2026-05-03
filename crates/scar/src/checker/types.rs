@@ -2073,6 +2073,10 @@ impl Checker {
                 TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
             }
             TypedInner::LensPath(path) => TypedInner::LensPath(self.resolve_typed_lens_path(path)),
+            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {
+                source_ty_hint: path.source_ty_hint.map(|ty| self.resolve_ty(&ty)),
+                segments: path.segments,
+            }),
             TypedInner::LensView {
                 source,
                 path,

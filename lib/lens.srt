@@ -28,6 +28,7 @@ Common path forms:
 You may bind it in the same scope:
 
 `lens = User.name`
+`tuple_lens = Tuple._1`
 
 but you may not pass it as a function argument, return it, capture it in a
 closure, or store it inside runtime containers such as `List`, tuples, `Ok(...)`

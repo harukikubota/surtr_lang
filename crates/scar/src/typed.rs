@@ -132,6 +132,12 @@ pub struct TypedLensPath {
     pub segments: Vec<TypedLensSegment>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingLensPath {
+    pub source_ty_hint: Option<Ty>,
+    pub segments: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypedLensSetMode {
     Exact,
@@ -184,6 +190,10 @@ pub enum TypedInner {
     /// Compile-time lens constant path value. Stage 1 does not allow
     /// first-class runtime transport of lens values.
     LensPath(TypedLensPath),
+
+    /// Deferred compile-time lens path value. Used for path bindings that need
+    /// later source/focus context before they can be fully specialized.
+    PendingLensPath(PendingLensPath),
 
     /// Lens view application with compile-time path metadata.
     LensView {

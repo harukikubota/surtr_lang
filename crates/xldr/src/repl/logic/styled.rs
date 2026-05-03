@@ -93,6 +93,9 @@ pub fn signature(signature: &str) -> String {
 }
 
 pub fn info_line(line: &str) -> String {
+    if let Some(rest) = line.strip_prefix("## ") {
+        return styled(rest, Style::fg(Color::Yellow).bold());
+    }
     if let Some(rest) = line.strip_prefix("kind: ") {
         return concat([
             styled("kind", Style::fg(Color::BrightBlack).bold()),
@@ -128,12 +131,69 @@ pub fn info_line(line: &str) -> String {
             type_doc(rest),
         ]);
     }
+    if let Some(rest) = line.strip_prefix("view result: ") {
+        return concat([
+            styled("view result", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            type_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("full path: ") {
+        return concat([
+            styled("full path", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            source_doc(rest),
+        ]);
+    }
     if let Some(rest) = line.strip_prefix("identity: ") {
         return concat([
             styled("identity", Style::fg(Color::BrightBlack).bold()),
             styled(": ", Style::fg(Color::BrightBlack)),
             source_doc(rest),
         ]);
+    }
+    if let Some(rest) = line.strip_prefix("hop ") {
+        return concat([
+            styled("hop ", Style::fg(Color::BrightBlack).bold()),
+            styled(rest, Style::fg(Color::Cyan).bold()),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("relation: ") {
+        return concat([
+            styled("relation", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            signature_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("cumulative: ") {
+        return concat([
+            styled("cumulative", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            source_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("fallible: ") {
+        return concat([
+            styled("fallible", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            styled(rest, Style::fg(Color::Yellow)),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("reason: ") {
+        return concat([
+            styled("reason", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            source_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("stop ") {
+        return concat([
+            styled("stop ", Style::fg(Color::BrightBlack).bold()),
+            styled(rest, Style::fg(Color::Magenta).bold()),
+        ]);
+    }
+    if line == "none" {
+        return styled(line, Style::fg(Color::BrightBlack).dim());
     }
     if line.contains("->") && line.contains('(') {
         return signature_doc(line);

@@ -432,7 +432,7 @@ Tuple._1
 ```
 
 - `.0`, `.1` ではなく `._0`, `._1`
-- `Tuple._N` は `Lens<(...), ...>` が期待される場所でだけ使う
+- `Tuple._N` は `Lens<(...), ...>` が期待される場所で使うほか、同一スコープの local binding として deferred path に束縛できる
 - `_0` 単体は使わない
 
 enum variant path は `Enum.Variant` です。
@@ -451,6 +451,10 @@ Token.Ident
 User.profile / Profile.name
 Lens::compose(User.profile, Profile.name)
 ```
+
+compose 後の表示は canonical path に正規化されます。
+`User.profile / Profile.name` は `User.profile.name` として扱われ、root path の
+重複は表示に残りません。
 
 ### `value.segment` は read sugar
 
@@ -557,6 +561,10 @@ name = Lens::view(profile_name, user)
 lens = User.name
 name = Lens::view(lens, user)
 ```
+
+REPL では `:type` / `:info` に加えて `:lens <binding|expr>` が使えます。
+`type` と `full path` の確認に加えて、variant selector や `Result` source を含む
+path の停止点をまとめて見たいときに使います。
 
 一方で、次はできません。
 

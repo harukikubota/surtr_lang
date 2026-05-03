@@ -210,6 +210,65 @@ fn core_commands_do_not_require_a_cli_process() {
 }
 
 #[test]
+fn core_reuses_deferred_tuple_lens_bindings_between_inputs() {
+    let mut engine = engine();
+
+    let lens = engine.handle_line("a = Tuple._1");
+    assert!(rendered_text(&lens).contains("a: Lens<_, _> = Tuple._1"));
+
+    let pair = engine.handle_line("pair = (\"alice\", 2)");
+    assert!(rendered_text(&pair).contains("pair: (String, Int) = (\"alice\", 2)"));
+
+    let value = engine.handle_line("Lens::view(a, pair)");
+    assert!(rendered_text(&value).contains("2"));
+}
+
+#[test]
+fn core_renders_top_level_lens_compose_expressions_without_codegen_leak() {
+    let mut engine = engine();
+
+    let tuple_lens = engine.handle_line("a = Tuple._1");
+    assert!(rendered_text(&tuple_lens).contains("a: Lens<_, _> = Tuple._1"));
+
+    let enum_lens = engine.handle_line("ep = IntBase.Oct");
+    assert!(rendered_text(&enum_lens).contains("ep: Lens<IntBase, Unit> = IntBase.Oct"));
+
+    let slash = engine.handle_line("a / ep");
+    let slash = rendered_text(&slash);
+    assert!(slash.contains("Lens<_, _> = Tuple._1.Oct"), "{slash}");
+
+    let helper = engine.handle_line("Lens::compose(a, ep)");
+    let helper = rendered_text(&helper);
+    assert!(helper.contains("Lens<_, _> = Tuple._1.Oct"), "{helper}");
+}
+
+#[test]
+fn core_lens_command_reports_segments_and_stop_points() {
+    let mut engine = engine();
+
+    let binding = engine.handle_line("path = Tuple._0");
+    assert!(rendered_text(&binding).contains("path: Lens<_, _> = Tuple._0"));
+
+    let lens_info = engine.handle_line(":lens path");
+    assert!(matches!(lens_info.output, ReplOutput::StyledDoc { .. }));
+    let lens_info = rendered_text(&lens_info);
+    assert!(lens_info.contains("## LensPath"), "{lens_info}");
+    assert!(lens_info.contains("type: Lens<_, _>"), "{lens_info}");
+    assert!(lens_info.contains("view result: _"), "{lens_info}");
+    assert!(lens_info.contains("full path: Tuple._0"), "{lens_info}");
+    assert!(lens_info.contains("## Flow"), "{lens_info}");
+    assert!(lens_info.contains("hop 1: Tuple._0"), "{lens_info}");
+    assert!(lens_info.contains("relation: _ -> _"), "{lens_info}");
+
+    let fallible = engine.handle_line(":lens BitWidth.Any");
+    let fallible = rendered_text(&fallible);
+    assert!(fallible.contains("view result: Result<Int, Error>"), "{fallible}");
+    assert!(fallible.contains("## Stops"), "{fallible}");
+    assert!(fallible.contains("stop 1:"), "{fallible}");
+    assert!(fallible.contains("variant mismatch returns Result"), "{fallible}");
+}
+
+#[test]
 fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
     let mut engine = engine();
 

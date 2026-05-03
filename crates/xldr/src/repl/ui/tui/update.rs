@@ -61,6 +61,7 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("sig", ":sig <symbol|expr>  — show signature"),
     ("info", ":info <query>  — show derived info"),
     ("type", ":type <binding>  — lookup binding type"),
+    ("lens", ":lens <binding|expr>  — inspect lens path"),
     ("save", ":save <path>  — save session to .eldr"),
 ];
 
@@ -236,7 +237,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
 
     match cmd {
         "q" | "quit" => app.should_quit = true,
-        "help" | "save" | "doc" | "error" | "sig" | "info" | "type" => {
+        "help" | "save" | "doc" | "error" | "sig" | "info" | "type" | "lens" => {
             let line = if arg.is_empty() {
                 format!(":{cmd}")
             } else {

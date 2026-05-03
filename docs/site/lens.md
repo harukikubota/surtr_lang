@@ -21,6 +21,11 @@ Lens では `Result` focus として扱われます。
 
 tuple path は REPL でそのまま試しやすいです。
 
+`Tuple._N` は `Lens` 文脈の中だけでなく、同一スコープの一時 binding としても
+保持できます。binding 自体は runtime value ではなく deferred path として扱われ、
+あとから `Lens::view/set/over/over_result` や `/` に渡した時点で concrete な
+`Lens<S, A>` に specialize されます。
+
 ### get
 
 ```text
@@ -40,6 +45,18 @@ xldr(2)> pair2 =? Lens::set(Tuple._1, pair, 99)
 > pair2: (String, Int) = ("alice", 99)
 xldr(3)> print(inspect(pair2))
 ("alice", 99)
+xldr(4)>
+```
+
+### deferred binding
+
+```text
+xldr(1)> pair = ("alice", 42)
+> pair: (String, Int) = ("alice", 42)
+xldr(2)> second = Tuple._1
+> second: Lens<_, _> = Tuple._1
+xldr(3)> print(Lens::view(second, pair))
+42
 xldr(4)>
 ```
 
@@ -148,6 +165,76 @@ profile_name = Lens::compose(User.profile, Profile.name)
 profile_name = User.profile.name
 ```
 
+compose した path は REPL や inspect 表示で canonical path に圧縮されます。
+つまり `User.profile / Profile.name` と `User.profile.name` は同じ path として
+扱われ、compose の履歴は表示に残りません。
+
+この canonical 化では、つなぎ目で root path が重複していたら落とします。
+たとえば `outer = User.profile` と `inner = Profile.name` を compose した結果は
+`User.profile.Profile.name` ではなく `User.profile.name` です。
+
+```text
+xldr(1)> outer = User.profile
+> outer: Lens<_, _> = User.profile
+xldr(2)> inner = Profile.name
+> inner: Lens<_, _> = Profile.name
+xldr(3)> path = outer / inner
+> path: Lens<_, _> = User.profile.name
+xldr(4)>
+```
+
+同じ規則は tuple segment や variant segment を含む path にも適用されます。
+
+- `Config.entrypoint / Tuple._0` は `Config.entrypoint._0`
+- `Expr.Add / Tuple._1` は `Expr.Add._1`
+
+`/` は path を組み立てる surface であり、表示時には canonical path へ正規化されます。
+
+## REPL で path を確認する
+
+`Lens` binding は runtime value ではないため、REPL では `:type` / `:info` /
+`:lens` を役割分担して使うのが自然です。
+
+- `:type path`
+  - `Lens<S, A>` または未解決なら `Lens<_, _>` を見る
+- `:info path`
+  - type と canonical `full path` を軽く確認する
+- `:lens path`
+  - segment 一覧と、`Result` 化しうる停止点を詳しく確認する
+
+### `:lens` の例
+
+```text
+xldr(1)> :lens Expr.Add.value
+type: Lens<Expr, Int>
+full path: Expr.Add.value
+segments:
+1. Expr.Add
+   kind: variant
+   source: Expr
+   focus: (Int)
+   fallible: yes
+   reason: variant mismatch returns Result
+2. value
+   kind: field
+   source: Add
+   focus: Int
+   fallible: no
+   reason: plain field access
+may stop at:
+1. Expr.Add - variant mismatch returns Result
+```
+
+`Result<T>` source から始める value-side query でも、停止点は `:lens` にまとまります。
+
+```text
+xldr(1)> :lens result_user.profile.name
+type: Lens<Result<User>, String>
+full path: User.profile.name
+may stop at:
+1. source - input already starts in Result context
+```
+
 ## `Result` focus の更新
 
 `Lens::set` と `Lens::over` は `Result<A>` focus に対して少し ergonomic です。
@@ -199,6 +286,8 @@ lens = User.password
 ## 躓きやすいポイント
 
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできません。
-- `Tuple._0` のような tuple root は、`Lens` 文脈なしで単独に置くと失敗します。
+- `Tuple._0` のような tuple root は、いまは同一スコープの local binding になら置けます。ただし runtime value にはならず、`Lens::view(...)` や `/` で消費する必要があります。
+- compose した path は canonical 表示へ圧縮されるので、`User.profile / Profile.name` を inspect すると `User.profile.name` に見えます。`/` の組み立て履歴そのものは残りません。
+- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:lens <binding|expr>` で確認するのが一番わかりやすいです。
 - `Lens` を closure capture や runtime container に運ぶのではなく、`Lens::view(...)` 済みの値を運ぶのが基本です。
 - `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。

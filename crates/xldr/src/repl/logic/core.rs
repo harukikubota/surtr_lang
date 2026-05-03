@@ -14,7 +14,7 @@ use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
 use sindr::ir::{DocEntry, DocKind};
 use sindr::policy::CompileUnitKind;
-use spire::ast::{Ast, AstTy, ImportSpec, RecordLitArg, Span};
+use spire::ast::{Ast, AstTy, BinOp, ImportSpec, RecordLitArg, Span};
 
 use super::command::{parse_repl_command, ReplCommand};
 use super::output::{ReplOutput, ReplResult};
@@ -758,6 +758,7 @@ impl ReplEngine {
             ":info <query>        Show derived information for a visible symbol or query"
                 .to_string(),
             ":type <binding>      Show the type and identity for a visible binding".to_string(),
+            ":lens <binding|expr> Inspect a LensPath and its stop points".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
             ":v <line>            Recall a previous result".to_string(),
@@ -798,6 +799,14 @@ impl ReplEngine {
         ]
     }
 
+    fn lens_help_lines() -> Vec<String> {
+        vec![
+            "Usage: :lens <binding|expr>".to_string(),
+            "Examples: :lens path, :lens Tuple._1, :lens BitWidth.Any".to_string(),
+            "Shows canonical path, segment details, and where the path may stop.".to_string(),
+        ]
+    }
+
     fn handle_help(&self, topic: Option<&str>) -> Vec<String> {
         let Some(topic) = topic.map(str::trim).filter(|topic| !topic.is_empty()) else {
             return Self::help_lines();
@@ -807,6 +816,7 @@ impl ReplEngine {
             "sig" => Self::sig_help_lines(),
             "info" => Self::info_help_lines(),
             "type" => Self::type_help_lines(),
+            "lens" => Self::lens_help_lines(),
             other => {
                 let mut rendered = vec![format!("No help found for :{}", other)];
                 rendered.push("Type :help for available REPL commands.".to_string());
@@ -1533,6 +1543,14 @@ impl ReplEngine {
             return Self::plain(vec![format!("No binding found for {}", trimmed)]);
         };
 
+        if binding.lens_info.is_some() {
+            return Self::plain(vec![format!(
+                "{} :: {}",
+                binding.ty.as_str(),
+                self.render_type_identity(binding, None)
+            )]);
+        }
+
         let Some(value) = self.vm.get_local(binding.slot_id) else {
             return Self::plain(vec![format!("Binding `{}` has no current value.", trimmed)]);
         };
@@ -1540,7 +1558,7 @@ impl ReplEngine {
         Self::plain(vec![format!(
             "{} :: {}",
             binding.ty.as_str(),
-            self.render_type_identity(binding, &value)
+            self.render_type_identity(binding, Some(&value))
         )])
     }
 
@@ -1566,6 +1584,199 @@ impl ReplEngine {
         }
     }
 
+    fn render_lens_info(info: &forge::ReplLensInfo) -> Vec<String> {
+        let mut lines = vec![
+            "## LensPath".to_string(),
+            format!("type: {}", info.ty),
+            format!("view result: {}", info.view_result_ty),
+            format!("full path: {}", info.full_path),
+            "## Flow".to_string(),
+        ];
+
+        let mut previous_terminal = None::<String>;
+        for (index, segment) in info.segments.iter().enumerate() {
+            let terminal = Self::lens_segment_terminal_name(&segment.label);
+            let local_path =
+                Self::render_lens_local_hop(segment, previous_terminal.as_deref(), &terminal);
+            lines.push(format!("hop {}: {}", index + 1, local_path));
+            lines.push(format!(
+                "relation: {} -> {}",
+                segment.source_ty, segment.focus_ty
+            ));
+            lines.push(format!("cumulative: {}", segment.label));
+            lines.push(format!(
+                "fallible: {}",
+                if segment.fallible { "yes" } else { "no" }
+            ));
+            lines.push(format!("reason: {}", segment.reason));
+            previous_terminal = Some(terminal);
+        }
+        lines.push("## Stops".to_string());
+        if info.stop_points.is_empty() {
+            lines.push("none".to_string());
+        } else {
+            for (index, stop_point) in info.stop_points.iter().enumerate() {
+                lines.push(format!("stop {}: {}", index + 1, stop_point));
+            }
+        }
+        lines
+    }
+
+    fn lens_segment_terminal_name(label: &str) -> String {
+        label
+            .rsplit('.')
+            .next()
+            .unwrap_or(label)
+            .to_string()
+    }
+
+    fn render_lens_local_hop(
+        segment: &forge::ReplLensSegmentInfo,
+        previous_terminal: Option<&str>,
+        terminal: &str,
+    ) -> String {
+        if segment.label == format!("Tuple.{terminal}") {
+            return segment.label.clone();
+        }
+        if segment.source_ty != "_" && !segment.source_ty.starts_with('(') {
+            return format!("{}.{}", segment.source_ty, terminal);
+        }
+        if let Some(previous_terminal) = previous_terminal {
+            return format!("{previous_terminal}.{terminal}");
+        }
+        segment.label.clone()
+    }
+
+    fn handle_lens(&mut self, query: &str) -> ReplResult {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Self::plain(Self::lens_help_lines());
+        }
+        if let Some(binding) = self.binding_info(trimmed) {
+            if let Some(lens_info) = &binding.lens_info {
+                return Self::styled(Self::render_lens_info(lens_info));
+            }
+        }
+        self.handle_lens_expression(trimmed)
+    }
+
+    fn handle_lens_expression(&mut self, source_query: &str) -> ReplResult {
+        let original_pending = self.pending.clone();
+        let original_source = self
+            .sources
+            .source(self.repl_source_id)
+            .unwrap_or("")
+            .to_string();
+        let query_source = format!("{source_query}\n");
+        let sigil_cp = self.sigil_session.checkpoint();
+        let scar_cp = self.scar_session.checkpoint();
+        let forge_cp = self.forge_session.checkpoint();
+
+        self.sources
+            .update_source(self.repl_source_id, query_source.clone());
+
+        let result = self.handle_lens_expression_inner(source_query, &query_source);
+
+        self.sigil_session.rollback(sigil_cp);
+        self.scar_session.rollback(scar_cp);
+        self.forge_session.rollback(forge_cp);
+        self.pending = original_pending;
+        self.sources
+            .update_source(self.repl_source_id, original_source);
+
+        result
+    }
+
+    fn handle_lens_expression_inner(
+        &mut self,
+        source_query: &str,
+        query_source: &str,
+    ) -> ReplResult {
+        let ast = match spire::parse_with_context(
+            query_source,
+            spire::ParserContext::repl(self.repl_source_id.0)
+                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
+        ) {
+            Ok(ast) => ast,
+            Err(e) => {
+                let message = e.message();
+                let spec = diagnostics::parse_error_spec(query_source, message, e.span().clone());
+                let rendered = error_display::diagnostic_lines_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
+                );
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: format!(":lens {source_query}"),
+                    rendered,
+                });
+            }
+        };
+
+        let resolved = match self.sigil_session.resolve(ast) {
+            Ok(r) => r,
+            Err(e) => {
+                let spec =
+                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None);
+                let rendered = error_display::diagnostic_lines_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
+                );
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: format!(":lens {source_query}"),
+                    rendered,
+                });
+            }
+        };
+
+        let typed = match self.scar_session.typecheck_with_context(
+            resolved,
+            scar::TypecheckContext {
+                runtime_policy: derive_runtime_policy(
+                    CompileUnitKind::Repl,
+                    SourceKind::ReplChunk,
+                    None,
+                ),
+                enforce_builtin_type_contracts: false,
+                allow_error_function_params: false,
+            },
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                let error = diagnostics::TypeErrorDiagnostic::new(e.message, e.span, e.hint);
+                let spec =
+                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
+                let rendered = error_display::diagnostic_lines_by_id(
+                    &self.sources,
+                    self.repl_source_id,
+                    &spec,
+                    self.error_display_mode,
+                );
+                return ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: format!(":lens {source_query}"),
+                    rendered,
+                });
+            }
+        };
+
+        let Some(root) = typed.first() else {
+            return Self::plain(Self::lens_help_lines());
+        };
+        let Some(info) = Self::lens_info_for_typed_node(root) else {
+            return Self::plain(vec![format!(
+                "`{source_query}` is not a LensPath binding or expression."
+            )]);
+        };
+
+        Self::styled(Self::render_lens_info(&info))
+    }
+
     fn handle_info_symbol(&self, source_query: &str, symbol: &str) -> ReplResult {
         if let Some(binding) = self.binding_info(symbol) {
             let mut lines = vec![symbol.to_string()];
@@ -1576,11 +1787,20 @@ impl ReplEngine {
             };
             lines.push(format!("kind: {kind}"));
             lines.push("origin: repl".to_string());
-            if let Some(value) = self.vm.get_local(binding.slot_id) {
+            if binding.lens_info.is_some() {
                 lines.push(format!("type: {}", binding.ty));
                 lines.push(format!(
                     "identity: {}",
-                    self.render_type_identity(binding, &value)
+                    self.render_type_identity(binding, None)
+                ));
+                if let Some(lens_info) = &binding.lens_info {
+                    lines.push(format!("full path: {}", lens_info.full_path));
+                }
+            } else if let Some(value) = self.vm.get_local(binding.slot_id) {
+                lines.push(format!("type: {}", binding.ty));
+                lines.push(format!(
+                    "identity: {}",
+                    self.render_type_identity(binding, Some(&value))
                 ));
             }
             if let Some(sig) = self.binding_callable_sig_summary(symbol) {
@@ -2056,11 +2276,33 @@ impl ReplEngine {
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
                 Self::typed_source_expr_name(update_fun).unwrap_or("<update>".to_string())
             ),
-            TypedInner::LensPath(path) => {
-                let rendered = Self::render_typed_lens_path(path);
+            TypedInner::LensPath(_path) => {
+                let rendered = match expr {
+                    Ast::BinOp(_, BinOp::Slash, left, right) => format!(
+                        "Lens::compose({}, {})",
+                        Self::source_expr_string(left),
+                        Self::source_expr_string(right)
+                    ),
+                    _ => Self::source_expr_string(expr),
+                };
                 format!(
-                    "Lens::compose({}, {}) -> {}",
+                    "{}: {}",
                     rendered,
+                    Self::ty_to_string(&typed.ty)
+                )
+            }
+            TypedInner::PendingLensPath(path) => {
+                let _ = path;
+                let rendered = match expr {
+                    Ast::BinOp(_, BinOp::Slash, left, right) => format!(
+                        "Lens::compose({}, {})",
+                        Self::source_expr_string(left),
+                        Self::source_expr_string(right)
+                    ),
+                    _ => Self::source_expr_string(expr),
+                };
+                format!(
+                    "{}: {}",
                     rendered,
                     Self::ty_to_string(&typed.ty)
                 )
@@ -2183,6 +2425,24 @@ impl ReplEngine {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Ast::BinOp(_, op, left, right) => format!(
+                "{} {} {}",
+                Self::source_expr_string(left),
+                match op {
+                    BinOp::Add => "+",
+                    BinOp::Sub => "-",
+                    BinOp::Mul => "*",
+                    BinOp::Slash => "/",
+                    BinOp::Eq => "==",
+                    BinOp::Neq => "!=",
+                    BinOp::Lt => "<",
+                    BinOp::Gt => ">",
+                    BinOp::Lte => "<=",
+                    BinOp::Gte => ">=",
+                    BinOp::Concat => "++",
+                },
+                Self::source_expr_string(right)
+            ),
             Ast::Closure(..) => "<closure>".to_string(),
             _ => "<expr>".to_string(),
         }
@@ -2197,6 +2457,23 @@ impl ReplEngine {
                 idx
             )),
             TypedInner::LensPath(path) => Some(Self::render_typed_lens_path(path)),
+            TypedInner::PendingLensPath(path) => Some(
+                path.segments
+                    .iter()
+                    .enumerate()
+                    .fold(String::new(), |mut acc, (index, segment)| {
+                        if index == 0 && segment.starts_with('_') {
+                            acc.push_str("Tuple");
+                        } else if !acc.is_empty() && !segment.starts_with('_') {
+                            acc.push('.');
+                        }
+                        if segment.starts_with('_') {
+                            acc.push('.');
+                        }
+                        acc.push_str(segment);
+                        acc
+                    }),
+            ),
             TypedInner::Closure(..) => Some("{|...| ...}".to_string()),
             TypedInner::Lit(lit) => Some(Self::literal_source(lit)),
             _ => None,
@@ -2231,14 +2508,14 @@ impl ReplEngine {
                 }
                 TypedLensSegment::Field { field_name, .. } => {
                     if rendered.is_empty() {
-                        rendered.push_str("<field>");
+                        rendered.push_str(&Self::ty_to_string(&path.source_ty));
                     }
                     rendered.push('.');
                     rendered.push_str(field_name);
                 }
                 TypedLensSegment::Variant { variant_name, .. } => {
                     if rendered.is_empty() {
-                        rendered.push_str("<variant>");
+                        rendered.push_str(&Self::ty_to_string(&path.source_ty));
                     }
                     rendered.push('.');
                     rendered.push_str(variant_name);
@@ -2249,6 +2526,175 @@ impl ReplEngine {
             "<lens>".to_string()
         } else {
             rendered
+        }
+    }
+
+    fn lens_segment_label(segment: &TypedLensSegment) -> String {
+        match segment {
+            TypedLensSegment::Field { field_name, .. } => field_name.clone(),
+            TypedLensSegment::Tuple { field_index, .. } => format!("_{field_index}"),
+            TypedLensSegment::Variant { variant_name, .. } => variant_name.clone(),
+        }
+    }
+
+    fn lens_info_from_path(
+        path: &TypedLensPath,
+        ty: &Ty,
+        source_is_result: bool,
+    ) -> forge::ReplLensInfo {
+        let mut current_source = path.source_ty.clone();
+        let mut segments = Vec::with_capacity(path.segments.len());
+        let mut stop_points = Vec::new();
+        let mut path_is_fallible = false;
+        if source_is_result {
+            stop_points.push("source - input already starts in Result context".to_string());
+        }
+        let mut prefix = String::new();
+        for segment in &path.segments {
+            let label = Self::lens_segment_label(segment);
+            let (kind, fallible, reason) = match segment {
+                TypedLensSegment::Field {
+                    field_index,
+                    field_name,
+                    ..
+                } => {
+                    let focus_ty = match &current_source {
+                        Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+                            .get(*field_index as usize)
+                            .map(|(_, ty)| ty.clone())
+                            .unwrap_or(Ty::Unit),
+                        _ => Ty::Unit,
+                    };
+                    if !prefix.is_empty() {
+                        prefix.push('.');
+                    }
+                    prefix.push_str(field_name);
+                    segments.push(forge::ReplLensSegmentInfo {
+                        label: prefix.clone(),
+                        kind: "field".to_string(),
+                        source_ty: Self::ty_to_string(&current_source),
+                        focus_ty: Self::ty_to_string(&focus_ty),
+                        fallible: false,
+                        reason: "field access".to_string(),
+                    });
+                    current_source = focus_ty;
+                    ("field", false, "field access")
+                }
+                TypedLensSegment::Tuple { field_index, .. } => {
+                    let focus_ty = match &current_source {
+                        Ty::Tuple(items) => items
+                            .get(*field_index as usize)
+                            .cloned()
+                            .unwrap_or(Ty::Unit),
+                        _ => Ty::Unit,
+                    };
+                    if prefix.is_empty() {
+                        prefix.push_str("Tuple");
+                    }
+                    prefix.push_str(&format!("._{field_index}"));
+                    segments.push(forge::ReplLensSegmentInfo {
+                        label: prefix.clone(),
+                        kind: "tuple".to_string(),
+                        source_ty: Self::ty_to_string(&current_source),
+                        focus_ty: Self::ty_to_string(&focus_ty),
+                        fallible: false,
+                        reason: "tuple index access".to_string(),
+                    });
+                    current_source = focus_ty;
+                    ("tuple", false, "tuple index access")
+                }
+                TypedLensSegment::Variant { variant_name, .. } => {
+                    if !prefix.is_empty() {
+                        prefix.push('.');
+                    }
+                    prefix.push_str(variant_name);
+                    let focus_ty = path.focus_ty.clone();
+                    path_is_fallible = true;
+                    stop_points.push(format!("{prefix} - variant mismatch returns Result"));
+                    segments.push(forge::ReplLensSegmentInfo {
+                        label: prefix.clone(),
+                        kind: "variant".to_string(),
+                        source_ty: Self::ty_to_string(&current_source),
+                        focus_ty: Self::ty_to_string(&focus_ty),
+                        fallible: true,
+                        reason: "variant mismatch returns Result".to_string(),
+                    });
+                    current_source = focus_ty;
+                    ("variant", true, "variant mismatch returns Result")
+                }
+            };
+            let _ = (kind, fallible, reason, label);
+        }
+        forge::ReplLensInfo {
+            ty: Self::ty_to_string(ty),
+            view_result_ty: if source_is_result || path_is_fallible {
+                format!("Result<{}, Error>", Self::ty_to_string(&path.focus_ty))
+            } else {
+                Self::ty_to_string(&path.focus_ty)
+            },
+            full_path: Self::render_typed_lens_path(path),
+            segments,
+            stop_points,
+        }
+    }
+
+    fn lens_info_for_typed_node(node: &TypedNode) -> Option<forge::ReplLensInfo> {
+        match &node.node {
+            TypedInner::LensPath(path) => Some(Self::lens_info_from_path(path, &node.ty, false)),
+            TypedInner::PendingLensPath(path) => {
+                let full_path = if path.segments.is_empty() {
+                    "<lens>".to_string()
+                } else {
+                    let mut rendered = String::new();
+                    for (index, segment) in path.segments.iter().enumerate() {
+                        if index == 0 && segment.starts_with('_') {
+                            rendered.push_str("Tuple");
+                        } else if !rendered.is_empty() && !segment.starts_with('_') {
+                            rendered.push('.');
+                        }
+                        if segment.starts_with('_') {
+                            rendered.push('.');
+                        }
+                        rendered.push_str(segment);
+                    }
+                    rendered
+                };
+                Some(forge::ReplLensInfo {
+                    ty: Self::ty_to_string(&node.ty),
+                    view_result_ty: "_".to_string(),
+                    full_path,
+                    segments: path
+                        .segments
+                        .iter()
+                        .map(|segment| forge::ReplLensSegmentInfo {
+                            label: if segment.starts_with('_') {
+                                format!("Tuple.{segment}")
+                            } else {
+                                segment.clone()
+                            },
+                            kind: if segment.starts_with('_') {
+                                "tuple".to_string()
+                            } else {
+                                "field".to_string()
+                            },
+                            source_ty: "_".to_string(),
+                            focus_ty: "_".to_string(),
+                            fallible: false,
+                            reason: "requires Lens context to specialize".to_string(),
+                        })
+                        .collect(),
+                    stop_points: Vec::new(),
+                })
+            }
+            TypedInner::LensView {
+                path,
+                source_is_result,
+                ..
+            } => Some(Self::lens_info_from_path(path, &Ty::Lens(
+                Box::new(path.source_ty.clone()),
+                Box::new(path.focus_ty.clone()),
+            ), *source_is_result)),
+            _ => None,
         }
     }
 
@@ -3148,7 +3594,14 @@ impl ReplEngine {
         chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     }
 
-    fn render_type_identity(&self, binding: &forge::BindingInfo, value: &Value) -> String {
+    fn render_type_identity(
+        &self,
+        binding: &forge::BindingInfo,
+        value: Option<&Value>,
+    ) -> String {
+        if binding.lens_info.is_some() {
+            return "TypeIdentity::LensPath".to_string();
+        }
         if let Some(kind) = binding.callable_kind {
             return match kind {
                 forge::ReplCallableKind::Closure => "TypeIdentity::Closure".to_string(),
@@ -3156,12 +3609,13 @@ impl ReplEngine {
             };
         }
         match value {
-            Value::Callable(callable) => match callable.metadata.origin {
+            None => "TypeIdentity::Type".to_string(),
+            Some(Value::Callable(callable)) => match callable.metadata.origin {
                 sindr::runtime::CallableOrigin::Closure => "TypeIdentity::Closure".to_string(),
                 sindr::runtime::CallableOrigin::Capture => "TypeIdentity::Capture".to_string(),
                 sindr::runtime::CallableOrigin::Unknown => "TypeIdentity::Closure".to_string(),
             },
-            Value::Tagged { tag, .. } => {
+            Some(Value::Tagged { tag, .. }) => {
                 let identity = self
                     .vm
                     .type_registry()
@@ -3174,7 +3628,7 @@ impl ReplEngine {
                     .unwrap_or("Type");
                 format!("TypeIdentity::{}", identity)
             }
-            _ => "TypeIdentity::Type".to_string(),
+            Some(_) => "TypeIdentity::Type".to_string(),
         }
     }
 
@@ -3247,6 +3701,9 @@ impl ReplEngine {
                     }
                     ReplCommand::Type { symbol } => {
                         return self.handle_type(&symbol);
+                    }
+                    ReplCommand::Lens { query } => {
+                        return self.handle_lens(&query);
                     }
                     ReplCommand::Error { mode } => {
                         return self.handle_error_mode(mode.as_deref());

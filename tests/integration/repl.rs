@@ -181,8 +181,8 @@ fn repl_pipe_stdin_prints_prompts_and_eval_output() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("xldr(1)> "));
     assert!(stdout.contains("xldr(2)> "));
-    assert!(stdout.contains("> x: Int = 42"));
-    assert!(stdout.contains("> 42"));
+    assert!(stdout.contains("xldr(1)> x: Int = 42"));
+    assert!(stdout.contains("xldr(2)> 42"));
 }
 
 #[test]
@@ -400,6 +400,49 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
         "{stdout}"
     );
     assert!(stdout.contains("Lens::compose("), "{stdout}");
+}
+
+#[test]
+fn repl_supports_deferred_lens_bindings_and_lens_command() {
+    let output = run_repl_session(
+        "a = Tuple._1\npair = (\"alice\", 2)\nLens::view(a, pair)\n:lens a\n:lens BitWidth.Any\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("a: Lens<_, _> = Tuple._1"), "{stdout}");
+    assert!(stdout.contains("2"), "{stdout}");
+    assert!(stdout.contains("LensPath"), "{stdout}");
+    assert!(stdout.contains("view result: _"), "{stdout}");
+    assert!(stdout.contains("full path: Tuple._1"), "{stdout}");
+    assert!(stdout.contains("Flow"), "{stdout}");
+    assert!(stdout.contains("hop 1: Tuple._1"), "{stdout}");
+    assert!(stdout.contains("Stops"), "{stdout}");
+    assert!(stdout.contains("stop 1:"), "{stdout}");
+    assert!(stdout.contains("view result: Result<Int, Error>"), "{stdout}");
+    assert!(stdout.contains("variant mismatch returns Result"), "{stdout}");
+}
+
+#[test]
+fn repl_renders_top_level_lens_compose_expressions() {
+    let output =
+        run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nLens::compose(a, ep)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("ep: Lens<IntBase, Unit> = IntBase.Oct"), "{stdout}");
+    assert!(stdout.contains("a: Lens<_, _> = Tuple._1"), "{stdout}");
+    assert!(stdout.contains("Lens<_, _> = Tuple._1.Oct"), "{stdout}");
 }
 
 #[test]

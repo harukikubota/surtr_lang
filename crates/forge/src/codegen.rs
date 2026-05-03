@@ -474,6 +474,7 @@ pub struct BindingInfo {
     pub callable_kind: Option<ReplCallableKind>,
     pub callable_display: Option<ReplCallableDisplay>,
     pub callable_captures: Vec<String>,
+    pub lens_info: Option<ReplLensInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -489,6 +490,25 @@ pub enum ReplCallableDisplay {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplLensSegmentInfo {
+    pub label: String,
+    pub kind: String,
+    pub source_ty: String,
+    pub focus_ty: String,
+    pub fallible: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplLensInfo {
+    pub ty: String,
+    pub view_result_ty: String,
+    pub full_path: String,
+    pub segments: Vec<ReplLensSegmentInfo>,
+    pub stop_points: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDefDisplay {
     pub name: String,
     pub kind: ReplTypeKind,
@@ -498,6 +518,7 @@ pub struct TypeDefDisplay {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChunkMeta {
     pub bindings: Vec<BindingInfo>,
+    pub result_lens_info: Option<ReplLensInfo>,
     pub type_defs: Vec<TypeDefDisplay>,
     pub function_defs: Vec<String>,
     pub docs: Vec<DocEntry>,
@@ -1039,9 +1060,192 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
 
     ChunkMeta {
         bindings,
+        result_lens_info: top_level_result_lens_info(typed),
         type_defs,
         function_defs,
         docs: Vec::new(),
+    }
+}
+
+fn top_level_result_lens_info(typed: &[TypedNode]) -> Option<ReplLensInfo> {
+    typed
+        .iter()
+        .rev()
+        .find(|stmt| {
+            !matches!(
+                stmt.node,
+                TypedInner::Def(..) | TypedInner::ExtractorDef(..) | TypedInner::DeferrorDef(..)
+            )
+        })
+        .and_then(lens_info_for_node)
+}
+
+fn lens_segment_label(segment: &TypedLensSegment) -> String {
+    match segment {
+        TypedLensSegment::Field { field_name, .. } => field_name.clone(),
+        TypedLensSegment::Tuple { field_index, .. } => format!("_{field_index}"),
+        TypedLensSegment::Variant { variant_name, .. } => variant_name.clone(),
+    }
+}
+
+fn lens_path_full_path(path: &TypedLensPath) -> String {
+    let mut rendered = String::new();
+    for segment in &path.segments {
+        match segment {
+            TypedLensSegment::Tuple { field_index, .. } => {
+                if rendered.is_empty() {
+                    rendered.push_str("Tuple");
+                }
+                rendered.push_str(&format!("._{field_index}"));
+            }
+            other => {
+                if rendered.is_empty() {
+                    rendered.push_str(&ty_to_string(&path.source_ty));
+                }
+                if !rendered.is_empty() {
+                    rendered.push('.');
+                }
+                rendered.push_str(&lens_segment_label(other));
+            }
+        }
+    }
+    if rendered.is_empty() {
+        "<lens>".to_string()
+    } else {
+        rendered
+    }
+}
+
+fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
+    match &node.node {
+        TypedInner::LensPath(path) => {
+            let mut current_source = path.source_ty.clone();
+            let mut segments = Vec::with_capacity(path.segments.len());
+            let mut stop_points = Vec::new();
+            let mut path_is_fallible = false;
+            let mut prefix = String::new();
+            for segment in &path.segments {
+                let label = lens_segment_label(segment);
+                let focus_ty = match segment {
+                    TypedLensSegment::Field { .. } | TypedLensSegment::Tuple { .. } => match &current_source {
+                        Ty::Tuple(items) => match segment {
+                            TypedLensSegment::Tuple { field_index, .. } => items
+                                .get(*field_index as usize)
+                                .cloned()
+                                .unwrap_or(Ty::Unit),
+                            _ => Ty::Unit,
+                        },
+                        Ty::Struct(_, fields) | Ty::Record(_, fields) => match segment {
+                            TypedLensSegment::Field { field_index, .. } => fields
+                                .get(*field_index as usize)
+                                .map(|(_, ty)| ty.clone())
+                                .unwrap_or(Ty::Unit),
+                            _ => Ty::Unit,
+                        },
+                        _ => Ty::Unit,
+                    },
+                    TypedLensSegment::Variant {
+                        payload_arity,
+                        variant_name,
+                        ..
+                    } => {
+                        stop_points.push(format!(
+                            "{}.{} - variant mismatch returns Result",
+                            ty_to_string(&current_source),
+                            variant_name
+                        ));
+                        if *payload_arity == 0 {
+                            Ty::Unit
+                        } else {
+                            path.focus_ty.clone()
+                        }
+                    }
+                };
+                if !prefix.is_empty() && !matches!(segment, TypedLensSegment::Tuple { .. }) {
+                    prefix.push('.');
+                }
+                match segment {
+                    TypedLensSegment::Tuple { field_index, .. } => {
+                        if prefix.is_empty() {
+                            prefix.push_str("Tuple");
+                        }
+                        prefix.push_str(&format!("._{field_index}"));
+                    }
+                    _ => prefix.push_str(&label),
+                }
+                let (kind, fallible, reason) = match segment {
+                    TypedLensSegment::Field { .. } => ("field", false, "field access"),
+                    TypedLensSegment::Tuple { .. } => ("tuple", false, "tuple index access"),
+                    TypedLensSegment::Variant { .. } => {
+                        path_is_fallible = true;
+                        ("variant", true, "variant mismatch returns Result")
+                    }
+                };
+                segments.push(ReplLensSegmentInfo {
+                    label: prefix.clone(),
+                    kind: kind.to_string(),
+                    source_ty: ty_to_string(&current_source),
+                    focus_ty: ty_to_string(&focus_ty),
+                    fallible,
+                    reason: reason.to_string(),
+                });
+                current_source = focus_ty;
+            }
+            Some(ReplLensInfo {
+                ty: ty_to_string(&node.ty),
+                view_result_ty: if path_is_fallible {
+                    format!("Result<{}, Error>", ty_to_string(&path.focus_ty))
+                } else {
+                    ty_to_string(&path.focus_ty)
+                },
+                full_path: lens_path_full_path(path),
+                segments,
+                stop_points,
+            })
+        }
+        TypedInner::PendingLensPath(path) => Some(ReplLensInfo {
+            ty: ty_to_string(&node.ty),
+            view_result_ty: "_".to_string(),
+            full_path: if path.segments.is_empty() {
+                "<lens>".to_string()
+            } else {
+                let mut rendered = String::new();
+                for (index, segment) in path.segments.iter().enumerate() {
+                    if index == 0 && segment.starts_with('_') {
+                        rendered.push_str("Tuple");
+                    } else if !rendered.is_empty() && !segment.starts_with('_') {
+                        rendered.push('.');
+                    }
+                    if segment.starts_with('_') {
+                        rendered.push('.');
+                    }
+                    rendered.push_str(segment);
+                }
+                rendered
+            },
+            segments: path
+                .segments
+                .iter()
+                .map(|segment| ReplLensSegmentInfo {
+                    label: if segment.starts_with('_') {
+                        format!("Tuple.{segment}")
+                    } else {
+                        segment.clone()
+                    },
+                    kind: if segment.starts_with('_') {
+                        "tuple".to_string()
+                    } else {
+                        "field".to_string()
+                    },
+                    source_ty: "_".to_string(),
+                    focus_ty: "_".to_string(),
+                    fallible: false,
+                    reason: "requires Lens context to specialize".to_string(),
+                })
+                .collect(),
+            stop_points: Vec::new(),
+        }),
+        _ => None,
     }
 }
 
@@ -1065,6 +1269,7 @@ fn collect_stmt_meta(
                 callable_kind_for_node(rhs),
                 callable_display_for_node(rhs),
                 &callable_capture_names(rhs),
+                lens_info_for_node(rhs),
             );
         }
         TypedInner::StructDef(_, name, field_names, _) => {
@@ -1127,6 +1332,7 @@ fn collect_pattern_binding_infos(
     callable_kind: Option<ReplCallableKind>,
     callable_display: Option<ReplCallableDisplay>,
     callable_captures: &[String],
+    lens_info: Option<ReplLensInfo>,
 ) {
     match pat {
         TypedPattern::Var(ty, id) => {
@@ -1138,6 +1344,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display: callable_display.clone(),
                     callable_captures: callable_captures.to_vec(),
+                    lens_info: lens_info.clone(),
                 });
             }
         }
@@ -1150,6 +1357,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display: callable_display.clone(),
                     callable_captures: callable_captures.to_vec(),
+                    lens_info: lens_info.clone(),
                 });
             }
             collect_pattern_binding_infos(
@@ -1159,6 +1367,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display,
                 callable_captures,
+                lens_info,
             );
         }
         TypedPattern::Wildcard(_)
@@ -1175,6 +1384,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display.clone(),
                     callable_captures,
+                    lens_info.clone(),
                 );
             }
         }
@@ -1186,6 +1396,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display.clone(),
                 callable_captures,
+                lens_info.clone(),
             );
             collect_pattern_binding_infos(
                 tail,
@@ -1194,6 +1405,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display,
                 callable_captures,
+                lens_info,
             );
         }
         TypedPattern::ResultOk(_, inner) => {
@@ -1204,6 +1416,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display,
                 callable_captures,
+                lens_info,
             );
         }
         TypedPattern::Extractor { items, .. } => {
@@ -1215,6 +1428,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display.clone(),
                     callable_captures,
+                    lens_info.clone(),
                 );
             }
         }
@@ -2001,7 +2215,18 @@ impl Codegen {
         });
 
         for (i, stmt) in main_stmts.iter().enumerate() {
-            self.emit_node(stmt)?;
+            if self.top_level_returns_result
+                && matches!(
+                    stmt.node,
+                    TypedInner::LensPath(_) | TypedInner::PendingLensPath(_)
+                )
+            {
+                // REPL chunks may end with a LensPath expression so the session can
+                // inspect the canonical path without materializing a runtime value.
+                self.emit_unit_const();
+            } else {
+                self.emit_node(stmt)?;
+            }
             if pop_last || i + 1 < main_stmts.len() {
                 self.emit(Opcode::Pop);
             }
@@ -2242,6 +2467,7 @@ impl Codegen {
 
             TypedInner::Bind(pat, rhs) => {
                 if matches!(rhs.ty, Ty::Lens(_, _)) {
+                    self.reserve_pattern_slots_for_lens_bind(pat);
                     let unit_idx = self.add_constant(Constant::Unit);
                     self.emit(Opcode::LoadConst(unit_idx));
                     return Ok(());
@@ -2454,7 +2680,7 @@ impl Codegen {
                 }
             }
 
-            TypedInner::LensPath(_) => {
+            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => {
                 return Err(CodegenError {
                     message:
                         "Lens path value leaked to codegen; Lens is compile-time only in Stage1"
@@ -4083,6 +4309,20 @@ impl Codegen {
         }
 
         self.emit_pattern_bind_from_local(current_pat, current_slot)
+    }
+
+    fn reserve_pattern_slots_for_lens_bind(&mut self, pat: &TypedPattern) {
+        match pat {
+            TypedPattern::Var(_, id) => {
+                self.alloc_slot(id.unique_id);
+            }
+            TypedPattern::As(_, inner, alias) => {
+                self.alloc_slot(alias.unique_id);
+                self.reserve_pattern_slots_for_lens_bind(inner);
+            }
+            TypedPattern::Wildcard(_) => {}
+            _ => {}
+        }
     }
 
     fn emit_propagate_result_from_local(

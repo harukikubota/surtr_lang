@@ -25,22 +25,29 @@ pub fn format_result_lines(
                 .bindings
                 .iter()
                 .filter_map(|b| {
-                    let val = vm.get_local(b.slot_id)?;
-                    let displayed = b.callable_display.as_ref().map_or_else(
-                        || inspect_value(vm, &val),
-                        |display| match display {
-                            ReplCallableDisplay::FnCapture { module, name, sig } => format!(
-                                "FnCapture(module: {}, name: {}, sig: {})",
-                                module, name, sig
-                            ),
-                            ReplCallableDisplay::Closure { sig } => {
-                                format!("Closure{}", sig)
-                            }
-                        },
-                    );
+                    let displayed = if let Some(lens_info) = &b.lens_info {
+                        lens_info.full_path.clone()
+                    } else {
+                        let val = vm.get_local(b.slot_id)?;
+                        b.callable_display.as_ref().map_or_else(
+                            || inspect_value(vm, &val),
+                            |display| match display {
+                                ReplCallableDisplay::FnCapture { module, name, sig } => format!(
+                                    "FnCapture(module: {}, name: {}, sig: {})",
+                                    module, name, sig
+                                ),
+                                ReplCallableDisplay::Closure { sig } => {
+                                    format!("Closure{}", sig)
+                                }
+                            },
+                        )
+                    };
                     Some(format!("{}: {} = {}", b.name, b.ty, displayed))
                 })
                 .collect();
+        }
+        if let Some(lens_info) = &meta.result_lens_info {
+            return vec![format!("{} = {}", lens_info.ty, lens_info.full_path)];
         }
         if !meta.type_defs.is_empty() {
             return meta.type_defs.iter().map(|t| t.name.clone()).collect();

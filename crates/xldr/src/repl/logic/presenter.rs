@@ -41,15 +41,14 @@ pub fn present_for_cli(result: &ReplResult, color: bool) -> Vec<String> {
         ReplOutput::EvalSuccess { rendered, .. } => rendered
             .iter()
             .map(|line| {
-                let rendered = if color {
+                if color {
                     styled::repl_result_line(line)
                 } else {
                     line.clone()
-                };
-                format!("> {rendered}")
+                }
             })
             .collect(),
-        ReplOutput::PlainText { lines } => lines.iter().map(|line| format!("> {line}")).collect(),
+        ReplOutput::PlainText { lines } => lines.clone(),
         ReplOutput::StyledDoc { lines } => {
             if color {
                 lines.iter().map(|line| styled::info_line(line)).collect()

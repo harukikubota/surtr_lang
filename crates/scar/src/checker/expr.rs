@@ -82,20 +82,29 @@ impl Checker {
                     };
                     if matches!(ty, Ty::Lens(_, _)) {
                         if let Some(path) = self.lens_bindings.get(&id.unique_id).cloned() {
-                            let source_ty = self.resolve_ty(&path.source_ty);
-                            let focus_ty = self.resolve_ty(&path.focus_ty);
-                            return Ok(TypedNode {
-                                ty: Ty::Lens(
-                                    Box::new(source_ty.clone()),
-                                    Box::new(focus_ty.clone()),
-                                ),
-                                span: span.clone(),
-                                node: TypedInner::LensPath(TypedLensPath {
-                                    source_ty,
-                                    focus_ty,
-                                    may_fail: path.may_fail,
-                                    segments: path.segments,
-                                }),
+                            return Ok(match path {
+                                StoredLensPath::Concrete(path) => {
+                                    let source_ty = self.resolve_ty(&path.source_ty);
+                                    let focus_ty = self.resolve_ty(&path.focus_ty);
+                                    TypedNode {
+                                        ty: Ty::Lens(
+                                            Box::new(source_ty.clone()),
+                                            Box::new(focus_ty.clone()),
+                                        ),
+                                        span: span.clone(),
+                                        node: TypedInner::LensPath(TypedLensPath {
+                                            source_ty,
+                                            focus_ty,
+                                            may_fail: path.may_fail,
+                                            segments: path.segments,
+                                        }),
+                                    }
+                                }
+                                StoredLensPath::Pending(path) => TypedNode {
+                                    ty,
+                                    span: span.clone(),
+                                    node: TypedInner::PendingLensPath(path),
+                                },
                             });
                         }
                         return Err(TypeError {
@@ -196,7 +205,7 @@ impl Checker {
                     self.check_node(rhs)?
                 };
                 let lens_path = if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
-                    Some(self.resolve_lens_path_from_node(typed_rhs.clone(), span)?)
+                    Some(self.stored_lens_path_from_node(typed_rhs.clone(), span)?)
                 } else {
                     None
                 };
@@ -371,10 +380,33 @@ impl Checker {
         }
     }
 
+    fn stored_lens_path_from_node(
+        &self,
+        typed: TypedNode,
+        span: &Span,
+    ) -> Result<StoredLensPath, TypeError> {
+        match typed.node {
+            TypedInner::LensPath(path) => Ok(StoredLensPath::Concrete(TypedLensPath {
+                source_ty: self.resolve_ty(&path.source_ty),
+                focus_ty: self.resolve_ty(&path.focus_ty),
+                may_fail: path.may_fail,
+                segments: path.segments,
+            })),
+            TypedInner::PendingLensPath(path) => Ok(StoredLensPath::Pending(path)),
+            _ => Err(TypeError {
+                message:
+                    "Lens values are compile-time only in Stage1 and cannot be stored or passed around"
+                        .into(),
+                span: span.clone(),
+                hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
+            }),
+        }
+    }
+
     fn bind_lens_pattern_bindings(
         &mut self,
         pattern: &TypedPattern,
-        path: &TypedLensPath,
+        path: &StoredLensPath,
         span: &Span,
     ) -> Result<(), TypeError> {
         match pattern {
@@ -2680,10 +2712,84 @@ impl Checker {
         }
     }
 
+    fn lens_segment_name(segment: &TypedLensSegment) -> String {
+        match segment {
+            TypedLensSegment::Field { field_name, .. } => field_name.clone(),
+            TypedLensSegment::Tuple { field_index, .. } => format!("_{field_index}"),
+            TypedLensSegment::Variant { variant_name, .. } => variant_name.clone(),
+        }
+    }
+
+    fn pending_lens_node(&mut self, span: &Span, path: PendingLensPath) -> TypedNode {
+        let source_tv = self.env.fresh_tyvar();
+        let focus_tv = self.env.fresh_tyvar();
+        TypedNode {
+            ty: Ty::Lens(Box::new(source_tv), Box::new(focus_tv)),
+            span: span.clone(),
+            node: TypedInner::PendingLensPath(path),
+        }
+    }
+
+    fn specialize_pending_lens_path(
+        &mut self,
+        path: PendingLensPath,
+        span: &Span,
+        expected_source: Option<&Ty>,
+    ) -> Result<TypedLensPath, TypeError> {
+        let mut current_source = if let Some(source_ty_hint) = path.source_ty_hint.clone() {
+            if let Some(expected_source) = expected_source {
+                if !self.types_compatible(&source_ty_hint, expected_source) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Lens path source type mismatch: path expects {}, got {}",
+                            self.ty_name(&source_ty_hint),
+                            self.ty_name(expected_source)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+            self.resolve_ty(&source_ty_hint)
+        } else {
+            let Some(expected_source) = expected_source else {
+                return Err(TypeError {
+                    message:
+                        "Tuple._N requires Lens type context (e.g. Lens::view(Tuple._1, source_tuple))"
+                            .into(),
+                    span: span.clone(),
+                    hint: Some(
+                        "Use Tuple._N only where a Lens<(...), ...> is expected.".into(),
+                    ),
+                });
+            };
+            self.resolve_ty(expected_source)
+        };
+
+        let source_ty = current_source.clone();
+        let mut may_fail = false;
+        let mut segments = Vec::with_capacity(path.segments.len());
+        for segment_name in path.segments {
+            let (segment, focus_ty, segment_may_fail) =
+                self.resolve_lens_segment_for_source_ty(&current_source, &segment_name, span, true)?;
+            segments.push(segment);
+            current_source = self.resolve_ty(&focus_ty);
+            may_fail |= segment_may_fail;
+        }
+
+        Ok(TypedLensPath {
+            source_ty,
+            focus_ty: current_source,
+            may_fail,
+            segments,
+        })
+    }
+
     fn resolve_lens_path_from_node(
-        &self,
+        &mut self,
         typed: TypedNode,
         span: &Span,
+        expected_source: Option<&Ty>,
     ) -> Result<TypedLensPath, TypeError> {
         if !matches!(typed.ty, Ty::Lens(_, _)) {
             return Err(TypeError {
@@ -2699,6 +2805,9 @@ impl Checker {
                 may_fail: path.may_fail,
                 segments: path.segments,
             }),
+            TypedInner::PendingLensPath(path) => {
+                self.specialize_pending_lens_path(path, span, expected_source)
+            }
             _ => Err(TypeError {
                 message:
                     "Lens values are compile-time only in Stage1 and cannot be stored or passed around"
@@ -2722,7 +2831,7 @@ impl Checker {
             Box::new(expected_right_focus),
         );
         let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
-        let right_path = self.resolve_lens_path_from_node(right, span)?;
+        let right_path = self.resolve_lens_path_from_node(right, span, Some(&left_path.focus_ty))?;
 
         if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
             return Err(TypeError {
@@ -2752,6 +2861,34 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::LensPath(path),
         })
+    }
+
+    fn compose_pending_lens_paths(
+        &mut self,
+        span: &Span,
+        mut left_path: PendingLensPath,
+        right_expr: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let right = self.check_node(right_expr)?;
+        match right.node {
+            TypedInner::LensPath(path) => {
+                left_path
+                    .segments
+                    .extend(path.segments.iter().map(Self::lens_segment_name));
+                Ok(self.pending_lens_node(span, left_path))
+            }
+            TypedInner::PendingLensPath(path) => {
+                left_path.segments.extend(path.segments);
+                Ok(self.pending_lens_node(span, left_path))
+            }
+            _ => Err(TypeError {
+                message:
+                    "Lens values are compile-time only in Stage1 and cannot be stored or passed around"
+                        .into(),
+                span: span.clone(),
+                hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
+            }),
+        }
     }
 
     fn check_lens_compose_intrinsic(
@@ -2785,8 +2922,15 @@ impl Checker {
         };
 
         let left = self.check_node(left_expr)?;
-        let left_path = self.resolve_lens_path_from_node(left, span)?;
-        self.compose_lens_paths(span, left_path, right_expr, "Lens::compose")
+        match left.node {
+            TypedInner::LensPath(path) => self.compose_lens_paths(span, path, right_expr, "Lens::compose"),
+            TypedInner::PendingLensPath(path) => self.compose_pending_lens_paths(span, path, right_expr),
+            _ => Err(TypeError {
+                message: format!("Expected Lens<...> value, got {}", self.ty_name(&left.ty)),
+                span: left.span.clone(),
+                hint: None,
+            }),
+        }
     }
 
     fn check_lens_source_value(
@@ -2825,7 +2969,7 @@ impl Checker {
             Box::new(expected_focus_ty),
         );
         let path_node = self.check_node_with_expected(path_expr, Some(&expected_path_ty))?;
-        let path = self.resolve_lens_path_from_node(path_node, span)?;
+        let path = self.resolve_lens_path_from_node(path_node, span, Some(source_value_ty))?;
 
         if !self.types_compatible(&path.source_ty, source_value_ty) {
             return Err(TypeError {
@@ -3985,8 +4129,20 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
         if matches!(typed_left.ty, Ty::Lens(_, _)) {
-            let left_path = self.resolve_lens_path_from_node(typed_left, span)?;
-            return self.compose_lens_paths(span, left_path, right, "`/`");
+            return match typed_left.node {
+                TypedInner::LensPath(path) => self.compose_lens_paths(span, path, right, "`/`"),
+                TypedInner::PendingLensPath(path) => {
+                    self.compose_pending_lens_paths(span, path, right)
+                }
+                _ => Err(TypeError {
+                    message: format!(
+                        "Expected Lens<...> value, got {}",
+                        self.ty_name(&typed_left.ty)
+                    ),
+                    span: typed_left.span.clone(),
+                    hint: None,
+                }),
+            };
         }
 
         let typed_right = self.check_node(right)?;
@@ -4610,14 +4766,15 @@ impl Checker {
             return Ok(None);
         };
 
-        let expected_ty = expected.ok_or_else(|| TypeError {
-            message: format!(
-                "Tuple.{} requires Lens type context (e.g. Lens::view(Tuple.{}, source_tuple))",
-                field, field
-            ),
-            span: span.clone(),
-            hint: Some("Use Tuple._N only where a Lens<(...), ...> is expected.".into()),
-        })?;
+        let Some(expected_ty) = expected else {
+            return Ok(Some(self.pending_lens_node(
+                span,
+                PendingLensPath {
+                    source_ty_hint: None,
+                    segments: vec![field.to_string()],
+                },
+            )));
+        };
         let expected_ty = self.resolve_ty(expected_ty);
         let (expected_source, expected_focus) = match expected_ty {
             Ty::Lens(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
@@ -4714,7 +4871,7 @@ impl Checker {
         let typed_expr = self.check_node(expr)?;
 
         if matches!(typed_expr.ty, Ty::Lens(_, _)) {
-            let path = self.resolve_lens_path_from_node(typed_expr, span)?;
+            let path = self.resolve_lens_path_from_node(typed_expr, span, None)?;
             let (segment, focus_ty, may_fail) =
                 self.resolve_lens_segment_for_source_ty(&path.focus_ty, field, span, true)?;
             let source_ty = self.resolve_ty(&path.source_ty);
