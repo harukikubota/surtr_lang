@@ -736,9 +736,80 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{extractor_sig}"
     );
 
+    let extractor_sig_no_args = engine.handle_line(":sig Duration!");
+    let extractor_sig_no_args = signature_text(&extractor_sig_no_args);
+    assert_eq!(extractor_sig_no_args.trim(), extractor_sig.trim());
+
+    let extractor_sig_explicit_self = engine.handle_line(":sig Duration!(Duration)");
+    let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
+    assert!(
+        extractor_sig_explicit_self.contains(
+            "defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"
+        ),
+        "{extractor_sig_explicit_self}"
+    );
+    assert!(
+        extractor_sig_explicit_self.contains(
+            "specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"
+        ),
+        "{extractor_sig_explicit_self}"
+    );
+
+    let duration_sig = engine.handle_line(":sig Duration");
+    let duration_sig = signature_text(&duration_sig);
+    assert_eq!(
+        duration_sig.trim(),
+        "Duration::new(value: Int) -> Result<Self, Error>"
+    );
+
+    let duration_empty_call_sig = engine.handle_line(":sig Duration()");
+    let duration_empty_call_sig = signature_text(&duration_empty_call_sig);
+    assert_eq!(
+        duration_empty_call_sig.trim(),
+        "Duration::new(value: Int) -> Result<Self, Error>"
+    );
+
     let unsupported = engine.handle_line(":doc gt(make_value(), 1)");
     assert!(rendered_text(&unsupported)
         .contains("Unsupported typed call query argument `make_value()`"));
+}
+
+#[test]
+fn core_sig_type_owner_falls_back_to_constructor_signatures() {
+    let mut engine = engine();
+
+    let option_sig = engine.handle_line(":sig Option");
+    let option_sig = rendered_text(&option_sig);
+    assert!(option_sig.contains("* Option::Some($T)"), "{option_sig}");
+    assert!(option_sig.contains("* Option::None"), "{option_sig}");
+
+    let point_sig = engine.handle_line(":sig StyledDocStyle");
+    let point_sig = signature_text(&point_sig);
+    assert!(point_sig.contains("StyledDocStyle::new("), "{point_sig}");
+    assert!(point_sig.contains("fg: Option"), "{point_sig}");
+    assert!(point_sig.contains("italic: Boolean"), "{point_sig}");
+    assert!(point_sig.contains("-> Self"), "{point_sig}");
+}
+
+#[test]
+fn core_sig_enum_rejects_extra_input_with_shared_message() {
+    let mut engine = engine();
+
+    for query in [
+        ":sig Option(Int)",
+        ":sig Option::Some",
+        ":sig Option::Some()",
+        ":sig Option::Some(1)",
+        ":sig Option::Some(Int)",
+    ] {
+        let rendered = rendered_text(&engine.handle_line(query));
+        assert!(
+            rendered.contains(
+                "Enum signatures are only available for bare type owners: use `:sig Option` instead"
+            ),
+            "{query}\n{rendered}"
+        );
+    }
 }
 
 #[test]

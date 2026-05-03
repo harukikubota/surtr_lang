@@ -778,7 +778,7 @@ impl ReplEngine {
         vec![
             "Usage: :sig <function|expr>".to_string(),
             "Also: :sig <typed-call>".to_string(),
-            "Examples: :sig print, :sig Kernel::if, :sig Duration!(), :sig gt(_ : Float, _ : Float), :sig ret |>= up"
+            "Examples: :sig print, :sig Duration, :sig Duration(), :sig Duration!(), :sig gt(_ : Float, _ : Float), :sig ret |>= up"
                 .to_string(),
         ]
     }
@@ -1373,15 +1373,23 @@ impl ReplEngine {
     fn match_owner_typed_call_docs<'a>(&'a self, query: &TypedCallQuery) -> Option<Vec<&'a DocEntry>> {
         if let Some(owner) = query.callee.strip_suffix('!') {
             let decl = self.visible_declaration(owner)?;
-            if decl.kind != sigil::DeclarationKind::Struct || !query.args.is_empty() {
+            if decl.kind != sigil::DeclarationKind::Struct {
                 return Some(Vec::new());
             }
             let qualified_name = format!("{}::deconstruct", decl.fq_name);
+            let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
+                return Some(Vec::new());
+            };
             let mut matches = self
                 .docs
                 .iter()
                 .filter(|entry| entry.kind == DocKind::Function)
                 .filter(|entry| entry.qualified_name == qualified_name)
+                .filter(|entry| {
+                    entry.signature.as_deref().is_none_or(|sig| {
+                        arg_types.is_empty() || self.signature_accepts_arg_types(sig, &arg_types)
+                    })
+                })
                 .collect::<Vec<_>>();
             matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
             return Some(matches);
@@ -1412,14 +1420,16 @@ impl ReplEngine {
     }
 
     fn invalid_attached_extractor_query_message(&self, query: &TypedCallQuery) -> Option<String> {
-        let owner = query.callee.strip_suffix('!')?;
-        let decl = self.visible_declaration(owner)?;
-        (decl.kind == sigil::DeclarationKind::Struct && !query.args.is_empty()).then(|| {
-            format!(
-                "Attached extractor query `{}` does not take explicit arguments. Use `{}!()`.",
-                query.callee, owner
-            )
-        })
+        query.callee.strip_suffix('!')?;
+        None
+    }
+
+    fn is_attached_extractor_owner_query(&self, symbol: &str) -> bool {
+        let Some(owner) = symbol.strip_suffix('!') else {
+            return false;
+        };
+        self.visible_declaration(owner)
+            .is_some_and(|decl| decl.kind == sigil::DeclarationKind::Struct)
     }
 
     fn special_form_doc_entry(&self, symbol: &str) -> Option<&DocEntry> {
@@ -1532,6 +1542,21 @@ impl ReplEngine {
             Ok(ReplQuery::Symbol(symbol)) => {
                 if matches!(self.parse_sig_symbol_as_expression(&symbol), Some(_)) {
                     return self.handle_sig_expression(trimmed);
+                }
+                if self.is_attached_extractor_owner_query(&symbol) {
+                    return self.handle_sig_typed_call(
+                        trimmed,
+                        &TypedCallQuery {
+                            callee: symbol.source.clone(),
+                            args: Vec::new(),
+                        },
+                    );
+                }
+                if let Some(message) = self.enum_sig_extra_input_message_for_symbol(&symbol) {
+                    return Self::plain(vec![message]);
+                }
+                if let Some(lines) = self.sig_type_owner_summary_lines(&symbol) {
+                    return Self::styled(lines);
                 }
                 if let Some(rendered) = self.binding_callable_sig_summary(&symbol) {
                     return Self::styled(vec![rendered]);
@@ -2812,6 +2837,12 @@ impl ReplEngine {
         if let Some(message) = self.invalid_attached_extractor_query_message(query) {
             return Self::plain(vec![message]);
         }
+        if let Some(message) = self.enum_sig_extra_input_message_for_typed_call(query) {
+            return Self::plain(vec![message]);
+        }
+        if let Some(lines) = self.sig_zero_arg_type_owner_fallback(query) {
+            return Self::styled(lines);
+        }
         if let Some(binding) = self.binding_info(&query.callee) {
             if let Some(rendered) = self.handle_sig_binding_typed_call(source_query, query, binding)
             {
@@ -2858,6 +2889,193 @@ impl ReplEngine {
             }
             [] => Self::plain(vec![format!("No signature found for {}", source_query)]),
             entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
+        }
+    }
+
+    fn sig_type_owner_summary_lines(&self, symbol: &str) -> Option<Vec<String>> {
+        let decl = self.visible_declaration(symbol)?;
+        match decl.kind {
+            sigil::DeclarationKind::Struct | sigil::DeclarationKind::Record => {
+                self.constructor_signature_lines(decl)
+            }
+            sigil::DeclarationKind::Enum => self.enum_variant_signature_lines(decl),
+            _ => None,
+        }
+    }
+
+    fn enum_sig_extra_input_message_for_symbol(&self, symbol: &str) -> Option<String> {
+        let (owner, _) = symbol.split_once("::")?;
+        self.enum_sig_extra_input_message(owner.trim(), symbol.trim())
+    }
+
+    fn enum_sig_extra_input_message_for_typed_call(
+        &self,
+        query: &TypedCallQuery,
+    ) -> Option<String> {
+        let callee = query.callee.trim();
+        if let Some((owner, _)) = callee.split_once("::") {
+            return self.enum_sig_extra_input_message(owner.trim(), callee);
+        }
+        if query.args.is_empty() {
+            return None;
+        }
+        self.enum_sig_extra_input_message(callee, callee)
+    }
+
+    fn enum_sig_extra_input_message(&self, owner: &str, source: &str) -> Option<String> {
+        let decl = self.visible_declaration(owner)?;
+        (decl.kind == sigil::DeclarationKind::Enum).then(|| {
+            format!(
+                "Enum signatures are only available for bare type owners: use `:sig {}` instead of `:sig {}`.",
+                decl.fq_name, source
+            )
+        })
+    }
+
+    fn sig_zero_arg_type_owner_fallback(&self, query: &TypedCallQuery) -> Option<Vec<String>> {
+        if !query.args.is_empty() {
+            return None;
+        }
+        let decl = self.visible_declaration(&query.callee)?;
+        match decl.kind {
+            sigil::DeclarationKind::Struct | sigil::DeclarationKind::Record => {
+                self.constructor_signature_lines(decl)
+            }
+            _ => None,
+        }
+    }
+
+    fn constructor_signature_lines(
+        &self,
+        decl: &sigil::DeclarationEntry,
+    ) -> Option<Vec<String>> {
+        let qualified_name = format!("{}::new", decl.fq_name);
+        let mut matches = self
+            .docs
+            .iter()
+            .filter(|entry| entry.kind == DocKind::Function)
+            .filter(|entry| entry.qualified_name == qualified_name)
+            .filter_map(|entry| {
+                entry.signature.clone().map(|signature| {
+                    Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
+                })
+            })
+            .collect::<Vec<_>>();
+        matches.sort();
+        if !matches.is_empty() {
+            return Some(matches);
+        }
+
+        if decl.kind == sigil::DeclarationKind::Record {
+            return self
+                .scar_session
+                .lookup_type_def(&decl.fq_name)
+                .filter(|def| def.kind == scar::env::TypeKind::Record)
+                .map(|def| {
+                    let params = def
+                        .fields
+                        .iter()
+                        .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    vec![format!("{}::new({params}) -> Self", decl.fq_name)]
+                });
+        }
+
+        None
+    }
+
+    fn enum_variant_signature_lines(
+        &self,
+        decl: &sigil::DeclarationEntry,
+    ) -> Option<Vec<String>> {
+        let entry = self.docs.iter().rev().find(|entry| {
+            entry.kind == DocKind::Type && entry.qualified_name == decl.fq_name
+        });
+        if let Some(entry) = entry {
+            if let Some(signature) = entry.signature.as_deref() {
+                if let Some((_owner_surface, variants_src)) = Self::parse_defenum_signature(signature)
+                {
+                    let variants = Self::split_top_level_items(variants_src)
+                        .into_iter()
+                        .map(|variant| {
+                            Self::render_enum_variant_listing(&decl.fq_name, &variant)
+                        })
+                        .collect::<Vec<_>>();
+                    if !variants.is_empty() {
+                        return Some(variants);
+                    }
+                }
+            }
+        }
+
+        self.scar_session.enum_variants_of(&decl.fq_name).and_then(|variants| {
+            let lines = variants
+                .iter()
+                .map(|variant| {
+                    if variant.payload.is_empty() {
+                        format!("* {}::{}", decl.fq_name, variant.short_name)
+                    } else {
+                        let payload = variant
+                            .payload
+                            .iter()
+                            .map(Self::ty_to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("* {}::{}({payload})", decl.fq_name, variant.short_name)
+                    }
+                })
+                .collect::<Vec<_>>();
+            (!lines.is_empty()).then_some(lines)
+        })
+    }
+
+    fn parse_defenum_signature(signature: &str) -> Option<(String, &str)> {
+        let rest = signature.strip_prefix("defenum ")?;
+        let open = rest.find('{')?;
+        let close = rest.rfind('}')?;
+        let owner = rest[..open].trim().to_string();
+        let variants = rest[open + 1..close].trim();
+        Some((owner, variants))
+    }
+
+    fn split_top_level_items(input: &str) -> Vec<String> {
+        let mut items = Vec::new();
+        let mut current = String::new();
+        let mut depth = 0usize;
+        for ch in input.chars() {
+            match ch {
+                '<' | '(' | '[' | '{' => {
+                    depth += 1;
+                    current.push(ch);
+                }
+                '>' | ')' | ']' | '}' => {
+                    depth = depth.saturating_sub(1);
+                    current.push(ch);
+                }
+                ',' if depth == 0 => {
+                    let item = current.trim();
+                    if !item.is_empty() {
+                        items.push(item.to_string());
+                    }
+                    current.clear();
+                }
+                _ => current.push(ch),
+            }
+        }
+        let tail = current.trim();
+        if !tail.is_empty() {
+            items.push(tail.to_string());
+        }
+        items
+    }
+
+    fn render_enum_variant_listing(owner_fq: &str, variant: &str) -> String {
+        if let Some((name, payload)) = variant.split_once('(') {
+            let payload = payload.trim_end_matches(')').trim();
+            format!("* {}::{}({payload})", owner_fq, name.trim())
+        } else {
+            format!("* {}::{}", owner_fq, variant.trim())
         }
     }
 
@@ -3350,7 +3568,8 @@ impl ReplEngine {
 
     fn specialize_signature_return(&self, signature: &str, arg_types: &[AstTy]) -> Option<AstTy> {
         let (param_types, return_ty) = Self::signature_param_asts_and_return(signature)?;
-        let self_ty = Self::self_type_from_signature(signature);
+        let self_ty = Self::self_type_from_signature(signature)
+            .or_else(|| Self::implicit_self_type_from_args(&param_types, arg_types));
         let substitutions =
             Self::build_type_substitutions(&param_types, arg_types, self_ty.as_ref())?;
         Some(Self::substitute_query_ty(
@@ -3374,6 +3593,15 @@ impl ReplEngine {
         let after_for = &signature[for_pos + " for ".len()..];
         let method_sep = after_for.find("::")?;
         parse_signature_type(after_for[..method_sep].trim())
+    }
+
+    fn implicit_self_type_from_args(params: &[AstTy], args: &[AstTy]) -> Option<AstTy> {
+        (params.len() == args.len())
+            .then_some((params.first()?, args.first()?))
+            .and_then(|(param, arg)| match param {
+                AstTy::Named(_, name) if name == "Self" => Some(arg.clone()),
+                _ => None,
+            })
     }
 
     fn build_type_substitutions(
@@ -4508,4 +4736,5 @@ mod tests {
             other => panic!("expected runtime bootstrap failure, got {:?}", other),
         }
     }
+
 }

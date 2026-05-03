@@ -976,6 +976,14 @@ impl ScarSession {
         }
     }
 
+    pub fn lookup_type_def(&self, name: &str) -> Option<&crate::env::TypeDefInfo> {
+        self.env.lookup_type_def(name)
+    }
+
+    pub fn enum_variants_of(&self, enum_name: &str) -> Option<&Vec<crate::env::EnumVariantInfo>> {
+        self.env.enum_variants_of(enum_name)
+    }
+
     pub fn rollback(&mut self, checkpoint: ScarCheckpoint) {
         self.env = checkpoint.env;
         self.consts = checkpoint.consts;

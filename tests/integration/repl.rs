@@ -259,6 +259,75 @@ fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
 }
 
 #[test]
+fn repl_sig_type_owner_constructor_fallback_renders_through_cli() {
+    let output = run_repl_session(":sig Duration\n:sig Duration()\n:sig Option\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("Duration::new(value: Int) -> Result<Self, Error>"),
+        "{stdout}"
+    );
+    assert!(stdout.matches("Duration::new(value: Int) -> Result<Self, Error>").count() >= 2, "{stdout}");
+    assert!(stdout.contains("* Option::Some"), "{stdout}");
+    assert!(stdout.contains("* Option::None"), "{stdout}");
+}
+
+#[test]
+fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
+    let output = run_repl_session(":sig Duration!\n:sig Duration!()\n:sig Duration!(Duration)\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.matches(
+            "Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"
+        )
+        .count()
+            >= 3,
+        "{stdout}"
+    );
+    assert!(stdout.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"), "{stdout}");
+    assert!(
+        stdout.contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn repl_sig_enum_rejects_extra_input_with_shared_message() {
+    let output = run_repl_session(
+        ":sig Option(Int)\n:sig Option::Some\n:sig Option::Some()\n:sig Option::Some(1)\n:sig Option::Some(Int)\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.matches(
+            "Enum signatures are only available for bare type owners: use `:sig Option` instead"
+        )
+        .count()
+            >= 5,
+        "{stdout}"
+    );
+}
+
+#[test]
 fn repl_info_renders_styled_summary_for_queries() {
     let output = run_repl_session_with_color(
         "ret = Ok(\"3\")\nup = {|term: String| try_from(term, Int)}\n:info ret |>= up\n:quit\n",
