@@ -51,6 +51,7 @@ const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../../lib/types/boolean.
 const ORDERING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/ordering.srt");
 const ERROR_MODULE_SOURCE: &str = include_str!("../../../../lib/types/error.srt");
 const LIST_MODULE_SOURCE: &str = include_str!("../../../../lib/types/list.srt");
+const OPTION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/option.srt");
 const GENERATOR_MODULE_SOURCE: &str = r#"@@builtin type Generator<$State, $Item>
 
 impl Generator {}"#;
@@ -382,6 +383,10 @@ pub(crate) fn std_module_stages_with_overrides(
                 pick_override("Error", ERROR_MODULE_SOURCE, overrides),
             ),
             ("List", pick_override("List", LIST_MODULE_SOURCE, overrides)),
+            (
+                "Option",
+                pick_override("Option", OPTION_MODULE_SOURCE, overrides),
+            ),
             (
                 "Generator",
                 pick_override("Generator", GENERATOR_MODULE_SOURCE, overrides),

@@ -890,14 +890,31 @@ impl Checker {
         &[]
     }
 
+    fn public_trait_target_display(info: &TraitImplInfo) -> Option<String> {
+        let display = Self::ast_ty_key(&info.target_ast_ty);
+        let base = display.split('<').next().unwrap_or(display.as_str());
+        match base {
+            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses" | "Self" => None,
+            _ => Some(display),
+        }
+    }
+
     pub(super) fn trait_implementation_targets(&self, trait_name: &str) -> Vec<String> {
         let mut targets = std::collections::BTreeSet::new();
         for target in self.compiler_trait_target_names(trait_name) {
             targets.insert((*target).to_string());
         }
-        for (impl_trait_name, target_name) in self.trait_impls.keys() {
-            if impl_trait_name == trait_name {
-                targets.insert(target_name.clone());
+        let match_exact = trait_name.contains('<');
+        for ((impl_trait_name, _target_name), info) in &self.trait_impls {
+            let matches = if match_exact {
+                impl_trait_name == trait_name
+            } else {
+                self.trait_matches_short_name(impl_trait_name, trait_name)
+            };
+            if matches {
+                if let Some(display) = Self::public_trait_target_display(info) {
+                    targets.insert(display);
+                }
             }
         }
         targets.into_iter().collect()

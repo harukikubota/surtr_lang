@@ -2740,13 +2740,9 @@ fn add_trait_mismatch_lists_available_implementations() {
     assert!(err.message.contains("Add::add expects argument 2"));
     assert!(err.message.contains("receiver type Int"));
     assert!(err.message.contains("got Boolean"));
-    assert!(err
-        .message
-        .contains("Add is implemented for: Duration, Float, Int"));
-    assert!(err
-        .hint
-        .as_deref()
-        .is_some_and(|hint| hint.contains("Call target signature: Add::add")));
+    let hint = err.hint.as_deref().expect("trait summary hint");
+    assert!(hint.contains("Call target signature: Add::add"));
+    assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
 }
 
 #[test]
@@ -2756,13 +2752,34 @@ fn add_trait_missing_receiver_lists_available_implementations() {
     assert!(err
         .message
         .contains("Add::add requires a receiver type implementing Add, got Boolean"));
+    let hint = err.hint.as_deref().expect("trait summary hint");
+    assert!(hint.contains("Call target signature: Add::add"));
+    assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
+}
+
+#[test]
+fn add_operator_missing_impl_lists_available_implementations_in_hint() {
+    let resolved = resolve_with_builtin_prelude("value = False + True");
+    let err = typecheck(resolved).expect_err("invalid add operator must fail");
     assert!(err
         .message
-        .contains("Add is implemented for: Duration, Float, Int"));
+        .contains("`+` requires both operands to implement Add"));
+    let hint = err.hint.as_deref().expect("operator hint");
+    assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
+}
+
+#[test]
+fn bind_operator_missing_impl_lists_available_implementations_in_hint() {
+    let resolved = resolve_with_builtin_prelude("value = 1 |>= {|x| Ok(x)}");
+    let err = typecheck(resolved).expect_err("plain lhs bind must fail");
     assert!(err
-        .hint
-        .as_deref()
-        .is_some_and(|hint| hint.contains("Call target signature: Add::add")));
+        .message
+        .contains("`|>=` requires Chainable implementation on the left, got Int"));
+    let hint = err.hint.as_deref().expect("bind hint");
+    assert!(hint.contains("Chainable is implemented for:"));
+    assert!(hint.contains("List<$A>"));
+    assert!(hint.contains("Option<$A>"));
+    assert!(hint.contains("Result<$A>"));
 }
 
 #[test]

@@ -53,8 +53,8 @@ pub fn type_error_spec(source: &str, error: &TypeErrorDiagnostic) -> DiagnosticS
         spec.labels.extend(labels);
     }
 
-    let replace_help = is_flow_operator_message(&error.message)
-        || parse_binary_operator_error(&error.message).is_some();
+    let binary_operator_error = parse_binary_operator_error(&error.message).is_some();
+    let replace_help = is_flow_operator_message(&error.message) || binary_operator_error;
     let inferred_template =
         infer_type_error_template(source, &error.span, &error.message, error.hint.as_deref());
 
@@ -63,7 +63,14 @@ pub fn type_error_spec(source: &str, error: &TypeErrorDiagnostic) -> DiagnosticS
         spec.notes.extend(template.notes);
         if let Some(help) = template.help {
             spec.help = Some(if replace_help {
-                help
+                match spec.help.take() {
+                    Some(existing)
+                        if binary_operator_error && existing.contains("is implemented for:") =>
+                    {
+                        format!("{}\n{}", existing, help)
+                    }
+                    _ => help,
+                }
             } else {
                 match spec.help.take() {
                     Some(existing) => format!("{}\n{}", existing, help),

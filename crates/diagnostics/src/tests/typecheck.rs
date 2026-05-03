@@ -344,6 +344,22 @@ fn render_flow_operator_error_keeps_actual_types_out_of_help() {
 }
 
 #[test]
+fn binary_operator_error_preserves_trait_implementation_hint_in_help() {
+    let source = "bad = False + True";
+    let err = TypeError {
+        message: "`+` requires both operands to implement Add".into(),
+        span: Span { start: 6, end: 18 },
+        hint: Some("Add is implemented for: Duration, Float, Int.".into()),
+    };
+
+    let spec = type_error_spec(source, &err);
+    assert!(spec
+        .help
+        .as_deref()
+        .is_some_and(|help| help.contains("Add is implemented for: Duration, Float, Int.")));
+}
+
+#[test]
 fn type_error_spec_labels_repl_flow_operator_lhs_before_pipe_bind() {
     let source = r#"re"^a$" |>= Regex::is_match("a")"#;
     let rhs_start = source.find("Regex::is_match").expect("rhs call");

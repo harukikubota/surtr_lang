@@ -1,5 +1,19 @@
 use super::*;
 
+fn combine_hint_parts(parts: &[Option<String>]) -> Option<String> {
+    let joined = parts
+        .iter()
+        .filter_map(|part| part.as_deref())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
 impl Checker {
     pub(super) fn match_result_value_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
@@ -1314,6 +1328,12 @@ impl Checker {
             let ret = checker.resolve_ty(&ret_ty);
             checker.trait_method_signature_hint(&trait_display_name, method_name, &params, &ret)
         };
+        let trait_hint = |checker: &Self| {
+            combine_hint_parts(&[
+                Some(trait_signature_hint(checker)),
+                Some(trait_impl_summary.clone()),
+            ])
+        };
 
         if args.len() != param_tys.len() {
             return Err(TypeError {
@@ -1354,22 +1374,16 @@ impl Checker {
                         || self.trait_matches_short_name(trait_name, "Gte")
                     {
                         return Err(TypeError {
-                            message: format!(
-                                "Cannot compare {} and {}. {}",
-                                left_ty, right_ty, trait_impl_summary
-                            ),
+                            message: format!("Cannot compare {} and {}", left_ty, right_ty),
                             span: arg.span.clone(),
-                            hint: Some(trait_signature_hint(self)),
+                            hint: trait_hint(self),
                         });
                     }
                     if self.trait_matches_short_name(trait_name, "Concat") {
                         return Err(TypeError {
-                            message: format!(
-                                "++ requires (String, String), got ({}, {}). {}",
-                                left_ty, right_ty, trait_impl_summary
-                            ),
+                            message: format!("++ requires (String, String), got ({}, {})", left_ty, right_ty),
                             span: arg.span.clone(),
-                            hint: Some(trait_signature_hint(self)),
+                            hint: trait_hint(self),
                         });
                     }
                 }
@@ -1379,29 +1393,27 @@ impl Checker {
                 {
                     return Err(TypeError {
                         message: format!(
-                            "{}::{} expects argument {} to match receiver type {}, got {}. {}",
+                            "{}::{} expects argument {} to match receiver type {}, got {}",
                             trait_display_name,
                             method_name,
                             idx + 1,
                             self.ty_name(&receiver_ty),
-                            self.ty_name(&arg.ty),
-                            trait_impl_summary
+                            self.ty_name(&arg.ty)
                         ),
                         span: arg.span.clone(),
-                        hint: Some(trait_signature_hint(self)),
+                        hint: trait_hint(self),
                     });
                 }
                 return Err(TypeError {
                     message: format!(
-                        "Argument type mismatch in {}::{}: expected {}, got {}. {}",
+                        "Argument type mismatch in {}::{}: expected {}, got {}",
                         trait_display_name,
                         method_name,
                         self.ty_name(expected),
-                        self.ty_name(&arg.ty),
-                        trait_impl_summary
+                        self.ty_name(&arg.ty)
                     ),
                     span: arg.span.clone(),
-                    hint: Some(trait_signature_hint(self)),
+                    hint: trait_hint(self),
                 });
             }
         }
@@ -1444,15 +1456,17 @@ impl Checker {
             )
             .ok_or_else(|| TypeError {
                 message: format!(
-                    "{}::{} requires a receiver type implementing {}, got {}. {}",
+                    "{}::{} requires a receiver type implementing {}, got {}",
                     trait_call_display_name,
                     method_name,
                     trait_call_display_name,
-                    self.ty_name(&receiver_ty),
-                    trait_call_summary
+                    self.ty_name(&receiver_ty)
                 ),
                 span: receiver_span,
-                hint: Some(trait_signature_hint(self)),
+                hint: combine_hint_parts(&[
+                    Some(trait_signature_hint(self)),
+                    Some(trait_call_summary),
+                ]),
             })?;
 
         Ok(TypedNode {
@@ -1614,6 +1628,7 @@ impl Checker {
             receiver_ty,
             &requested_trait_args,
         ) else {
+            let summary = self.trait_implementation_summary(trait_short_name);
             return Err(TypeError {
                 message: format!(
                     "{} requires {} implementation on the left, got {}",
@@ -1622,7 +1637,7 @@ impl Checker {
                     self.ty_name(receiver_ty)
                 ),
                 span: span.clone(),
-                hint: None,
+                hint: Some(summary),
             });
         };
         let trait_name = self.trait_instance_key_from_tys(&trait_key, &resolved_trait_args);
@@ -1791,6 +1806,7 @@ impl Checker {
             &receiver_ty,
             &requested_trait_args,
         ) else {
+            let functor_summary = self.trait_implementation_summary("Functor");
             return Err(TypeError {
                 message: format!(
                     "`|*>` requires Functor implementation on the left, got {}",
@@ -1803,8 +1819,9 @@ impl Checker {
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
-                        "Standard Functor implementations are available for Result, List, and Option. The evaluated LHS is {}.",
-                        self.ty_name(&receiver_ty)
+                        "{} The evaluated LHS is {}.",
+                        functor_summary,
+                        self.ty_name(&receiver_ty),
                     )),
                 )),
             });
@@ -2035,6 +2052,7 @@ impl Checker {
             &receiver_ty,
             &requested_trait_args,
         ) else {
+            let chainable_summary = self.trait_implementation_summary("Chainable");
             return Err(TypeError {
                 message: format!(
                     "`|>=` requires Chainable implementation on the left, got {}",
@@ -2047,7 +2065,8 @@ impl Checker {
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
-                        "Standard Chainable implementations are available for Result, List, and Option. The evaluated LHS is {}. Use `|*>` after a contextual value when the RHS is plain.",
+                        "{} The evaluated LHS is {}. Use `|*>` after a contextual value when the RHS is plain.",
+                        chainable_summary,
                         self.ty_name(&receiver_ty)
                     )),
                 )),
@@ -4036,6 +4055,7 @@ impl Checker {
                 };
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
+                    let summary = self.trait_implementation_summary(trait_short_name);
                     return Err(TypeError {
                         message: format!(
                             "Cannot apply {:?} to {} and {}",
@@ -4045,10 +4065,11 @@ impl Checker {
                         ),
                         span: typed_right.span.clone(),
                         hint: Some(format!(
-                            "Operator `{:?}` requires compatible operand types. Left operand is {}, right operand is {}.",
+                            "Operator `{:?}` requires compatible operand types. Left operand is {}, right operand is {}.\n{}",
                             op,
                             self.ty_name(&lt),
-                            self.ty_name(&rt)
+                            self.ty_name(&rt),
+                            summary
                         )),
                     });
                 }
@@ -4068,10 +4089,7 @@ impl Checker {
                             symbol, trait_short_name
                         ),
                         span: typed_right.span.clone(),
-                        hint: Some(format!(
-                            "Add a `{}` bound or use a type that implements `{}`.",
-                            trait_short_name, trait_short_name
-                        )),
+                        hint: Some(self.trait_implementation_summary(trait_short_name)),
                     })?;
                 Ok(make_trait_call(
                     operator_trait,
@@ -4087,6 +4105,11 @@ impl Checker {
             BinOp::Eq | BinOp::Neq => {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
+                    let summary = self.trait_implementation_summary(match op {
+                        BinOp::Eq => "Eq",
+                        BinOp::Neq => "Neq",
+                        _ => unreachable!("validated above"),
+                    });
                     return Err(TypeError {
                         message: format!(
                             "Cannot compare {} and {}",
@@ -4094,7 +4117,7 @@ impl Checker {
                             self.ty_name(&rt)
                         ),
                         span: typed_right.span.clone(),
-                        hint: None,
+                        hint: Some(summary),
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
@@ -4118,7 +4141,7 @@ impl Checker {
                             symbol, trait_short_name
                         ),
                         span: typed_right.span.clone(),
-                        hint: None,
+                        hint: Some(self.trait_implementation_summary(trait_short_name)),
                     })?;
                 Ok(make_trait_call(
                     eq_trait,
@@ -4133,6 +4156,13 @@ impl Checker {
             BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
+                    let summary = self.trait_implementation_summary(match op {
+                        BinOp::Lt => "Lt",
+                        BinOp::Gt => "Gt",
+                        BinOp::Lte => "Lte",
+                        BinOp::Gte => "Gte",
+                        _ => unreachable!("validated above"),
+                    });
                     return Err(TypeError {
                         message: format!(
                             "Cannot compare {} and {}",
@@ -4140,7 +4170,7 @@ impl Checker {
                             self.ty_name(&rt)
                         ),
                         span: typed_right.span.clone(),
-                        hint: None,
+                        hint: Some(summary),
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
@@ -4166,7 +4196,7 @@ impl Checker {
                             symbol, trait_short_name
                         ),
                         span: typed_right.span.clone(),
-                        hint: None,
+                        hint: Some(self.trait_implementation_summary(trait_short_name)),
                     })?;
                 Ok(make_trait_call(
                     ord_trait,
@@ -4188,7 +4218,7 @@ impl Checker {
                             self.ty_name(&rt)
                         ),
                         span: typed_right.span.clone(),
-                        hint: None,
+                        hint: Some(self.trait_implementation_summary("Concat")),
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
@@ -4208,7 +4238,7 @@ impl Checker {
                             self.ty_name(&rt)
                         ),
                         span: typed_right.span.clone(),
-                        hint: None,
+                        hint: Some(self.trait_implementation_summary("Concat")),
                     })?;
                 Ok(make_trait_call(
                     concat_trait,
