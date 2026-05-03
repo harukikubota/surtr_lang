@@ -7,33 +7,3 @@ deftrait KleisliComposable<$A, $B, $Chained> {
   # Compose the receiver contextual callable before a contextual RHS callable.
   def kleisli_compose(self: Self, rhs: ($B -> $Chained)) -> ($A -> $Chained)
 }
-
-@@doc """
-`KleisliComposable` implementation for `Result`-returning unary functions.
-This is the source-level meaning of `left >=> right` for `Result`.
-"""
-impl KleisliComposable<$A, $B, Result<$C>> for ($A -> Result<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> Result<$C>)) -> ($A -> Result<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
-  }
-}
-
-@@doc """
-`KleisliComposable` implementation for `List`-returning unary functions.
-This is the source-level meaning of `left >=> right` for `List`.
-"""
-impl KleisliComposable<$A, $B, List<$C>> for ($A -> List<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> List<$C>)) -> ($A -> List<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
-  }
-}
-
-@@doc """
-`KleisliComposable` implementation for `Option`-returning unary functions.
-This is the source-level meaning of `left >=> right` for `Option`.
-"""
-impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
-  }
-}

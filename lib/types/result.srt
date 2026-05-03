@@ -441,3 +441,23 @@ impl Chainable<$A, Result<$B>> for Result<$A> {
     }
   }
 }
+
+@@doc """
+`LiftComposable` implementation for `Result`-returning unary functions.
+This is the source-level meaning of `left >* right` for `Result`.
+"""
+impl LiftComposable<$A, $B, $C, Result<$C>> for ($A -> Result<$B>) {
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Result<$C>) {
+    {|value| Functor::map(self(value), rhs)}
+  }
+}
+
+@@doc """
+`KleisliComposable` implementation for `Result`-returning unary functions.
+This is the source-level meaning of `left >=> right` for `Result`.
+"""
+impl KleisliComposable<$A, $B, Result<$C>> for ($A -> Result<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> Result<$C>)) -> ($A -> Result<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}
