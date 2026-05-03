@@ -1047,9 +1047,14 @@ fn test_duration_literal_resolves_as_compiler_generated_struct_lit() {
         Resolved::StructLit(_, id, fields) => {
             assert_eq!(id.name, "Duration");
             assert!(id.compiler_generated);
-            assert!(matches!(fields.as_slice(), [(name, Resolved::Lit(_, spire::ast::Lit::Int(value)))] if name == "millis" && *value == sindr::primitives::int(100)));
+            assert!(
+                matches!(fields.as_slice(), [(name, Resolved::Lit(_, spire::ast::Lit::Int(value)))] if name == "millis" && *value == sindr::primitives::int(100))
+            );
         }
-        other => panic!("Expected compiler-generated Duration struct literal, got {:?}", other),
+        other => panic!(
+            "Expected compiler-generated Duration struct literal, got {:?}",
+            other
+        ),
     }
 }
 

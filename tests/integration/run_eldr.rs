@@ -2,7 +2,9 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::common::{module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source};
+use crate::common::{
+    module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source,
+};
 use crate::support;
 
 fn run_cache_files(cache_dir: &Path) -> Vec<PathBuf> {
@@ -392,8 +394,8 @@ fn run_vm_dump_includes_process_runtime_tables_for_agents() {
         fixture.case.entry_source,
         module_sources,
     );
-    let bytecode = support::compile_script_sources(&compile_sources)
-        .expect("fixture bytecode should compile");
+    let bytecode =
+        support::compile_script_sources(&compile_sources).expect("fixture bytecode should compile");
     fs::write(&eldr_path, bytecode.encode().expect("bytecode must encode"))
         .expect("eldr file should be written");
 
@@ -421,7 +423,10 @@ fn run_vm_dump_includes_process_runtime_tables_for_agents() {
         serde_json::from_slice(&fs::read(&dump_path).expect("vm dump file should be readable"))
             .expect("vm dump should be valid json");
     assert_eq!(dump["process_runtime"]["counters"]["process_spec_count"], 1);
-    assert_eq!(dump["process_runtime"]["counters"]["singleton_slot_count"], 1);
+    assert_eq!(
+        dump["process_runtime"]["counters"]["singleton_slot_count"],
+        1
+    );
     assert_eq!(dump["process_runtime"]["counters"]["process_count"], 1);
     assert_eq!(
         dump["process_runtime"]["specs"][0]["process_name"],

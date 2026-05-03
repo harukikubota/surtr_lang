@@ -262,10 +262,16 @@ fn core_lens_command_reports_segments_and_stop_points() {
 
     let fallible = engine.handle_line(":lens BitWidth.Any");
     let fallible = rendered_text(&fallible);
-    assert!(fallible.contains("view result: Result<Int, Error>"), "{fallible}");
+    assert!(
+        fallible.contains("view result: Result<Int, Error>"),
+        "{fallible}"
+    );
     assert!(fallible.contains("## Stops"), "{fallible}");
     assert!(fallible.contains("stop 1:"), "{fallible}");
-    assert!(fallible.contains("variant mismatch returns Result"), "{fallible}");
+    assert!(
+        fallible.contains("variant mismatch returns Result"),
+        "{fallible}"
+    );
 }
 
 #[test]
@@ -636,10 +642,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let slash_doc = engine.handle_line(":doc /");
     let slash_doc = doc_text(&slash_doc);
     assert!(slash_doc.contains("trait Compose"), "{slash_doc}");
-    assert!(
-        slash_doc.contains("models the `/` operator"),
-        "{slash_doc}"
-    );
+    assert!(slash_doc.contains("models the `/` operator"), "{slash_doc}");
 
     let helper_sig = engine.handle_line(":sig gt");
     let helper_sig = signature_text(&helper_sig);
@@ -1182,14 +1185,24 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
 
     let result_pair = engine.handle_line("result_pair = (Ok(2), \"ok\")");
     let result_pair_text = rendered_text(&result_pair);
-    assert!(result_pair_text.contains("result_pair"), "{result_pair_text}");
+    assert!(
+        result_pair_text.contains("result_pair"),
+        "{result_pair_text}"
+    );
 
-    let over_result_sig = engine
-        .handle_line(":sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})");
+    let over_result_sig = engine.handle_line(
+        ":sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})",
+    );
     let over_result_sig = signature_text(&over_result_sig);
     assert!(over_result_sig.contains("defined:"), "{over_result_sig}");
-    assert!(over_result_sig.contains("Lens::over_result("), "{over_result_sig}");
-    assert!(over_result_sig.contains("specialized:"), "{over_result_sig}");
+    assert!(
+        over_result_sig.contains("Lens::over_result("),
+        "{over_result_sig}"
+    );
+    assert!(
+        over_result_sig.contains("specialized:"),
+        "{over_result_sig}"
+    );
     assert!(
         over_result_sig.contains(
             "Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)}): Result<(Result<Int, Error>, String), Error>"

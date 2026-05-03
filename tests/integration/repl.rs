@@ -424,8 +424,14 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
     assert!(stdout.contains("hop 1: Tuple._1"), "{stdout}");
     assert!(stdout.contains("Stops"), "{stdout}");
     assert!(stdout.contains("stop 1:"), "{stdout}");
-    assert!(stdout.contains("view result: Result<Int, Error>"), "{stdout}");
-    assert!(stdout.contains("variant mismatch returns Result"), "{stdout}");
+    assert!(
+        stdout.contains("view result: Result<Int, Error>"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("variant mismatch returns Result"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -440,7 +446,10 @@ fn repl_renders_top_level_lens_compose_expressions() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("ep: Lens<IntBase, Unit> = IntBase.Oct"), "{stdout}");
+    assert!(
+        stdout.contains("ep: Lens<IntBase, Unit> = IntBase.Oct"),
+        "{stdout}"
+    );
     assert!(stdout.contains("a: Lens<_, _> = Tuple._1"), "{stdout}");
     assert!(stdout.contains("Lens<_, _> = Tuple._1.Oct"), "{stdout}");
 }

@@ -171,7 +171,9 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
             span,
             items.into_iter().map(rewrite_process_self_refs).collect(),
         ),
-        Ast::Grouped(span, inner) => Ast::Grouped(span, Box::new(rewrite_process_self_refs(*inner))),
+        Ast::Grouped(span, inner) => {
+            Ast::Grouped(span, Box::new(rewrite_process_self_refs(*inner)))
+        }
         Ast::InterpolatedStr(span, parts) => Ast::InterpolatedStr(
             span,
             parts
@@ -393,7 +395,11 @@ fn process_state_bind(span: &Span) -> Ast {
     Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "state".to_string()),
-        Box::new(internal_call(span, "__process_state", vec![var(span, "pid")])),
+        Box::new(internal_call(
+            span,
+            "__process_state",
+            vec![var(span, "pid")],
+        )),
     )
 }
 

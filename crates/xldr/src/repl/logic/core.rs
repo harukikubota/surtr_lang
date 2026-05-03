@@ -1623,11 +1623,7 @@ impl ReplEngine {
     }
 
     fn lens_segment_terminal_name(label: &str) -> String {
-        label
-            .rsplit('.')
-            .next()
-            .unwrap_or(label)
-            .to_string()
+        label.rsplit('.').next().unwrap_or(label).to_string()
     }
 
     fn render_lens_local_hop(
@@ -2285,11 +2281,7 @@ impl ReplEngine {
                     ),
                     _ => Self::source_expr_string(expr),
                 };
-                format!(
-                    "{}: {}",
-                    rendered,
-                    Self::ty_to_string(&typed.ty)
-                )
+                format!("{}: {}", rendered, Self::ty_to_string(&typed.ty))
             }
             TypedInner::PendingLensPath(path) => {
                 let _ = path;
@@ -2301,11 +2293,7 @@ impl ReplEngine {
                     ),
                     _ => Self::source_expr_string(expr),
                 };
-                format!(
-                    "{}: {}",
-                    rendered,
-                    Self::ty_to_string(&typed.ty)
-                )
+                format!("{}: {}", rendered, Self::ty_to_string(&typed.ty))
             }
             TypedInner::TraitCall {
                 trait_name,
@@ -2457,23 +2445,21 @@ impl ReplEngine {
                 idx
             )),
             TypedInner::LensPath(path) => Some(Self::render_typed_lens_path(path)),
-            TypedInner::PendingLensPath(path) => Some(
-                path.segments
-                    .iter()
-                    .enumerate()
-                    .fold(String::new(), |mut acc, (index, segment)| {
-                        if index == 0 && segment.starts_with('_') {
-                            acc.push_str("Tuple");
-                        } else if !acc.is_empty() && !segment.starts_with('_') {
-                            acc.push('.');
-                        }
-                        if segment.starts_with('_') {
-                            acc.push('.');
-                        }
-                        acc.push_str(segment);
-                        acc
-                    }),
-            ),
+            TypedInner::PendingLensPath(path) => Some(path.segments.iter().enumerate().fold(
+                String::new(),
+                |mut acc, (index, segment)| {
+                    if index == 0 && segment.starts_with('_') {
+                        acc.push_str("Tuple");
+                    } else if !acc.is_empty() && !segment.starts_with('_') {
+                        acc.push('.');
+                    }
+                    if segment.starts_with('_') {
+                        acc.push('.');
+                    }
+                    acc.push_str(segment);
+                    acc
+                },
+            )),
             TypedInner::Closure(..) => Some("{|...| ...}".to_string()),
             TypedInner::Lit(lit) => Some(Self::literal_source(lit)),
             _ => None,
@@ -2690,10 +2676,14 @@ impl ReplEngine {
                 path,
                 source_is_result,
                 ..
-            } => Some(Self::lens_info_from_path(path, &Ty::Lens(
-                Box::new(path.source_ty.clone()),
-                Box::new(path.focus_ty.clone()),
-            ), *source_is_result)),
+            } => Some(Self::lens_info_from_path(
+                path,
+                &Ty::Lens(
+                    Box::new(path.source_ty.clone()),
+                    Box::new(path.focus_ty.clone()),
+                ),
+                *source_is_result,
+            )),
             _ => None,
         }
     }
@@ -3062,11 +3052,13 @@ impl ReplEngine {
                 ))
             }
             "/" => match (&lhs_ty, &rhs_ty) {
-                (AstTy::Generic(_, left_name, left_args), AstTy::Generic(_, right_name, right_args))
-                    if left_name == "Lens"
-                        && right_name == "Lens"
-                        && left_args.len() == 2
-                        && right_args.len() == 2 =>
+                (
+                    AstTy::Generic(_, left_name, left_args),
+                    AstTy::Generic(_, right_name, right_args),
+                ) if left_name == "Lens"
+                    && right_name == "Lens"
+                    && left_args.len() == 2
+                    && right_args.len() == 2 =>
                 {
                     Self::ensure_query_type_matches(
                         &left_args[1],
@@ -3088,7 +3080,10 @@ impl ReplEngine {
                         result_ty,
                     ))
                 }
-                _ => Err("`/` currently models Lens composition. Use `safe_div(...)` for division.".to_string()),
+                _ => Err(
+                    "`/` currently models Lens composition. Use `safe_div(...)` for division."
+                        .to_string(),
+                ),
             },
             ">>" => {
                 let (left_params, left_ret) = Self::query_unary_func_parts(&lhs_ty, ">>")?;
@@ -3594,11 +3589,7 @@ impl ReplEngine {
         chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     }
 
-    fn render_type_identity(
-        &self,
-        binding: &forge::BindingInfo,
-        value: Option<&Value>,
-    ) -> String {
+    fn render_type_identity(&self, binding: &forge::BindingInfo, value: Option<&Value>) -> String {
         if binding.lens_info.is_some() {
             return "TypeIdentity::LensPath".to_string();
         }

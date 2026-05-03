@@ -909,7 +909,10 @@ mod tests {
             loaded.builtin_module_path.as_deref(),
             Some(BUILTIN_PRELUDE_MODULE_PATH)
         );
-        assert_eq!(loaded.module_source_ids.len(), 5 + DEFAULT_STD_MODULES.len());
+        assert_eq!(
+            loaded.module_source_ids.len(),
+            5 + DEFAULT_STD_MODULES.len()
+        );
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
@@ -1047,10 +1050,7 @@ mod tests {
             loaded.module_stages[1][1].source_kind,
             SourceKind::StdModule
         );
-        assert_eq!(
-            loaded.module_stages[2][0].source_kind,
-            SourceKind::Module
-        );
+        assert_eq!(loaded.module_stages[2][0].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[3][0].source_kind, SourceKind::Module);
         assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
         let std_paths = loaded.module_stages[1]

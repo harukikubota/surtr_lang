@@ -1187,8 +1187,10 @@ impl VM {
             return Ok(pid);
         }
 
-        let init_result = self
-            .invoke_callable_isolated_sync(self.callable_for_function(spec.init_fun_idx), Vec::new())?;
+        let init_result = self.invoke_callable_isolated_sync(
+            self.callable_for_function(spec.init_fun_idx),
+            Vec::new(),
+        )?;
         let state = match decode_vm_result(init_result, "__root_boot", "init")? {
             Ok(state) => state,
             Err(err) => {
@@ -1227,8 +1229,10 @@ impl VM {
             )));
         };
 
-        let init_result = self
-            .invoke_callable_isolated_sync(self.callable_for_function(spec.init_fun_idx), Vec::new())?;
+        let init_result = self.invoke_callable_isolated_sync(
+            self.callable_for_function(spec.init_fun_idx),
+            Vec::new(),
+        )?;
         let state = match decode_vm_result(init_result, "__process_state", "init")? {
             Ok(state) => state,
             Err(err) => return Ok(Some(err_vm_result(err))),
@@ -1577,42 +1581,40 @@ impl VM {
                 set_fun_idx: spec.set_fun_idx,
             })
             .collect();
-        let processes = self
-            .process_runtime
-            .processes
-            .values()
-            .map(|process| {
-                let process_name = self
-                    .process_runtime
-                    .spec_for_id(process.spec_id)
-                    .map(|spec| spec.process_name.clone())
-                    .unwrap_or_else(|| format!("<unknown:{}>", process.spec_id));
-                let execution_context =
-                    process
-                        .execution_context
-                        .as_ref()
-                        .map(|context| VmExecutionContextSnapshot {
+        let processes =
+            self.process_runtime
+                .processes
+                .values()
+                .map(|process| {
+                    let process_name = self
+                        .process_runtime
+                        .spec_for_id(process.spec_id)
+                        .map(|spec| spec.process_name.clone())
+                        .unwrap_or_else(|| format!("<unknown:{}>", process.spec_id));
+                    let execution_context = process.execution_context.as_ref().map(|context| {
+                        VmExecutionContextSnapshot {
                             pc: context.pc,
                             stack_depth: context.stack.len(),
                             frame_depth: context.frames.len(),
                             target: context.target.label(),
-                        });
-                VmProcessInstanceSnapshot {
-                    pid: process.pid,
-                    process_name,
-                    spec_id: process.spec_id,
-                    status: process.status.label().into(),
-                    mailbox_len: process.mailbox.len(),
-                    owner: process.owner,
-                    lazy_state_pending: process.lazy_state_pending,
-                    state_value: process
-                        .state_value
-                        .as_ref()
-                        .map(|value| crate::builtin::inspect_value(self, value)),
-                    execution_context,
-                }
-            })
-            .collect();
+                        }
+                    });
+                    VmProcessInstanceSnapshot {
+                        pid: process.pid,
+                        process_name,
+                        spec_id: process.spec_id,
+                        status: process.status.label().into(),
+                        mailbox_len: process.mailbox.len(),
+                        owner: process.owner,
+                        lazy_state_pending: process.lazy_state_pending,
+                        state_value: process
+                            .state_value
+                            .as_ref()
+                            .map(|value| crate::builtin::inspect_value(self, value)),
+                        execution_context,
+                    }
+                })
+                .collect();
         let waiting = self
             .process_runtime
             .waiting_table
@@ -1688,9 +1690,9 @@ impl VM {
                 self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
                 Ok(())
             }
-            StepOutcome::Pending { .. } => {
-                Err(RuntimeError::new("top-level execution suspended without scheduler support"))
-            }
+            StepOutcome::Pending { .. } => Err(RuntimeError::new(
+                "top-level execution suspended without scheduler support",
+            )),
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("top-level execution did not finish")),
         }
@@ -2016,14 +2018,16 @@ impl VM {
 
         match value {
             Value::PendingFuture(future_id) => {
-                let resolved = self.process_runtime.futures.get(&future_id).and_then(|future| {
-                    match &future.state {
+                let resolved = self
+                    .process_runtime
+                    .futures
+                    .get(&future_id)
+                    .and_then(|future| match &future.state {
                         FutureState::Ready(value) | FutureState::Cancelled(value) => {
                             Some(value.clone())
                         }
                         FutureState::Running => None,
-                    }
-                });
+                    });
 
                 if let Some(value) = resolved {
                     self.current_frame_mut()?.locals[slot_index] = value.clone();
@@ -2092,9 +2096,7 @@ impl VM {
                 }
                 OpcodeControl::Halt => {
                     self.pc = next_pc;
-                    return StepOutcome::Halt(
-                        self.stack.last().cloned().unwrap_or(Value::Unit),
-                    );
+                    return StepOutcome::Halt(self.stack.last().cloned().unwrap_or(Value::Unit));
                 }
                 OpcodeControl::Pending(future_id) => {
                     return StepOutcome::Pending {
@@ -2119,10 +2121,12 @@ impl VM {
         full_args.extend(args);
 
         match callable.target {
-            CallableTarget::Builtin(builtin_id) => match call_builtin(self, builtin_id, full_args) {
-                Ok(value) => StepOutcome::Halt(value),
-                Err(err) => StepOutcome::RuntimeError(err),
-            },
+            CallableTarget::Builtin(builtin_id) => {
+                match call_builtin(self, builtin_id, full_args) {
+                    Ok(value) => StepOutcome::Halt(value),
+                    Err(err) => StepOutcome::RuntimeError(err),
+                }
+            }
             CallableTarget::Function(fun_idx) => {
                 let entry = match self.function_entry(fun_idx) {
                     Ok(entry) => entry.clone(),
@@ -2171,9 +2175,9 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         match self.invoke_callable_step(callable, args) {
             StepOutcome::Halt(value) => Ok(value),
-            StepOutcome::Pending { .. } => {
-                Err(RuntimeError::new("callable suspended without scheduler support"))
-            }
+            StepOutcome::Pending { .. } => Err(RuntimeError::new(
+                "callable suspended without scheduler support",
+            )),
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("callable execution did not finish")),
         }
@@ -2197,7 +2201,8 @@ impl VM {
         loop {
             match outcome {
                 StepOutcome::Halt(value) => {
-                    self.process_runtime.resolve_future(future_id, value.clone());
+                    self.process_runtime
+                        .resolve_future(future_id, value.clone());
                     return self.ready_future_value(future_id).ok_or_else(|| {
                         RuntimeError::new(format!(
                             "task completion future {} did not resolve",
@@ -2263,10 +2268,9 @@ impl VM {
             return value;
         };
         if started.elapsed().as_millis() > u128::from(timeout_ms) {
-            err_vm_result(self.process_error(
-                "Timeout",
-                &format!("task timed out after {}ms", timeout_ms),
-            ))
+            err_vm_result(
+                self.process_error("Timeout", &format!("task timed out after {}ms", timeout_ms)),
+            )
         } else {
             value
         }
@@ -4362,7 +4366,8 @@ mod tests {
             metadata: CallableMetadata::default(),
         };
 
-        let resume = match vm.invoke_callable_step(callable, vec![Value::PendingFuture(future_id)]) {
+        let resume = match vm.invoke_callable_step(callable, vec![Value::PendingFuture(future_id)])
+        {
             StepOutcome::Pending { resume, .. } => resume,
             other => panic!("expected pending outcome, got {other:?}"),
         };
@@ -5564,7 +5569,10 @@ mod tests {
         assert_eq!(snapshot.counters.future_count, task_count * 2);
         assert_eq!(snapshot.counters.ready_future_count, task_count * 2);
         assert_eq!(snapshot.specs.len(), singleton_count as usize + 1);
-        assert_eq!(snapshot.processes.len(), singleton_count as usize + spawn_count);
+        assert_eq!(
+            snapshot.processes.len(),
+            singleton_count as usize + spawn_count
+        );
         assert_eq!(snapshot.futures.len(), task_count * 2);
 
         let observation = vm.observation().expect("observation should exist");

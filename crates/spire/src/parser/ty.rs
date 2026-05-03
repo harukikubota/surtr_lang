@@ -24,13 +24,7 @@ impl Parser<'_> {
             "Result".to_string(),
             vec![
                 inner,
-                AstTy::Named(
-                    Span {
-                        start,
-                        end,
-                    },
-                    "NoneError".to_string(),
-                ),
+                AstTy::Named(Span { start, end }, "NoneError".to_string()),
             ],
         )
     }

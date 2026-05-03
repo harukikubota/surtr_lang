@@ -1660,8 +1660,7 @@ impl Resolver {
                 let mut show_resolver = Resolver::with_scope(error_scope);
                 show_resolver.declaration_uids = self.declaration_uids.clone();
                 show_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
-                show_resolver.declaration_hidden_by_uid =
-                    self.declaration_hidden_by_uid.clone();
+                show_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 show_resolver.current_module_path = self.current_module_path.clone();
                 show_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_show = show_resolver.resolve_node(*show_expr)?;
@@ -1740,8 +1739,7 @@ impl Resolver {
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
-                body_resolver.declaration_hidden_by_uid =
-                    self.declaration_hidden_by_uid.clone();
+                body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -1811,8 +1809,7 @@ impl Resolver {
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
-                body_resolver.declaration_hidden_by_uid =
-                    self.declaration_hidden_by_uid.clone();
+                body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -2096,8 +2093,7 @@ impl Resolver {
                 let mut decl_resolver = Resolver::with_scope(self.scope.clone());
                 decl_resolver.declaration_uids = self.declaration_uids.clone();
                 decl_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
-                decl_resolver.declaration_hidden_by_uid =
-                    self.declaration_hidden_by_uid.clone();
+                decl_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 decl_resolver.current_module_path = self.current_module_path.clone();
                 decl_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_params = params
@@ -2235,8 +2231,7 @@ impl Resolver {
                 let mut body_resolver = Resolver::with_scope(closure_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
-                body_resolver.declaration_hidden_by_uid =
-                    self.declaration_hidden_by_uid.clone();
+                body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_body = body_resolver.resolve_node(*body)?;

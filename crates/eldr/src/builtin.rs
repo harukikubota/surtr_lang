@@ -620,19 +620,43 @@ fn builtin_task_cast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
 }
 
 fn builtin_task_call_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    invoke_task_body_with_timeout(vm, &args[1], &args[0], "__task_call_timeout", TaskMode::Call)
+    invoke_task_body_with_timeout(
+        vm,
+        &args[1],
+        &args[0],
+        "__task_call_timeout",
+        TaskMode::Call,
+    )
 }
 
 fn builtin_task_async_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    invoke_task_body_with_timeout(vm, &args[1], &args[0], "__task_async_timeout", TaskMode::Async)
+    invoke_task_body_with_timeout(
+        vm,
+        &args[1],
+        &args[0],
+        "__task_async_timeout",
+        TaskMode::Async,
+    )
 }
 
 fn builtin_task_launch_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    invoke_task_body_with_timeout(vm, &args[1], &args[0], "__task_launch_timeout", TaskMode::Launch)
+    invoke_task_body_with_timeout(
+        vm,
+        &args[1],
+        &args[0],
+        "__task_launch_timeout",
+        TaskMode::Launch,
+    )
 }
 
 fn builtin_task_cast_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    invoke_task_body_with_timeout(vm, &args[1], &args[0], "__task_cast_timeout", TaskMode::Cast)
+    invoke_task_body_with_timeout(
+        vm,
+        &args[1],
+        &args[0],
+        "__task_cast_timeout",
+        TaskMode::Cast,
+    )
 }
 
 fn invoke_task_body(
