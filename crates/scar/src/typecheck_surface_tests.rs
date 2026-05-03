@@ -1930,42 +1930,7 @@ mapped = Functor::map(Ok(1), &inc)"#,
 #[test]
 fn flow_apply_and_compose_operators_lower_to_trait_calls() {
     let typed = typecheck_with_builtin_prelude(
-        r#"defenum Option<$T> {
-  Some($T),
-  None,
-}
-
-impl Functor<$A, $B, Option<$B>> for Option<$A> {
-  def map(self: Self, f: ($A -> $B)) -> Option<$B> {
-    match self {
-      Option::Some(value) => Option::Some(f(value)),
-      Option::None => Option::None,
-    }
-  }
-}
-
-impl Chainable<$A, Option<$B>> for Option<$A> {
-  def chain(self: Self, f: ($A -> Option<$B>)) -> Option<$B> {
-    match self {
-      Option::Some(value) => f(value),
-      Option::None => Option::None,
-    }
-  }
-}
-
-impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
-  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
-    {|value| Functor::map(self(value), rhs)}
-  }
-}
-
-impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
-  }
-}
-
-def inc(x: Int) -> Int {
+        r#"def inc(x: Int) -> Int {
   x + 1
 }
 
