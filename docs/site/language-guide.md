@@ -523,6 +523,16 @@ List::map([1, 2], &to_string)
 List::find_map([1, 2], &lookup)
 ```
 
+固定範囲をその場で書きたいときは range literal も使えます。
+
+```surtr
+nums = [1..3]          # => [1, 2, 3]
+chars = ["a".."c"]     # => Ok([a, b, c])
+```
+
+`Int` range はそのまま `List<Int>` になり、`String` range は char validation を伴うので `Result<List<String>, Error>` になります。
+constant literal は compile-time に畳まれますが、変数 endpoint の場合でも surface は同じで、runtime では既存の `Generator::range` / `Generator::range_char` を使って評価されます。
+
 ここでの単位元は `[]` です。  
 Surtr は一般化された `pure` を置かず、`[]` と `List::cons` / `[x]` をはっきり分けています。
 `[head, ..tail]` の分解は pattern 位置専用で、`List` と `String` のどちらにも使えます。

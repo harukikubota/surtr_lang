@@ -887,6 +887,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|e| shift_ast_span(e, delta))
                 .collect(),
         ),
+        Ast::RangeLiteral(span, start, stop) => Ast::RangeLiteral(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*start, delta)),
+            Box::new(shift_ast_span(*stop, delta)),
+        ),
         Ast::TupleLiteral(span, elems) => Ast::TupleLiteral(
             shift_span(span, delta),
             elems
@@ -1251,6 +1256,7 @@ impl Ast {
             | Ast::ListNil(s)
             | Ast::ListCons(s, _, _)
             | Ast::ListLiteral(s, _)
+            | Ast::RangeLiteral(s, _, _)
             | Ast::TupleLiteral(s, _)
             | Ast::Grouped(s, _)
             | Ast::InterpolatedStr(s, _)

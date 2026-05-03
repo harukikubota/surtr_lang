@@ -1784,6 +1784,36 @@ fn test_list_cons_expr() {
 }
 
 #[test]
+fn test_range_literal_expr() {
+    let ast = parse("nums = [1..3]").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::RangeLiteral(_, start, stop) => {
+                assert!(matches!(start.as_ref(), Ast::Lit(_, Lit::Int(n)) if *n == int(1)));
+                assert!(matches!(stop.as_ref(), Ast::Lit(_, Lit::Int(n)) if *n == int(3)));
+            }
+            other => panic!("Expected RangeLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_string_range_literal_expr() {
+    let ast = parse(r#"chars = ["a".."c"]"#).unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::RangeLiteral(_, start, stop) => {
+                assert!(matches!(start.as_ref(), Ast::Lit(_, Lit::Str(value)) if value == "a"));
+                assert!(matches!(stop.as_ref(), Ast::Lit(_, Lit::Str(value)) if value == "c"));
+            }
+            other => panic!("Expected RangeLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_list_pattern_safebind() {
     let ast = parse("[head, ..tail] =? value").unwrap();
     match &ast[0] {

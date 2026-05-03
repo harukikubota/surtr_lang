@@ -329,6 +329,22 @@ value: Int =? parse_int("1")
 - `Option` は SafeBind 対象ではない。`from(value, Result)` で明示的に変換してから使う
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
+#### range literal
+
+`[start..stop]` は inclusive range literal です。
+
+```surtr
+[1..3]         # => [1, 2, 3]
+["a".."c"]     # => Ok([a, b, c])
+```
+
+- `[Int..Int]` は `List<Int>`
+- `[String..String]` は `Result<List<String>, Error>`
+- `String` endpoint は single ASCII char として扱う
+- constant endpoint は compile-time に fold される
+- `""` や `"ab"` のような constant string endpoint は compile error
+- `[head, ..tail]` とは別構文で、range form は comma を持たない
+
 #### 共通制約
 
 - 裸の関数参照は許可しない

@@ -309,6 +309,10 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         | Resolved::TupleLiteral(_, nodes) => {
             rebase_resolved_nodes(nodes, base, offset);
         }
+        Resolved::RangeLiteral(_, start, stop) => {
+            rebase_resolved_node(start, base, offset);
+            rebase_resolved_node(stop, base, offset);
+        }
         Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
             rebase_pattern(pattern, base, offset);
             rebase_resolved_node(rhs, base, offset);

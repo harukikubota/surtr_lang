@@ -167,6 +167,11 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
             span,
             items.into_iter().map(rewrite_process_self_refs).collect(),
         ),
+        Ast::RangeLiteral(span, start, stop) => Ast::RangeLiteral(
+            span,
+            Box::new(rewrite_process_self_refs(*start)),
+            Box::new(rewrite_process_self_refs(*stop)),
+        ),
         Ast::TupleLiteral(span, items) => Ast::TupleLiteral(
             span,
             items.into_iter().map(rewrite_process_self_refs).collect(),

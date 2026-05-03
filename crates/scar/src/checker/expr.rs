@@ -1,4 +1,8 @@
 use super::*;
+use sindr::primitives::int;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static SYNTHETIC_RANGE_UID: AtomicU32 = AtomicU32::new(3_000_000_000);
 
 fn combine_hint_parts(parts: &[Option<String>]) -> Option<String> {
     let joined = parts
@@ -327,6 +331,7 @@ impl Checker {
             Resolved::ListNil(span) => self.check_list_nil(span),
             Resolved::ListCons(span, head, tail) => self.check_list_cons(span, head, tail),
             Resolved::ListLiteral(span, elems) => self.check_list_literal(span, elems),
+            Resolved::RangeLiteral(span, start, stop) => self.check_range_literal(span, start, stop),
             Resolved::TupleLiteral(span, elems) => self.check_tuple_literal(span, elems),
             Resolved::Grouped(span, inner) => {
                 let mut typed = self.check_node(inner)?;
@@ -861,6 +866,7 @@ impl Checker {
             | Resolved::ListNil(span)
             | Resolved::ListCons(span, _, _)
             | Resolved::ListLiteral(span, _)
+            | Resolved::RangeLiteral(span, _, _)
             | Resolved::TupleLiteral(span, _)
             | Resolved::Grouped(span, _)
             | Resolved::InterpolatedStr(span, _)
@@ -4555,6 +4561,258 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::ListLiteral(typed_elems),
         })
+    }
+
+    pub(super) fn check_range_literal(
+        &mut self,
+        span: &Span,
+        start: &Resolved,
+        stop: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_start = self.check_node(start)?;
+        let typed_stop = self.check_node(stop)?;
+        self.ensure_no_runtime_lens_value(&typed_start, "Range literal")?;
+        self.ensure_no_runtime_lens_value(&typed_stop, "Range literal")?;
+
+        let start_ty = self.resolve_ty(&typed_start.ty);
+        let stop_ty = self.resolve_ty(&typed_stop.ty);
+        match (&start_ty, &stop_ty) {
+            (Ty::Int, Ty::Int) => {
+                if let (Some(start_int), Some(stop_int)) = (
+                    Self::typed_int_literal_value(&typed_start),
+                    Self::typed_int_literal_value(&typed_stop),
+                ) {
+                    return Ok(self.fold_int_range_literal(span, start_int, stop_int));
+                }
+                self.lower_int_range_runtime(span, start.clone(), stop.clone())
+            }
+            (Ty::Str, Ty::Str) => {
+                if let (Some(start_str), Some(stop_str)) = (
+                    Self::typed_string_literal_value(&typed_start),
+                    Self::typed_string_literal_value(&typed_stop),
+                ) {
+                    return self.fold_string_range_literal(span, &start_str, &stop_str);
+                }
+                self.lower_string_range_runtime(span, start.clone(), stop.clone())
+            }
+            _ => Err(TypeError {
+                message: "range literal endpoints must both be Int or both be String".into(),
+                span: span.clone(),
+                hint: Some("Use `[start..stop]` with matching Int endpoints or matching single-char String endpoints.".into()),
+            }),
+        }
+    }
+
+    fn typed_int_literal_value(node: &TypedNode) -> Option<sindr::primitives::SurtrInt> {
+        match &node.node {
+            TypedInner::Lit(Lit::Int(value)) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    fn typed_string_literal_value(node: &TypedNode) -> Option<String> {
+        match &node.node {
+            TypedInner::Lit(Lit::Str(value)) => Some(value.clone()),
+            _ => None,
+        }
+    }
+
+    fn fold_int_range_literal(
+        &mut self,
+        span: &Span,
+        start: sindr::primitives::SurtrInt,
+        stop: sindr::primitives::SurtrInt,
+    ) -> TypedNode {
+        let mut current = start;
+        let mut elems = Vec::new();
+        while current <= stop {
+            elems.push(TypedNode {
+                ty: Ty::Int,
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Int(current.clone())),
+            });
+            current += int(1);
+        }
+
+        TypedNode {
+            ty: Ty::List(Box::new(Ty::Int)),
+            span: span.clone(),
+            node: TypedInner::ListLiteral(elems),
+        }
+    }
+
+    fn fold_string_range_literal(
+        &mut self,
+        span: &Span,
+        start: &str,
+        stop: &str,
+    ) -> Result<TypedNode, TypeError> {
+        let start_cp = Self::single_ascii_range_endpoint(start, "start", span)?;
+        let stop_cp = Self::single_ascii_range_endpoint(stop, "stop", span)?;
+        let mut elems = Vec::new();
+        let mut current = start_cp;
+        while current <= stop_cp {
+            elems.push(TypedNode {
+                ty: Ty::Str,
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Str((current as char).to_string())),
+            });
+            current += 1;
+        }
+
+        let list_node = TypedNode {
+            ty: Ty::List(Box::new(Ty::Str)),
+            span: span.clone(),
+            node: TypedInner::ListLiteral(elems),
+        };
+        Ok(TypedNode {
+            ty: Ty::Result(Box::new(Ty::List(Box::new(Ty::Str))), Box::new(Ty::Error)),
+            span: span.clone(),
+            node: TypedInner::ConstructorCall(0, vec![list_node]),
+        })
+    }
+
+    fn single_ascii_range_endpoint(
+        value: &str,
+        label: &str,
+        span: &Span,
+    ) -> Result<u8, TypeError> {
+        let mut chars = value.chars();
+        let Some(ch) = chars.next() else {
+            return Err(TypeError {
+                message: format!("range literal {label} must be a single char"),
+                span: span.clone(),
+                hint: Some("Use a one-character string literal such as \"a\".".into()),
+            });
+        };
+        if chars.next().is_some() {
+            return Err(TypeError {
+                message: format!("range literal {label} must be a single char"),
+                span: span.clone(),
+                hint: Some("Use a one-character string literal such as \"a\".".into()),
+            });
+        }
+        if !ch.is_ascii() {
+            return Err(TypeError {
+                message: format!("range literal {label} must be a single ASCII char"),
+                span: span.clone(),
+                hint: Some("Non-constant String ranges run through Generator::range_char at runtime, but constant literals are limited to ASCII in v1.".into()),
+            });
+        }
+        Ok(ch as u8)
+    }
+
+    fn runtime_helper_id(&self, qualified_name: &str, span: &Span) -> Result<ResolvedId, TypeError> {
+        if let Some(id) = self.function_ids_by_name.get(qualified_name) {
+            return Ok(id.clone());
+        }
+        if let Some(uid) = self.impl_method_uids.get(qualified_name) {
+            if let Some(id) = self
+                .function_ids_by_name
+                .values()
+                .find(|id| id.unique_id == *uid)
+            {
+                return Ok(id.clone());
+            }
+            let local_name = qualified_name
+                .rsplit("::")
+                .next()
+                .unwrap_or(qualified_name)
+                .to_string();
+            return Ok(ResolvedId {
+                name: local_name,
+                qualified_name: Some(qualified_name.to_string()),
+                unique_id: *uid,
+                compiler_generated: true,
+                span: span.clone(),
+            });
+        }
+        Err(TypeError {
+            message: format!("internal error: missing std helper `{qualified_name}`"),
+            span: span.clone(),
+            hint: None,
+        })
+    }
+
+    fn next_synthetic_range_uid() -> u32 {
+        SYNTHETIC_RANGE_UID.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn lower_int_range_runtime(
+        &mut self,
+        span: &Span,
+        start: Resolved,
+        stop: Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let range_id = self.runtime_helper_id("Generator::range", span)?;
+        let to_list_id = self.runtime_helper_id("Generator::to_list", span)?;
+        let lowered = Resolved::App(
+            span.clone(),
+            Box::new(Resolved::Var(span.clone(), to_list_id)),
+            vec![ResolvedRecordLitArg::Positional(Resolved::App(
+                span.clone(),
+                Box::new(Resolved::Var(span.clone(), range_id)),
+                vec![
+                    ResolvedRecordLitArg::Positional(start),
+                    ResolvedRecordLitArg::Positional(stop),
+                ],
+            ))],
+        );
+        self.check_node(&lowered)
+    }
+
+    fn lower_string_range_runtime(
+        &mut self,
+        span: &Span,
+        start: Resolved,
+        stop: Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let range_char_id = self.runtime_helper_id("Generator::range_char", span)?;
+        let to_list_id = self.runtime_helper_id("Generator::to_list", span)?;
+        let gen_uid = Self::next_synthetic_range_uid();
+        let gen_id = ResolvedId {
+            name: "__range_gen".into(),
+            qualified_name: None,
+            unique_id: gen_uid,
+            compiler_generated: true,
+            span: span.clone(),
+        };
+        let lowered = Resolved::Block(
+            span.clone(),
+            vec![
+                Resolved::SafeBind(
+                    span.clone(),
+                    ResolvedPattern::Var(gen_id.clone()),
+                    Box::new(Resolved::App(
+                        span.clone(),
+                        Box::new(Resolved::Var(span.clone(), range_char_id)),
+                        vec![
+                            ResolvedRecordLitArg::Positional(start),
+                            ResolvedRecordLitArg::Positional(stop),
+                        ],
+                    )),
+                ),
+                Resolved::ConstructorCall(
+                    span.clone(),
+                    ResolvedId {
+                        name: "Ok".into(),
+                        qualified_name: None,
+                        unique_id: 0,
+                        compiler_generated: true,
+                        span: span.clone(),
+                    },
+                    vec![ResolvedRecordLitArg::Positional(Resolved::App(
+                        span.clone(),
+                        Box::new(Resolved::Var(span.clone(), to_list_id)),
+                        vec![ResolvedRecordLitArg::Positional(Resolved::Var(
+                            span.clone(),
+                            gen_id,
+                        ))],
+                    ))],
+                ),
+            ],
+        );
+        self.check_node(&lowered)
     }
 
     pub(super) fn check_tuple_literal(

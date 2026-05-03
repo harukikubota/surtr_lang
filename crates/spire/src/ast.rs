@@ -322,6 +322,9 @@ pub enum Ast {
     /// Fixed list literal: `[1, 2, 3]`
     ListLiteral(Span, Vec<Ast>),
 
+    /// Inclusive range literal: `[start..stop]`
+    RangeLiteral(Span, Box<Ast>, Box<Ast>),
+
     /// Tuple literal: `(1, 2, 3)`
     TupleLiteral(Span, Vec<Ast>),
 

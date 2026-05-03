@@ -3034,6 +3034,21 @@ fn test_list_literal_resolves_all_elements() {
 }
 
 #[test]
+fn test_range_literal_resolves_endpoints() {
+    let resolved = parse_and_resolve("items = [1..3]").unwrap();
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::RangeLiteral(_, start, stop) => {
+                assert!(matches!(start.as_ref(), Resolved::Lit(_, Lit::Int(n)) if *n == int(1)));
+                assert!(matches!(stop.as_ref(), Resolved::Lit(_, Lit::Int(n)) if *n == int(3)));
+            }
+            other => panic!("Expected RangeLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_semicolon_expression_wraps_inner_node() {
     let resolved = parse_and_resolve(r#"print("hello");"#).unwrap();
     match &resolved[0] {

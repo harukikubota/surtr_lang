@@ -1280,6 +1280,21 @@ impl Parser<'_> {
 
             let first = parser.parse_expr()?;
             parser.skip_newlines();
+            if matches!(parser.peek(), Token::DotDot) {
+                parser.advance();
+                parser.skip_newlines();
+                let stop = parser.parse_expr()?;
+                parser.skip_newlines();
+                let end = parser.expect(&Token::RBrack)?;
+                return Ok(Ast::RangeLiteral(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    Box::new(first),
+                    Box::new(stop),
+                ));
+            }
             if matches!(parser.peek(), Token::Comma) {
                 parser.advance();
                 parser.skip_newlines();

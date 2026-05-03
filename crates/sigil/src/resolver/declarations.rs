@@ -330,6 +330,11 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|elem| rewrite_self_ast(elem, target))
                 .collect(),
         ),
+        Ast::RangeLiteral(span, start, stop) => Ast::RangeLiteral(
+            span,
+            Box::new(rewrite_self_ast(*start, target)),
+            Box::new(rewrite_self_ast(*stop, target)),
+        ),
         Ast::TupleLiteral(span, elems) => Ast::TupleLiteral(
             span,
             elems

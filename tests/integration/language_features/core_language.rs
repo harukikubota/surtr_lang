@@ -116,6 +116,32 @@ fn int_negative_literal() {
     assert_output("x = -5\nprint(to_string(x))", &["-5"]);
 }
 
+fn range_literal_executes_for_int_and_string() {
+    assert_output(
+        "print(to_string([1..3]))\nprint(to_string([3..1]))\nprint(to_string([\"a\"..\"c\"]))\nprint(to_string([\"c\"..\"a\"]))",
+        &["[1, 2, 3]", "[]", "Ok([a, b, c])", "Ok([])"],
+    );
+}
+
+fn range_literal_dynamic_endpoints_execute() {
+    assert_output(
+        "start = 1\nstop = 3\nprint(to_string([start..stop]))\na = \"a\"\nc = \"c\"\nprint(to_string([a..c]))",
+        &["[1, 2, 3]", "Ok([a, b, c])"],
+    );
+}
+
+fn range_literal_rejects_mixed_endpoint_types() {
+    assert_compile_error(r#"bad = [1.."c"]"#, "range literal endpoints must both be Int or both be String");
+}
+
+fn range_literal_rejects_empty_string_literal_endpoint() {
+    assert_compile_error(r#"bad = ["".."c"]"#, "range literal start must be a single char");
+}
+
+fn range_literal_rejects_multichar_string_literal_endpoint() {
+    assert_compile_error(r#"bad = ["ab".."c"]"#, "range literal start must be a single char");
+}
+
 fn arithmetic_int_ops() {
     assert_output(
         "print(to_string(10 + 5))\nprint(to_string(10 - 3))\nprint(to_string(4 * 3))\nprint(inspect(safe_div(10, 3)))\nprint(inspect(safe_mod(10, 3)))",
@@ -1211,6 +1237,26 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "string_interpolation_result_type_error",
             string_interpolation_result_type_error as fn(),
+        ),
+        (
+            "range_literal_executes_for_int_and_string",
+            range_literal_executes_for_int_and_string as fn(),
+        ),
+        (
+            "range_literal_dynamic_endpoints_execute",
+            range_literal_dynamic_endpoints_execute as fn(),
+        ),
+        (
+            "range_literal_rejects_mixed_endpoint_types",
+            range_literal_rejects_mixed_endpoint_types as fn(),
+        ),
+        (
+            "range_literal_rejects_empty_string_literal_endpoint",
+            range_literal_rejects_empty_string_literal_endpoint as fn(),
+        ),
+        (
+            "range_literal_rejects_multichar_string_literal_endpoint",
+            range_literal_rejects_multichar_string_literal_endpoint as fn(),
         ),
         (
             "function_definition_minimal",

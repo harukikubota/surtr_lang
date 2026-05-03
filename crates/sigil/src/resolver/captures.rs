@@ -107,6 +107,10 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(elem, bound, free);
             }
         }
+        Resolved::RangeLiteral(_, start, stop) => {
+            collect_captures_inner(start, bound, free);
+            collect_captures_inner(stop, bound, free);
+        }
         Resolved::TupleLiteral(_, elems) => {
             for elem in elems {
                 collect_captures_inner(elem, bound, free);

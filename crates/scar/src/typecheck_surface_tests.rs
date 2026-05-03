@@ -153,6 +153,37 @@ fn safebind_string_pattern_accepts_plain_string_rhs() {
 }
 
 #[test]
+fn int_range_literal_typechecks_to_list_int() {
+    let resolved = resolve_with_builtin_prelude("nums = [1..3]");
+    let typed = typecheck(resolved).expect("typecheck should succeed");
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("expected binding");
+    assert_eq!(rhs.ty, Ty::List(Box::new(Ty::Int)));
+}
+
+#[test]
+fn string_range_literal_typechecks_to_result_list_string() {
+    let resolved = resolve_with_builtin_prelude(r#"chars = ["a".."c"]"#);
+    let typed = typecheck(resolved).expect("typecheck should succeed");
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("expected binding");
+    assert_eq!(
+        rhs.ty,
+        Ty::Result(Box::new(Ty::List(Box::new(Ty::Str))), Box::new(Ty::Error))
+    );
+}
+
+#[test]
 fn match_string_requires_empty_and_uncons_arms_for_exhaustiveness() {
     let resolved = resolve_with_builtin_prelude(
         r#"value = "x"

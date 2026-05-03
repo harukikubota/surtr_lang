@@ -86,6 +86,9 @@ pub enum Resolved {
     /// Fixed list literal
     ListLiteral(Span, Vec<Resolved>),
 
+    /// Inclusive range literal
+    RangeLiteral(Span, Box<Resolved>, Box<Resolved>),
+
     /// Tuple literal
     TupleLiteral(Span, Vec<Resolved>),
 

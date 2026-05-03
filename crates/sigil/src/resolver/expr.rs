@@ -203,6 +203,20 @@ impl Resolver {
                 }
                 Ok(())
             }
+            Ast::RangeLiteral(_, start, stop) => {
+                self.collect_capture_placeholders(
+                    start,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )?;
+                self.collect_capture_placeholders(
+                    stop,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )
+            }
             Ast::Bind(_, _, rhs)
             | Ast::SafeBind(_, _, rhs)
             | Ast::Grouped(_, rhs)
@@ -588,6 +602,21 @@ impl Resolver {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             )),
+            Ast::RangeLiteral(span, start, stop) => Ok(Ast::RangeLiteral(
+                span,
+                Box::new(self.rewrite_capture_placeholders(
+                    *start,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+                Box::new(self.rewrite_capture_placeholders(
+                    *stop,
+                    capture_span,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                )?),
+            )),
             Ast::TupleLiteral(span, elems) => Ok(Ast::TupleLiteral(
                 span,
                 elems
@@ -884,6 +913,9 @@ impl Resolver {
             }),
             Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
                 stmts.iter().find_map(Self::pipe_slot_span)
+            }
+            Ast::RangeLiteral(_, start, stop) => {
+                Self::pipe_slot_span(start).or_else(|| Self::pipe_slot_span(stop))
             }
             Ast::Bind(_, _, rhs)
             | Ast::SafeBind(_, _, rhs)
@@ -1518,6 +1550,16 @@ impl Resolver {
                     .map(|e| self.resolve_node(e))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Resolved::ListLiteral(span, resolved))
+            }
+
+            Ast::RangeLiteral(span, start, stop) => {
+                let start = self.resolve_node(*start)?;
+                let stop = self.resolve_node(*stop)?;
+                Ok(Resolved::RangeLiteral(
+                    span,
+                    Box::new(start),
+                    Box::new(stop),
+                ))
             }
 
             Ast::TupleLiteral(span, elems) => {
