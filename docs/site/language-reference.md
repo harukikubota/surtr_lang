@@ -39,16 +39,16 @@ deferror Name(field: Ty, ...) { "message" }
 
 defenum Name { Variant, Variant(Ty), Variant = Int, ... }
 
-deftrait Numeric {
-  def add(self: Self, rhs: Self) -> Self
+deftrait Show {
+  def to_string(self: Self) -> String
 }
 
 impl Type {
   def method(...) -> ... { ... }
 }
 
-impl Numeric for Int {
-  def add(self: Self, rhs: Self) -> Self { self + rhs }
+impl Show for Int {
+  def to_string(self: Self) -> String { inspect(self) }
 }
 ```
 
@@ -107,7 +107,9 @@ match expr {
 - `impl Trait` は parameter 位置のみで使える
 - `-> impl Trait` は未対応
 - `where` clause は未対応
-- `+`, `-`, `*` は `Numeric::{add, sub, mul}` へ resolve される
+- `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
+- `Numeric` は演算子親ではなく helper capability
+- `Compare` が三値比較の正本で、`Ord` は互換 helper
 - `TypeRef<$T>` は compiler-reserved な target type witness
 - `TypeRef<$T>` は trait head で宣言された型引数に対応するときだけ、trait method parameter 型として使える
 - `TypeRef<$T>` は通常関数の引数型、戻り値型、field、local binding には使えない
@@ -380,6 +382,8 @@ value.field
 - `impl struct` では `new` を必須実装とする
 - `Type(...)` は `Type::new(...)` の糖衣として解決される
 - `Type { ... }` 構造体リテラルは `impl Type` の同型メソッド本体内でのみ使用可能
+- struct literal の field は `field: expr` または shorthand の `field` を使える
+- shorthand は `field: field` の sugar で、`Type { name, age: next_age }` のように混在可能
 - `Type::new` は import 対象外
 - `Type(...)` の pattern 側は `Type::deconstruct(...)` を要求する
 
@@ -464,12 +468,12 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 現在の標準モジュール層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> ユーザ拡張
+Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Lens, Float, Config, Project, Random, IO] -> ユーザ拡張
 ```
 
 ### auto import
 
-- `Bootstrap` と `Kernel` は auto import 対象
+- `Bootstrap`, `Kernel`, `Result` と `@@autoimport` 付き標準 trait は auto import 対象
 - `Bootstrap` / `Kernel` の明示 `import` は compile error
 - それ以外の標準モジュールは auto import しない
 

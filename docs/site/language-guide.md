@@ -126,15 +126,15 @@ top-level 宣言名として直接見えます。
 
 ### 5.2 Trait System V1
 
-Surtr には V1 の trait system があります。最初の trait は `Numeric` です。
+Surtr には V1 の trait system があります。まずは capability trait と operator dispatch trait を分けて読むと理解しやすいです。
 
 ```surtr
 deftrait Numeric {
-  def add(self: Self, rhs: Self) -> Self
+  def abs(self: Self) -> Self
 }
 
 def twice<$N: Numeric>(x: $N) -> $N {
-  x + x
+  Numeric::abs(x)
 }
 
 def show_abs(x: impl Numeric) -> String {
@@ -147,6 +147,8 @@ def show_abs(x: impl Numeric) -> String {
 - `deftrait` は method 宣言だけを持つ
 - trait は `deftrait Name<$T, ...> { ... }` のように型引数を取れる
 - 実装は `impl Numeric for Int { ... }` の形で書く
+- `+`, `-`, `*` は `Numeric` ではなく `Add` / `Sub` / `Mul` の dispatch
+- `Compare` は三値比較の正本で、`Ord` は互換 helper
 - trait 側の型引数を使う実装は `impl Trait<Concrete> for Type { ... }` の形で書く
 - `impl Trait` は parameter 位置だけで使える
 - 戻り値でも同じ型を使いたいときは `<$N: Numeric>` のように名前付き bound を使う
@@ -341,7 +343,7 @@ defstruct User {
 
 impl User {
   def new(name: String, age: Int) -> Self {
-    User { name: name, age: age }
+    User { name, age }
   }
 }
 
@@ -354,6 +356,7 @@ print(to_string(user.age))
 
 - `User(...)` は `User::new(...)` の糖衣
 - `User { ... }` は `impl User` 内でのみ使う
+- `User { name, age }` は `User { name: name, age: age }` の shorthand
 - 分解は field pattern ではなく `User::deconstruct` を通す
 
 ### `defrecord`
@@ -722,7 +725,7 @@ not_fn = &`Boolean::not`
 - `set_exit_code(Int) -> Unit`
 
 `safe_div` と `safe_mod` は、失敗を例外ではなく `Result<_, ZeroDivisionError>` で返します。  
-`+`, `-`, `*` は内部では `Numeric` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
+`+`, `-`, `*` は内部では `Add` / `Sub` / `Mul` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
 
 ## 12. 標準モジュールの前提
 

@@ -65,6 +65,7 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 現時点では次の module が用意されています。
 
 - `Numeric`
+  - helper capability trait
 - `Int`
 - `String`
 - `Boolean`
@@ -88,7 +89,8 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 - `numeric.srt` に `deftrait Numeric` を置く
 - `int.srt` のトップレベルに `impl Numeric for Int` を置く
 - `float.srt` のトップレベルに `impl Numeric for Float` を置く
-- `+`, `-`, `*` は `Numeric` dispatch を通るが、runtime には trait object を導入しない
+- `Numeric` は `safe_div`, `abs`, `min`, `max` の helper capability を表す
+- `+`, `-`, `*` は `Add` / `Sub` / `Mul` dispatch を通るが、runtime には trait object を導入しない
 
 ## 3. `@@builtin type` の契約
 
@@ -383,6 +385,25 @@ defenum Option<$T> {
 `Option` は `=?` の対象ではありませんが、`|*>`、`|>=`、`>*`、`>=>` には `Option` 文脈の標準実装があります。
 失敗伝播へ載せたい場合は `from(value, Result)`、値として分岐したい場合は `match` を使います。
 `from(value, Option)` は `Err(_)` を `None` に畳み込む明示変換です。
+
+## Public vs Hidden
+
+`Process` / `Task` のような副作用系モジュールは、public helper と runtime/internal builtin を分けて読みます。  
+`IO` と `Random` は現時点では public builtin をそのまま surface に出しており、hidden shim 経由ではありません。
+
+- public API は通常の `def` / `impl Type` / `@@doc` に現れる
+- `@@hidden __*` builtin は compiler/runtime 接続用で、利用者向け API 一覧には含めない
+
+特に `|>` や trait helper の docs では public surface を正本とし、hidden builtin 名を直接使う前提にはしません。
+
+## REPL Model
+
+REPL は起動時に標準 module と preload script を読み切った OnceRead universe で動きます。
+
+- REPL 中の `include` は扱わない
+- REPL 中の `import` は、起動時に読み込まれた固定 universe に対する既存 symbol の導入としては使える
+- REPL 中の `defstruct` / `defenum` / `deftrait` / `impl` / `defmod` は増分 universe 更新を前提にしない
+- trait impl 候補一覧や diagnostics は、その起動時 universe を前提に固定される
 
 データ型の field で欠損を表したい場合は、`Option<T>` より `T?` を先に検討してください。
 `T?` は `Result<T, NoneError>` に下がるので、Lens 更新や `Result` を返す helper と直接つながります。

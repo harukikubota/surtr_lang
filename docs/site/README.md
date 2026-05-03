@@ -4,6 +4,7 @@
 
 REPL でそのまま試しやすい題材を優先しており、実行例は `surtr repl` で確認した形に寄せています。  
 一方で、`defstruct` / `defenum` / `impl` / `defextractor` のような file-oriented 宣言は REPL top-level へそのまま置けないため、宣言例は通常の `surtr` コードブロックで示します。
+REPL は起動時に標準 module と preload を読み切る OnceRead universe で動くので、その後の `include` や trait universe 増分更新を前提にした説明は避けています。
 
 ## 入口
 
