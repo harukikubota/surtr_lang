@@ -752,7 +752,7 @@ impl ReplEngine {
             "REPL commands:".to_string(),
             ":help, :h [command]  Show REPL help".to_string(),
             ":quit, :exit         Exit the REPL".to_string(),
-            ":doc <symbol>        Show documentation for a visible symbol".to_string(),
+            ":doc <symbol|query>  Show documentation for a visible symbol or query".to_string(),
             ":sig <symbol|expr>   Show the signature for a visible function or expression"
                 .to_string(),
             ":info <query>        Show derived information for a visible symbol or query"
@@ -767,9 +767,9 @@ impl ReplEngine {
 
     fn doc_help_lines() -> Vec<String> {
         vec![
-            "Usage: :doc <symbol>".to_string(),
+            "Usage: :doc <symbol|query>".to_string(),
             "Also: :doc <typed-call>".to_string(),
-            "Examples: :doc print, :doc match, :doc cond, :doc Closure, :doc Kernel::if, :doc Add, :doc +, :doc gt(3, 2)"
+            "Examples: :doc print, :doc match, :doc cond, :doc Closure, :doc Kernel::if, :doc Add, :doc +, :doc Duration(Int), :doc Duration!(), :doc gt(3, 2)"
                 .to_string(),
         ]
     }
@@ -778,7 +778,7 @@ impl ReplEngine {
         vec![
             "Usage: :sig <function|expr>".to_string(),
             "Also: :sig <typed-call>".to_string(),
-            "Examples: :sig print, :sig Kernel::if, :sig gt(_ : Float, _ : Float), :sig ret |>= up"
+            "Examples: :sig print, :sig Kernel::if, :sig Duration!(), :sig gt(_ : Float, _ : Float), :sig ret |>= up"
                 .to_string(),
         ]
     }
@@ -1283,6 +1283,9 @@ impl ReplEngine {
     }
 
     fn handle_doc_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
+        if let Some(message) = self.invalid_attached_extractor_query_message(query) {
+            return Self::plain(vec![message]);
+        }
         if let Err(message) = self.query_arg_types(query.args.as_slice()) {
             return Self::plain(vec![message]);
         }
@@ -1296,6 +1299,9 @@ impl ReplEngine {
 
     fn match_typed_call_docs<'a>(&'a self, query: &TypedCallQuery) -> Vec<&'a DocEntry> {
         if let Some(matches) = self.match_special_form_typed_call_docs(query) {
+            return matches;
+        }
+        if let Some(matches) = self.match_owner_typed_call_docs(query) {
             return matches;
         }
 
@@ -1362,6 +1368,58 @@ impl ReplEngine {
             }
             _ => None,
         }
+    }
+
+    fn match_owner_typed_call_docs<'a>(&'a self, query: &TypedCallQuery) -> Option<Vec<&'a DocEntry>> {
+        if let Some(owner) = query.callee.strip_suffix('!') {
+            let decl = self.visible_declaration(owner)?;
+            if decl.kind != sigil::DeclarationKind::Struct || !query.args.is_empty() {
+                return Some(Vec::new());
+            }
+            let qualified_name = format!("{}::deconstruct", decl.fq_name);
+            let mut matches = self
+                .docs
+                .iter()
+                .filter(|entry| entry.kind == DocKind::Function)
+                .filter(|entry| entry.qualified_name == qualified_name)
+                .collect::<Vec<_>>();
+            matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+            return Some(matches);
+        }
+
+        let decl = self.visible_declaration(&query.callee)?;
+        if decl.kind != sigil::DeclarationKind::Struct {
+            return None;
+        }
+        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
+            return Some(Vec::new());
+        };
+        let qualified_name = format!("{}::new", decl.fq_name);
+        let mut matches = self
+            .docs
+            .iter()
+            .filter(|entry| entry.kind == DocKind::Function)
+            .filter(|entry| entry.qualified_name == qualified_name)
+            .filter(|entry| {
+                entry
+                    .signature
+                    .as_deref()
+                    .is_none_or(|sig| self.signature_accepts_arg_types(sig, &arg_types))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        Some(matches)
+    }
+
+    fn invalid_attached_extractor_query_message(&self, query: &TypedCallQuery) -> Option<String> {
+        let owner = query.callee.strip_suffix('!')?;
+        let decl = self.visible_declaration(owner)?;
+        (decl.kind == sigil::DeclarationKind::Struct && !query.args.is_empty()).then(|| {
+            format!(
+                "Attached extractor query `{}` does not take explicit arguments. Use `{}!()`.",
+                query.callee, owner
+            )
+        })
     }
 
     fn special_form_doc_entry(&self, symbol: &str) -> Option<&DocEntry> {
@@ -2751,6 +2809,9 @@ impl ReplEngine {
     }
 
     fn handle_sig_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
+        if let Some(message) = self.invalid_attached_extractor_query_message(query) {
+            return Self::plain(vec![message]);
+        }
         if let Some(binding) = self.binding_info(&query.callee) {
             if let Some(rendered) = self.handle_sig_binding_typed_call(source_query, query, binding)
             {

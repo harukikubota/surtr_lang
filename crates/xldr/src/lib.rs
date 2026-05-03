@@ -149,6 +149,23 @@ fn format_fun_signature(
     }
 }
 
+fn format_extractor_signature(
+    name: &str,
+    type_params: &[spire::ast::TypeParam],
+    param: &spire::ast::ExtractorParam,
+    ret_ty: &spire::ast::AstTy,
+) -> String {
+    let type_params = format_type_params(type_params);
+    let param = match &param.ty {
+        Some(ty) => format!("{}: {}", param.name, format_ast_ty(ty)),
+        None => param.name.clone(),
+    };
+    format!(
+        "{name}{type_params}({param}) -> {}",
+        format_ast_ty(ret_ty)
+    )
+}
+
 fn format_result_ctor_signature(
     name: &str,
     param_ty: &spire::ast::AstTy,
@@ -233,6 +250,21 @@ fn format_impl_method_signature(
     }
 }
 
+fn format_impl_extractor_signature(
+    target: &str,
+    name: &str,
+    type_params: &[spire::ast::TypeParam],
+    param: &spire::ast::ExtractorParam,
+    ret_ty: &spire::ast::AstTy,
+) -> String {
+    let signature = format_extractor_signature(name, type_params, param, ret_ty);
+    if let Some(rest) = signature.strip_prefix(name) {
+        format!("{target}::{name}{rest}")
+    } else {
+        signature
+    }
+}
+
 fn format_trait_impl_signature(
     trait_name: &str,
     trait_args: &[spire::ast::AstTy],
@@ -308,6 +340,33 @@ fn collect_doc_entries_for_ast(
                         kind: DocKind::Function,
                         module_path: module_path.to_string(),
                         signature: Some(signature.clone()),
+                        doc: doc.clone(),
+                    });
+                }
+            }
+            spire::ast::Ast::ExtractorDef(_, name, type_params, param, ret_ty, _, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, name),
+                        kind: DocKind::Function,
+                        module_path: module_path.to_string(),
+                        signature: Some(format_extractor_signature(
+                            name,
+                            type_params,
+                            param,
+                            ret_ty,
+                        )),
+                        doc: doc.clone(),
+                    });
+                }
+            }
+            spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, attrs) => {
+                if let Some(doc) = &attrs.doc {
+                    out.push(DocEntry {
+                        qualified_name: qualified_name(module_path, name),
+                        kind: DocKind::Function,
+                        module_path: module_path.to_string(),
+                        signature: Some(format_extractor_signature(name, &[], param, ret_ty)),
                         doc: doc.clone(),
                     });
                 }
@@ -422,7 +481,58 @@ fn collect_doc_entries_for_ast(
                                 });
                             }
                         }
-                        spire::ast::Ast::ExtractorDef(..) => {}
+                        spire::ast::Ast::ExtractorDef(
+                            _,
+                            name,
+                            type_params,
+                            param,
+                            ret_ty,
+                            _,
+                            attrs,
+                        ) => {
+                            if let Some(doc) = &attrs.doc {
+                                let qualified_method_name = if module_path == target {
+                                    format!("{target}::{name}")
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                                out.push(DocEntry {
+                                    qualified_name: qualified_method_name,
+                                    kind: DocKind::Function,
+                                    module_path: module_path.to_string(),
+                                    signature: Some(format_impl_extractor_signature(
+                                        target,
+                                        name,
+                                        type_params,
+                                        param,
+                                        ret_ty,
+                                    )),
+                                    doc: doc.clone(),
+                                });
+                            }
+                        }
+                        spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, attrs) => {
+                            if let Some(doc) = &attrs.doc {
+                                let qualified_method_name = if module_path == target {
+                                    format!("{target}::{name}")
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                                out.push(DocEntry {
+                                    qualified_name: qualified_method_name,
+                                    kind: DocKind::Function,
+                                    module_path: module_path.to_string(),
+                                    signature: Some(format_impl_extractor_signature(
+                                        target,
+                                        name,
+                                        &[],
+                                        param,
+                                        ret_ty,
+                                    )),
+                                    doc: doc.clone(),
+                                });
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1618,6 +1728,11 @@ impl User {
   def new(name: String) -> Self {
     User { name: name }
   }
+
+  @@doc """Deconstruct a user value for pattern matching."""
+  defextractor deconstruct(self: Self) -> MatchResult<String, Error> {
+    MatchResult::Success(self.name)
+  }
 }
 
 @@doc """String conversion for `Int`."""
@@ -1649,6 +1764,13 @@ impl Show for Int {
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref() == Some("User::new(name: String) -> Self")
                 && entry.doc == "Construct a new user value."
+        }));
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "User::deconstruct"
+                && entry.kind == DocKind::Function
+                && entry.signature.as_deref()
+                    == Some("User::deconstruct(self: Self) -> MatchResult<String, Error>")
+                && entry.doc == "Deconstruct a user value for pattern matching."
         }));
         assert!(docs.iter().any(|entry| {
             entry.qualified_name == "Sample::impl Show for Int::to_string"

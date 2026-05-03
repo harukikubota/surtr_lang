@@ -703,6 +703,39 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let helper_doc = doc_text(&helper_doc);
     assert!(helper_doc.contains("trait Gt { gt(self: Self, rhs: Self) -> Boolean }"));
 
+    let constructor_doc = engine.handle_line(":doc Duration(Int)");
+    let constructor_doc = doc_text(&constructor_doc);
+    assert!(
+        constructor_doc.contains("Duration::new(value: Int) -> Result<Self, Error>"),
+        "{constructor_doc}"
+    );
+    assert!(
+        constructor_doc.contains("Construct a `Duration` from a millisecond count."),
+        "{constructor_doc}"
+    );
+
+    let extractor_doc = engine.handle_line(":doc Duration!()");
+    let extractor_doc = doc_text(&extractor_doc);
+    assert!(
+        extractor_doc.contains("Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
+        "{extractor_doc}"
+    );
+    assert!(
+        extractor_doc.contains("Deconstruct a `Duration` into its millisecond count in pattern position."),
+        "{extractor_doc}"
+    );
+
+    let extractor_sig = engine.handle_line(":sig Duration!()");
+    let extractor_sig = signature_text(&extractor_sig);
+    assert!(
+        extractor_sig.contains("defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
+        "{extractor_sig}"
+    );
+    assert!(
+        extractor_sig.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"),
+        "{extractor_sig}"
+    );
+
     let unsupported = engine.handle_line(":doc gt(make_value(), 1)");
     assert!(rendered_text(&unsupported)
         .contains("Unsupported typed call query argument `make_value()`"));

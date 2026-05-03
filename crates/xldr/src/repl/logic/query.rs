@@ -736,6 +736,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_attached_extractor_query() {
+        let query = parse_repl_query("Duration!()").expect("query should parse");
+        assert!(matches!(
+            query,
+            ReplQuery::TypedCall(ParsedTypedCallQuery {
+                query: TypedCallQuery { callee, args },
+                ..
+            })
+            if callee == "Duration!" && args.is_empty()
+        ));
+    }
+
+    #[test]
     fn parse_typed_operator_query_with_bindings() {
         let query = parse_repl_query("ret |>= up").expect("query should parse");
         assert!(matches!(
