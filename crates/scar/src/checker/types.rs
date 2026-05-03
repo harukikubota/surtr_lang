@@ -2,6 +2,10 @@ use super::*;
 use sindr::names::{builtin_type_name, TypeName};
 
 impl Checker {
+    pub(super) fn is_duration_ty(ty: &Ty) -> bool {
+        matches!(ty, Ty::Struct(name, _) if name == "Duration")
+    }
+
     fn match_result_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             message: "MatchResult is extractor-only and can only be used in extractor definitions"
@@ -512,11 +516,9 @@ impl Checker {
                     let ok =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     let err = if args.len() == 2 {
-                        let allow_none_error_surface =
-                            context != TypeSyntaxContext::FunctionReturn
-                                && Self::ast_ty_is_none_error_marker(&args[1]);
-                        if context != TypeSyntaxContext::FunctionReturn
-                            && !allow_none_error_surface
+                        let allow_none_error_surface = context != TypeSyntaxContext::FunctionReturn
+                            && Self::ast_ty_is_none_error_marker(&args[1]);
+                        if context != TypeSyntaxContext::FunctionReturn && !allow_none_error_surface
                         {
                             return Err(TypeError {
                                 message:
@@ -2243,6 +2245,7 @@ impl Checker {
             TypedPattern::IntLit(ty, n) => TypedPattern::IntLit(self.resolve_ty(&ty), n),
             TypedPattern::StrLit(ty, s) => TypedPattern::StrLit(self.resolve_ty(&ty), s),
             TypedPattern::BoolLit(ty, b) => TypedPattern::BoolLit(self.resolve_ty(&ty), b),
+            TypedPattern::DurationLit(ty, n) => TypedPattern::DurationLit(self.resolve_ty(&ty), n),
             TypedPattern::Tuple(ty, items) => TypedPattern::Tuple(
                 self.resolve_ty(&ty),
                 items
@@ -2292,6 +2295,7 @@ impl Checker {
             TypedMatchPattern::BoolLit(value) => TypedMatchPattern::BoolLit(value),
             TypedMatchPattern::IntLit(value) => TypedMatchPattern::IntLit(value),
             TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
+            TypedMatchPattern::DurationLit(value) => TypedMatchPattern::DurationLit(value),
             TypedMatchPattern::ErrorKind(value) => TypedMatchPattern::ErrorKind(value),
             TypedMatchPattern::Or(items) => TypedMatchPattern::Or(
                 items

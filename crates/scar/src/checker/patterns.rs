@@ -14,6 +14,7 @@ impl Checker {
             | ResolvedPattern::IntLit(_, _)
             | ResolvedPattern::StrLit(_, _)
             | ResolvedPattern::BoolLit(_, _)
+            | ResolvedPattern::DurationLit(_, _)
             | ResolvedPattern::Constructor(_, _)
             | ResolvedPattern::Extractor(_, _) => false,
         }
@@ -217,6 +218,20 @@ impl Checker {
                 }
                 Ok((TypedPattern::BoolLit(Ty::Bool, *b), rhs_ty))
             }
+            ResolvedPattern::DurationLit(pspan, n) => {
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                if !Self::is_duration_ty(&rhs_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "duration literal pattern requires Duration, got {}",
+                            self.ty_name(&rhs_ty)
+                        ),
+                        span: pspan.clone(),
+                        hint: None,
+                    });
+                }
+                Ok((TypedPattern::DurationLit(rhs_ty.clone(), n.clone()), rhs_ty))
+            }
             ResolvedPattern::Constructor(ctor_id, inners) => {
                 if ctor_id.name != "Ok" {
                     return Err(TypeError {
@@ -341,7 +356,8 @@ impl Checker {
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => {}
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {}
             TypedPattern::Tuple(_, items) => {
                 let item_tys = match &rhs_ty {
                     Ty::Tuple(item_tys) => item_tys.clone(),
@@ -418,7 +434,8 @@ impl Checker {
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => {}
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {}
         }
     }
 }

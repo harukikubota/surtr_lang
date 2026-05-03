@@ -1,0 +1,4 @@
+print(match 20 {
+  20ms => "hit",
+  _ => "miss",
+})

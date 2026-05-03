@@ -1319,14 +1319,12 @@ impl Checker {
                 may_fail: path.may_fail,
                 segments: path.segments,
             }),
-            TypedInner::PendingLensPath(path) => {
-                TypedInner::PendingLensPath(PendingLensPath {
-                    source_ty_hint: path
-                        .source_ty_hint
-                        .map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
-                    segments: path.segments,
-                })
-            }
+            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {
+                source_ty_hint: path
+                    .source_ty_hint
+                    .map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
+                segments: path.segments,
+            }),
             TypedInner::LensView {
                 source,
                 path,
@@ -1526,6 +1524,9 @@ impl Checker {
             TypedPattern::BoolLit(ty, value) => {
                 TypedPattern::BoolLit(self.substitute_ty_with_mapping(&ty, mapping), value)
             }
+            TypedPattern::DurationLit(ty, value) => {
+                TypedPattern::DurationLit(self.substitute_ty_with_mapping(&ty, mapping), value)
+            }
             TypedPattern::Tuple(ty, items) => TypedPattern::Tuple(
                 self.substitute_ty_with_mapping(&ty, mapping),
                 items
@@ -1580,6 +1581,7 @@ impl Checker {
             TypedMatchPattern::BoolLit(value) => TypedMatchPattern::BoolLit(value),
             TypedMatchPattern::IntLit(value) => TypedMatchPattern::IntLit(value),
             TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
+            TypedMatchPattern::DurationLit(value) => TypedMatchPattern::DurationLit(value),
             TypedMatchPattern::ErrorKind(value) => TypedMatchPattern::ErrorKind(value),
             TypedMatchPattern::Or(items) => TypedMatchPattern::Or(
                 items

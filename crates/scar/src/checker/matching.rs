@@ -361,6 +361,20 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::StrLit(s.clone()))
             }
+            ResolvedPattern::DurationLit(span, n) => {
+                let expected_ty = self.resolve_ty(expected_ty);
+                if !Self::is_duration_ty(&expected_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "duration literal pattern requires Duration, got {}",
+                            self.ty_name(&expected_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                Ok(TypedMatchPattern::DurationLit(n.clone()))
+            }
             ResolvedPattern::Or(items) => {
                 if items.is_empty() {
                     return Err(TypeError {
@@ -617,9 +631,20 @@ impl Checker {
             TypedMatchPattern::Tuple(items) => {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
+            TypedMatchPattern::Extractor {
+                input_ty,
+                extractor,
+                items,
+                ..
+            } if extractor.name == "Duration::deconstruct"
+                && Self::is_duration_ty(&self.resolve_ty(input_ty)) =>
+            {
+                items.iter().all(|item| self.is_match_catch_all(item))
+            }
             TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::DurationLit(_)
             | TypedMatchPattern::ErrorKind(_)
             | TypedMatchPattern::Constructor { .. }
             | TypedMatchPattern::ListNil
@@ -648,6 +673,7 @@ impl Checker {
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::DurationLit(_)
             | TypedMatchPattern::ErrorKind(_)
             | TypedMatchPattern::ListNil => false,
         }

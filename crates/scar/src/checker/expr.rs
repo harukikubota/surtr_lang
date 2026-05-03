@@ -456,7 +456,8 @@ impl Checker {
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => {}
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {}
         }
     }
 
@@ -2855,8 +2856,12 @@ impl Checker {
         let mut may_fail = false;
         let mut segments = Vec::with_capacity(path.segments.len());
         for segment_name in path.segments {
-            let (segment, focus_ty, segment_may_fail) =
-                self.resolve_lens_segment_for_source_ty(&current_source, &segment_name, span, true)?;
+            let (segment, focus_ty, segment_may_fail) = self.resolve_lens_segment_for_source_ty(
+                &current_source,
+                &segment_name,
+                span,
+                true,
+            )?;
             segments.push(segment);
             current_source = self.resolve_ty(&focus_ty);
             may_fail |= segment_may_fail;
@@ -2916,7 +2921,8 @@ impl Checker {
             Box::new(expected_right_focus),
         );
         let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
-        let right_path = self.resolve_lens_path_from_node(right, span, Some(&left_path.focus_ty))?;
+        let right_path =
+            self.resolve_lens_path_from_node(right, span, Some(&left_path.focus_ty))?;
 
         if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
             return Err(TypeError {
@@ -3008,8 +3014,12 @@ impl Checker {
 
         let left = self.check_node(left_expr)?;
         match left.node {
-            TypedInner::LensPath(path) => self.compose_lens_paths(span, path, right_expr, "Lens::compose"),
-            TypedInner::PendingLensPath(path) => self.compose_pending_lens_paths(span, path, right_expr),
+            TypedInner::LensPath(path) => {
+                self.compose_lens_paths(span, path, right_expr, "Lens::compose")
+            }
+            TypedInner::PendingLensPath(path) => {
+                self.compose_pending_lens_paths(span, path, right_expr)
+            }
             _ => Err(TypeError {
                 message: format!("Expected Lens<...> value, got {}", self.ty_name(&left.ty)),
                 span: left.span.clone(),
@@ -3268,8 +3278,13 @@ impl Checker {
         )?;
 
         let typed_update = self.check_node(update_expr)?;
-        let mode =
-            self.check_lens_over_callable("Lens::over", span, &path.focus_ty, &typed_update, false)?;
+        let mode = self.check_lens_over_callable(
+            "Lens::over",
+            span,
+            &path.focus_ty,
+            &typed_update,
+            false,
+        )?;
 
         Ok(TypedNode {
             ty: Ty::Result(
@@ -3294,7 +3309,10 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 3 {
             return Err(TypeError {
-                message: format!("Lens::over_result expects 3 argument(s), got {}", args.len()),
+                message: format!(
+                    "Lens::over_result expects 3 argument(s), got {}",
+                    args.len()
+                ),
                 span: span.clone(),
                 hint: None,
             });
@@ -3758,8 +3776,7 @@ impl Checker {
     fn current_process_name(&self) -> Option<String> {
         let symbol = self.current_function_symbol.as_deref()?;
         let (module, handler) = symbol.rsplit_once("::")?;
-        matches!(handler, "__agent_get" | "__agent_set")
-            .then(|| module.to_string())
+        matches!(handler, "__agent_get" | "__agent_set").then(|| module.to_string())
     }
 
     pub(super) fn check_closure(
@@ -4250,7 +4267,10 @@ impl Checker {
             let hint = if matches!(receiver_ty, Ty::Int | Ty::Float)
                 || matches!(rhs_ty, Ty::Int | Ty::Float)
             {
-                Some("Infix `/` is reserved for compose/join. Use `safe_div(...)` for division.".into())
+                Some(
+                    "Infix `/` is reserved for compose/join. Use `safe_div(...)` for division."
+                        .into(),
+                )
             } else {
                 None
             };

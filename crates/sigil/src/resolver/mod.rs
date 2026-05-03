@@ -475,7 +475,8 @@ fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(..)
         | ResolvedPattern::StrLit(..)
-        | ResolvedPattern::BoolLit(..) => {}
+        | ResolvedPattern::BoolLit(..)
+        | ResolvedPattern::DurationLit(..) => {}
         ResolvedPattern::ListCons(head, tail) => {
             rebase_pattern(head, base, offset);
             rebase_pattern(tail, base, offset);

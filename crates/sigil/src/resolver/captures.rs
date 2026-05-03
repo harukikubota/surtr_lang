@@ -251,6 +251,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(_, _)
         | ResolvedPattern::StrLit(_, _)
-        | ResolvedPattern::BoolLit(_, _) => {}
+        | ResolvedPattern::BoolLit(_, _)
+        | ResolvedPattern::DurationLit(_, _) => {}
     }
 }

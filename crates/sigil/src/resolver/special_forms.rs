@@ -523,7 +523,8 @@ fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
         | AstPattern::ListNil(_)
         | AstPattern::IntLit(_, _)
         | AstPattern::StrLit(_, _)
-        | AstPattern::BoolLit(_, _) => false,
+        | AstPattern::BoolLit(_, _)
+        | AstPattern::DurationLit(_, _) => false,
     }
 }
 
@@ -537,6 +538,7 @@ fn ast_pattern_span(pattern: &AstPattern) -> &Span {
         | AstPattern::IntLit(span, _)
         | AstPattern::StrLit(span, _)
         | AstPattern::BoolLit(span, _)
+        | AstPattern::DurationLit(span, _)
         | AstPattern::Constructor(span, _, _)
         | AstPattern::Call(span, _, _)
         | AstPattern::Tuple(span, _)

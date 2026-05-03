@@ -170,6 +170,16 @@ impl Parser<'_> {
             }
             Token::Int(n) => {
                 self.advance();
+                if self.is_duration_suffix_here() {
+                    let suffix_span = self.advance().span.clone();
+                    return Ok(AstPattern::DurationLit(
+                        Span {
+                            start: sp.start,
+                            end: suffix_span.end,
+                        },
+                        n,
+                    ));
+                }
                 Ok(AstPattern::IntLit(sp, n))
             }
             Token::Minus => {

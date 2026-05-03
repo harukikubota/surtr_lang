@@ -297,6 +297,7 @@ pub enum TypedPattern {
     IntLit(Ty, SurtrInt),
     StrLit(Ty, String),
     BoolLit(Ty, bool),
+    DurationLit(Ty, SurtrInt),
     Tuple(Ty, Vec<TypedPattern>),
     /// `Ok(inner)` pattern node in safe-bind recursion.
     ResultOk(Ty, Box<TypedPattern>),
@@ -326,6 +327,8 @@ pub enum TypedMatchPattern {
     IntLit(SurtrInt),
     /// String literal
     StrLit(String),
+    /// Duration literal, e.g. `20ms`.
+    DurationLit(SurtrInt),
     /// Concrete `deferror` kind pattern for abstract Error values.
     ErrorKind(String),
     /// Pattern alternative. Alternatives are tests only and do not bind names.

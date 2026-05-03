@@ -1,0 +1,10 @@
+True
+True
+True
+True
+Ordering::Less
+30ms
+Ok(10ms)
+Err(InvalidDuration("duration subtraction would be negative: 10ms - 20ms"))
+20
+hit

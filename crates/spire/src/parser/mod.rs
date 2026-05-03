@@ -649,6 +649,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::IntLit(span, _)
         | AstPattern::StrLit(span, _)
         | AstPattern::BoolLit(span, _)
+        | AstPattern::DurationLit(span, _)
         | AstPattern::Constructor(span, _, _)
         | AstPattern::Call(span, _, _)
         | AstPattern::Tuple(span, _)
@@ -721,6 +722,7 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
         AstPattern::IntLit(span, n) => AstPattern::IntLit(shift_span(span, delta), n),
         AstPattern::StrLit(span, s) => AstPattern::StrLit(shift_span(span, delta), s),
         AstPattern::BoolLit(span, b) => AstPattern::BoolLit(shift_span(span, delta), b),
+        AstPattern::DurationLit(span, n) => AstPattern::DurationLit(shift_span(span, delta), n),
         AstPattern::Constructor(span, name, inners) => AstPattern::Constructor(
             shift_span(span, delta),
             name,

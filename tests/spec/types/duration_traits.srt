@@ -1,0 +1,15 @@
+print(to_string(10ms == 10ms))
+print(to_string(10ms != 20ms))
+print(to_string(10ms < 20ms))
+print(to_string(20ms >= 20ms))
+print(to_string(compare(10ms, 20ms)))
+print(to_string(10ms + 20ms))
+print(inspect(Duration::sub(20ms, 10ms)))
+print(inspect(Duration::sub(10ms, 20ms)))
+print(match 20ms {
+  Duration(ms) => to_string(ms),
+})
+print(match 20ms {
+  20ms => "hit",
+  _ => "miss",
+})

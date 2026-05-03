@@ -595,7 +595,8 @@ impl Checker {
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => Ok(()),
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => Ok(()),
         }
     }
 
@@ -645,11 +646,7 @@ impl Checker {
                         | Ty::BuiltinFunc { ret, .. }
                         | Ty::Func(_, ret) => *ret,
                         other => {
-                            return Err(self.struct_new_contract_error(
-                                &target,
-                                span,
-                                Some(&other),
-                            ))
+                            return Err(self.struct_new_contract_error(&target, span, Some(&other)))
                         }
                     };
                     if !self.struct_new_return_allowed(expected_self_ty, &ret_ty) {
@@ -864,14 +861,17 @@ impl Checker {
     }
 
     fn compiler_trait_target_names(&self, trait_name: &str) -> &'static [&'static str] {
-        if self.trait_matches_short_name(trait_name, "Numeric")
-            || self.trait_matches_short_name(trait_name, "Add")
-            || self.trait_matches_short_name(trait_name, "Sub")
-            || self.trait_matches_short_name(trait_name, "Mul")
+        if self.trait_matches_short_name(trait_name, "Add")
             || self.trait_matches_short_name(trait_name, "Lt")
             || self.trait_matches_short_name(trait_name, "Lte")
             || self.trait_matches_short_name(trait_name, "Gt")
             || self.trait_matches_short_name(trait_name, "Gte")
+        {
+            return &["Float", "Int"];
+        }
+        if self.trait_matches_short_name(trait_name, "Numeric")
+            || self.trait_matches_short_name(trait_name, "Sub")
+            || self.trait_matches_short_name(trait_name, "Mul")
         {
             return &["Float", "Int"];
         }

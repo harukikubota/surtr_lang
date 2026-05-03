@@ -123,6 +123,8 @@ pub enum AstPattern {
     StrLit(Span, String),
     /// Boolean literal in pattern position.
     BoolLit(Span, bool),
+    /// Duration literal in pattern position, e.g. `20ms`.
+    DurationLit(Span, SurtrInt),
     /// `Ok(inner)` / `Color::Red` / `KeyInput::Arrow(dir)` in pattern position.
     Constructor(Span, Symbol, Vec<AstPattern>),
     /// `uncons(head, tail)` / `User(name, age)` in MatchBlock position.

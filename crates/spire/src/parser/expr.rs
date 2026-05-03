@@ -581,7 +581,7 @@ impl Parser<'_> {
         }
     }
 
-    fn is_duration_suffix_here(&self) -> bool {
+    pub(super) fn is_duration_suffix_here(&self) -> bool {
         matches!(self.peek(), Token::Ident(name) if name == "ms")
     }
 

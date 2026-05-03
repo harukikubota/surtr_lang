@@ -552,16 +552,15 @@ const BAD = VALUE / VALUE"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("non-lens const refs should fail");
-    assert!(err.message.contains("const value must be a primitive literal or a lens path"));
+    assert!(err
+        .message
+        .contains("const value must be a primitive literal or a lens path"));
 }
 
 #[test]
 fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
-    let err = typecheck_with_rules(
-        r#"print(to_string(10 / 3))"#,
-        RuntimeSourcePolicy::script(),
-    )
-    .expect_err("numeric infix slash should fail");
+    let err = typecheck_with_rules(r#"print(to_string(10 / 3))"#, RuntimeSourcePolicy::script())
+        .expect_err("numeric infix slash should fail");
     assert!(err.message.contains("`/` requires Compose implementation"));
     assert!(err
         .hint
@@ -2567,6 +2566,49 @@ largest = Numeric::max(1.5, 2.5)"#,
 }
 
 #[test]
+fn duration_operator_traits_dispatch_to_surtr_impls() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"sum = 10ms + 20ms
+same = 10ms == 10ms
+less = 10ms < 20ms"#,
+    );
+
+    let trait_calls = typed
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => match &rhs.node {
+                TypedInner::TraitCall {
+                    method_name,
+                    dispatch,
+                    ..
+                } => Some((method_name.as_str(), dispatch)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    for (method, expected_name) in [
+        ("add", "Duration::add"),
+        ("eq", "Duration::eq"),
+        ("lt", "Duration::lt"),
+    ] {
+        assert!(
+            trait_calls.iter().any(|(method_name, dispatch)| {
+                *method_name == method
+                    && matches!(
+                        dispatch,
+                        scar::typed::TraitDispatch::Static(
+                            scar::typed::TraitDispatchTarget::UserFunction { name, .. }
+                        ) if name == expected_name
+                    )
+            }),
+            "{method} should dispatch to {expected_name}"
+        );
+    }
+}
+
+#[test]
 fn bounded_add_generics_specialize_without_pending_trait_calls() {
     fn has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
@@ -2698,7 +2740,9 @@ fn add_trait_mismatch_lists_available_implementations() {
     assert!(err.message.contains("Add::add expects argument 2"));
     assert!(err.message.contains("receiver type Int"));
     assert!(err.message.contains("got Boolean"));
-    assert!(err.message.contains("Add is implemented for: Float, Int"));
+    assert!(err
+        .message
+        .contains("Add is implemented for: Duration, Float, Int"));
     assert!(err
         .hint
         .as_deref()
@@ -2712,7 +2756,9 @@ fn add_trait_missing_receiver_lists_available_implementations() {
     assert!(err
         .message
         .contains("Add::add requires a receiver type implementing Add, got Boolean"));
-    assert!(err.message.contains("Add is implemented for: Float, Int"));
+    assert!(err
+        .message
+        .contains("Add is implemented for: Duration, Float, Int"));
     assert!(err
         .hint
         .as_deref()

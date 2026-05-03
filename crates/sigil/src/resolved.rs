@@ -253,6 +253,7 @@ pub enum ResolvedPattern {
     IntLit(Span, SurtrInt),
     StrLit(Span, String),
     BoolLit(Span, bool),
+    DurationLit(Span, SurtrInt),
     Constructor(ResolvedId, Vec<ResolvedPattern>),
     Extractor(ResolvedId, Vec<ResolvedPattern>),
     Tuple(Vec<ResolvedPattern>),

@@ -1127,23 +1127,25 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
             for segment in &path.segments {
                 let label = lens_segment_label(segment);
                 let focus_ty = match segment {
-                    TypedLensSegment::Field { .. } | TypedLensSegment::Tuple { .. } => match &current_source {
-                        Ty::Tuple(items) => match segment {
-                            TypedLensSegment::Tuple { field_index, .. } => items
-                                .get(*field_index as usize)
-                                .cloned()
-                                .unwrap_or(Ty::Unit),
+                    TypedLensSegment::Field { .. } | TypedLensSegment::Tuple { .. } => {
+                        match &current_source {
+                            Ty::Tuple(items) => match segment {
+                                TypedLensSegment::Tuple { field_index, .. } => items
+                                    .get(*field_index as usize)
+                                    .cloned()
+                                    .unwrap_or(Ty::Unit),
+                                _ => Ty::Unit,
+                            },
+                            Ty::Struct(_, fields) | Ty::Record(_, fields) => match segment {
+                                TypedLensSegment::Field { field_index, .. } => fields
+                                    .get(*field_index as usize)
+                                    .map(|(_, ty)| ty.clone())
+                                    .unwrap_or(Ty::Unit),
+                                _ => Ty::Unit,
+                            },
                             _ => Ty::Unit,
-                        },
-                        Ty::Struct(_, fields) | Ty::Record(_, fields) => match segment {
-                            TypedLensSegment::Field { field_index, .. } => fields
-                                .get(*field_index as usize)
-                                .map(|(_, ty)| ty.clone())
-                                .unwrap_or(Ty::Unit),
-                            _ => Ty::Unit,
-                        },
-                        _ => Ty::Unit,
-                    },
+                        }
+                    }
                     TypedLensSegment::Variant {
                         payload_arity,
                         variant_name,
@@ -1374,7 +1376,8 @@ fn collect_pattern_binding_infos(
         | TypedPattern::ListNil(_)
         | TypedPattern::IntLit(_, _)
         | TypedPattern::StrLit(_, _)
-        | TypedPattern::BoolLit(_, _) => {}
+        | TypedPattern::BoolLit(_, _)
+        | TypedPattern::DurationLit(_, _) => {}
         TypedPattern::Tuple(_, items) => {
             for item in items {
                 collect_pattern_binding_infos(
@@ -3248,82 +3251,80 @@ impl Codegen {
                 update_fun_slot,
                 mode,
                 focus_is_result,
-            } => {
-                match (mode, focus_is_result) {
-                    (TypedLensOverMode::FocusValue, true) => {
-                        self.emit(Opcode::LoadLocal(current_slot));
-                        self.emit(Opcode::GetTag);
-                        let err_tag = self.add_constant(Constant::Tag(1));
-                        self.emit(Opcode::LoadConst(err_tag));
-                        self.emit(Opcode::EqTag);
+            } => match (mode, focus_is_result) {
+                (TypedLensOverMode::FocusValue, true) => {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetTag);
+                    let err_tag = self.add_constant(Constant::Tag(1));
+                    self.emit(Opcode::LoadConst(err_tag));
+                    self.emit(Opcode::EqTag);
 
-                        let ok_label = self.fresh_label();
-                        let continue_label = self.fresh_label();
-                        self.emit_jump_if_false(ok_label);
-                        self.emit_jump(continue_label);
+                    let ok_label = self.fresh_label();
+                    let continue_label = self.fresh_label();
+                    self.emit_jump_if_false(ok_label);
+                    self.emit_jump(continue_label);
 
-                        self.patch_label(ok_label);
-                        self.emit(Opcode::LoadLocal(update_fun_slot));
-                        self.emit(Opcode::LoadLocal(current_slot));
-                        self.emit(Opcode::GetField { field_index: 0 });
-                        self.emit(Opcode::CallClosure {
-                            arity: 1,
-                            span_start: span.start as u32,
-                            span_end: span.end as u32,
-                        });
-                        let update_result_slot = self.state.next_slot;
-                        self.state.next_slot += 1;
-                        self.emit(Opcode::StoreLocal(update_result_slot));
+                    self.patch_label(ok_label);
+                    self.emit(Opcode::LoadLocal(update_fun_slot));
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                    let update_result_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::StoreLocal(update_result_slot));
 
-                        self.emit(Opcode::LoadLocal(update_result_slot));
-                        self.emit(Opcode::GetTag);
-                        self.emit(Opcode::LoadConst(err_tag));
-                        self.emit(Opcode::EqTag);
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit(Opcode::GetTag);
+                    self.emit(Opcode::LoadConst(err_tag));
+                    self.emit(Opcode::EqTag);
 
-                        let update_ok_label = self.fresh_label();
-                        self.emit_jump_if_false(update_ok_label);
-                        self.emit(Opcode::LoadLocal(update_result_slot));
-                        self.emit_jump(failure_end);
+                    let update_ok_label = self.fresh_label();
+                    self.emit_jump_if_false(update_ok_label);
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit_jump(failure_end);
 
-                        self.patch_label(update_ok_label);
-                        let ok_tag = self.add_constant(Constant::Tag(0));
-                        self.emit(Opcode::LoadConst(ok_tag));
-                        self.emit(Opcode::LoadLocal(update_result_slot));
-                        self.emit(Opcode::GetField { field_index: 0 });
-                        self.emit(Opcode::StructNew { field_count: 1 });
-                        self.emit(Opcode::StoreLocal(current_slot));
-                        self.patch_label(continue_label);
-                    }
-                    _ => {
-                        self.emit(Opcode::LoadLocal(update_fun_slot));
-                        self.emit(Opcode::LoadLocal(current_slot));
-                        self.emit(Opcode::CallClosure {
-                            arity: 1,
-                            span_start: span.start as u32,
-                            span_end: span.end as u32,
-                        });
-                        let update_result_slot = self.state.next_slot;
-                        self.state.next_slot += 1;
-                        self.emit(Opcode::StoreLocal(update_result_slot));
-
-                        self.emit(Opcode::LoadLocal(update_result_slot));
-                        self.emit(Opcode::GetTag);
-                        let err_tag = self.add_constant(Constant::Tag(1));
-                        self.emit(Opcode::LoadConst(err_tag));
-                        self.emit(Opcode::EqTag);
-
-                        let ok_label = self.fresh_label();
-                        self.emit_jump_if_false(ok_label);
-                        self.emit(Opcode::LoadLocal(update_result_slot));
-                        self.emit_jump(failure_end);
-
-                        self.patch_label(ok_label);
-                        self.emit(Opcode::LoadLocal(update_result_slot));
-                        self.emit(Opcode::GetField { field_index: 0 });
-                        self.emit(Opcode::StoreLocal(current_slot));
-                    }
+                    self.patch_label(update_ok_label);
+                    let ok_tag = self.add_constant(Constant::Tag(0));
+                    self.emit(Opcode::LoadConst(ok_tag));
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::StructNew { field_count: 1 });
+                    self.emit(Opcode::StoreLocal(current_slot));
+                    self.patch_label(continue_label);
                 }
-            }
+                _ => {
+                    self.emit(Opcode::LoadLocal(update_fun_slot));
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                    let update_result_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::StoreLocal(update_result_slot));
+
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit(Opcode::GetTag);
+                    let err_tag = self.add_constant(Constant::Tag(1));
+                    self.emit(Opcode::LoadConst(err_tag));
+                    self.emit(Opcode::EqTag);
+
+                    let ok_label = self.fresh_label();
+                    self.emit_jump_if_false(ok_label);
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit_jump(failure_end);
+
+                    self.patch_label(ok_label);
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::StoreLocal(current_slot));
+                }
+            },
         }
         Ok(())
     }
@@ -3639,7 +3640,8 @@ impl Codegen {
             }
             TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => {
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {
                 self.emit_literal_pattern_mismatch_failure(pat, value_slot, span)
             }
             _ => self.emit_pattern_mismatch_failure(span),
@@ -4071,6 +4073,9 @@ impl Codegen {
                 self.emit(Opcode::EqBool);
                 self.emit_jump_if_false(fail_label);
             }
+            TypedPattern::DurationLit(_, n) => {
+                self.emit_duration_lit_pattern_test(slot, n, fail_label);
+            }
             TypedPattern::ListNil(_) => {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::ListIsEmpty);
@@ -4173,7 +4178,8 @@ impl Codegen {
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => {}
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {}
             TypedPattern::Tuple(_, items) => {
                 for (index, item) in items.iter().enumerate() {
                     let item_slot = self.state.next_slot;
@@ -4392,6 +4398,10 @@ impl Codegen {
         arity: usize,
         _span: &Span,
     ) -> Result<Vec<u32>, CodegenError> {
+        if arity == 1 {
+            return Ok(vec![tuple_slot]);
+        }
+
         let mut item_slots = Vec::with_capacity(arity);
 
         for index in 0..arity {
@@ -5160,6 +5170,9 @@ impl Codegen {
                 self.emit(Opcode::EqStr);
                 self.emit_jump_if_false(fail_label);
             }
+            TypedMatchPattern::DurationLit(n) => {
+                self.emit_duration_lit_pattern_test(slot, n, fail_label);
+            }
             TypedMatchPattern::ErrorKind(kind) => {
                 self.emit_error_kind_test_from_local(slot, kind, fail_label)?;
             }
@@ -5272,6 +5285,7 @@ impl Codegen {
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::DurationLit(_)
             | TypedMatchPattern::ErrorKind(_)
             | TypedMatchPattern::Or(_)
             | TypedMatchPattern::ListNil => {}
@@ -5451,6 +5465,24 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_duration_payload_from_local(&mut self, slot: u32) {
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+    }
+
+    fn emit_duration_lit_pattern_test(
+        &mut self,
+        slot: u32,
+        millis: &sindr::primitives::SurtrInt,
+        fail_label: Label,
+    ) {
+        self.emit_duration_payload_from_local(slot);
+        let millis_const = self.add_constant(Constant::Int(millis.clone()));
+        self.emit(Opcode::LoadConst(millis_const));
+        self.emit(Opcode::EqInt);
+        self.emit_jump_if_false(fail_label);
+    }
+
     fn binop_to_opcode(
         &self,
         op: &BinOp,
@@ -5546,6 +5578,7 @@ fn literal_pattern_display(pat: &TypedPattern) -> Option<String> {
         } else {
             "False".to_string()
         }),
+        TypedPattern::DurationLit(_, value) => Some(format!("{value}ms")),
         _ => None,
     }
 }

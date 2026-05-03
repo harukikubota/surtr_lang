@@ -1,0 +1,1 @@
+print(to_string(20ms - 10ms))

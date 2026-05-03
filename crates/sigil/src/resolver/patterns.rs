@@ -58,6 +58,7 @@ impl Resolver {
             AstPattern::IntLit(span, n) => Ok(ResolvedPattern::IntLit(span, n)),
             AstPattern::StrLit(span, s) => Ok(ResolvedPattern::StrLit(span, s)),
             AstPattern::BoolLit(span, b) => Ok(ResolvedPattern::BoolLit(span, b)),
+            AstPattern::DurationLit(span, n) => Ok(ResolvedPattern::DurationLit(span, n)),
             AstPattern::Constructor(span, ctor_name, inners) => {
                 let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
