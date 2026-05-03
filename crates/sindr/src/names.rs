@@ -33,6 +33,7 @@ pub enum TypeName {
     Generator,
     Result,
     Duration,
+    Lazy,
     TypeRef,
     Hole,
     Lens,
@@ -60,6 +61,7 @@ impl TypeName {
             Self::Generator => "Generator",
             Self::Result => "Result",
             Self::Duration => "Duration",
+            Self::Lazy => "Lazy",
             Self::TypeRef => "TypeRef",
             Self::Hole => "Hole",
             Self::Lens => "Lens",
@@ -79,6 +81,7 @@ impl TypeName {
                 | Self::Closure
                 | Self::MatchArms
                 | Self::CondClauses
+                | Self::Lazy
                 | Self::Pid
         )
     }
@@ -104,6 +107,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Generator" => Some(TypeName::Generator),
         "Result" => Some(TypeName::Result),
         "Duration" => Some(TypeName::Duration),
+        "Lazy" => Some(TypeName::Lazy),
         "TypeRef" => Some(TypeName::TypeRef),
         "Hole" => Some(TypeName::Hole),
         "Lens" => Some(TypeName::Lens),

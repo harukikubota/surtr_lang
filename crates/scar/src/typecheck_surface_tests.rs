@@ -1301,7 +1301,7 @@ fn set_exit_code_entry_only_policy_allows_only_entrypoint_function() {
 
 #[test]
 fn assert_special_form_typechecks_to_result_unit() {
-    let typed = typecheck_with_builtin_prelude("guard = assert(True, NoneError)");
+    let typed = typecheck_with_builtin_prelude("guard = assert(True, NoneError())");
     let bind = typed.last().expect("binding should exist");
     match &bind.node {
         TypedInner::Bind(_, rhs) => {
@@ -1401,7 +1401,7 @@ fn bitwidth_zero_arg_variant_typechecks_with_builtin_prelude() {
 fn ensure_special_form_typechecks_to_result_value() {
     let typed = typecheck_with_builtin_prelude(
         r#"def is_even(n: Int) -> Boolean { Int::is_even(n) }
-guard = ensure(4, &is_even, NoneError)"#,
+guard = ensure(4, &is_even, NoneError())"#,
     );
     let bind = typed.last().expect("binding should exist");
     match &bind.node {
@@ -1520,17 +1520,19 @@ guard = assert(False, make_error(True))"#,
 }
 
 #[test]
-fn kernel_and_contract_rejects_lazy_signature() {
+fn kernel_and_contract_rejects_eager_signature() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Kernel",
-        r#"defmod Kernel {
-  @@builtin def and(left: Boolean, right: (-> Boolean)) -> Boolean
+        r#"@@builtin type Lazy<$T>
+
+defmod Kernel {
+  @@builtin def and(left: Boolean, right: Boolean) -> Boolean
 }"#,
     )])
-    .expect_err("lazy signature should violate canonical contract");
+    .expect_err("eager signature should violate canonical contract");
     assert!(err
         .message
-        .contains("@@builtin def and(left: Boolean, right: Boolean) -> Boolean"));
+        .contains("@@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean"));
 }
 
 #[test]
@@ -1566,6 +1568,68 @@ fn kernel_does_not_allow_removed_concat_builtin() {
     let err = sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
         .expect_err("concat is no longer a declared runtime builtin");
     assert!(err.message.contains("Unknown builtin declaration: concat"));
+}
+
+#[test]
+fn if_auto_forces_zero_arg_closure_once_for_branch_type() {
+    let typed = typecheck_with_builtin_prelude("value = if(True, {|| 1}, 2)");
+    let bind = typed.last().expect("binding should exist");
+    match &bind.node {
+        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.ty, scar::types::Ty::Int)),
+        other => panic!("expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn if_nested_closure_is_not_deep_forced() {
+    let err = typecheck_with_rules(
+        "value = if(True, {|| {|| 1}}, 2)",
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("nested lazy branch should not be deep forced");
+    assert!(err
+        .message
+        .contains("if branches have different types: (-> Int) and Int"));
+}
+
+#[test]
+fn user_lazy_annotation_is_rejected() {
+    let err = typecheck_with_rules("x: Lazy<Int> = 1", RuntimeSourcePolicy::script())
+        .expect_err("user lazy annotations must fail");
+    assert!(err
+        .message
+        .contains("Lazy<T> is reserved for std-module special-form declarations"));
+}
+
+#[test]
+fn assert_accepts_lazy_error_branch() {
+    let typed = typecheck_with_rules(
+        r#"deferror SomeError(detail: String) { detail }
+guard = assert(False, {|| SomeError("boom") })"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("lazy error branch should typecheck");
+    let bind = typed.last().expect("binding should exist");
+    match &bind.node {
+        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Assert(_, _))),
+        other => panic!("expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn ensure_accepts_lazy_error_branch() {
+    let typed = typecheck_with_rules(
+        r#"deferror SomeError(detail: String) { detail }
+def is_positive(value: Int) -> Boolean { value > 0 }
+guard = ensure(-1, &is_positive, {|| SomeError("boom") })"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("lazy ensure error branch should typecheck");
+    let bind = typed.last().expect("binding should exist");
+    match &bind.node {
+        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Ensure(_, _, _))),
+        other => panic!("expected bind, got {:?}", other),
+    }
 }
 
 #[test]

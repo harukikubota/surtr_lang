@@ -40,11 +40,24 @@ impl Checker {
         }
     }
 
+    fn lazy_type_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Lazy<T> is reserved for std-module special-form declarations".into(),
+            span: span.clone(),
+            hint: Some(
+                "Use ordinary expression syntax at call sites; the compiler applies lazy special-form evaluation automatically."
+                    .into(),
+            ),
+        }
+    }
+
     pub(super) fn ty_exposes_error_value(ty: &Ty) -> bool {
         match ty {
             Ty::Error => true,
             Ty::Result(ok, _) => Self::ty_exposes_error_value(ok),
-            Ty::List(inner) | Ty::TypeRef(inner) => Self::ty_exposes_error_value(inner),
+            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+                Self::ty_exposes_error_value(inner)
+            }
             Ty::Lens(source, focus) => {
                 Self::ty_exposes_error_value(source) || Self::ty_exposes_error_value(focus)
             }
@@ -367,6 +380,7 @@ impl Checker {
                             | TypeName::Generator
                             | TypeName::Result
                             | TypeName::Duration
+                            | TypeName::Lazy
                             | TypeName::TypeRef
                             | TypeName::Hole
                             | TypeName::Closure
@@ -419,6 +433,9 @@ impl Checker {
                 if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
+            }
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Lazy" => {
+                Err(self.lazy_type_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
@@ -1270,6 +1287,21 @@ impl Checker {
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lazy" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "Lazy<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_builtin_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::Lazy(Box::new(inner)))
+            }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
@@ -1518,7 +1550,9 @@ impl Checker {
             | (Ty::Unit, Ty::Unit)
             | (Ty::Error, Ty::Error) => true,
             (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-            (Ty::TypeRef(a), Ty::TypeRef(b)) => self.types_compatible(a, b),
+            (Ty::TypeRef(a), Ty::TypeRef(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => {
+                self.types_compatible(a, b)
+            }
             (Ty::Pid(a), Ty::Pid(b)) => a == b || a.starts_with('$') || b.starts_with('$'),
             (Ty::Lens(src_a, focus_a), Ty::Lens(src_b, focus_b)) => {
                 self.types_compatible(src_a, src_b) && self.types_compatible(focus_a, focus_b)
@@ -1609,7 +1643,7 @@ impl Checker {
             Ty::Var(var) => var == needle,
             Ty::Hole => false,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
-            Ty::TypeRef(inner) => self.ty_contains_var(&inner, needle),
+            Ty::TypeRef(inner) | Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
             Ty::Pid(_) => false,
             Ty::Lens(source, focus) => {
                 self.ty_contains_var(&source, needle) || self.ty_contains_var(&focus, needle)
@@ -1647,6 +1681,7 @@ impl Checker {
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
             Ty::Hole => Ty::Hole,
             Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.resolve_ty(inner))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
             Ty::Lens(source, focus) => Ty::Lens(
                 Box::new(self.resolve_ty(source)),
@@ -1722,6 +1757,7 @@ impl Checker {
             Ty::TypeRef(inner) => {
                 Ty::TypeRef(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
             }
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
             Ty::Lens(source, focus) => Ty::Lens(
                 Box::new(self.instantiate_ty_with_fresh(source, fresh)),
@@ -1842,6 +1878,7 @@ impl Checker {
             Ty::Error => "Error".into(),
             Ty::Hole => "_".into(),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
+            Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
             Ty::Pid(name) => format!("PID<{}>", name),
             Ty::Lens(source, focus) => {
@@ -1892,7 +1929,9 @@ impl Checker {
     pub(super) fn ty_contains_lens(&self, ty: &Ty) -> bool {
         match self.resolve_ty(ty) {
             Ty::Lens(_, _) => true,
-            Ty::List(inner) | Ty::TypeRef(inner) => self.ty_contains_lens(inner.as_ref()),
+            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+                self.ty_contains_lens(inner.as_ref())
+            }
             Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_lens(item)),
             Ty::Func(params, ret) => {
                 params.iter().any(|param| self.ty_contains_lens(param))

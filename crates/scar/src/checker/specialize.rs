@@ -1124,8 +1124,9 @@ impl Checker {
                     ordered.push(var);
                 }
             }
-            Ty::List(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
-            Ty::TypeRef(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
+            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+                self.collect_bound_tyvars_in_ty(&inner, ordered, seen)
+            }
             Ty::Lens(source, focus) => {
                 self.collect_bound_tyvars_in_ty(&source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&focus, ordered, seen);

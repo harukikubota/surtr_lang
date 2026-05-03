@@ -690,6 +690,12 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 [ok, _err] => Ty::Result(Box::new(ok.clone()), Box::new(Ty::Error)),
                 _ => return Err("Result requires 1 or 2 type arguments".into()),
             },
+            "Lazy" => {
+                let [inner] = args.as_slice() else {
+                    return Err("Lazy requires exactly 1 type argument".into());
+                };
+                Ty::Lazy(Box::new(inner.clone()))
+            }
             "Lens" => {
                 let [source, focus] = args.as_slice() else {
                     return Err("Lens requires exactly 2 type arguments".into());
@@ -1069,7 +1075,7 @@ impl ScarSession {
 
     fn rewrite_fun_indices_in_ty(ty: &mut Ty, rewrites: &HashMap<u32, u32>) {
         match ty {
-            Ty::List(inner) | Ty::TypeRef(inner) => {
+            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 Self::rewrite_fun_indices_in_ty(inner, rewrites)
             }
             Ty::Tuple(items) => {

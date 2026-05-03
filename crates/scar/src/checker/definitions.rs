@@ -105,8 +105,8 @@ impl Checker {
             "if" => {
                 params.len() == 3
                     && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_zero_arg_func_to_named(&params[1].ty, "$A")
-                    && Self::is_zero_arg_func_to_named(&params[2].ty, "$A")
+                    && Self::is_lazy_of_named(&params[1].ty, "$A")
+                    && Self::is_lazy_of_named(&params[2].ty, "$A")
                     && ret_ty
                         .as_ref()
                         .is_some_and(|ty| Self::is_named_type(ty, "$A"))
@@ -114,15 +114,15 @@ impl Checker {
             "if_then" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_zero_arg_func_to_unit(&params[1].ty)
+                    && Self::is_lazy_of_unit(&params[1].ty)
                     && ret_ty.as_ref().is_some_and(Self::is_unit_type)
             }
             "if_let" => {
                 params.len() == 4
                     && Self::is_named_type(&params[0].ty, "$A")
                     && Self::is_named_type(&params[1].ty, "$Pattern")
-                    && Self::is_zero_arg_func_to_named(&params[2].ty, "$B")
-                    && Self::is_zero_arg_func_to_named(&params[3].ty, "$B")
+                    && Self::is_lazy_of_named(&params[2].ty, "$B")
+                    && Self::is_lazy_of_named(&params[3].ty, "$B")
                     && ret_ty
                         .as_ref()
                         .is_some_and(|ty| Self::is_named_type(ty, "$B"))
@@ -131,7 +131,7 @@ impl Checker {
                 params.len() == 3
                     && Self::is_named_type(&params[0].ty, "$A")
                     && Self::is_named_type(&params[1].ty, "$Pattern")
-                    && Self::is_zero_arg_func_to_unit(&params[2].ty)
+                    && Self::is_lazy_of_unit(&params[2].ty)
                     && ret_ty.as_ref().is_some_and(Self::is_unit_type)
             }
             "is_match" => {
@@ -145,7 +145,7 @@ impl Checker {
             "assert" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_named_type(&params[1].ty, "Error")
+                    && Self::is_lazy_of_named(&params[1].ty, "Error")
                     && ret_ty
                         .as_ref()
                         .is_some_and(|ty| Self::is_result_of_named(ty, "Unit"))
@@ -154,7 +154,7 @@ impl Checker {
                 params.len() == 3
                     && Self::is_named_type(&params[0].ty, "$A")
                     && Self::is_unary_func_from_named_to_named(&params[1].ty, "$A", "Boolean")
-                    && Self::is_named_type(&params[2].ty, "Error")
+                    && Self::is_lazy_of_named(&params[2].ty, "Error")
                     && ret_ty
                         .as_ref()
                         .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
@@ -171,7 +171,7 @@ impl Checker {
             "and" | "or" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_named_type(&params[1].ty, "Boolean")
+                    && Self::is_lazy_of_named(&params[1].ty, "Boolean")
                     && ret_ty
                         .as_ref()
                         .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
@@ -181,16 +181,16 @@ impl Checker {
 
         if !shape_ok {
             let expected = match id.name.as_str() {
-                "if" => "@@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A",
-                "if_then" => "@@builtin def if_then(flag: Boolean, then_branch: (-> ())) -> ()",
-                "if_let" => "@@builtin def if_let(value: $A, pattern: $Pattern, then_branch: (-> $B), else_branch: (-> $B)) -> $B",
-                "if_let_then" => "@@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: (-> ())) -> ()",
+                "if" => "@@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
+                "if_then" => "@@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
+                "if_let" => "@@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
+                "if_let_then" => "@@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
                 "is_match" => "@@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
-                "assert" => "@@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>",
-                "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>",
+                "assert" => "@@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
+                "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
                 "recover_kind" => "@@builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>",
-                "and" => "@@builtin def and(left: Boolean, right: Boolean) -> Boolean",
-                "or" => "@@builtin def or(left: Boolean, right: Boolean) -> Boolean",
+                "and" => "@@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                "or" => "@@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 _ => unreachable!(),
             };
             return Err(TypeError {
@@ -398,17 +398,18 @@ impl Checker {
         Self::is_named_type(ast_ty, "Unit")
     }
 
-    pub(super) fn is_zero_arg_func_to_named(ast_ty: &AstTy, expected_name: &str) -> bool {
+    pub(super) fn is_lazy_of_named(ast_ty: &AstTy, expected_name: &str) -> bool {
         matches!(
             ast_ty,
-            AstTy::Func(_, params, ret)
-                if params.is_empty()
-                    && matches!(ret.as_ref(), AstTy::Named(_, name) if name == expected_name)
+            AstTy::Generic(_, name, args)
+                if name == "Lazy"
+                    && args.len() == 1
+                    && matches!(&args[0], AstTy::Named(_, param_name) if param_name == expected_name)
         )
     }
 
-    pub(super) fn is_zero_arg_func_to_unit(ast_ty: &AstTy) -> bool {
-        Self::is_zero_arg_func_to_named(ast_ty, "Unit")
+    pub(super) fn is_lazy_of_unit(ast_ty: &AstTy) -> bool {
+        Self::is_lazy_of_named(ast_ty, "Unit")
     }
 
     pub(super) fn is_unary_func_from_named_to_named(
@@ -1925,10 +1926,14 @@ impl Checker {
     pub(super) fn is_concrete_error_value(&self, node: &TypedNode) -> bool {
         match &node.node {
             TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
-            TypedInner::App(func, _) => match &func.node {
+            TypedInner::App(func, args) if args.is_empty() => match &func.node {
                 TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
+                TypedInner::Closure(_, _, body) => self.is_concrete_error_value(body),
                 _ => false,
             },
+            TypedInner::App(func, _) => {
+                matches!(&func.node, TypedInner::Var(id) if self.env.is_error_constructor(id.unique_id))
+            }
             _ => false,
         }
     }

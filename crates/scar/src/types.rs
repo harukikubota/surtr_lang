@@ -23,6 +23,10 @@ pub enum Ty {
     /// method parameter positions such as `From<$To>::from(_, TypeRef<$To>)`.
     TypeRef(Box<Ty>),
 
+    /// Compiler-reserved lazy special-form marker used only in std builtin
+    /// declarations. User code cannot name or transport Lazy values directly.
+    Lazy(Box<Ty>),
+
     /// Compiler-managed lens path capability: `Lens<S, A>`
     Lens(Box<Ty>, Box<Ty>),
 

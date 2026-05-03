@@ -790,7 +790,9 @@ impl Checker {
                     out.push(*var);
                 }
             }
-            Ty::List(inner) | Ty::TypeRef(inner) => Self::collect_ty_vars(inner, out),
+            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+                Self::collect_ty_vars(inner, out)
+            }
             Ty::Lens(source, focus) | Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);

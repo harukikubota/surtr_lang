@@ -14,18 +14,17 @@ xldr(2)> ("alice", 42)
 ("alice", 42)
 """
 @@autoimport
+@@builtin type Lazy<$T>
 defmod Kernel {
   @@doc """
   Conditional execution for side-effect-oriented code paths.
 
   The declared type is:
-  `if_then(Boolean, (-> Unit)) -> Unit`
+  `if_then(Boolean, Lazy<Unit>) -> Unit`
 
-  The function type on the second argument is a contract-level way to express
-  Surtr's evaluation rule: the branch is selected lazily and only the chosen
-  side is evaluated.
-  This does not mean everyday source code must wrap the argument in an explicit
-  closure.
+  `Lazy<T>` is a compiler marker used only in std builtin declarations to
+  express delayed evaluation. This does not mean everyday source code must wrap
+  the argument in an explicit closure.
 
   Ordinary expression form stays available:
   `if_then(flag, print("flag is true"))`
@@ -37,16 +36,16 @@ defmod Kernel {
   xldr(1)> if_then(True, print("flag is true"))
   flag is true
   """
-  @@builtin def if_then(flag: Boolean, then_branch: (-> Unit)) -> Unit
+  @@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit
 
   @@doc """
   Branching expression that returns one value from two alternatives.
 
   The declared type is:
-  `if(Boolean, (-> $A), (-> $A)) -> $A`
+  `if(Boolean, Lazy<$A>, Lazy<$A>) -> $A`
 
-  Both branches are written as zero-argument function types in the declaration
-  because Surtr treats `if` as a language-level special form.
+  Both branches are marked as `Lazy<_>` because Surtr treats `if` as a
+  language-level special form.
   Only the selected branch is evaluated, and both branches must agree on the
   same result type.
 
@@ -63,13 +62,13 @@ defmod Kernel {
   xldr(1)> if(True, "ok", "ng")
   "ok"
   """
-  @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
+  @@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
 
   @@doc """
   Pattern-aware branching expression for a single success path.
 
   The declared type is:
-  `if_let($A, $Pattern, (-> $B), (-> $B)) -> $B`
+  `if_let($A, $Pattern, Lazy<$B>, Lazy<$B>) -> $B`
 
   `if_let` evaluates the input value once, checks it against the pattern, and:
   - evaluates `then_branch` when the pattern matches
@@ -82,13 +81,13 @@ defmod Kernel {
   xldr(1)> if_let(Ok(1), Ok(value), to_string(value), "miss")
   "1"
   """
-  @@builtin def if_let(value: $A, pattern: $Pattern, then_branch: (-> $B), else_branch: (-> $B)) -> $B
+  @@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B
 
   @@doc """
   Pattern-aware side-effect guard for a single success path.
 
   The declared type is:
-  `if_let_then($A, $Pattern, (-> Unit)) -> Unit`
+  `if_let_then($A, $Pattern, Lazy<Unit>) -> Unit`
 
   The input value is evaluated once.
   The branch expression is evaluated only when the pattern matches.
@@ -98,7 +97,7 @@ defmod Kernel {
   xldr(1)> if_let_then(Ok(1), Ok(value), print(to_string(value)))
   1
   """
-  @@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: (-> Unit)) -> Unit
+  @@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit
 
   @@doc """
   Boolean predicate for pattern compatibility.
@@ -121,7 +120,7 @@ defmod Kernel {
   Logical conjunction with short-circuit evaluation.
 
   The declared type is:
-  `and(Boolean, Boolean) -> Boolean`
+  `and(Boolean, Lazy<Boolean>) -> Boolean`
 
   Even though the surface contract looks like an ordinary 2-argument function,
   the compiler evaluates the right-hand side only when the left-hand side is
@@ -132,13 +131,13 @@ defmod Kernel {
   xldr(1)> and(True, False)
   False
   """
-  @@builtin def and(left: Boolean, right: Boolean) -> Boolean
+  @@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean
 
   @@doc """
   Logical disjunction with short-circuit evaluation.
 
   The declared type is:
-  `or(Boolean, Boolean) -> Boolean`
+  `or(Boolean, Lazy<Boolean>) -> Boolean`
 
   The compiler evaluates the right-hand side only when the left-hand side is
   `False`.
@@ -149,13 +148,13 @@ defmod Kernel {
   xldr(1)> or(False, True)
   True
   """
-  @@builtin def or(left: Boolean, right: Boolean) -> Boolean
+  @@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean
 
   @@doc """
   Guard a precondition and return `Result<Unit>`.
 
   The declared type is:
-  `assert(Boolean, Error) -> Result<Unit>`
+  `assert(Boolean, Lazy<Error>) -> Result<Unit>`
 
   Like `if`, this is a special form. The error branch is evaluated only when
   the condition is `False`, so success does not pay to build diagnostics.
@@ -167,13 +166,13 @@ defmod Kernel {
   xldr(1)> assert(True, NoneError)
   Ok(())
   """
-  @@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>
+  @@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>
 
   @@doc """
   Validate a value and return it unchanged on success.
 
   The declared type is:
-  `ensure($A, ($A -> Boolean), Error) -> Result<$A>`
+  `ensure($A, ($A -> Boolean), Lazy<Error>) -> Result<$A>`
 
   The first argument is evaluated once, passed to the predicate, and returned
   inside `Ok(...)` when the predicate succeeds.
@@ -187,7 +186,7 @@ defmod Kernel {
   xldr(1)> ensure(3, {|n| n > 0}, NoneError)
   Ok(3)
   """
-  @@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>
+  @@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>
 
   @@doc """
   Observe `value` for side effects and return it unchanged.

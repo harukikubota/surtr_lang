@@ -4557,11 +4557,13 @@ impl Checker {
             });
         }
 
-        let typed_then = self.check_node(then)?;
+        let raw_then = self.check_node(then)?;
+        let typed_then = self.maybe_call_zero_arg_function(raw_then, span.clone());
 
         match else_opt {
             Some(else_branch) => {
-                let typed_else = self.check_node(else_branch)?;
+                let raw_else = self.check_node(else_branch)?;
+                let typed_else = self.maybe_call_zero_arg_function(raw_else, span.clone());
                 if !self.types_compatible(&typed_then.ty, &typed_else.ty) {
                     return Err(TypeError {
                         message: format!(
