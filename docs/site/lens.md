@@ -9,6 +9,7 @@
 - `Lens::set(lens, source, value)`
 - `Lens::over(lens, source, update_fun)`
 - `Lens::over_result(lens, source, update_fun)`
+- `outer / inner`
 - `Lens::compose(outer, inner)`
 
 `T?` は `Result<T, NoneError>` に下がるため、optional-looking な field でも
@@ -117,7 +118,7 @@ add_lens = Expr.Add
 
 ## compose
 
-ネストした path は `Lens::compose(...)` でつなぎます。
+ネストした path は `outer / inner` でつなぎます。`Lens::compose(...)` も同じ意味で使えます。
 
 ```surtr
 defstruct Profile {
@@ -140,6 +141,8 @@ impl User {
   }
 }
 
+profile_name = User.profile / Profile.name
+# or
 profile_name = Lens::compose(User.profile, Profile.name)
 # or
 profile_name = User.profile.name

@@ -46,8 +46,14 @@ impl Checker {
     fn const_surface_is_allowed(&self, value: &Resolved) -> bool {
         match value {
             Resolved::Lit(_, _) => true,
-            Resolved::Var(_, id) => !self.consts.contains_key(&id.unique_id),
+            Resolved::Var(_, id) => self
+                .consts
+                .get(&id.unique_id)
+                .is_none_or(|meta| matches!(meta.kind, ConstKind::LensPath)),
             Resolved::FieldAccess(_, inner, _) => self.const_surface_is_allowed(inner),
+            Resolved::BinOp(_, BinOp::Slash, left, right) => {
+                self.const_surface_is_allowed(left) && self.const_surface_is_allowed(right)
+            }
             _ => false,
         }
     }
@@ -63,7 +69,7 @@ impl Checker {
                     message: "const value must be a primitive literal or a lens path".into(),
                     span: span.clone(),
                     hint: Some(
-                        "V1 const supports literal values and type-root lens paths only.".into(),
+                        "V1 const supports literal values, lens paths, Lens const refs, and `/` composition of those lens values only.".into(),
                     ),
                 });
             }
@@ -89,7 +95,7 @@ impl Checker {
                         message: "const value must be a primitive literal or a lens path".into(),
                         span: span.clone(),
                         hint: Some(
-                            "Use `const NAME = 1` or `const NAME = User.profile.name`.".into(),
+                            "Use `const NAME = 1`, `const NAME = User.profile`, or compose Lens consts with `/`.".into(),
                         ),
                     })
                 }
@@ -932,6 +938,7 @@ impl Checker {
             Ty::Pid(name) => Some(format!("PID<{name}>")),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
+            Ty::Lens(_, _) => Some("Lens".into()),
             Ty::Func(_, _) => Some("Function".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
             Ty::Enum(name, _) => Some(name),

@@ -305,6 +305,29 @@ Lens::compose(Profile.name, User.profile)"#,
 }
 
 #[test]
+fn lens_slash_compose_typecheck_success_and_mismatch() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord Profile(name: String)
+defrecord User(profile: Profile)
+user = User(Profile("alice"))
+Lens::view(User.profile / Profile.name, user)"#,
+    );
+    assert!(matches!(
+        typed.last().map(|node| &node.ty),
+        Some(scar::types::Ty::Str)
+    ));
+
+    let err = typecheck_with_rules(
+        r#"defrecord Profile(name: String)
+defrecord User(profile: Profile)
+Profile.name / User.profile"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("mismatched slash compose should fail");
+    assert!(err.message.contains("source/focus mismatch"));
+}
+
+#[test]
 fn lens_set_returns_result_source() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
@@ -467,6 +490,57 @@ Lens::view(Lens::compose(User.pair, Tuple._0), user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
+}
+
+#[test]
+fn lens_tuple_type_root_slash_compose_works_as_inner_path() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(pair: (String, Int))
+user = User(("alice", 42))
+Lens::view(User.pair / Tuple._0, user)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Str));
+}
+
+#[test]
+fn lens_const_slash_compose_allows_lens_consts() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord Profile(name: String)
+defrecord User(profile: Profile)
+const USER_PROFILE: Lens<User, Profile> = User.profile
+const PROFILE_NAME: Lens<Profile, String> = Profile.name
+const FULL_NAME: Lens<User, String> = USER_PROFILE / PROFILE_NAME
+user = User(Profile("alice"))
+Lens::view(FULL_NAME, user)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Str));
+}
+
+#[test]
+fn lens_const_slash_compose_rejects_non_lens_const_refs() {
+    let err = typecheck_with_rules(
+        r#"const VALUE = 1
+const BAD = VALUE / VALUE"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("non-lens const refs should fail");
+    assert!(err.message.contains("const value must be a primitive literal or a lens path"));
+}
+
+#[test]
+fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
+    let err = typecheck_with_rules(
+        r#"print(to_string(10 / 3))"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("numeric infix slash should fail");
+    assert!(err.message.contains("`/` requires Compose implementation"));
+    assert!(err
+        .hint
+        .as_deref()
+        .is_some_and(|hint| hint.contains("safe_div")));
 }
 
 #[test]

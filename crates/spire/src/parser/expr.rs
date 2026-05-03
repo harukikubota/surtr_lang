@@ -155,6 +155,7 @@ impl Parser<'_> {
             Token::Plus => Some(BinOp::Add),
             Token::Minus => Some(BinOp::Sub),
             Token::Star => Some(BinOp::Mul),
+            Token::Slash => Some(BinOp::Slash),
             Token::Concat => Some(BinOp::Concat),
             _ => None,
         }
@@ -185,6 +186,7 @@ impl Parser<'_> {
             "+" => Some(BinOp::Add),
             "-" => Some(BinOp::Sub),
             "*" => Some(BinOp::Mul),
+            "/" => Some(BinOp::Slash),
             "++" => Some(BinOp::Concat),
             _ => None,
         }

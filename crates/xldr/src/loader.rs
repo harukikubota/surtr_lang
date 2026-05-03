@@ -115,6 +115,11 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         "PipeApply",
     ),
     (
+        "traits/operator/compose.srt",
+        include_str!("../../../lib/traits/operator/compose.srt"),
+        "Compose",
+    ),
+    (
         "traits/operator/composable.srt",
         include_str!("../../../lib/traits/operator/composable.srt"),
         "Composable",
@@ -938,6 +943,7 @@ mod tests {
                 "Functor",
                 "Chainable",
                 "PipeApply",
+                "Compose",
                 "Composable",
                 "LiftComposable",
                 "KleisliComposable",
@@ -1076,6 +1082,7 @@ mod tests {
                 "Functor",
                 "Chainable",
                 "PipeApply",
+                "Compose",
                 "Composable",
                 "LiftComposable",
                 "KleisliComposable",

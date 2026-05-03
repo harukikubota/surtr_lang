@@ -31,6 +31,8 @@ const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operato
 const CHAINABLE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/chainable.srt");
 const PIPE_APPLY_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/pipe_apply.srt");
+const COMPOSE_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/compose.srt");
 const COMPOSABLE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/composable.srt");
 const LIFT_COMPOSABLE_MODULE_SOURCE: &str =
@@ -342,6 +344,10 @@ pub(crate) fn std_module_stages_with_overrides(
             (
                 "PipeApply",
                 pick_override("PipeApply", PIPE_APPLY_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Compose",
+                pick_override("Compose", COMPOSE_MODULE_SOURCE, overrides),
             ),
             (
                 "Composable",

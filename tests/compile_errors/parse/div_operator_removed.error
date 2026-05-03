@@ -1,2 +1,2 @@
-phase: parse
-contains: Unexpected character: '/'
+phase: typecheck
+contains: safe_div

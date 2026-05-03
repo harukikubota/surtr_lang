@@ -77,6 +77,7 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
+    Slash,
     Eq,
     Neq,
     Lt,

@@ -2159,6 +2159,22 @@ fn test_legacy_pipe_compose_operator_is_rejected() {
 }
 
 #[test]
+fn test_lens_slash_compose_expression_parses() {
+    parse(
+        r#"value = Lens::view(User.profile / Profile.name, user)"#,
+    )
+    .expect("lens slash compose should parse");
+}
+
+#[test]
+fn test_lens_slash_compose_chain_parses() {
+    parse(
+        r#"value = Lens::view(Config.root / Project.current / Tuple._0, cfg)"#,
+    )
+    .expect("chained lens slash compose should parse");
+}
+
+#[test]
 fn test_closure_body_accepts_semicolon_separated_statements() {
     let ast = parse("fun = {|num| x = x + 5;x+num}").unwrap();
     match &ast[0] {

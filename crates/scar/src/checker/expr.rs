@@ -2709,6 +2709,51 @@ impl Checker {
         }
     }
 
+    fn compose_lens_paths(
+        &mut self,
+        span: &Span,
+        left_path: TypedLensPath,
+        right_expr: &Resolved,
+        operator_name: &str,
+    ) -> Result<TypedNode, TypeError> {
+        let expected_right_focus = self.env.fresh_tyvar();
+        let expected_right_ty = Ty::Lens(
+            Box::new(self.resolve_ty(&left_path.focus_ty)),
+            Box::new(expected_right_focus),
+        );
+        let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
+        let right_path = self.resolve_lens_path_from_node(right, span)?;
+
+        if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
+            return Err(TypeError {
+                message: format!(
+                    "{} source/focus mismatch: left focus is {}, right source is {}",
+                    operator_name,
+                    self.ty_name(&left_path.focus_ty),
+                    self.ty_name(&right_path.source_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let source_ty = self.resolve_ty(&left_path.source_ty);
+        let focus_ty = self.resolve_ty(&right_path.focus_ty);
+        let mut segments = left_path.segments;
+        segments.extend(right_path.segments);
+        let path = TypedLensPath {
+            source_ty: source_ty.clone(),
+            focus_ty: focus_ty.clone(),
+            may_fail: left_path.may_fail || right_path.may_fail,
+            segments,
+        };
+        Ok(TypedNode {
+            ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+            span: span.clone(),
+            node: TypedInner::LensPath(path),
+        })
+    }
+
     fn check_lens_compose_intrinsic(
         &mut self,
         span: &Span,
@@ -2741,42 +2786,7 @@ impl Checker {
 
         let left = self.check_node(left_expr)?;
         let left_path = self.resolve_lens_path_from_node(left, span)?;
-
-        let expected_right_focus = self.env.fresh_tyvar();
-        let expected_right_ty = Ty::Lens(
-            Box::new(self.resolve_ty(&left_path.focus_ty)),
-            Box::new(expected_right_focus),
-        );
-        let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
-        let right_path = self.resolve_lens_path_from_node(right, span)?;
-
-        if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
-            return Err(TypeError {
-                message: format!(
-                    "Lens::compose source/focus mismatch: left focus is {}, right source is {}",
-                    self.ty_name(&left_path.focus_ty),
-                    self.ty_name(&right_path.source_ty)
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-
-        let source_ty = self.resolve_ty(&left_path.source_ty);
-        let focus_ty = self.resolve_ty(&right_path.focus_ty);
-        let mut segments = left_path.segments;
-        segments.extend(right_path.segments);
-        let path = TypedLensPath {
-            source_ty: source_ty.clone(),
-            focus_ty: focus_ty.clone(),
-            may_fail: left_path.may_fail || right_path.may_fail,
-            segments,
-        };
-        Ok(TypedNode {
-            ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
-            span: span.clone(),
-            node: TypedInner::LensPath(path),
-        })
+        self.compose_lens_paths(span, left_path, right_expr, "Lens::compose")
     }
 
     fn check_lens_source_value(
@@ -3738,6 +3748,10 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
+        if matches!(op, BinOp::Slash) {
+            return self.check_slash_compose(span, left, right);
+        }
+
         let typed_left = self.check_node(left)?;
         let typed_right = self.check_node(right)?;
         let lt = self.resolve_ty(&typed_left.ty);
@@ -3823,6 +3837,7 @@ impl Checker {
                     typed_right,
                 ))
             }
+            BinOp::Slash => unreachable!("handled before generic binop path"),
             BinOp::Eq | BinOp::Neq => {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
@@ -3960,6 +3975,75 @@ impl Checker {
                 ))
             }
         }
+    }
+
+    fn check_slash_compose(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_left = self.check_node(left)?;
+        if matches!(typed_left.ty, Ty::Lens(_, _)) {
+            let left_path = self.resolve_lens_path_from_node(typed_left, span)?;
+            return self.compose_lens_paths(span, left_path, right, "`/`");
+        }
+
+        let typed_right = self.check_node(right)?;
+        let receiver_ty = self.resolve_ty(&typed_left.ty);
+        let rhs_ty = self.resolve_ty(&typed_right.ty);
+        let compose_trait = self
+            .trait_key_by_short_name("Compose")
+            .ok_or_else(|| TypeError {
+                message: "Unknown trait: Compose".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let result_ty = self.env.fresh_tyvar();
+        let Some((dispatch, resolved_trait_args)) = self.operator_trait_dispatch_for_args(
+            &compose_trait,
+            "compose",
+            &receiver_ty,
+            &[rhs_ty.clone(), result_ty],
+        ) else {
+            let hint = if matches!(receiver_ty, Ty::Int | Ty::Float)
+                || matches!(rhs_ty, Ty::Int | Ty::Float)
+            {
+                Some("Infix `/` is reserved for compose/join. Use `safe_div(...)` for division.".into())
+            } else {
+                None
+            };
+            return Err(TypeError {
+                message: format!(
+                    "`/` requires Compose implementation on the left, got {} and {}",
+                    self.ty_name(&receiver_ty),
+                    self.ty_name(&rhs_ty)
+                ),
+                span: span.clone(),
+                hint,
+            });
+        };
+        let result_ty = resolved_trait_args
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| self.resolve_ty(&typed_left.ty));
+        let trait_name = self.trait_instance_key_from_tys(&compose_trait, &resolved_trait_args);
+        Ok(TypedNode {
+            ty: result_ty,
+            span: span.clone(),
+            node: TypedInner::TraitCall {
+                trait_name,
+                method_name: "compose".into(),
+                receiver_ty: receiver_ty.clone(),
+                dispatch,
+                origin: TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::SlashCompose,
+                    lhs_ty: receiver_ty,
+                    rhs_ty,
+                },
+                args: vec![typed_left, typed_right],
+            },
+        })
     }
 
     pub(super) fn check_list_nil(&mut self, span: &Span) -> Result<TypedNode, TypeError> {

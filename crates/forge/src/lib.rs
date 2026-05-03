@@ -51,6 +51,7 @@ mod tests {
         include_str!("../../../lib/traits/operator/chainable.srt");
     const PIPE_APPLY_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/pipe_apply.srt");
+    const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compose.srt");
     const COMPOSABLE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/composable.srt");
     const LIFT_COMPOSABLE_MODULE_SOURCE: &str =
@@ -201,6 +202,7 @@ mod tests {
                 ("Functor", FUNCTOR_MODULE_SOURCE),
                 ("Chainable", CHAINABLE_MODULE_SOURCE),
                 ("PipeApply", PIPE_APPLY_MODULE_SOURCE),
+                ("Compose", COMPOSE_MODULE_SOURCE),
                 ("Composable", COMPOSABLE_MODULE_SOURCE),
                 ("LiftComposable", LIFT_COMPOSABLE_MODULE_SOURCE),
                 ("KleisliComposable", KLEISLI_COMPOSABLE_MODULE_SOURCE),

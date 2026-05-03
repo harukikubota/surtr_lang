@@ -43,6 +43,7 @@ const OPERATOR_DOC_ALIASES: &[(&str, &str)] = &[
     ("<=", "Lte"),
     (">", "Gt"),
     (">=", "Gte"),
+    ("/", "Compose"),
     ("++", "Concat"),
     ("|>", "PipeApply"),
     ("|*>", "Functor"),
@@ -2614,6 +2615,35 @@ impl ReplEngine {
                     result_ty,
                 ))
             }
+            "/" => match (&lhs_ty, &rhs_ty) {
+                (AstTy::Generic(_, left_name, left_args), AstTy::Generic(_, right_name, right_args))
+                    if left_name == "Lens"
+                        && right_name == "Lens"
+                        && left_args.len() == 2
+                        && right_args.len() == 2 =>
+                {
+                    Self::ensure_query_type_matches(
+                        &left_args[1],
+                        &right_args[0],
+                        "`/` requires the left focus type to match the right source type",
+                    )?;
+                    let result_ty = AstTy::Generic(
+                        Span { start: 0, end: 0 },
+                        "Lens".to_string(),
+                        vec![left_args[0].clone(), right_args[1].clone()],
+                    );
+                    Ok((
+                        format!(
+                            "Compose::compose(lhs: {}, rhs: {}) -> {}",
+                            format_query_ty(&lhs_ty),
+                            format_query_ty(&rhs_ty),
+                            format_query_ty(&result_ty)
+                        ),
+                        result_ty,
+                    ))
+                }
+                _ => Err("`/` currently models Lens composition. Use `safe_div(...)` for division.".to_string()),
+            },
             ">>" => {
                 let (left_params, left_ret) = Self::query_unary_func_parts(&lhs_ty, ">>")?;
                 let (right_params, right_ret) = Self::query_unary_func_parts(&rhs_ty, ">>")?;

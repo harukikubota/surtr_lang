@@ -445,9 +445,10 @@ Token.Ident
 - selector は PascalCase 固定
 - 実行時の値がその variant でなければ `Err(VariantMismatch(...))` になる
 
-ネストした path は `Lens::compose` でつなぎます。
+ネストした path は `/` または `Lens::compose` でつなぎます。
 
 ```surtr
+User.profile / Profile.name
 Lens::compose(User.profile, Profile.name)
 ```
 
@@ -474,7 +475,7 @@ first = Lens::view(Tuple._0, pair)
 ```surtr
 name = Lens::view(User.name, user)
 first = Lens::view(Tuple._0, pair)
-profile_name = Lens::view(Lens::compose(User.profile, Profile.name), user)
+profile_name = Lens::view(User.profile / Profile.name, user)
 ```
 
 返り値は path と source に応じて変わります。
@@ -504,7 +505,7 @@ pair2 =? Lens::set(Tuple._1, pair, 4)
 ネストした値も同じです。
 
 ```surtr
-profile_name = Lens::compose(User.profile, Profile.name)
+profile_name = User.profile / Profile.name
 user2 =? Lens::set(profile_name, user, "bob")
 ```
 
@@ -535,7 +536,7 @@ focus が `Result<A>` のとき、`over` は `Ok(value)` の payload だけを�
 
 ### `Lens::compose`
 
-`Lens::compose(outer, inner)` は 2 つの path を順につなぎます。
+`Lens::compose(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。
 
 ```surtr
 profile_name = Lens::compose(User.profile, Profile.name)

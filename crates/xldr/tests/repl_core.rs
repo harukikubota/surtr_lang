@@ -574,6 +574,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let operator_sig = signature_text(&operator_sig);
     assert!(operator_sig.contains("trait PipeApply { pipe_apply(self: Self, value: $A) -> $B }"));
 
+    let slash_doc = engine.handle_line(":doc /");
+    let slash_doc = doc_text(&slash_doc);
+    assert!(slash_doc.contains("trait Compose"), "{slash_doc}");
+    assert!(
+        slash_doc.contains("models the `/` operator"),
+        "{slash_doc}"
+    );
+
     let helper_sig = engine.handle_line(":sig gt");
     let helper_sig = signature_text(&helper_sig);
     assert!(helper_sig.contains("trait Gt { gt(self: Self, rhs: Self) -> Boolean }"));
@@ -1136,6 +1144,12 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     assert!(compose_sig.contains("defined:"), "{compose_sig}");
     assert!(compose_sig.contains("Lens::compose("), "{compose_sig}");
     assert!(compose_sig.contains("specialized:"), "{compose_sig}");
+
+    let slash_sig = engine.handle_line(":sig StyledDocSegment.style / StyledDocStyle.bold");
+    let slash_sig = signature_text(&slash_sig);
+    assert!(slash_sig.contains("defined:"), "{slash_sig}");
+    assert!(slash_sig.contains("Lens::compose("), "{slash_sig}");
+    assert!(slash_sig.contains("specialized:"), "{slash_sig}");
 }
 
 fn tempfile_dir(prefix: &str) -> std::path::PathBuf {

@@ -99,6 +99,7 @@ pub enum OperatorTraitOp {
     PipeApply,
     PipeMap,
     PipeBind,
+    SlashCompose,
     Compose,
     LiftCompose,
     KleisliCompose,

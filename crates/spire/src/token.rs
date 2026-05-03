@@ -26,6 +26,7 @@ pub enum Token {
     Plus,   // +
     Minus,  // -
     Star,   // *
+    Slash,  // /
     Concat, // ++
 
     // ── Comparison / equality ──

@@ -19,7 +19,8 @@ Common path forms:
 
 - struct / record field: `User.name`
 - tuple field: `Tuple._0`, `Tuple._1`, ...
-- nested path: `Lens::compose(User.profile, Profile.name)`
+- nested path: `User.profile / Profile.name`
+- function-form nested path: `Lens::compose(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
 - value sugar: `value.segment`
 
@@ -44,7 +45,7 @@ Provides compiler-managed path access/update intrinsics:
 
 Typical workflow:
 
-1. Build a path with `Type.segment` or `Lens::compose(...)`
+1. Build a path with `Type.segment`, `left / right`, or `Lens::compose(...)`
 2. Read with `Lens::view(...)` or `value.segment`
 3. Update with `Lens::set(...)`, `Lens::over(...)`, or `Lens::over_result(...)`
 
@@ -202,6 +203,7 @@ impl Lens {
   @@doc """
   Compose two lens paths in sequence.
   `compose(outer, inner)` focuses from `S` to `B` via `A`.
+  `outer / inner` is equivalent operator sugar.
 
   Use this for nested access and updates.
 
@@ -222,7 +224,24 @@ impl Lens {
   In the REPL, use the same shape as:
   outer = User.profile
   inner = Profile.name
+  path2 = outer / inner
   path = Lens::compose(outer, inner)
   """
   @@builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
+}
+
+@@doc """
+`Compose` implementation for nested `Lens` paths.
+This is the source-level meaning of `left / right` for Lens values.
+
+The compiler still lowers Lens composition at compile time in Stage1, but the
+surface contract is expressed through `Compose::compose`.
+"""
+impl Compose<Lens<$A, $B>, Lens<$S, $B>> for Lens<$S, $A> {
+  @@doc """
+  Compose the receiver path before `rhs`.
+  `left / right` and `Compose::compose(left, right)` follow this contract.
+  `Lens::compose(left, right)` remains the canonical helper form.
+  """
+  @@builtin def compose(self: Self, rhs: Lens<$A, $B>) -> Lens<$S, $B>
 }
