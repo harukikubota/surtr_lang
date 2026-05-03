@@ -12,7 +12,19 @@ impl Checker {
         let mut result_ty: Option<Ty> = None;
 
         for arm in arms {
-            let typed_arm = self.check_match_arm(arm, &typed_scrut.ty, span)?;
+            let mut typed_arm = self.check_match_arm(arm, &typed_scrut.ty, span)?;
+            if let Some(ref rt) = result_ty {
+                if !self.types_compatible(rt, &typed_arm.body.ty)
+                    && self.can_coerce_err_only_result_self_arm(
+                        &typed_scrut,
+                        &typed_arms,
+                        &typed_arm,
+                        rt,
+                    )
+                {
+                    typed_arm.body.ty = self.resolve_ty(rt);
+                }
+            }
             let body_node = &typed_arm.body;
             if let Some(ref rt) = result_ty {
                 if !self.types_compatible(rt, &body_node.ty) {
@@ -41,6 +53,53 @@ impl Checker {
             ty,
             span: span.clone(),
             node: TypedInner::Match(Box::new(typed_scrut), typed_arms),
+        })
+    }
+
+    fn can_coerce_err_only_result_self_arm(
+        &mut self,
+        scrutinee: &TypedNode,
+        previous_arms: &[TypedMatchArm],
+        arm: &TypedMatchArm,
+        expected_ty: &Ty,
+    ) -> bool {
+        if arm.guard.is_some() || !matches!(arm.pattern, TypedMatchPattern::Wildcard) {
+            return false;
+        }
+
+        let (scrut_ok, scrut_err) = match self.resolve_ty(&scrutinee.ty) {
+            Ty::Result(ok, err) => (ok, err),
+            _ => return false,
+        };
+        let (expected_ok, expected_err) = match self.resolve_ty(expected_ty) {
+            Ty::Result(ok, err) => (ok, err),
+            _ => return false,
+        };
+
+        if !self.types_compatible(scrut_err.as_ref(), expected_err.as_ref()) {
+            return false;
+        }
+
+        if self.types_compatible(scrut_ok.as_ref(), expected_ok.as_ref()) {
+            return false;
+        }
+
+        let (scrut_id, body_id) = match (&scrutinee.node, &arm.body.node) {
+            (TypedInner::Var(scrut_id), TypedInner::Var(body_id)) => {
+                (scrut_id.unique_id, body_id.unique_id)
+            }
+            _ => return false,
+        };
+        if scrut_id != body_id {
+            return false;
+        }
+
+        previous_arms.iter().any(|prev_arm| {
+            prev_arm.guard.is_none()
+                && matches!(
+                    prev_arm.pattern,
+                    TypedMatchPattern::Constructor { tag: 0, .. }
+                )
         })
     }
 

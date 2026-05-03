@@ -2203,6 +2203,63 @@ bound = Boxed::Box(1) |>= &stringify"#,
 }
 
 #[test]
+fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def remap(value: Result<Int>) -> Result<String> {
+  match value {
+    Ok(inner) => Ok(to_string(inner)),
+    _ => value,
+  }
+}"#,
+    );
+
+    let typed = typecheck(resolved).expect("Err-proven wildcard arm should typecheck");
+    assert!(typed
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+}
+
+#[test]
+fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def bind_like(value: Result<Int>) -> Result<String> {
+  match value {
+    Ok(inner) => Ok(to_string(inner)),
+    _ => value,
+  }
+}"#,
+    );
+
+    let typed = typecheck(resolved).expect("Err-proven bind-style wildcard arm should typecheck");
+    assert!(typed
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+}
+
+#[test]
+fn result_match_wildcard_self_requires_err_proven_branch() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def bad(value: Result<Int>) -> Result<String> {
+  match value {
+    _ => value,
+    Ok(inner) => Ok(to_string(inner)),
+  }
+}"#,
+    );
+
+    let err = typecheck(resolved).expect_err("wildcard arm without prior Ok coverage must fail");
+    assert!(
+        err.message.contains("Match arm type mismatch")
+            || err
+                .message
+                .contains("expected Result<String>, got Result<Int>")
+            || err
+                .message
+                .contains("expected Result<Int>, got Result<String>")
+    );
+}
+
+#[test]
 fn closure_param_annotation_must_match_expected_signature() {
     let resolved = resolve_with_builtin_prelude(r#"id: (String -> String) = {|value: Int| value}"#);
     let err = typecheck(resolved).expect_err("mismatched expected signature must fail");

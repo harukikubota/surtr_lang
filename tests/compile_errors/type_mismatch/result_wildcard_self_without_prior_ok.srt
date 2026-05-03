@@ -1,0 +1,8 @@
+def bad(value: Result<Int>) -> Result<String> {
+  match value {
+    _ => value,
+    Ok(inner) => Ok(to_string(inner)),
+  }
+}
+
+bad(Err(NoneError))
