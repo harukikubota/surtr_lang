@@ -47,7 +47,10 @@ impl Checker {
         body: &Resolved,
         err: TypeError,
     ) -> TypeError {
-        if !self.is_repl_chunk() || !err.message.starts_with("Argument type mismatch: expected Unit")
+        if !self.is_repl_chunk()
+            || !err
+                .message
+                .starts_with("Argument type mismatch: expected Unit")
         {
             return err;
         }
@@ -331,7 +334,9 @@ impl Checker {
             Resolved::ListNil(span) => self.check_list_nil(span),
             Resolved::ListCons(span, head, tail) => self.check_list_cons(span, head, tail),
             Resolved::ListLiteral(span, elems) => self.check_list_literal(span, elems),
-            Resolved::RangeLiteral(span, start, stop) => self.check_range_literal(span, start, stop),
+            Resolved::RangeLiteral(span, start, stop) => {
+                self.check_range_literal(span, start, stop)
+            }
             Resolved::TupleLiteral(span, elems) => self.check_tuple_literal(span, elems),
             Resolved::Grouped(span, inner) => {
                 let mut typed = self.check_node(inner)?;
@@ -4029,7 +4034,8 @@ impl Checker {
             let body_ty = self.resolve_ty(&typed_body.ty);
             if let Some(Ty::Func(_, expected_ret)) = expected {
                 let expected_ret = self.resolve_ty(expected_ret);
-                if matches!(expected_ret, Ty::Unit) && !self.types_compatible(&expected_ret, &body_ty)
+                if matches!(expected_ret, Ty::Unit)
+                    && !self.types_compatible(&expected_ret, &body_ty)
                 {
                     let err = TypeError {
                         message: format!(
@@ -4041,11 +4047,7 @@ impl Checker {
                         hint: None,
                     };
                     return Err(self.rewrite_repl_closure_helper_error(
-                        params,
-                        &param_tys,
-                        expected,
-                        body,
-                        err,
+                        params, &param_tys, expected, body, err,
                     ));
                 }
             }
@@ -4688,7 +4690,11 @@ impl Checker {
         Some(ch as u8)
     }
 
-    fn runtime_helper_id(&self, qualified_name: &str, span: &Span) -> Result<ResolvedId, TypeError> {
+    fn runtime_helper_id(
+        &self,
+        qualified_name: &str,
+        span: &Span,
+    ) -> Result<ResolvedId, TypeError> {
         if let Some(id) = self.function_ids_by_name.get(qualified_name) {
             return Ok(id.clone());
         }

@@ -2259,10 +2259,7 @@ impl Parser<'_> {
                     ));
                 }
                 "test" => {
-                    return Err(ParseError::syntax(
-                        "@test has been removed",
-                        annotator_span,
-                    ));
+                    return Err(ParseError::syntax("@test has been removed", annotator_span));
                 }
                 "init" | "get" | "set" => {
                     return Err(ParseError::syntax(
@@ -2489,7 +2486,8 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            let marker = if matches!(self.peek(), Token::Annotator(name) if matches!(name.as_str(), "init" | "get" | "set")) {
+            let marker = if matches!(self.peek(), Token::Annotator(name) if matches!(name.as_str(), "init" | "get" | "set"))
+            {
                 Some(self.parse_agent_handler_marker()?)
             } else {
                 None

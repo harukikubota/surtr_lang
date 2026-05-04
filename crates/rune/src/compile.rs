@@ -678,8 +678,7 @@ pub(crate) fn prepare_script_compile_plan(
     source: &str,
     cli_entry: Option<&str>,
 ) -> Result<ScriptCompilePlan, ScriptPlanError> {
-    let (source_for_parse, include_directives) = match collect_include_directives(source)
-    {
+    let (source_for_parse, include_directives) = match collect_include_directives(source) {
         Ok(collected) => collected,
         Err(err) => {
             if xldr::derive_primary_module_path(source).is_some() {

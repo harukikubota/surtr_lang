@@ -155,7 +155,10 @@ fn range_literal_dynamic_endpoints_execute() {
 }
 
 fn range_literal_rejects_mixed_endpoint_types() {
-    assert_compile_error(r#"bad = [1.."c"]"#, "range literal endpoints must both be Int or both be String");
+    assert_compile_error(
+        r#"bad = [1.."c"]"#,
+        "range literal endpoints must both be Int or both be String",
+    );
 }
 
 fn range_literal_empty_string_literal_endpoint_uses_runtime_invalid_char_range() {
@@ -1293,7 +1296,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         ),
         (
             "range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range",
-            range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range as fn(),
+            range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range
+                as fn(),
         ),
         (
             "range_literal_multichar_string_literal_stop_uses_runtime_invalid_char_range",
