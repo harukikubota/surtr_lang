@@ -1,0 +1,5 @@
+defmod ProcessSchema {
+  def call_fixture(label: String) -> Result<String> {
+    Task::call({|| Ok("call:" ++ label)})
+  }
+}

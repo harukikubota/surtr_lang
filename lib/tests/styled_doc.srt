@@ -1,60 +1,136 @@
+include "./schema/styled_doc_schema.srt"
+
+import StyledDocSchema::esc;
 import Test;
 import StyledDoc;
 
-def esc() -> String {
-  match String::from_codepoints([27], StringEncoding::Utf8) {
-    Ok(value) => value,
-    Err(_) => "",
-  }
-}
-
 test("StyledDoc") {
   describe("plain") {
-    it("renders text and appended lines") {
+    it("renders empty docs and explicit blank lines") {
       doc = StyledDoc::append(
         StyledDoc::line("hello"),
-        StyledDoc::line("world"),
+        StyledDoc::append(StyledDoc::newline(), StyledDoc::line("world")),
       )
-      assert_doc_plain_eq("hello\nworld", doc)
+      assert_doc_plain_eq("", StyledDoc::empty())
+      assert_doc_plain_eq("hello\n\nworld", doc)
+    }
+
+    it("renders segment text line and concat helpers") {
+      styled = StyledDoc::segment(
+        "!",
+        StyledDocStyle(Option::Some(StyledDocColor::Red), Option::None, False, False, False, False),
+      )
+      doc = StyledDoc::concat([
+        StyledDoc::text("sur"),
+        StyledDoc::line("tr"),
+        styled,
+      ])
+      assert_doc_plain_eq("sur\ntr\n!", doc)
     }
 
     it("renders inline concatenation on one line") {
       doc = StyledDoc::inline_concat([
-        StyledDoc::text("sur"),
+        StyledDoc::line("sur"),
+        StyledDoc::newline(),
         StyledDoc::text("tr"),
         StyledDoc::text(" code"),
       ])
       assert_doc_plain_eq("surtr code", doc)
     }
 
-    it("indents each line") {
+    it("indents each line including blank ones") {
       doc = StyledDoc::indent(
-        StyledDoc::append(StyledDoc::line("one"), StyledDoc::line("two")),
+        StyledDoc::append(
+          StyledDoc::line("one"),
+          StyledDoc::append(StyledDoc::newline(), StyledDoc::line("two")),
+        ),
         2,
       )
-      assert_doc_plain_eq("  one\n  two", doc)
+      assert_doc_plain_eq("  one\n  \n  two", doc)
     }
   }
 
   describe("ansi") {
-    it("renders foreground colors and emphasis") {
-      doc = StyledDoc::bold(StyledDoc::green(StyledDoc::text("ok")))
-      assert_doc_ansi_eq(esc() ++ "[1;32mok" ++ esc() ++ "[0m", doc)
-    }
-
-    it("renders dim underline italic and background color") {
-      doc = StyledDoc::bg_blue(
-        StyledDoc::italic(
-          StyledDoc::underline(
-            StyledDoc::dim(StyledDoc::yellow(StyledDoc::text("note"))),
-          ),
+    it("renders style with merged foreground background and emphasis") {
+      doc = StyledDoc::style(
+        StyledDoc::text("mix"),
+        StyledDocStyle(
+          Option::Some(StyledDocColor::Cyan),
+          Option::Some(StyledDocColor::Default),
+          True,
+          False,
+          True,
+          False,
         ),
       )
-      assert_doc_ansi_eq(esc() ++ "[2;4;3;33;44mnote" ++ esc() ++ "[0m", doc)
+      assert_doc_ansi_eq(esc() ++ "[1;4;36;49mmix" ++ esc() ++ "[0m", doc)
     }
 
-    it("does not add escape codes to plain text") {
+    it("renders foreground helpers") {
+      doc = StyledDoc::inline_concat([
+        StyledDoc::black(StyledDoc::text("k")),
+        StyledDoc::red(StyledDoc::text("r")),
+        StyledDoc::green(StyledDoc::text("g")),
+        StyledDoc::yellow(StyledDoc::text("y")),
+        StyledDoc::blue(StyledDoc::text("b")),
+        StyledDoc::magenta(StyledDoc::text("m")),
+        StyledDoc::cyan(StyledDoc::text("c")),
+        StyledDoc::white(StyledDoc::text("w")),
+        StyledDoc::default_color(StyledDoc::text("d")),
+      ])
+      expected = String::join([
+        esc() ++ "[30mk" ++ esc() ++ "[0m",
+        esc() ++ "[31mr" ++ esc() ++ "[0m",
+        esc() ++ "[32mg" ++ esc() ++ "[0m",
+        esc() ++ "[33my" ++ esc() ++ "[0m",
+        esc() ++ "[34mb" ++ esc() ++ "[0m",
+        esc() ++ "[35mm" ++ esc() ++ "[0m",
+        esc() ++ "[36mc" ++ esc() ++ "[0m",
+        esc() ++ "[37mw" ++ esc() ++ "[0m",
+        esc() ++ "[39md" ++ esc() ++ "[0m",
+      ], "")
+      assert_doc_ansi_eq(expected, doc)
+    }
+
+    it("renders background helpers and stacked emphasis") {
+      doc = StyledDoc::inline_concat([
+        StyledDoc::bg_black(StyledDoc::text("0")),
+        StyledDoc::bg_red(StyledDoc::text("1")),
+        StyledDoc::bg_green(StyledDoc::text("2")),
+        StyledDoc::bg_yellow(StyledDoc::text("3")),
+        StyledDoc::bg_blue(
+          StyledDoc::italic(
+            StyledDoc::underline(
+              StyledDoc::dim(StyledDoc::yellow(StyledDoc::text("4"))),
+            ),
+          ),
+        ),
+        StyledDoc::bg_magenta(StyledDoc::text("5")),
+        StyledDoc::bg_cyan(StyledDoc::text("6")),
+        StyledDoc::bg_white(StyledDoc::text("7")),
+        StyledDoc::bg_default(StyledDoc::bold(StyledDoc::text("8"))),
+      ])
+      expected = String::join([
+        esc() ++ "[40m0" ++ esc() ++ "[0m",
+        esc() ++ "[41m1" ++ esc() ++ "[0m",
+        esc() ++ "[42m2" ++ esc() ++ "[0m",
+        esc() ++ "[43m3" ++ esc() ++ "[0m",
+        esc() ++ "[2;4;3;33;44m4" ++ esc() ++ "[0m",
+        esc() ++ "[45m5" ++ esc() ++ "[0m",
+        esc() ++ "[46m6" ++ esc() ++ "[0m",
+        esc() ++ "[47m7" ++ esc() ++ "[0m",
+        esc() ++ "[1;49m8" ++ esc() ++ "[0m",
+      ], "")
+      assert_doc_ansi_eq(expected, doc)
+    }
+
+    it("does not add escape codes to plain text or empty styled segments") {
+      empty_styled = StyledDoc::style(
+        StyledDoc::text(""),
+        StyledDocStyle(Option::Some(StyledDocColor::Red), Option::None, True, False, False, False),
+      )
       assert_doc_ansi_eq("plain", StyledDoc::text("plain"))
+      assert_doc_ansi_eq("", empty_styled)
     }
   }
 

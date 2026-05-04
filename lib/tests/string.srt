@@ -1,15 +1,41 @@
+include "./schema/string_schema.srt"
+
 import String;
 import Test;
 
 test("String") {
+  describe("emptiness helpers") {
+    it("detects empty strings") { assert_true(is_empty("")) }
+    it("detects non-empty strings") { assert_true(non_empty("surtr")) }
+    it("reports False for the opposite branch") {
+      assert_false(is_empty("surtr"))
+      assert_false(non_empty(""))
+    }
+  }
+
   describe("len") {
     it("counts ascii characters") { assert_eq(5, len("surtr")) }
     it("counts unicode surface characters") { assert_eq(2, len("あい")) }
   }
 
+  describe("surround") {
+    it("wraps a string with prefix and suffix") {
+      assert_eq("[core]", surround("core", "[", "]"))
+    }
+  }
+
+  describe("join") {
+    it("joins parts with separators") { assert_eq("a,b,c", join(["a", "b", "c"], ",")) }
+    it("returns an empty string for empty input") { assert_eq("", join([], ",")) }
+  }
+
   describe("repeat") {
     it("repeats a string") {
       assert_eq("Ok(\"nanana\")", inspect(repeat("na", 3)))
+    }
+
+    it("accepts zero repeats") {
+      assert_eq("Ok(\"\")", inspect(repeat("na", 0)))
     }
 
     it("rejects negative counts") {
@@ -84,6 +110,31 @@ test("String") {
     it("rejects a missing substring") { assert_false(contains("surtr", "zzz")) }
   }
 
+  describe("replace") {
+    it("replaces each matched substring") { assert_eq("baNANA", replace("banana", "na", "NA")) }
+    it("leaves input unchanged for an empty separator") { assert_eq("surtr", replace("surtr", "", "-")) }
+  }
+
+  describe("split") {
+    it("keeps empty segments around matches") {
+      assert_eq("[\"a\", \"\", \"b\", \"\"]", inspect(split("a,,b,", ",")))
+    }
+
+    it("splits into characters on an empty separator") {
+      assert_eq("[\"s\", \"u\", \"r\", \"t\", \"r\"]", inspect(split("surtr", "")))
+    }
+
+    it("returns the original string when the separator is absent") {
+      assert_eq("[\"surtr\"]", inspect(split("surtr", "/")))
+    }
+  }
+
+  describe("lines") {
+    it("returns no lines for empty input") { assert_eq("[]", inspect(lines(""))) }
+    it("splits newline-terminated text") { assert_eq("[\"a\", \"b\"]", inspect(lines("a\nb\n"))) }
+    it("normalizes CRLF line endings") { assert_eq("[\"a\", \"b\"]", inspect(lines("a\r\nb\r\n"))) }
+  }
+
   describe("chars") {
     it("splits into single-character strings") {
       assert_eq("[\"あ\", \"b\"]", inspect(chars("あb")))
@@ -93,6 +144,10 @@ test("String") {
   describe("from_chars") {
     it("rebuilds a valid character list") {
       assert_eq("Ok(\"あb\")", inspect(from_chars(["あ", "b"])))
+    }
+
+    it("accepts an empty character list") {
+      assert_eq("Ok(\"\")", inspect(from_chars([])))
     }
 
     it("rejects multi-character items") {
@@ -147,6 +202,13 @@ test("String") {
         inspect(from_codepoints([128], StringEncoding::Ascii)),
       )
     }
+
+    it("rejects invalid utf8 byte sequences") {
+      assert_eq(
+        "Err(InvalidStringEncoding(\"invalid UTF-8 byte sequence at index 0 (len 1)\"))",
+        inspect(from_codepoints([255], StringEncoding::Utf8)),
+      )
+    }
   }
 
   describe("trim") {
@@ -160,12 +222,36 @@ test("String") {
       try_from("1", Int) |>= assert_eq(1)
     }
 
+    it("parses signed integers") {
+      try_from("-12", Int) |>= assert_eq(-12)
+    }
+
     it("reports invalid integer text") {
       assert_err_contains("invalid integer literal", try_from("bad", Int))
     }
 
     it("parses booleans") {
       try_from("true", Boolean) |>= assert_eq(True)
+    }
+
+    it("parses alternate boolean casing") {
+      try_from("False", Boolean) |>= assert_eq(False)
+    }
+
+    it("reports invalid boolean text") {
+      assert_err_contains("invalid boolean literal", try_from("maybe", Boolean))
+    }
+  }
+
+  describe("trait integration") {
+    it("converts user wrappers through From") {
+      slug = from("  surtr code  ", Slug)
+      assert_eq("surtr-code", to_string(slug))
+    }
+
+    it("reuses string helpers through wrapper methods") {
+      slug = from("  surtr code  ", Slug)
+      assert_eq("[\"surtr\", \"code\"]", inspect(Slug::segments(slug)))
     }
   }
 }

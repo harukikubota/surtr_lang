@@ -1,0 +1,10 @@
+deferror ApiError(detail: String) {
+  detail
+}
+
+defmod ErrorSchema {
+  def fallback() -> Result<String> {
+    print("fallback")
+    Ok("fallback")
+  }
+}

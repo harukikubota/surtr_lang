@@ -1,0 +1,54 @@
+import Test;
+
+test("Random") {
+  describe("host-seeded helpers") {
+    it("returns values inside half-open ranges") {
+      a =? Random::int_until(10)
+      b =? Random::int_range(-3, 3)
+      assert_eq((True, True, True, True), (a >= 0, a < 10, b >= -3, b < 3))
+    }
+
+    it("rejects empty ranges") {
+      assert_eq(
+        (
+          "Err(InvalidRandomRange(\"random range must be non-empty: 0..0\"))",
+          "Err(InvalidRandomRange(\"random range must be non-empty: 4..4\"))",
+        ),
+        (
+          inspect(Random::int_until(0)),
+          inspect(Random::int_range(4, 4)),
+        ),
+      )
+    }
+  }
+
+  describe("seeded generators") {
+    it("replays the same first draw for the same seed") {
+      rng0 = Random::seed(123)
+      (v1, rng1) =? Random::next_int_range(rng0, -100, 100)
+      (v1_again, _) =? Random::next_int_range(Random::seed(123), -100, 100)
+      assert_eq((True, True, True), (v1 == v1_again, v1 >= -100, v1 < 100))
+    }
+
+    it("threads the returned generator into the next draw") {
+      rng0 = Random::seed(123)
+      (_, rng1) =? Random::next_int_range(rng0, -100, 100)
+      (v2, _) =? Random::next_int_until(rng1, 10)
+      assert_eq((True, True), (v2 >= 0, v2 < 10))
+    }
+
+    it("rejects invalid seeded bounds") {
+      rng0 = Random::seed(123)
+      assert_eq(
+        (
+          "Err(InvalidRandomRange(\"random range must be non-empty: 0..0\"))",
+          "Err(InvalidRandomRange(\"random range must be non-empty: 4..4\"))",
+        ),
+        (
+          inspect(Random::next_int_until(rng0, 0)),
+          inspect(Random::next_int_range(Random::seed(123), 4, 4)),
+        ),
+      )
+    }
+  }
+}

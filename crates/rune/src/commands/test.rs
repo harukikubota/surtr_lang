@@ -7,7 +7,10 @@ use eldr::vm::{VmTestDiagnostic, VmTestEvent, VmTestEventKind};
 use forge::bytecode::{stable_hash_hex, Bytecode};
 use spire::ast::Span;
 
-use crate::compile::{compile_source, ScriptCompilePlan};
+use crate::compile::{
+    collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
+    script_plan_error_as_rune_error, IncludeDirective,
+};
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
 const TEST_CACHE_VERSION: &str = "surtr-test-dsl-v2";
@@ -273,6 +276,7 @@ fn collect_all_test_selectors() -> RuneResult<Vec<String>> {
 
     let selectors = paths
         .into_iter()
+        .filter(|path| !is_schema_test_path(&root, path))
         .filter(|path| path.file_name().and_then(|name| name.to_str()) != Some("prelude.srt"))
         .filter_map(|path| selector_for_test_path(&root, &path))
         .collect();
@@ -315,46 +319,27 @@ fn selector_for_test_path(root: &Path, path: &Path) -> Option<String> {
     Some(display_path(&without_extension))
 }
 
-fn collect_test_compile_sources(
-    script: &TestScript,
-    env: ExecutionEnv,
-) -> RuneResult<xldr::CompileSources> {
-    let module_inputs = xldr::collect_additional_default_std_module_inputs().map_err(|e| {
-        RuneError::message(
-            1,
-            format!(
-                "{}: failed to collect module sources: {}",
-                env.command_name(),
-                e
-            ),
-        )
-    })?;
-    let module_sources = xldr::collect_module_sources_with_module_stages(&[module_inputs])
-        .map_err(|e| {
-            RuneError::message(
-                1,
-                format!(
-                    "{}: failed to collect test module sources: {}",
-                    env.command_name(),
-                    e
-                ),
-            )
-        })?;
-    Ok(xldr::compose_script_compile_sources(
-        &script.file_path,
-        &script.source,
-        module_sources,
-    ))
+fn is_schema_test_path(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .is_some_and(|component| component.as_os_str() == "schema")
 }
 
 fn compile_test_script(script: &TestScript, env: ExecutionEnv) -> RuneResult<Bytecode> {
-    let cache_path = cached_eldr_path(script)?;
+    let compile_plan = prepare_script_compile_plan(&script.file_path, &script.source, None)
+        .map_err(|e| script_plan_error_as_rune_error(&script.file_path, &script.source, e))?;
+    let cache_path = cached_eldr_path(script, &compile_plan.include_directives)?;
     if let Some(bytecode) = load_cached_bytecode(&cache_path)? {
         return Ok(bytecode);
     }
 
-    let compile_plan = ScriptCompilePlan::plain(script.source.clone());
-    let compile_sources = collect_test_compile_sources(script, env)?;
+    let compile_sources = collect_default_script_compile_sources(
+        env,
+        &script.file_path,
+        &compile_plan.source_for_parse,
+        &compile_plan.include_directives,
+    )?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     store_cached_bytecode(&cache_path, &bytecode)?;
     Ok(bytecode)
@@ -408,7 +393,10 @@ fn library_sources_fingerprint() -> Result<String, RuneError> {
     Ok(stable_hash_hex(&payload))
 }
 
-fn cached_eldr_path(script: &TestScript) -> Result<PathBuf, RuneError> {
+fn cached_eldr_path(
+    script: &TestScript,
+    include_directives: &[IncludeDirective],
+) -> Result<PathBuf, RuneError> {
     let mut key = String::new();
     key.push_str(TEST_CACHE_VERSION);
     key.push('\x1f');
@@ -419,7 +407,47 @@ fn cached_eldr_path(script: &TestScript) -> Result<PathBuf, RuneError> {
     key.push_str(&script.file_path);
     key.push('\x1f');
     key.push_str(&stable_hash_hex(&script.source));
+    key.push('\x1f');
+    key.push_str(&include_sources_fingerprint(&script.file_path, include_directives)?);
     Ok(fixture_cache_root().join(format!("{}.eldr", stable_hash_hex(&key))))
+}
+
+fn include_sources_fingerprint(
+    script_file_path: &str,
+    include_directives: &[IncludeDirective],
+) -> Result<String, RuneError> {
+    let mut payload = String::new();
+    for directive in include_directives {
+        let resolved_path = resolve_include_file_path(script_file_path, &directive.file_path);
+        let source = fs::read_to_string(&resolved_path).map_err(|e| {
+            RuneError::message(
+                1,
+                format!(
+                    "test: failed to read include source {}: {}",
+                    resolved_path.display(),
+                    e
+                ),
+            )
+        })?;
+        payload.push_str(&display_path(&resolved_path));
+        payload.push('\x1f');
+        payload.push_str(&stable_hash_hex(&source));
+        payload.push('\x1e');
+    }
+    Ok(stable_hash_hex(&payload))
+}
+
+fn resolve_include_file_path(script_file_path: &str, raw_path: &str) -> PathBuf {
+    let candidate = Path::new(raw_path);
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
+    }
+
+    let base_dir = Path::new(script_file_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    base_dir.join(candidate)
 }
 
 fn load_cached_bytecode(cache_path: &Path) -> RuneResult<Option<Bytecode>> {

@@ -1,16 +1,7 @@
+include "./schema/function_schema.srt"
+
+import FunctionSchema::{double, inc, show_int};
 import Test;
-
-def inc(x: Int) -> Int {
-  x + 1
-}
-
-def double(x: Int) -> Int {
-  x * 2
-}
-
-def show_int(x: Int) -> String {
-  to_string(x)
-}
 
 test("Function") {
   describe("plain composition laws") {
@@ -38,6 +29,22 @@ test("Function") {
       left = (&inc >> &double) >> &show_int
       right = &inc >> (&double >> &show_int)
       assert_eq(left(2), right(2))
+    }
+  }
+
+  describe("trait integration") {
+    it("Composable::compose matches >>") {
+      direct = Composable::compose(&inc, &double)
+      operator = &inc >> &double
+      assert_eq(6, direct(2))
+      assert_eq(direct(2), operator(2))
+    }
+
+    it("id composes on both sides through the trait") {
+      left = Composable::compose(&id, &inc)
+      right = Composable::compose(&inc, &id)
+      assert_eq(inc(4), left(4))
+      assert_eq(inc(4), right(4))
     }
   }
 }

@@ -1,4 +1,12 @@
+include "./schema/int_schema.srt"
+
 import Int::{
+  abs,
+  min,
+  max,
+  sign,
+  is_even,
+  is_odd,
   bit_and,
   bit_or,
   bit_xor,
@@ -32,6 +40,27 @@ import Int::{
 import Test;
 
 test("Int") {
+  describe("numeric helpers") {
+    it("supports safe division and modulo") {
+      assert_eq(
+        ("Ok(4)", "Ok(1)", "Err(ZeroDivisionError(\"division by zero\"))"),
+        (
+          inspect(Int::safe_div(8, 2)),
+          inspect(Int::safe_mod(7, 3)),
+          inspect(Int::safe_div(8, 0))
+        ),
+      )
+    }
+
+    it("supports abs min max and sign") {
+      assert_eq((5, -2, 4, -1, 0, 1), (abs(-5), min(4, -2), max(4, -2), sign(-12), sign(0), sign(9)))
+    }
+
+    it("supports parity helpers") {
+      assert_eq((True, False, False), (is_even(8), is_odd(8), is_even(-3)))
+    }
+  }
+
   describe("bit_and") {
     it("combines shared bits") { assert_eq(2, bit_and(6, 3)) }
   }
@@ -39,10 +68,15 @@ test("Int") {
   describe("parse") {
     it("parses decimal text") { assert_eq("Ok(123)", inspect(parse("123"))) }
     it("aliases parse_dec") { assert_eq(inspect(parse_dec("123")), inspect(parse("123"))) }
+    it("accepts signed decimal text") { assert_eq("Ok(-42)", inspect(parse("-42"))) }
   }
 
   describe("parse_dec") {
     it("parses plain decimal digits") { assert_eq("Ok(123)", inspect(parse_dec("123"))) }
+    it("accepts an explicit plus sign") { assert_eq("Ok(12)", inspect(parse_dec("+12"))) }
+    it("rejects sign-only input") {
+      assert_eq("Err(ParseIntError(\"sign without digits\"))", inspect(parse_dec("-")))
+    }
     it("rejects literal prefixes") {
       assert_eq(
         "Err(ParseIntError(\"invalid digit for decimal integer: x at index 1\"))",
@@ -54,6 +88,7 @@ test("Int") {
   describe("parse_hex") {
     it("parses lowercase digits") { assert_eq("Ok(255)", inspect(parse_hex("ff"))) }
     it("parses uppercase digits") { assert_eq("Ok(255)", inspect(parse_hex("FF"))) }
+    it("accepts a leading sign") { assert_eq("Ok(-255)", inspect(parse_hex("-ff"))) }
     it("rejects prefixed input") {
       assert_eq(
         "Err(ParseIntError(\"invalid digit for hexadecimal integer: x at index 1\"))",
@@ -64,6 +99,7 @@ test("Int") {
 
   describe("parse_oct") {
     it("parses octal digits") { assert_eq("Ok(15)", inspect(parse_oct("17"))) }
+    it("accepts signed octal input") { assert_eq("Ok(-15)", inspect(parse_oct("-17"))) }
     it("rejects invalid digits") {
       assert_eq(
         "Err(ParseIntError(\"invalid digit for octal integer: 8 at index 1\"))",
@@ -74,6 +110,7 @@ test("Int") {
 
   describe("parse_bin") {
     it("parses binary digits") { assert_eq("Ok(13)", inspect(parse_bin("1101"))) }
+    it("accepts a leading sign") { assert_eq("Ok(-13)", inspect(parse_bin("-1101"))) }
     it("rejects invalid digits") {
       assert_eq(
         "Err(ParseIntError(\"invalid digit for binary integer: 2 at index 2\"))",
@@ -87,12 +124,22 @@ test("Int") {
       assert_eq("Ok(255)", inspect(parse_literal("0xff")))
     }
 
+    it("parses octal and binary literals") {
+      assert_eq("Ok(15)", inspect(parse_literal("0o17")))
+      assert_eq("Ok(13)", inspect(parse_literal("0b1101")))
+    }
+
     it("parses explicit decimal literals") {
       assert_eq("Ok(123)", inspect(parse_literal("0d123")))
     }
 
     it("treats unprefixed literals as decimal") {
       assert_eq("Ok(123)", inspect(parse_literal("123")))
+    }
+
+    it("accepts signed literals") {
+      assert_eq("Ok(-255)", inspect(parse_literal("-0xff")))
+      assert_eq("Ok(13)", inspect(parse_literal("+0b1101")))
     }
 
     it("rejects unknown prefixes") {
@@ -111,6 +158,10 @@ test("Int") {
 
     it("rejects empty input") {
       assert_eq("Err(ParseIntLiteralError(\"empty integer literal input\"))", inspect(parse_literal("")))
+    }
+
+    it("rejects sign-only input") {
+      assert_eq("Err(ParseIntLiteralError(\"sign without digits\"))", inspect(parse_literal("-")))
     }
   }
 
@@ -183,6 +234,12 @@ test("Int") {
   describe("mask") {
     it("builds a W8 mask") { assert_eq("Ok(255)", inspect(mask(BitWidth::W8))) }
     it("builds a custom-width mask") { assert_eq("Ok(31)", inspect(mask(BitWidth::Any(5)))) }
+    it("rejects invalid custom widths") {
+      assert_eq(
+        "Err(InvalidBitWidth(\"bit width must be positive: 0\"))",
+        inspect(mask(BitWidth::Any(0))),
+      )
+    }
   }
 
   describe("wrap_unsigned") {
@@ -192,6 +249,13 @@ test("Int") {
 
     it("wraps overflowing values") {
       assert_eq("Ok(4)", inspect(wrap_unsigned(260, BitWidth::W8)))
+    }
+
+    it("rejects invalid widths") {
+      assert_eq(
+        "Err(InvalidBitWidth(\"bit width must be positive: 0\"))",
+        inspect(wrap_unsigned(5, BitWidth::Any(0))),
+      )
     }
   }
 
@@ -203,6 +267,10 @@ test("Int") {
     it("wraps positive values with sign bit set") {
       assert_eq("Ok(-127)", inspect(wrap_signed(129, BitWidth::W8)))
     }
+
+    it("keeps in-range signed values unchanged") {
+      assert_eq("Ok(127)", inspect(wrap_signed(127, BitWidth::W8)))
+    }
   }
 
   describe("bit_not_in") {
@@ -213,11 +281,25 @@ test("Int") {
     it("inverts within custom width") {
       assert_eq("Ok(30)", inspect(bit_not_in(1, BitWidth::Any(5))))
     }
+
+    it("rejects invalid widths") {
+      assert_eq(
+        "Err(InvalidBitWidth(\"bit width must be positive: 0\"))",
+        inspect(bit_not_in(1, BitWidth::Any(0))),
+      )
+    }
   }
 
   describe("test_bit_in") {
     it("reads an in-range fixed-width bit") {
       assert_eq("Ok(True)", inspect(test_bit_in(5, 2, BitWidth::W8)))
+    }
+
+    it("rejects negative indexes") {
+      assert_eq(
+        "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))",
+        inspect(test_bit_in(5, -1, BitWidth::W8)),
+      )
     }
 
     it("rejects out-of-range indexes") {
@@ -246,6 +328,13 @@ test("Int") {
       assert_eq("Ok(5)", inspect(clear_bit_in(7, 1, BitWidth::W8)))
     }
 
+    it("rejects negative indexes") {
+      assert_eq(
+        "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))",
+        inspect(clear_bit_in(0, -1, BitWidth::W8)),
+      )
+    }
+
     it("rejects out-of-range indexes") {
       assert_eq(
         "Err(BitIndexOutOfRange(\"bit index 8 out of range for width 8\"))",
@@ -257,6 +346,13 @@ test("Int") {
   describe("toggle_bit_in") {
     it("toggles an in-range bit") {
       assert_eq("Ok(4)", inspect(toggle_bit_in(5, 0, BitWidth::W8)))
+    }
+
+    it("rejects negative indexes") {
+      assert_eq(
+        "Err(NegativeBitIndex(\"bit index must be non-negative: -1\"))",
+        inspect(toggle_bit_in(5, -1, BitWidth::W8)),
+      )
     }
 
     it("rejects out-of-range indexes") {
@@ -285,6 +381,10 @@ test("Int") {
       assert_eq("Ok(127)", inspect(shr_logical_in(-1, 1, BitWidth::W8)))
     }
 
+    it("zeros values when shifting by the width") {
+      assert_eq("Ok(0)", inspect(shr_logical_in(255, 8, BitWidth::W8)))
+    }
+
     it("rejects negative shifts") {
       assert_eq(
         "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))",
@@ -301,11 +401,19 @@ test("Int") {
     it("rotates left within custom widths") {
       assert_eq("Ok(3)", inspect(rotl_in(17, 1, BitWidth::Any(5))))
     }
+
+    it("normalizes rotation counts") {
+      assert_eq("Ok(3)", inspect(rotl_in(129, 9, BitWidth::W8)))
+    }
   }
 
   describe("rotr_in") {
     it("rotates right within W8") {
       assert_eq("Ok(192)", inspect(rotr_in(129, 1, BitWidth::W8)))
+    }
+
+    it("normalizes rotation counts") {
+      assert_eq("Ok(192)", inspect(rotr_in(129, 9, BitWidth::W8)))
     }
 
     it("rejects negative shifts") {
@@ -337,6 +445,19 @@ test("Int") {
         "Err(NegativeShiftCount(\"shift amount must be non-negative: -1\"))",
         inspect(shr(1, -1)),
       )
+    }
+  }
+
+  describe("trait integration") {
+    it("normalizes user-defined bit packs through impl Trait") {
+      packed = Permissions::new(260, BitWidth::W8)
+      normalized =? BitPack::normalize(packed)
+      assert_eq("Permissions(bits: 4, width: BitWidth::W8)", inspect(normalized))
+    }
+
+    it("inspects user-defined bit packs through impl Trait") {
+      packed = Permissions::new(5, BitWidth::W8)
+      assert_eq("Ok(True)", inspect(BitPack::lowest_bit_on(packed)))
     }
   }
 }

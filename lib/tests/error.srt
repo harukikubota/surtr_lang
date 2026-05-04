@@ -1,0 +1,92 @@
+include "./schema/error_schema.srt"
+
+import ErrorSchema::fallback;
+import Test;
+
+test("Error") {
+  describe("core surface") {
+    it("exposes kind message and formatted text") {
+      assert_eq(
+        (
+          "NoneError",
+          "None Value.",
+          "Error: NoneError: None Value.",
+          "ZeroDivisionError",
+          "division by zero",
+          "Error: ZeroDivisionError: division by zero",
+        ),
+        (
+          Error::kind(NoneError),
+          Error::message(NoneError),
+          Error::format(NoneError),
+          Error::kind(ZeroDivisionError),
+          Error::message(ZeroDivisionError),
+          Error::format(ZeroDivisionError),
+        ),
+      )
+    }
+
+    it("formats user-defined errors and preserves cause chains") {
+      chained = Result::cause(Err(NoneError), ApiError("api down"))
+      assert_eq("Err(ApiError(\"api down\"))\n|_ NoneError(\"None Value.\")", inspect(chained))
+      assert_eq("api down", Error::message(ApiError("api down")))
+    }
+
+    it("renders through Show and From<String>") {
+      match Err(NoneError) {
+        Ok(_) => assert_true(False),
+        Err(err) => assert_eq(
+          ("NoneError(\"None Value.\")", "NoneError(\"None Value.\")"),
+          (to_string(err), from(err, String)),
+        ),
+      }
+    }
+  }
+
+  describe("pattern matching") {
+    it("matches errors through the shared Error abstraction") {
+      assert_eq(
+        "matched:ZeroDivisionError\nError: ZeroDivisionError: division by zero",
+        match Err(ZeroDivisionError) {
+          Ok(value) => value,
+          Err(NoneError | ZeroDivisionError @ e: Error) => "matched:" ++ Error::kind(e) ++ "\n" ++ Error::format(e),
+          Err(err) => "other:" ++ Error::kind(err),
+        },
+      )
+    }
+  }
+
+  describe("result recovery helpers") {
+    it("runs fallback only for Err in recover") {
+      capture_stdout()
+      ok_result = Result::recover(Ok("ok"), &fallback)
+      err_result = Result::recover(Err(NoneError), &fallback)
+      assert_eq(
+        ("Ok(\"ok\")", "Ok(\"fallback\")", ["fallback"]),
+        (inspect(ok_result), inspect(err_result), capture_stdout()),
+      )
+    }
+
+    it("recovers only matching error kinds") {
+      capture_stdout()
+      retried = Result::recover_kind(Err(NoneError), NoneError, {|err|
+        print("retry:" ++ Error::kind(err))
+        print(Error::format(err))
+        Ok("retry")
+      })
+      untouched = Result::recover_kind(Err(ZeroDivisionError), NoneError, {|err|
+        print("retry:" ++ Error::kind(err))
+        print(Error::format(err))
+        Ok("retry")
+      })
+      assert_eq(
+        (
+          "Ok(\"retry\")",
+          "Err(ZeroDivisionError(\"division by zero\"))",
+          ["retry:NoneError", "Error: NoneError: None Value."],
+        ),
+        (inspect(retried), inspect(untouched), capture_stdout()),
+      )
+    }
+  }
+}

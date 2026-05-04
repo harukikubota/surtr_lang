@@ -1,0 +1,78 @@
+include "./schema/option_schema.srt"
+
+import OptionSchema::{ensure_short_name, maybe_profile};
+import Test;
+
+test("Option") {
+  describe("predicates and constructors") {
+    it("reports some and none states") {
+      assert_eq((True, False, False, True), (
+        Option::is_some(Option::Some(7)),
+        Option::is_some(Option::None),
+        Option::is_none(Option::Some(7)),
+        Option::is_none(Option::None),
+      ))
+    }
+
+    it("wrap builds Some") {
+      assert_eq("Option::Some(\"wrapped\")", inspect(Option::wrap("wrapped")))
+    }
+  }
+
+  describe("conversions") {
+    it("converts option into result") {
+      assert_eq("Ok(7)", inspect(from(Option::Some(7), Result)))
+    }
+
+    it("converts none into none error") {
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(from(Option::None, Result)))
+    }
+
+    it("converts result into option") {
+      assert_eq("Option::Some(9)", inspect(from(Ok(9), Option)))
+    }
+
+    it("drops concrete errors when converting err into option") {
+      assert_eq("Option::None", inspect(from(Err(NoneError), Option)))
+    }
+  }
+
+  describe("trait integrations") {
+    it("maps with functor operator") {
+      assert_eq("Option::Some(8)", inspect(Option::Some(7) |*> {|value| value + 1}))
+    }
+
+    it("preserves None under map") {
+      assert_eq("Option::None", inspect(Option::None |*> {|value| value + 1}))
+    }
+
+    it("chains with option-producing helpers") {
+      assert_eq("Option::Some(14)", inspect(Option::Some(7) |>= {|value| if(value < 10, Option::Some(value * 2), Option::None)}))
+    }
+
+    it("short-circuits None during chain") {
+      assert_eq("Option::None", inspect(Option::None |>= {|value| if(value < 10, Option::Some(value * 2), Option::None)}))
+    }
+
+    it("supports lifted composition") {
+      lifted = {|value| if(value < 10, Option::Some(value + 1), Option::None)} >* {|value| value + 1}
+      assert_eq("Option::Some(9)", inspect(lifted(7)))
+    }
+
+    it("supports kleisli composition") {
+      chained = {|value| if(value < 10, Option::Some(value + 1), Option::None)} >=> {|value| if(value < 10, Option::Some(value * 2), Option::None)}
+      assert_eq("Option::Some(10)", inspect(chained(4)))
+    }
+
+    it("returns none from composed option flow when the first step stops") {
+      chained = {|value| if(value < 10, Option::Some(value + 1), Option::None)} >=> {|value| if(value < 10, Option::Some(value * 2), Option::None)}
+      assert_eq("Option::None", inspect(chained(10)))
+    }
+
+    it("supports user-defined record pipelines") {
+      flow = &maybe_profile >=> &ensure_short_name
+      assert_eq("Option::Some(DraftProfile(name: \"surtr\"))", inspect(flow(" surtr ")))
+      assert_eq("Option::None", inspect(flow("a-very-long-profile-name")))
+    }
+  }
+}

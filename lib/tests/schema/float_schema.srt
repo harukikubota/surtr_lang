@@ -1,0 +1,21 @@
+defstruct Score {
+  value: Float,
+}
+
+impl Show for Score {
+  def to_string(self: Self) -> String {
+    "Score(" ++ inspect(self.value) ++ ")"
+  }
+}
+
+impl Score {
+  def new(value: Float) -> Self {
+    Score { value: value }
+  }
+}
+
+defmod FloatSchema {
+  def safe_ratio<$N: Numeric>(left: $N, right: $N) -> Result<$N> {
+    Numeric::safe_div(left, right)
+  }
+}

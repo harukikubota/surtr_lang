@@ -1,0 +1,20 @@
+defstruct Gate {
+  allow: Boolean,
+  audit: Boolean,
+}
+
+impl Show for Gate {
+  def to_string(self: Self) -> String {
+    "Gate(allow=" ++ inspect(self.allow) ++ ", audit=" ++ inspect(self.audit) ++ ")"
+  }
+}
+
+impl Gate {
+  def new(allow: Boolean, audit: Boolean) -> Self {
+    Gate { allow: allow, audit: audit }
+  }
+
+  def permits(self: Self) -> Boolean {
+    Boolean::implies(self.audit, self.allow)
+  }
+}

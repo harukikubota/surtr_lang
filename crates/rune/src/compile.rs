@@ -18,17 +18,6 @@ pub(crate) struct ScriptCompilePlan {
     pub(crate) include_directives: Vec<IncludeDirective>,
 }
 
-impl ScriptCompilePlan {
-    pub(crate) fn plain(source_for_parse: String) -> Self {
-        Self {
-            source_for_parse,
-            selected_entry_name: None,
-            normalized_entrypoint: None,
-            include_directives: Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct IncludeDirective {
     pub(crate) file_path: String,

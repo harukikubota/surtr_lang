@@ -1,0 +1,63 @@
+include "./schema/config_schema.srt"
+
+import ConfigSchema::app_config;
+import Test;
+
+test("Config") {
+  describe("new") {
+    it("starts with the canonical defaults") {
+      assert_eq(
+        "Config(name: \"App\", entrypoint: \"Main::main\", paths: [])",
+        inspect(Config::new("App")),
+      )
+    }
+  }
+
+  describe("entry_fun") {
+    it("updates the entrypoint without changing the original value") {
+      original = Config::new("Cli")
+      updated = Config::entry_fun(original, "Cli::main")
+      assert_eq(
+        "Config(name: \"Cli\", entrypoint: \"Main::main\", paths: [])",
+        inspect(original),
+      )
+      assert_eq(
+        "Config(name: \"Cli\", entrypoint: \"Cli::main\", paths: [])",
+        inspect(updated),
+      )
+    }
+  }
+
+  describe("add_path") {
+    it("appends search paths in order") {
+      cfg = Config::add_path(Config::add_path(Config::new("Fmt"), "./lib"), "./tests")
+      assert_eq(
+        "Config(name: \"Fmt\", entrypoint: \"Main::main\", paths: [\"./lib\", \"./tests\"])",
+        inspect(cfg),
+      )
+    }
+  }
+
+  describe("realistic fixtures") {
+    it("supports staged builder-style setup") {
+      assert_eq(
+        "Config(name: \"App\", entrypoint: \"App::main\", paths: [\"./lib\"])",
+        inspect(app_config()),
+      )
+    }
+  }
+
+  describe("lens integration") {
+    it("updates the entrypoint through a root lens") {
+      updated =? Lens::set(Config.entrypoint, Config::new("Lens"), "Lens::main")
+      assert_eq("Lens::main", updated.entrypoint)
+    }
+
+    it("updates paths through Lens::over") {
+      updated =? Lens::over(Config.paths, Config::new("Lens"), {|paths|
+        Ok(List::append(paths, ["./src"]))
+      })
+      assert_eq(["./src"], updated.paths)
+    }
+  }
+}

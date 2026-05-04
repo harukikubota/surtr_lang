@@ -1,0 +1,27 @@
+defstruct IssueRef {
+  team: String,
+  id: Int,
+}
+
+impl Show for IssueRef {
+  def to_string(self: Self) -> String {
+    self.team ++ "#" ++ inspect(self.id)
+  }
+}
+
+impl IssueRef {
+  def new(team: String, id: Int) -> Self {
+    IssueRef { team: team, id: id }
+  }
+}
+
+defmod RegexSchema {
+  def parse_issue_ref(text: String) -> Result<IssueRef> {
+    re =? Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
+    caps =? Regex::captures(re, text)
+    team =? RegexCaptures::get_name(caps, "team")
+    id_text =? RegexCaptures::get_name(caps, "id")
+    id =? try_from(id_text, Int)
+    Ok(IssueRef::new(team, id))
+  }
+}

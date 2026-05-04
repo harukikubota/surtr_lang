@@ -1,0 +1,62 @@
+include "./schema/regex_schema.srt"
+
+import RegexSchema::parse_issue_ref;
+import Test;
+
+test("Regex") {
+  describe("compile and match") {
+    it("matches realistic issue identifiers") {
+      re =? Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
+      assert_true(Regex::is_match(re, "issue-runtime-42"))
+    }
+
+    it("rejects non-matching text") {
+      re =? Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
+      assert_false(Regex::is_match(re, "runtime-42"))
+    }
+  }
+
+  describe("captures and spans") {
+    it("returns named capture values") {
+      re =? Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
+      caps =? Regex::captures(re, "issue-runtime-42")
+      assert_eq(["team", "id"], Regex::group_names(re))
+      assert_eq("issue-runtime-42", RegexCaptures::whole(caps))
+      assert_eq(3, RegexCaptures::capture_count(caps))
+      RegexCaptures::get_name(caps, "team") |>= assert_eq("runtime")
+      RegexCaptures::get(caps, 2) |>= assert_eq("42")
+    }
+
+    it("returns the first match span") {
+      re =? Regex::compile("issue-(?<team>[a-z]+)-(?<id>[0-9]+)")
+      found =? Regex::find(re, "open issue-runtime-42 now")
+      assert_eq("issue-runtime-42", RegexMatch::text(found))
+      assert_eq(5, RegexMatch::start(found))
+      assert_eq(21, RegexMatch::end(found))
+    }
+  }
+
+  describe("rewrite helpers") {
+    it("splits and replaces repeated separators") {
+      re =? Regex::compile("-+")
+      assert_eq(["surtr", "compiler", "worker"], Regex::split(re, "surtr---compiler-worker"))
+      assert_eq("surtr/compiler/worker", Regex::replace_all(re, "surtr---compiler-worker", "/"))
+      assert_eq("surtr/compiler-worker", Regex::replace(re, "surtr---compiler-worker", "/"))
+    }
+
+    it("escapes plain user text") {
+      assert_eq("issue\\-runtime\\+42\\?", Regex::escape("issue-runtime+42?"))
+    }
+  }
+
+  describe("trait integration") {
+    it("parses captures into user-defined records") {
+      issue =? parse_issue_ref("issue-runtime-42")
+      assert_eq("runtime#42", to_string(issue))
+    }
+
+    it("propagates no-match errors through the parser") {
+      assert_err_contains("NoneError", parse_issue_ref("runtime-42"))
+    }
+  }
+}

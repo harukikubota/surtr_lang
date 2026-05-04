@@ -1,24 +1,7 @@
+include "./schema/list_schema.srt"
+
+import ListSchema::{add_one, list_pure, list_step1, list_step2, list_step3};
 import Test;
-
-def add_one(x: Int) -> Int {
-  x + 1
-}
-
-def list_pure(x: Int) -> List<Int> {
-  [x]
-}
-
-def list_step1(x: Int) -> List<Int> {
-  [x, x + 10]
-}
-
-def list_step2(x: Int) -> List<Int> {
-  if(x < 10, [x * 2], [])
-}
-
-def list_step3(x: Int) -> List<Int> {
-  [x - 3]
-}
 
 test("List") {
   describe("monad laws") {
