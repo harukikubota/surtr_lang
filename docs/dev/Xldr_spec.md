@@ -128,25 +128,30 @@ REPL 実装は次の 3 層に分ける。
 |---|---|
 | `:help`, `:h [command]` | REPL コマンド一覧、または指定コマンドのヘルプを表示する |
 | `:quit`, `:exit` | REPL を終了する |
-| `:v <N>` | 行 `N` の結果を再表示する |
-| `:doc <symbol|query>` | 現在セッションで見える symbol の doc を表示する。名前だけなら定義 doc を返し、typed query (`gt(Int, Int)`, `ret |>= up`, `num |> (Int -> String)`) を与えたときは impl / 特化先 doc を返す。operator alias (`+`, `|>` など) は trait 定義 surface へ正規化する。`=` / `=?` は trait ではなく binding form として synthetic な Bind / SafeBind doc を返す。helper 名は current scope に従って解決し、auto-import helper の bare 名は trait 定義 surface を返してよいが、auto-import されない helper は qualified path か明示 import 後の short name でしか見えない。callable binding を与えた場合、capture は capture 元の doc を返し、匿名 closure は `Closure` type doc を返したうえで binding ごとの signature / captures / provenance を補足表示する。` :doc Ty` は常に type-bound doc を返し、`Ty(args...)` は constructor (`Ty::new`) doc、`Ty!()` は attached extractor (`Ty::deconstruct`) doc を返す。`Closure` も `:doc Ty` と同じ経路で表示できる。`Tuple` は doc 専用 surface とし、tuple shape、`Tuple._N` LensPath、`t._1` の値アクセス説明をまとめて返す。symbol が現在セッションで見えていても doc entry が無い場合は not found ではなく undocumented guidance を返す。bare symbol は current scope に従って解決し、auto-import されない helper は qualified path か明示 import 後のみ有効とする。 |
-| `:sig <symbol|query|expr>` | 現在セッションで見える関数の signature を表示する。名前だけなら定義 signature を返し、typed query を与えたときは specialized 表示を返す。trait / operator は「型なしなら定義、型ありなら実装」とし、`gt(Int, Int)`, `ret |>= up`, `:sig |>`, `:sig id(1)` のような query を受け付ける。operator alias は trait surface へ正規化し、`=` / `=?` は binding form surface (`pattern = expr`, `pattern =? expr`) を返す。helper 名は current scope に従って解決する。auto-import されない helper は qualified path か明示 import 後のみ bare 名で有効とする。bare `:sig Ty` は `Struct` / `Record` では constructor (`Ty::new`) signature、`Enum` では `* Ty::Variant(...)` 形式のコンストラクタ列挙を返す。`Ty(args...)` は constructor (`Ty::new`) signature、`Ty()` で 0 引数の直接一致が無い場合も constructor signature へ fallback する。`Ty!()` は attached extractor (`Ty::deconstruct`) signature として扱う。`Tuple` は doc 専用 surface なので `:sig Tuple` は無効とする。`pair._1` のような field access sugar は `Lens::view` へ展開した expression query として扱い、他の `Lens::view` / `Lens::set` / `Lens::over` / `Lens::over_result` / `Lens::compose` は通常の関数 query と同じ defined / specialized 表示を返す。 |
-| `:lens <binding|expr>` | LensPath binding または LensPath expression の canonical path、segment 一覧、停止しうるポイントを表示する。binding が deferred で未解決なら型は `Lens<_, _>` として表示し、segment の `source` / `focus` は `_` を使う。variant selector を含む path では `may stop at:` に variant mismatch を表示し、`Result<T>` source から始まる value-side lens query では `source - input already starts in Result context` を先頭の停止点として表示する。通常の plain value や callable には使えない。 |
+| `:v <N>` | 行 `N` の結果を再表示する。binding value の再表示は別 surface として扱い、query command には混ぜない。 |
+| `:doc <target>` | `@doc` を引く。定義 doc、型 doc、constructor / extractor doc、impl doc、binding 起点 doc を表示する。binding lookup を明示する時は `$name` を使う。typed query は `gt(Int, Int)`, `gt($left, $right)`, `ret |>= up`, `Result<Int> |>= &parse_int`, `xs |> map(&to_string)` のような command query 専用 surface に限定する。`literal` / 任意式 / generic type variable は query 引数に受けない。callable binding が closure のときは `Closure` type doc を返し、続けて binding 付属の `@doc` 本文と最小限の補足情報（signature / captures / provenance）を表示する。 |
+| `:sig <target>` | 関数、operator、constructor、extractor、enum 定義 surface、callable binding、impl specialization の signature を表示する。bare `:sig Ty` は constructor signature、`Ty(args...)` は constructor 照合、`Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。enum variant 単体は query target にしない。typed query は concrete type、visible binding、`$binding`、`CaptureQuery` のみを引数に受ける。 |
+| `:info <target>` | 定義、binding、dispatch、operator application query の解決情報を表示する。`$name` による binding 強制、typed call / typed operator の正規化結果、選択 impl、関連 command を出せることを契約に含める。 |
+| `:type <binding>` | REPL binding の型と `TypeIdentity` を表示する。対象は binding のみで、定義名、typed query、任意式は受けない。`$name` による binding 強制を許可する。 |
+| `:lens <lens-target>` | LensPath 定義または `$lens_binding` の canonical path、segment 一覧、停止点を表示する。値 access 式や一般の callable / plain value は受けず、Lens query surface は command query 専用の制限された対象に限る。 |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
+| `:save <path>` | 現在の REPL session を `.eldr` に保存する |
 
-REPL query grammar は `symbol | typed-call | typed-operator | expr` の共有 parser で扱う。
+REPL command query は Surtr 式 parser ではなく、command query parser と semantic resolver の組で扱う。
 
-- `typed-call`: `callee(arg1, arg2, ...)`
-- `typed-operator`: `lhs OP rhs` (`|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`)
-- query operand は既存 binding、literal、`_ : Type`、型式 (`Int`, `Result<Int>`, `(Int -> String)`) を受け付ける
-- 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で型変数を置換した結果を表示する
-- `:sig pair._1` は `Lens::view(Tuple._1, pair)` 相当の sugar 展開として表示してよい
+- 共通引数 surface は `ConcreteTypeKey | BindingKey | ForcedBindingKey | CaptureQuery` に限定する
+- `ConcreteTypeKey` は `Int`, `Result<Int>`, `(Int -> String)` のような具象型のみを受け、`$T`, `List<$T>`, `impl Numeric` は受けない
+- `ForcedBindingKey` は `$name` で表し、binding lookup を明示する
+- `CaptureQuery` は `&to_string`, `&add(Int, &1)`, `&replace($from, &1, $to)` のような command query 専用 pattern とし、literal、任意式、placeholder 付き capture の再帰を禁止する
+- operator query は `lhs OP rhs` (`|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`) を取り、RHS は実コードの引数注入規則に沿う限定 surface のみ許可する
+- `_1` は pipe RHS の注入位置を示す query token であり closure 生成記法ではない
+- `to_string()`, `to_string(_1)`, `1 + 2`, `pair._1` のような任意式 surface は command query としては受けない
+- 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で concrete type / binding 解決後の置換結果を表示する
 
 ### 5.2 予約済み
 
 | コマンド | 説明 |
 |---|---|
-| `:type <binding>` | 現在見えている binding の型と TypeIdentity を表示する |
 | `:env` | 現在の束縛一覧を表示する |
 | `:reset` | セッションを初期化する |
 | `:step [expr]` | ステッパーを起動する |

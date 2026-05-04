@@ -86,7 +86,11 @@ pub fn present_for_cli(result: &ReplResult, color: bool) -> Vec<String> {
                 };
                 lines.extend(body_lines);
             }
-            lines.extend(details.iter().cloned());
+            if color {
+                lines.extend(details.iter().map(|line| styled::doc_detail_line(line)));
+            } else {
+                lines.extend(details.iter().cloned());
+            }
             lines
         }
         ReplOutput::EvalError { .. }

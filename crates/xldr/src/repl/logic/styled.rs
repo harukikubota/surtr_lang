@@ -204,6 +204,39 @@ pub fn info_line(line: &str) -> String {
     styled(line, Style::default().bold())
 }
 
+pub fn doc_detail_line(line: &str) -> String {
+    if let Some(rest) = line.strip_prefix("example: ") {
+        return concat([
+            styled("example", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            source_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("binding: ") {
+        return concat([
+            styled("binding", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            source_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("derived from: ") {
+        return concat([
+            styled("derived from", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            source_doc(rest),
+        ]);
+    }
+    if let Some(rest) = line.strip_prefix("captures: ") {
+        return concat([
+            styled("captures", Style::fg(Color::BrightBlack).bold()),
+            styled(": ", Style::fg(Color::BrightBlack)),
+            source_doc(rest),
+        ]);
+    }
+
+    info_line(line)
+}
+
 pub fn doc_signature_banner(symbol: &str, signature: &str) -> String {
     signature_banner(symbol, signature, true)
 }
@@ -854,5 +887,18 @@ mod tests {
         let rendered = markdown_doc_line("  `if(Boolean, (-> $A), (-> $A)) -> $A`");
         assert!(rendered.contains("\x1b[1;96mBoolean\x1b[0m"));
         assert!(rendered.contains("\x1b[1;33m$A\x1b[0m"));
+    }
+
+    #[test]
+    fn doc_detail_lines_style_type_and_example_sections() {
+        let ty = doc_detail_line("type: (Int, Int -> Int)");
+        assert!(ty.contains("\x1b[1;90mtype\x1b[0m"), "{ty:?}");
+        assert!(ty.contains("\x1b[96mInt\x1b[0m"), "{ty:?}");
+
+        let example = doc_detail_line("example: ret: Int = c(Int, Int)");
+        assert!(example.contains("\x1b[1;90mexample\x1b[0m"), "{example:?}");
+        assert!(example.contains("ret"), "{example:?}");
+        assert!(example.contains("\x1b[36m:\x1b[0m"), "{example:?}");
+        assert!(example.contains("\x1b[96mInt\x1b[0m"), "{example:?}");
     }
 }

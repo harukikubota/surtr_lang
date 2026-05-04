@@ -160,10 +160,7 @@ fn format_extractor_signature(
         Some(ty) => format!("{}: {}", param.name, format_ast_ty(ty)),
         None => param.name.clone(),
     };
-    format!(
-        "{name}{type_params}({param}) -> {}",
-        format_ast_ty(ret_ty)
-    )
+    format!("{name}{type_params}({param}) -> {}", format_ast_ty(ret_ty))
 }
 
 fn format_result_ctor_signature(
@@ -1906,5 +1903,4 @@ impl User {
         assert_eq!(user_stage[0].module_path, "First");
         assert_eq!(user_stage[1].module_path, "Second");
     }
-
 }

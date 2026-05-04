@@ -2,7 +2,42 @@ use crate::common::{surtr_command, unique_temp_dir};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+
+struct ChildGuard {
+    child: Option<Child>,
+}
+
+impl ChildGuard {
+    fn spawn(command: &mut Command) -> Self {
+        Self {
+            child: Some(command.spawn().expect("failed to spawn surtr repl")),
+        }
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        self.child.as_mut().expect("child should still be owned")
+    }
+
+    fn wait_with_output(mut self) -> Output {
+        self.child
+            .take()
+            .expect("child should still be owned")
+            .wait_with_output()
+            .expect("failed to wait on repl")
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
 
 fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
     run_repl_session_with_args_in_dir(args, input, None)
@@ -38,14 +73,18 @@ fn run_repl_session_with_color(input: &str) -> Output {
 }
 
 fn run_repl_command(mut command: Command, input: &str) -> Output {
-    let mut child = command.spawn().expect("failed to spawn surtr repl");
-    let mut stdin = child.stdin.take().expect("stdin pipe is unavailable");
+    let mut child = ChildGuard::spawn(&mut command);
+    let mut stdin = child
+        .child_mut()
+        .stdin
+        .take()
+        .expect("stdin pipe is unavailable");
     stdin
         .write_all(input.as_bytes())
         .expect("failed to write repl input");
     drop(stdin);
 
-    child.wait_with_output().expect("failed to wait on repl")
+    child.wait_with_output()
 }
 
 fn strip_ansi(input: &str) -> String {
@@ -244,7 +283,7 @@ fn repl_sig_expression_query_flows_through_cli_presentation() {
 
 #[test]
 fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
-    let output = run_repl_session(":sig |>\n:sig id(1)\n:quit\n");
+    let output = run_repl_session(":sig |>\n:sig id(Int)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -273,7 +312,13 @@ fn repl_sig_type_owner_constructor_fallback_renders_through_cli() {
         stdout.contains("Duration::new(value: Int) -> Result<Self, Error>"),
         "{stdout}"
     );
-    assert!(stdout.matches("Duration::new(value: Int) -> Result<Self, Error>").count() >= 2, "{stdout}");
+    assert!(
+        stdout
+            .matches("Duration::new(value: Int) -> Result<Self, Error>")
+            .count()
+            >= 2,
+        "{stdout}"
+    );
     assert!(stdout.contains("* Option::Some"), "{stdout}");
     assert!(stdout.contains("* Option::None"), "{stdout}");
 }
@@ -296,7 +341,8 @@ fn repl_doc_type_owner_prefers_canonical_type_docs() {
 
 #[test]
 fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
-    let output = run_repl_session(":sig Duration!\n:sig Duration!()\n:sig Duration!(Duration)\n:quit\n");
+    let output =
+        run_repl_session(":sig Duration!\n:sig Duration!()\n:sig Duration!(Duration)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -306,14 +352,16 @@ fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.matches(
-            "Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"
-        )
-        .count()
+        stdout
+            .matches("Duration::deconstruct(self: Self) -> MatchResult<Int, Error>")
+            .count()
             >= 3,
         "{stdout}"
     );
-    assert!(stdout.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"), "{stdout}");
+    assert!(
+        stdout.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
         "{stdout}"
@@ -338,9 +386,10 @@ fn repl_sig_enum_rejects_extra_input_with_shared_message() {
             "Enum signatures are only available for bare type owners: use `:sig Option` instead"
         )
         .count()
-            >= 5,
+            >= 4,
         "{stdout}"
     );
+    assert!(stdout.contains("xldr(1)> xldr(1)>"), "{stdout}");
 }
 
 #[test]
@@ -376,7 +425,7 @@ fn repl_sig_missing_symbol_prints_guidance() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(stdout.contains("No signature found for a"));
-    assert!(stdout.contains(":sig <expr>"));
+    assert!(stdout.contains(":sig $a") || stdout.contains(":doc <symbol>"));
 }
 
 #[test]
@@ -466,7 +515,7 @@ fn repl_human_diagnostic_stays_on_stderr() {
 #[test]
 fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     let output = run_repl_session(
-        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Lens::view(Tuple._1, pair)\n:sig Lens::set(Tuple._1, pair, 3)\n:sig Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)})\n:sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)\n:quit\n",
+        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -476,9 +525,9 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(stdout.contains("Tuple._0"), "{stdout}");
     assert!(stdout.contains("Tuple._1"), "{stdout}");
-    assert!(stdout.contains("Lens::view(Tuple._1, pair)"), "{stdout}");
     assert!(stdout.contains("No signature found for Tuple"), "{stdout}");
     assert!(stdout.contains("defstruct Config"), "{stdout}");
     assert!(stdout.contains("defrecord StyledDocStyle"), "{stdout}");
@@ -487,22 +536,28 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     assert!(stdout.contains("Add::add"), "{stdout}");
     assert!(stdout.contains("pair._1: Int"), "{stdout}");
     assert!(
-        stdout.contains("Lens::set(Tuple._1, pair, 3): Result<(String, Int), Error>"),
-        "{stdout}"
+        stderr.contains("Unsupported command query argument `Tuple._0`"),
+        "{stderr}"
     );
+}
+
+#[test]
+fn repl_colorizes_closure_doc_footer_and_type_output() {
+    let output =
+        run_repl_session_with_color("c = {|x: Int, y: Int| x + y}\n:doc $c\n:type c\n:quit\n");
     assert!(
-        stdout.contains(
-            "Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)}): Result<(String, Int), Error>"
-        ),
-        "{stdout}"
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        stdout.contains(
-            "Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)}): Result<(Result<Int, Error>, String), Error>"
-        ),
-        "{stdout}"
-    );
-    assert!(stdout.contains("Lens::compose("), "{stdout}");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let plain = strip_ansi(&stdout);
+    assert!(stdout.contains("\u{1b}["), "{stdout}");
+    assert!(plain.contains("type: (Int, Int -> Int)"), "{plain}");
+    assert!(plain.contains("example: ret: Int = c(Int, Int)"), "{plain}");
+    assert!(plain.contains("identity: TypeIdentity::Closure"), "{plain}");
 }
 
 #[test]

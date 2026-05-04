@@ -20,7 +20,8 @@ use super::command::{parse_repl_command, ReplCommand};
 use super::output::{ReplOutput, ReplResult};
 use super::query::{
     ast_ty_from_query_arg, format_query_ty, parse_binding_query_type, parse_repl_query,
-    parse_signature_type, QueryArg, QueryArgKind, ReplQuery, TypedCallQuery, TypedOperatorQuery,
+    parse_signature_type, CaptureQuery, OperatorRhs, QueryArg, QueryArgKind, ReplQuery,
+    TypedCallQuery, TypedOperatorQuery,
 };
 use super::render;
 use crate::loader::{self, StagedModule};
@@ -753,8 +754,7 @@ impl ReplEngine {
             ":help, :h [command]  Show REPL help".to_string(),
             ":quit, :exit         Exit the REPL".to_string(),
             ":doc <symbol|query>  Show documentation for a visible symbol or query".to_string(),
-            ":sig <symbol|expr>   Show the signature for a visible function or expression"
-                .to_string(),
+            ":sig <function|query> Show the signature for a visible function or query".to_string(),
             ":info <query>        Show derived information for a visible symbol or query"
                 .to_string(),
             ":type <binding>      Show the type and identity for a visible binding".to_string(),
@@ -768,17 +768,17 @@ impl ReplEngine {
     fn doc_help_lines() -> Vec<String> {
         vec![
             "Usage: :doc <symbol|query>".to_string(),
-            "Also: :doc <typed-call>".to_string(),
-            "Examples: :doc print, :doc match, :doc cond, :doc Closure, :doc Kernel::if, :doc Add, :doc +, :doc Duration(Int), :doc Duration!(), :doc gt(3, 2)"
+            "Also: :doc $<binding>".to_string(),
+            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc Add, :doc +, :doc User(), :doc User!(), :doc gt(Int, Int), :doc $formatter"
                 .to_string(),
         ]
     }
 
     fn sig_help_lines() -> Vec<String> {
         vec![
-            "Usage: :sig <function|expr>".to_string(),
-            "Also: :sig <typed-call>".to_string(),
-            "Examples: :sig print, :sig Duration, :sig Duration(), :sig Duration!(), :sig gt(_ : Float, _ : Float), :sig ret |>= up"
+            "Usage: :sig <function|query>".to_string(),
+            "Also: :sig $<binding>".to_string(),
+            "Examples: :sig print, :sig User, :sig User!(), :sig gt(Int, Int), :sig ret |>= up, :sig $formatter"
                 .to_string(),
         ]
     }
@@ -786,16 +786,18 @@ impl ReplEngine {
     fn info_help_lines() -> Vec<String> {
         vec![
             "Usage: :info <query>".to_string(),
-            "Accepts: symbol | typed-call | typed-operator | expr".to_string(),
-            "Examples: :info print, :info id(1), :info ret |>= up, :info 1 + 2".to_string(),
+            "Accepts: symbol | $binding | typed-call | typed-operator".to_string(),
+            "Examples: :info print, :info $value, :info gt(Int, Int), :info ret |>= up".to_string(),
         ]
     }
 
     fn type_help_lines() -> Vec<String> {
         vec![
             "Usage: :type <binding>".to_string(),
-            "Examples: :type list, :type my_closure".to_string(),
-            "Looks up the latest visible binding only; expressions are not supported.".to_string(),
+            "Also: :type $<binding>".to_string(),
+            "Examples: :type list, :type $my_closure".to_string(),
+            "Looks up the latest visible binding only; symbols and expressions are not supported."
+                .to_string(),
         ]
     }
 
@@ -877,11 +879,15 @@ impl ReplEngine {
         if trimmed.is_empty() {
             return Self::plain(Self::doc_help_lines());
         }
+        if let Some(binding_name) = trimmed.strip_prefix('$') {
+            return self
+                .handle_doc_binding(binding_name)
+                .unwrap_or_else(|| Self::plain(vec![format!("No binding found for {}", trimmed)]));
+        }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => self.handle_doc_symbol(trimmed, &symbol),
             Ok(ReplQuery::TypedCall(query)) => self.handle_doc_typed_call(trimmed, &query),
             Ok(ReplQuery::TypedOperator(query)) => self.handle_doc_typed_operator(trimmed, &query),
-            Ok(ReplQuery::Expr(_)) => Self::plain(Self::doc_help_lines()),
             Err(err) => self.repl_query_diagnostic(
                 &format!(":doc {trimmed}"),
                 err.message().to_string(),
@@ -902,9 +908,6 @@ impl ReplEngine {
         }
         if let Some(entry) = self.special_form_doc_entry(symbol) {
             return ReplResult::ok(Self::doc_resolved_output(entry));
-        }
-        if let Some(binding_doc) = self.handle_doc_binding(symbol) {
-            return binding_doc;
         }
         let canonical = self
             .visible_helper_trait_alias(symbol)
@@ -945,7 +948,20 @@ impl ReplEngine {
                 .undocumented_doc_output(&canonical)
                 .map(|output| ReplResult::ok(output))
                 .unwrap_or_else(|| {
-                    Self::plain(vec![format!("No docs found for {}", source_symbol)])
+                    if let Some(binding) = self.binding_info(source_symbol) {
+                        Self::plain(vec![
+                            format!("No docs found for symbol `{}`.", source_symbol),
+                            String::new(),
+                            format!(
+                                "A REPL binding named `{}` exists:\n  {} : {}",
+                                source_symbol, source_symbol, binding.ty
+                            ),
+                            String::new(),
+                            format!("Try:\n  :doc ${source_symbol}"),
+                        ])
+                    } else {
+                        Self::plain(vec![format!("No docs found for {}", source_symbol)])
+                    }
                 }),
             [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
             entries => Self::plain(Self::ambiguous_doc_lines(source_symbol, entries)),
@@ -986,9 +1002,15 @@ impl ReplEngine {
         source_query: &str,
         query: &TypedOperatorQuery,
     ) -> ReplResult {
+        if let Some(synthetic) = Self::synthetic_pipe_call_query(query) {
+            return self.handle_doc_typed_call(source_query, &synthetic);
+        }
+        let OperatorRhs::QueryArg(rhs) = &query.rhs else {
+            return Self::plain(vec![format!("No docs found for {}", source_query)]);
+        };
         let synthetic = TypedCallQuery {
             callee: Self::canonical_symbol(query.operator).to_string(),
-            args: vec![query.lhs.clone(), query.rhs.clone()],
+            args: vec![query.lhs.clone(), rhs.clone()],
         };
         self.handle_doc_typed_call(source_query, &synthetic)
     }
@@ -998,6 +1020,58 @@ impl ReplEngine {
             .iter()
             .find_map(|(alias, trait_name)| (*alias == symbol).then_some(*trait_name))
             .unwrap_or(symbol)
+    }
+
+    fn synthetic_pipe_call_query(query: &TypedOperatorQuery) -> Option<TypedCallQuery> {
+        if query.operator != "|>" {
+            return None;
+        }
+        let OperatorRhs::TopLevelCall(call) = &query.rhs else {
+            return None;
+        };
+
+        let mut saw_placeholder = false;
+        let mut args = Vec::with_capacity(call.args.len() + 1);
+        for arg in &call.args {
+            if matches!(arg.kind, QueryArgKind::PipePlaceholder) {
+                if saw_placeholder {
+                    return None;
+                }
+                saw_placeholder = true;
+                args.push(query.lhs.clone());
+            } else {
+                args.push(arg.clone());
+            }
+        }
+        if !saw_placeholder {
+            args.insert(0, query.lhs.clone());
+        }
+
+        Some(TypedCallQuery {
+            callee: call.callee.clone(),
+            args,
+        })
+    }
+
+    fn typed_call_expression_source(query: &TypedCallQuery) -> Option<String> {
+        if query.callee.ends_with('!') {
+            return None;
+        }
+        let args = query
+            .args
+            .iter()
+            .map(Self::query_arg_expression_source)
+            .collect::<Option<Vec<_>>>()?;
+        Some(format!("{}({})", query.callee, args.join(", ")))
+    }
+
+    fn query_arg_expression_source(arg: &QueryArg) -> Option<String> {
+        match &arg.kind {
+            QueryArgKind::Binding(name) => Some(name.clone()),
+            QueryArgKind::ForcedBinding(name) => Some(name.clone()),
+            QueryArgKind::Capture(capture) => Some(capture.source.clone()),
+            QueryArgKind::TypeExpr(_) | QueryArgKind::PipePlaceholder => None,
+        }
     }
 
     fn definition_doc_kind(symbol: &str) -> Option<DocKind> {
@@ -1189,7 +1263,7 @@ impl ReplEngine {
 
         Some(ReplResult::ok(Self::doc_resolved_output_with_details(
             entry,
-            self.binding_doc_details(symbol, binding, &value),
+            self.binding_doc_details(symbol, binding, &value, kind),
         )))
     }
 
@@ -1226,12 +1300,12 @@ impl ReplEngine {
         symbol: &str,
         binding: &forge::BindingInfo,
         value: &Value,
+        kind: forge::ReplCallableKind,
     ) -> Vec<String> {
-        let mut details = vec![format!("binding: {symbol}")];
-        details.push(format!("signature: {}", binding.ty));
-
-        match self.binding_callable_kind(binding) {
-            Some(forge::ReplCallableKind::Capture) => {
+        match kind {
+            forge::ReplCallableKind::Capture => {
+                let mut details = vec![format!("binding: {symbol}")];
+                details.push(format!("type: {}", binding.ty));
                 if let Value::Callable(callable) = value {
                     let capture_count = callable.lexical_captures.len();
                     if capture_count == 0 {
@@ -1243,20 +1317,39 @@ impl ReplEngine {
                 if let Some(derived) = self.callable_origin_label(value) {
                     details.push(format!("derived from: {derived}"));
                 }
+                details
             }
-            Some(forge::ReplCallableKind::Closure) => {
-                let captures = if binding.callable_captures.is_empty() {
-                    "none".to_string()
-                } else {
-                    binding.callable_captures.join(", ")
-                };
-                details.push(format!("captures: {captures}"));
-                details.push("derived from: closure literal".to_string());
-            }
-            None => {}
+            forge::ReplCallableKind::Closure => self.closure_binding_doc_details(symbol, binding),
         }
+    }
 
+    fn closure_binding_doc_details(
+        &self,
+        symbol: &str,
+        binding: &forge::BindingInfo,
+    ) -> Vec<String> {
+        let mut details = vec![format!("type: {}", binding.ty)];
+        if let Some(example) = Self::closure_binding_example(symbol, &binding.ty) {
+            details.push(format!("example: {example}"));
+        }
         details
+    }
+
+    fn closure_binding_example(symbol: &str, signature: &str) -> Option<String> {
+        let ty = parse_binding_query_type(signature)?;
+        let AstTy::Func(_, params, ret) = ty else {
+            return None;
+        };
+        let args = params
+            .iter()
+            .map(format_query_ty)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "ret: {} = {}({args})",
+            format_query_ty(ret.as_ref()),
+            symbol
+        ))
     }
 
     fn callable_origin_label(&self, value: &Value) -> Option<String> {
@@ -1276,6 +1369,10 @@ impl ReplEngine {
 
     fn doc_method_tail(qualified_name: &str) -> &str {
         qualified_name.rsplit("::").next().unwrap_or(qualified_name)
+    }
+
+    fn callee_tail(callee: &str) -> &str {
+        callee.rsplit("::").next().unwrap_or(callee)
     }
 
     fn matching_doc_entries<'a>(
@@ -1350,15 +1447,27 @@ impl ReplEngine {
                     .iter()
                     .find_map(|(alias, trait_name)| (*alias == query.callee).then_some(*trait_name))
             });
+        let callee_tail = Self::callee_tail(&query.callee);
+        let callee_is_qualified = Self::is_qualified_symbol(&query.callee);
         let mut matches = self
             .docs
             .iter()
             .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == query.callee)
+            .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == callee_tail)
+            .filter(|entry| {
+                if !callee_is_qualified {
+                    return true;
+                }
+                entry.qualified_name == query.callee
+                    || entry
+                        .signature
+                        .as_deref()
+                        .is_some_and(|sig| sig.starts_with(&format!("{}(", query.callee)))
+            })
             .filter(|entry| {
                 entry.signature.as_deref().is_some_and(|sig| {
                     if sig.starts_with("impl ") {
-                        return sig.contains(&format!(" for {receiver_ty}::{}", query.callee));
+                        return sig.contains(&format!(" for {receiver_ty}::{callee_tail}"));
                     }
                     Self::signature_matches_callee(sig, &query.callee)
                 })
@@ -1401,7 +1510,10 @@ impl ReplEngine {
         }
     }
 
-    fn match_owner_typed_call_docs<'a>(&'a self, query: &TypedCallQuery) -> Option<Vec<&'a DocEntry>> {
+    fn match_owner_typed_call_docs<'a>(
+        &'a self,
+        query: &TypedCallQuery,
+    ) -> Option<Vec<&'a DocEntry>> {
         if let Some(owner) = query.callee.strip_suffix('!') {
             let decl = self.visible_declaration(owner)?;
             if decl.kind != sigil::DeclarationKind::Struct {
@@ -1569,6 +1681,15 @@ impl ReplEngine {
         if trimmed.is_empty() {
             return Self::plain(Self::sig_help_lines());
         }
+        if let Some(binding_name) = trimmed.strip_prefix('$') {
+            let Some(_binding) = self.binding_info(binding_name) else {
+                return Self::plain(vec![format!("No binding found for {}", trimmed)]);
+            };
+            if let Some(rendered) = self.binding_callable_sig_summary(binding_name) {
+                return Self::styled(vec![rendered]);
+            }
+            return Self::plain(vec![format!("No signature found for {}", trimmed)]);
+        }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => {
                 if matches!(self.parse_sig_symbol_as_expression(&symbol), Some(_)) {
@@ -1589,20 +1710,25 @@ impl ReplEngine {
                 if let Some(lines) = self.sig_type_owner_summary_lines(&symbol) {
                     return Self::styled(lines);
                 }
-                if let Some(rendered) = self.binding_callable_sig_summary(&symbol) {
-                    return Self::styled(vec![rendered]);
-                }
                 match self.find_signature(&symbol) {
                     Some((qualified_name, signature)) => {
                         let rendered =
                             Self::render_signature_with_qualified_name(&qualified_name, signature);
                         Self::styled(vec![rendered])
                     }
-                    None => Self::plain(vec![
-                        format!("No signature found for {}", trimmed),
-                        "Try `:sig <expr>` for an expression query or `:doc <symbol>` for docs."
-                            .to_string(),
-                    ]),
+                    None => {
+                        if self.binding_info(trimmed).is_some() {
+                            Self::plain(vec![
+                                format!("No signature found for {}", trimmed),
+                                format!("Try `:sig ${trimmed}` for a callable binding."),
+                            ])
+                        } else {
+                            Self::plain(vec![
+                                format!("No signature found for {}", trimmed),
+                                "Try `:doc <symbol>` for docs.".to_string(),
+                            ])
+                        }
+                    }
                 }
             }
             Ok(ReplQuery::TypedCall(query)) => {
@@ -1612,25 +1738,12 @@ impl ReplEngine {
                     self.handle_sig_typed_call(trimmed, &query)
                 }
             }
-            Ok(ReplQuery::TypedOperator(query)) => {
-                if query.lhs.source.is_empty() || query.rhs.source.is_empty() {
-                    Self::plain(vec![format!(
-                        "Invalid operator query: `{}` requires both left and right operands.",
-                        query.operator
-                    )])
-                } else {
-                    self.handle_sig_typed_operator(trimmed, &query)
-                }
-            }
-            Ok(ReplQuery::Expr(expr)) => self.handle_sig_expression(&expr),
+            Ok(ReplQuery::TypedOperator(query)) => self.handle_sig_typed_operator(trimmed, &query),
             Err(err) => self.repl_query_diagnostic(
                 &format!(":sig {trimmed}"),
                 err.message().to_string(),
                 err.span(),
-                Some(
-                    "Accepted forms: symbol, typed call, typed operator, or expression."
-                        .to_string(),
-                ),
+                Some("Accepted forms: symbol, typed call, or typed operator.".to_string()),
             ),
         }
     }
@@ -1648,32 +1761,36 @@ impl ReplEngine {
                     start: ":type ".chars().count(),
                     end: format!(":type {trimmed}").chars().count(),
                 },
-                Some("Usage: :type <binding>".to_string()),
+                Some("Usage: :type <binding> or :type $<binding>".to_string()),
                 Vec::new(),
             );
         }
+        let binding_name = trimmed.strip_prefix('$').unwrap_or(trimmed);
 
-        let Some(binding) = self.binding_info(trimmed) else {
+        let Some(binding) = self.binding_info(binding_name) else {
             return Self::plain(vec![format!("No binding found for {}", trimmed)]);
         };
 
         if binding.lens_info.is_some() {
-            return Self::plain(vec![format!(
-                "{} :: {}",
-                binding.ty.as_str(),
-                self.render_type_identity(binding, None)
-            )]);
+            return Self::styled(vec![
+                binding_name.to_string(),
+                format!("type: {}", binding.ty.as_str()),
+                format!("identity: {}", self.render_type_identity(binding, None)),
+            ]);
         }
 
         let Some(value) = self.vm.get_local(binding.slot_id) else {
             return Self::plain(vec![format!("Binding `{}` has no current value.", trimmed)]);
         };
 
-        Self::plain(vec![format!(
-            "{} :: {}",
-            binding.ty.as_str(),
-            self.render_type_identity(binding, Some(&value))
-        )])
+        Self::styled(vec![
+            binding_name.to_string(),
+            format!("type: {}", binding.ty.as_str()),
+            format!(
+                "identity: {}",
+                self.render_type_identity(binding, Some(&value))
+            ),
+        ])
     }
 
     fn handle_info(&mut self, query: &str) -> ReplResult {
@@ -1685,15 +1802,11 @@ impl ReplEngine {
             Ok(ReplQuery::Symbol(symbol)) => self.handle_info_symbol(trimmed, &symbol),
             Ok(ReplQuery::TypedCall(query)) => self.handle_info_typed_call(trimmed, &query),
             Ok(ReplQuery::TypedOperator(query)) => self.handle_info_typed_operator(trimmed, &query),
-            Ok(ReplQuery::Expr(expr)) => self.handle_info_expression(&expr),
             Err(err) => self.repl_query_diagnostic(
                 &format!(":info {trimmed}"),
                 err.message().to_string(),
                 err.span(),
-                Some(
-                    "Accepted forms: symbol, typed call, typed operator, or expression."
-                        .to_string(),
-                ),
+                Some("Accepted forms: symbol, typed call, or typed operator.".to_string()),
             ),
         }
     }
@@ -1888,41 +2001,31 @@ impl ReplEngine {
     }
 
     fn handle_info_symbol(&self, source_query: &str, symbol: &str) -> ReplResult {
+        let binding_lookup = symbol.strip_prefix('$').unwrap_or(symbol);
         if let Some(binding) = self.binding_info(symbol) {
-            let mut lines = vec![symbol.to_string()];
-            let kind = match self.binding_callable_kind(binding) {
-                Some(forge::ReplCallableKind::Closure) => "closure",
-                Some(forge::ReplCallableKind::Capture) => "capture",
-                None => "binding",
-            };
-            lines.push(format!("kind: {kind}"));
-            lines.push("origin: repl".to_string());
-            if binding.lens_info.is_some() {
-                lines.push(format!("type: {}", binding.ty));
-                lines.push(format!(
-                    "identity: {}",
-                    self.render_type_identity(binding, None)
-                ));
-                if let Some(lens_info) = &binding.lens_info {
-                    lines.push(format!("full path: {}", lens_info.full_path));
-                }
-            } else if let Some(value) = self.vm.get_local(binding.slot_id) {
-                lines.push(format!("type: {}", binding.ty));
-                lines.push(format!(
-                    "identity: {}",
-                    self.render_type_identity(binding, Some(&value))
-                ));
+            return self.render_info_binding(symbol, binding);
+        }
+        if binding_lookup != symbol {
+            if let Some(binding) = self.binding_info(binding_lookup) {
+                return self.render_info_binding(binding_lookup, binding);
             }
-            if let Some(sig) = self.binding_callable_sig_summary(symbol) {
-                lines.push(format!("defined: {sig}"));
-            }
-            return Self::styled(lines);
         }
 
         if let Some((qualified_name, signature)) = self.find_signature(symbol) {
+            let kind = self
+                .visible_declaration(symbol)
+                .map(|decl| match decl.kind {
+                    sigil::DeclarationKind::Enum => "enum",
+                    sigil::DeclarationKind::Struct
+                    | sigil::DeclarationKind::Record
+                    | sigil::DeclarationKind::BuiltinType
+                    | sigil::DeclarationKind::Trait => "type",
+                    _ => "function",
+                })
+                .unwrap_or("function");
             return Self::styled(vec![
                 qualified_name.clone(),
-                "kind: function".to_string(),
+                format!("kind: {kind}"),
                 format!("origin: {}", Self::origin_for_name(&qualified_name)),
                 format!(
                     "defined: {}",
@@ -1932,6 +2035,37 @@ impl ReplEngine {
         }
 
         Self::plain(vec![format!("No signature found for {}", source_query)])
+    }
+
+    fn render_info_binding(&self, symbol: &str, binding: &forge::BindingInfo) -> ReplResult {
+        let mut lines = vec![symbol.to_string()];
+        let kind = match self.binding_callable_kind(binding) {
+            Some(forge::ReplCallableKind::Closure) => "closure",
+            Some(forge::ReplCallableKind::Capture) => "capture",
+            None => "binding",
+        };
+        lines.push(format!("kind: {kind}"));
+        lines.push("origin: repl".to_string());
+        if binding.lens_info.is_some() {
+            lines.push(format!("type: {}", binding.ty));
+            lines.push(format!(
+                "identity: {}",
+                self.render_type_identity(binding, None)
+            ));
+            if let Some(lens_info) = &binding.lens_info {
+                lines.push(format!("full path: {}", lens_info.full_path));
+            }
+        } else if let Some(value) = self.vm.get_local(binding.slot_id) {
+            lines.push(format!("type: {}", binding.ty));
+            lines.push(format!(
+                "identity: {}",
+                self.render_type_identity(binding, Some(&value))
+            ));
+        }
+        if let Some(sig) = self.binding_callable_sig_summary(symbol) {
+            lines.push(format!("defined: {sig}"));
+        }
+        Self::styled(lines)
     }
 
     fn handle_info_typed_call(&mut self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
@@ -1965,6 +2099,15 @@ impl ReplEngine {
         source_query: &str,
         query: &TypedOperatorQuery,
     ) -> ReplResult {
+        if let Some(synthetic) = Self::synthetic_pipe_call_query(query) {
+            let mut result = self.handle_info_typed_call(source_query, &synthetic);
+            if let ReplOutput::StyledDoc { lines } = &mut result.output {
+                if let Some(kind) = lines.iter_mut().find(|line| line.starts_with("kind: ")) {
+                    *kind = "kind: operator query".to_string();
+                }
+            }
+            return result;
+        }
         match self.typed_operator_signature(query) {
             Ok((defined, result_ty)) => Self::styled(vec![
                 source_query.to_string(),
@@ -1987,131 +2130,6 @@ impl ReplEngine {
                 None,
             ),
         }
-    }
-
-    fn handle_info_expression(&mut self, source_query: &str) -> ReplResult {
-        let original_pending = self.pending.clone();
-        let original_source = self
-            .sources
-            .source(self.repl_source_id)
-            .unwrap_or("")
-            .to_string();
-        let query_source = format!("{source_query}\n");
-        let sigil_cp = self.sigil_session.checkpoint();
-        let scar_cp = self.scar_session.checkpoint();
-        let forge_cp = self.forge_session.checkpoint();
-
-        self.sources
-            .update_source(self.repl_source_id, query_source.clone());
-
-        let result = self.handle_info_expression_inner(source_query, &query_source);
-
-        self.sigil_session.rollback(sigil_cp);
-        self.scar_session.rollback(scar_cp);
-        self.forge_session.rollback(forge_cp);
-        self.pending = original_pending;
-        self.sources
-            .update_source(self.repl_source_id, original_source);
-
-        result
-    }
-
-    fn handle_info_expression_inner(
-        &mut self,
-        source_query: &str,
-        query_source: &str,
-    ) -> ReplResult {
-        let ast = match spire::parse_with_context(
-            query_source,
-            spire::ParserContext::repl(self.repl_source_id.0)
-                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
-        ) {
-            Ok(ast) => ast,
-            Err(e) => {
-                let message = e.message();
-                let spec = diagnostics::parse_error_spec(query_source, message, e.span().clone());
-                let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                return ReplResult::ok(ReplOutput::EvalError {
-                    idx: self.results.len(),
-                    source: format!(":info {source_query}"),
-                    rendered,
-                });
-            }
-        };
-
-        let resolved = match self.sigil_session.resolve(ast) {
-            Ok(r) => r,
-            Err(e) => {
-                let spec =
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None);
-                let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                return ReplResult::ok(ReplOutput::EvalError {
-                    idx: self.results.len(),
-                    source: format!(":info {source_query}"),
-                    rendered,
-                });
-            }
-        };
-
-        let typed = match self.scar_session.typecheck_with_context(
-            resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::ReplChunk,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
-        ) {
-            Ok(t) => t,
-            Err(e) => {
-                let error = diagnostics::TypeErrorDiagnostic::new(e.message, e.span, e.hint);
-                let spec =
-                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
-                let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                return ReplResult::ok(ReplOutput::EvalError {
-                    idx: self.results.len(),
-                    source: format!(":info {source_query}"),
-                    rendered,
-                });
-            }
-        };
-
-        let Some(root) = typed.first() else {
-            return Self::plain(Self::info_help_lines());
-        };
-
-        Self::styled(vec![
-            source_query.to_string(),
-            "kind: expr".to_string(),
-            "origin: repl".to_string(),
-            format!("type: {}", Self::ty_to_string(&root.ty)),
-            format!(
-                "specialized: {}",
-                Self::render_expression_signature(
-                    source_query,
-                    &Ast::Var(Span { start: 0, end: 0 }, source_query.to_string()),
-                    root
-                )
-            ),
-        ])
     }
 
     fn origin_for_name(name: &str) -> &'static str {
@@ -2163,13 +2181,21 @@ impl ReplEngine {
     }
 
     fn handle_sig_expression(&mut self, source_query: &str) -> ReplResult {
+        self.handle_sig_expression_with_source(source_query, source_query)
+    }
+
+    fn handle_sig_expression_with_source(
+        &mut self,
+        source_query: &str,
+        parse_source: &str,
+    ) -> ReplResult {
         let original_pending = self.pending.clone();
         let original_source = self
             .sources
             .source(self.repl_source_id)
             .unwrap_or("")
             .to_string();
-        let query_source = format!("{source_query}\n");
+        let query_source = format!("{parse_source}\n");
         let sigil_cp = self.sigil_session.checkpoint();
         let scar_cp = self.scar_session.checkpoint();
         let forge_cp = self.forge_session.checkpoint();
@@ -2864,7 +2890,7 @@ impl ReplEngine {
         }
     }
 
-    fn handle_sig_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
+    fn handle_sig_typed_call(&mut self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
         if let Some(message) = self.invalid_attached_extractor_query_message(query) {
             return Self::plain(vec![message]);
         }
@@ -2873,6 +2899,9 @@ impl ReplEngine {
         }
         if let Some(lines) = self.sig_zero_arg_type_owner_fallback(query) {
             return Self::styled(lines);
+        }
+        if let Some(expr_source) = Self::typed_call_expression_source(query) {
+            return self.handle_sig_expression_with_source(source_query, &expr_source);
         }
         if let Some(binding) = self.binding_info(&query.callee) {
             if let Some(rendered) = self.handle_sig_binding_typed_call(source_query, query, binding)
@@ -2976,10 +3005,7 @@ impl ReplEngine {
         }
     }
 
-    fn constructor_signature_lines(
-        &self,
-        decl: &sigil::DeclarationEntry,
-    ) -> Option<Vec<String>> {
+    fn constructor_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {
         let qualified_name = format!("{}::new", decl.fq_name);
         let mut matches = self
             .docs
@@ -3016,22 +3042,20 @@ impl ReplEngine {
         None
     }
 
-    fn enum_variant_signature_lines(
-        &self,
-        decl: &sigil::DeclarationEntry,
-    ) -> Option<Vec<String>> {
-        let entry = self.docs.iter().rev().find(|entry| {
-            entry.kind == DocKind::Type && entry.qualified_name == decl.fq_name
-        });
+    fn enum_variant_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {
+        let entry = self
+            .docs
+            .iter()
+            .rev()
+            .find(|entry| entry.kind == DocKind::Type && entry.qualified_name == decl.fq_name);
         if let Some(entry) = entry {
             if let Some(signature) = entry.signature.as_deref() {
-                if let Some((_owner_surface, variants_src)) = Self::parse_defenum_signature(signature)
+                if let Some((_owner_surface, variants_src)) =
+                    Self::parse_defenum_signature(signature)
                 {
                     let variants = Self::split_top_level_items(variants_src)
                         .into_iter()
-                        .map(|variant| {
-                            Self::render_enum_variant_listing(&decl.fq_name, &variant)
-                        })
+                        .map(|variant| Self::render_enum_variant_listing(&decl.fq_name, &variant))
                         .collect::<Vec<_>>();
                     if !variants.is_empty() {
                         return Some(variants);
@@ -3040,25 +3064,27 @@ impl ReplEngine {
             }
         }
 
-        self.scar_session.enum_variants_of(&decl.fq_name).and_then(|variants| {
-            let lines = variants
-                .iter()
-                .map(|variant| {
-                    if variant.payload.is_empty() {
-                        format!("* {}::{}", decl.fq_name, variant.short_name)
-                    } else {
-                        let payload = variant
-                            .payload
-                            .iter()
-                            .map(Self::ty_to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("* {}::{}({payload})", decl.fq_name, variant.short_name)
-                    }
-                })
-                .collect::<Vec<_>>();
-            (!lines.is_empty()).then_some(lines)
-        })
+        self.scar_session
+            .enum_variants_of(&decl.fq_name)
+            .and_then(|variants| {
+                let lines = variants
+                    .iter()
+                    .map(|variant| {
+                        if variant.payload.is_empty() {
+                            format!("* {}::{}", decl.fq_name, variant.short_name)
+                        } else {
+                            let payload = variant
+                                .payload
+                                .iter()
+                                .map(Self::ty_to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("* {}::{}({payload})", decl.fq_name, variant.short_name)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                (!lines.is_empty()).then_some(lines)
+            })
     }
 
     fn parse_defenum_signature(signature: &str) -> Option<(String, &str)> {
@@ -3111,10 +3137,13 @@ impl ReplEngine {
     }
 
     fn handle_sig_typed_operator(
-        &self,
+        &mut self,
         source_query: &str,
         query: &TypedOperatorQuery,
     ) -> ReplResult {
+        if let Some(synthetic) = Self::synthetic_pipe_call_query(query) {
+            return self.handle_sig_typed_call(source_query, &synthetic);
+        }
         match self.typed_operator_signature(query) {
             Ok((defined, result_ty)) => Self::styled(
                 format!(
@@ -3226,6 +3255,42 @@ impl ReplEngine {
         matches!(ty, AstTy::Func(_, _, _)).then_some(ty)
     }
 
+    fn capture_query_type(&self, capture: &CaptureQuery) -> Result<AstTy, String> {
+        if !capture.args.is_empty() {
+            return Err(format!(
+                "Capture query `{}` is only supported inside direct `|>` call queries.",
+                capture.source
+            ));
+        }
+
+        if let Some(binding) = self.binding_info(&capture.callable) {
+            return self.binding_callable_ty(binding).ok_or_else(|| {
+                format!(
+                    "Binding `{}` does not have a callable query type.",
+                    capture.callable
+                )
+            });
+        }
+
+        let Some((_qualified, signature)) = self.find_signature(&capture.callable) else {
+            return Err(format!(
+                "No callable signature found for capture query `{}`.",
+                capture.source
+            ));
+        };
+        let Some((params, ret)) = Self::signature_param_asts_and_return(&signature) else {
+            return Err(format!(
+                "Callable `{}` has an unsupported signature for capture queries.",
+                capture.callable
+            ));
+        };
+        Ok(AstTy::Func(
+            Span { start: 0, end: 0 },
+            params,
+            Box::new(ret),
+        ))
+    }
+
     fn callable_kind_for_typed_node(typed: &TypedNode) -> Option<forge::ReplCallableKind> {
         match &typed.node {
             TypedInner::Closure(params, _, _)
@@ -3289,15 +3354,21 @@ impl ReplEngine {
                 parse_binding_query_type(&ty)
                     .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))
             }
-            QueryArgKind::Expr => Err(format!(
-                "Unsupported typed call query argument `{}`. Use literals, existing bindings, or `_ : Type`.",
-                arg.source
-            )),
-            QueryArgKind::Literal(_)
-            | QueryArgKind::AnnotatedHole(_)
-            | QueryArgKind::TypeExpr(_) => ast_ty_from_query_arg(arg).ok_or_else(|| {
+            QueryArgKind::ForcedBinding(name) => {
+                let Some(ty) = self.binding_type(name) else {
+                    return Err(format!("Unknown query binding `{name}`."));
+                };
+                parse_binding_query_type(&ty)
+                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))
+            }
+            QueryArgKind::Capture(capture) => self.capture_query_type(capture),
+            QueryArgKind::PipePlaceholder => Err(
+                "Pipe placeholder `_1` is only valid inside a top-level `|>` call."
+                    .to_string(),
+            ),
+            QueryArgKind::TypeExpr(_) => ast_ty_from_query_arg(arg).ok_or_else(|| {
                 format!(
-                    "Unsupported typed operator query operand `{}`. Use literals, existing bindings, or a type such as `(Int -> String)`.",
+                    "Unsupported typed operator query operand `{}`. Use an existing binding or a concrete type such as `(Int -> String)`.",
                     arg.source
                 )
             }),
@@ -3308,16 +3379,22 @@ impl ReplEngine {
         &self,
         query: &TypedOperatorQuery,
     ) -> Result<(String, AstTy), String> {
+        let OperatorRhs::QueryArg(rhs) = &query.rhs else {
+            return Err(format!(
+                "Unsupported operator query `{}`. Use a direct callable or binding on the right-hand side.",
+                query.operator
+            ));
+        };
         let lhs_ty = self.query_arg_ast_ty(&query.lhs).map_err(|_| {
             format!(
-                "Unsupported typed operator query operand `{}`. Use literals, existing bindings, or a type such as `(Int -> String)`.",
+                "Unsupported typed operator query operand `{}`. Use an existing binding or a concrete type such as `(Int -> String)`.",
                 query.lhs.source
             )
         })?;
-        let rhs_ty = self.query_arg_ast_ty(&query.rhs).map_err(|_| {
+        let rhs_ty = self.query_arg_ast_ty(rhs).map_err(|_| {
             format!(
-                "Unsupported typed operator query operand `{}`. Use literals, existing bindings, or a type such as `(Int -> String)`.",
-                query.rhs.source
+                "Unsupported typed operator query operand `{}`. Use an existing binding or a concrete type such as `(Int -> String)`.",
+                rhs.source
             )
         })?;
         match query.operator {
@@ -3868,6 +3945,7 @@ impl ReplEngine {
         if symbol.is_empty() {
             return false;
         }
+        let symbol = symbol.strip_prefix('$').unwrap_or(symbol);
         if matches!(
             symbol,
             "True"
@@ -4371,13 +4449,14 @@ impl ReplEngine {
 
 impl ReplEngine {
     fn sync_scar_fun_index_with_vm(&mut self) {
-        self.scar_session
-            .reconcile_function_indices(self.vm.bytecode().functions.iter().filter_map(|entry| {
+        self.scar_session.reconcile_function_indices(
+            self.vm.bytecode().functions.iter().filter_map(|entry| {
                 entry
                     .qualified_name
                     .as_deref()
                     .map(|qualified_name| (qualified_name, entry.fun_idx))
-            }));
+            }),
+        );
         let next_fun_idx = self
             .vm
             .bytecode()
@@ -4766,5 +4845,4 @@ mod tests {
             other => panic!("expected runtime bootstrap failure, got {:?}", other),
         }
     }
-
 }

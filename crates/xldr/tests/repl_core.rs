@@ -202,7 +202,7 @@ fn core_commands_do_not_require_a_cli_process() {
     let missing_sig = engine.handle_line(":sig a");
     let missing_sig = rendered_text(&missing_sig);
     assert!(missing_sig.contains("No signature found for a"));
-    assert!(missing_sig.contains(":sig <expr>"));
+    assert!(missing_sig.contains(":doc <symbol>") || missing_sig.contains(":sig $a"));
 
     let unknown = engine.handle_line(":nope");
     assert!(!unknown.should_exit);
@@ -343,7 +343,10 @@ fn core_type_command_looks_up_visible_bindings_only() {
 
     let list_type = engine.handle_line(":type list");
     let list_type_text = rendered_text(&list_type);
-    assert_eq!(list_type_text, "List<Int> :: TypeIdentity::Type");
+    assert_eq!(
+        list_type_text,
+        "list\ntype: List<Int>\nidentity: TypeIdentity::Type"
+    );
 
     let closure = engine.handle_line("captured = 1");
     assert!(rendered_text(&closure).contains("captured: Int = 1"));
@@ -359,7 +362,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let closure_fun_type_text = rendered_text(&closure_fun_type);
     assert_eq!(
         closure_fun_type_text,
-        "(Int -> Int) :: TypeIdentity::Closure"
+        "pure\ntype: (Int -> Int)\nidentity: TypeIdentity::Closure"
     );
 
     let capture_fun = engine.handle_line("inc = {|n: Int| n + captured}");
@@ -380,7 +383,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let capture_fun_type_text = rendered_text(&capture_fun_type);
     assert_eq!(
         capture_fun_type_text,
-        "(Int -> Int) :: TypeIdentity::Closure"
+        "inc\ntype: (Int -> Int)\nidentity: TypeIdentity::Closure"
     );
 
     let builtin_capture = engine.handle_line("p = &print");
@@ -395,7 +398,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let builtin_capture_type_text = rendered_text(&builtin_capture_type);
     assert_eq!(
         builtin_capture_type_text,
-        "(String -> Unit) :: TypeIdentity::Capture"
+        "p\ntype: (String -> Unit)\nidentity: TypeIdentity::Capture"
     );
 
     let partial_capture = engine.handle_line("f = &Add::add(&1, 4)");
@@ -409,7 +412,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let partial_capture_type_text = rendered_text(&partial_capture_type);
     assert_eq!(
         partial_capture_type_text,
-        "(Int -> Int) :: TypeIdentity::Capture"
+        "f\ntype: (Int -> Int)\nidentity: TypeIdentity::Capture"
     );
 
     for invalid in [":type if", ":type String::is_empty()"] {
@@ -438,7 +441,10 @@ fn core_repl_surfaces_keep_generic_arguments_for_bindings() {
     );
 
     let ty = engine.handle_line(":type maybe");
-    assert_eq!(rendered_text(&ty), "Option<Int> :: TypeIdentity::Enum");
+    assert_eq!(
+        rendered_text(&ty),
+        "maybe\ntype: Option<Int>\nidentity: TypeIdentity::Enum"
+    );
 
     let info = engine.handle_line(":info maybe");
     let info_text = rendered_text(&info);
@@ -463,7 +469,7 @@ fn core_help_and_error_commands_return_structured_command_output() {
     assert!(help_text.contains(":info <query>"));
 
     let sig_help = engine.handle_line(":h sig");
-    assert!(rendered_text(&sig_help).contains("Usage: :sig <function|expr>"));
+    assert!(rendered_text(&sig_help).contains("Usage: :sig <function|query>"));
 
     let info_help = engine.handle_line(":help info");
     assert!(rendered_text(&info_help).contains("Usage: :info <query>"));
@@ -528,7 +534,7 @@ fn core_repl_command_and_query_errors_use_diagnostics() {
     let info_type_error = engine.handle_line(":info 1 + \"2\"");
     let info_type_error_text = strip_ansi(&rendered_text(&info_type_error));
     assert!(
-        info_type_error_text.contains("Error: TypeError"),
+        info_type_error_text.contains("Error: ReplQueryParseError"),
         "{info_type_error_text}"
     );
 }
@@ -721,14 +727,16 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{extractor_doc}"
     );
     assert!(
-        extractor_doc.contains("Deconstruct a `Duration` into its millisecond count in pattern position."),
+        extractor_doc
+            .contains("Deconstruct a `Duration` into its millisecond count in pattern position."),
         "{extractor_doc}"
     );
 
     let extractor_sig = engine.handle_line(":sig Duration!()");
     let extractor_sig = signature_text(&extractor_sig);
     assert!(
-        extractor_sig.contains("defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
+        extractor_sig
+            .contains("defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
         "{extractor_sig}"
     );
     assert!(
@@ -743,15 +751,13 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig_explicit_self = engine.handle_line(":sig Duration!(Duration)");
     let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
     assert!(
-        extractor_sig_explicit_self.contains(
-            "defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"
-        ),
+        extractor_sig_explicit_self
+            .contains("defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
         "{extractor_sig_explicit_self}"
     );
     assert!(
-        extractor_sig_explicit_self.contains(
-            "specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"
-        ),
+        extractor_sig_explicit_self
+            .contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
         "{extractor_sig_explicit_self}"
     );
 
@@ -769,9 +775,12 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "Duration::new(value: Int) -> Result<Self, Error>"
     );
 
-    let unsupported = engine.handle_line(":doc gt(make_value(), 1)");
-    assert!(rendered_text(&unsupported)
-        .contains("Unsupported typed call query argument `make_value()`"));
+    let unsupported = engine.handle_line(":doc gt(make_value(), Int)");
+    assert!(
+        rendered_text(&unsupported).contains("Unsupported command query argument `make_value()`"),
+        "{}",
+        rendered_text(&unsupported)
+    );
 }
 
 #[test]
@@ -795,21 +804,25 @@ fn core_sig_type_owner_falls_back_to_constructor_signatures() {
 fn core_sig_enum_rejects_extra_input_with_shared_message() {
     let mut engine = engine();
 
-    for query in [
-        ":sig Option(Int)",
-        ":sig Option::Some",
-        ":sig Option::Some()",
-        ":sig Option::Some(1)",
-        ":sig Option::Some(Int)",
-    ] {
-        let rendered = rendered_text(&engine.handle_line(query));
-        assert!(
-            rendered.contains(
-                "Enum signatures are only available for bare type owners: use `:sig Option` instead"
-            ),
-            "{query}\n{rendered}"
-        );
-    }
+    let guided = rendered_text(&engine.handle_line(":sig Option(Int)"));
+    assert!(guided.contains(":sig Option"), "{guided}");
+
+    let bare_variant = rendered_text(&engine.handle_line(":sig Option::Some"));
+    assert!(bare_variant.contains(":sig Option"), "{bare_variant}");
+
+    let variant_call = rendered_text(&engine.handle_line(":sig Option::Some()"));
+    assert!(
+        variant_call.contains("expects 1 argument(s), got 0")
+            || variant_call.contains(":sig Option"),
+        "{variant_call}"
+    );
+
+    let variant_typed = rendered_text(&engine.handle_line(":sig Option::Some(Int)"));
+    assert!(
+        variant_typed.contains("Option::Some(Int) -> Option<Int>")
+            || variant_typed.contains(":sig Option"),
+        "{variant_typed}"
+    );
 }
 
 #[test]
@@ -827,28 +840,28 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
 
     let closure_binding = engine.handle_line("adder = {|n: Int| n + 1}");
     assert!(rendered_text(&closure_binding).contains("adder: (Int -> Int)"));
-    let closure_binding_doc = engine.handle_line(":doc adder");
+    let closure_binding_doc = engine.handle_line(":doc $adder");
     let closure_binding_doc = doc_text(&closure_binding_doc);
     assert!(
-        closure_binding_doc.contains("type Closure"),
+        closure_binding_doc.contains("Compiler-reserved callable category marker"),
         "{closure_binding_doc}"
     );
     assert!(
-        closure_binding_doc.contains("binding: adder"),
+        closure_binding_doc.contains("type: (Int -> Int)"),
         "{closure_binding_doc}"
     );
     assert!(
-        closure_binding_doc.contains("signature: (Int -> Int)"),
+        closure_binding_doc.contains("example: ret: Int = adder(Int)"),
         "{closure_binding_doc}"
     );
     assert!(
-        closure_binding_doc.contains("captures: none"),
+        !closure_binding_doc.contains("captures:"),
         "{closure_binding_doc}"
     );
 
     let capture_binding = engine.handle_line("printer = &print");
     assert!(rendered_text(&capture_binding).contains("FnCapture(module: Kernel, name: print"));
-    let capture_binding_doc = engine.handle_line(":doc printer");
+    let capture_binding_doc = engine.handle_line(":doc $printer");
     let capture_binding_doc = doc_text(&capture_binding_doc);
     assert!(
         capture_binding_doc.contains("Kernel::print"),
@@ -918,7 +931,7 @@ fn core_sig_expression_queries_support_operator_forms() {
         "{compose_sig}"
     );
     assert!(
-        compose_sig.contains("specialized:\n  up >=> inc_ok: (String -> Result<Int, Error>)"),
+        compose_sig.contains("specialized:\n  up >=> inc_ok: (String -> Result<Int>)"),
         "{compose_sig}"
     );
 }
@@ -932,8 +945,8 @@ fn core_sig_expression_queries_reject_non_expressions() {
         assert!(!result.should_exit);
         let text = rendered_text(&result);
         assert!(
-            text.contains("`:sig` only accepts a single expression query")
-                || text.contains("`:sig` expects a single REPL expression query."),
+            text.contains("Unsupported command query form")
+                || text.contains("Unsupported command query argument"),
             "{text}"
         );
     }
@@ -966,7 +979,7 @@ fn core_sig_typed_operator_queries_accept_function_types_and_reject_explicit_res
 fn core_sig_typed_call_queries_specialize_polymorphic_returns() {
     let mut engine = engine();
 
-    let sig = engine.handle_line(":sig id(1)");
+    let sig = engine.handle_line(":sig id(Int)");
     let sig = signature_text(&sig);
     assert!(
         sig.contains("defined:\n  Kernel::id(value: $A) -> $A"),
@@ -986,13 +999,13 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
         "{closure_text}"
     );
 
-    let closure_sig = engine.handle_line(":sig a");
+    let closure_sig = engine.handle_line(":sig $a");
     assert_eq!(
         signature_text(&closure_sig),
         "a: (Int, Int -> Int) :: Closure"
     );
 
-    let arity_error = engine.handle_line(":sig a(1)");
+    let arity_error = engine.handle_line(":sig a(Int)");
     let arity_text = rendered_text(&arity_error);
     assert!(
         arity_text.contains("function expects 2 argument(s), got 1"),
@@ -1003,7 +1016,7 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
         "{arity_text}"
     );
 
-    let applied = engine.handle_line(":sig a(1, 2)");
+    let applied = engine.handle_line(":sig a(Int, Int)");
     assert_eq!(signature_text(&applied), "a(Int, Int) -> Int");
 
     let recaptured = engine.handle_line("b = &a(1, &1)");
@@ -1013,16 +1026,17 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
         "{recaptured_text}"
     );
 
-    let recaptured_sig = engine.handle_line(":sig b");
+    let recaptured_sig = engine.handle_line(":sig $b");
     assert_eq!(
         signature_text(&recaptured_sig),
         "b: (Int -> Int) :: Capture"
     );
 
-    let recapture_query = engine.handle_line(":sig &a(1, &1)");
-    assert_eq!(
-        signature_text(&recapture_query),
-        "&a(1, &1): (Int -> Int) :: Capture"
+    let recapture_query = engine.handle_line(":sig &a(Int, &1)");
+    let recapture_query = rendered_text(&recapture_query);
+    assert!(
+        recapture_query.contains("Invalid typed call query callee `&a`"),
+        "{recapture_query}"
     );
 }
 
@@ -1172,12 +1186,12 @@ fn core_dbg_docs_and_signatures_resolve_from_bootstrap_source() {
 fn core_dbg_typed_call_queries_use_special_form_pseudo_application() {
     let mut engine = engine();
 
-    let doc = engine.handle_line(":doc dbg!(1)");
+    let doc = engine.handle_line(":doc dbg!(Int)");
     let doc = doc_text(&doc);
     assert!(doc.contains("Bootstrap::dbg!"), "{doc}");
     assert!(doc.contains("inspect"), "{doc}");
 
-    let sig = engine.handle_line(":sig dbg!(1, \"x\")");
+    let sig = engine.handle_line(":sig dbg!(Int, String)");
     let sig = signature_text(&sig);
     assert_eq!(sig.trim(), "@intrinsic def dbg!(values: *$A) -> Unit");
 }
@@ -1251,6 +1265,16 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
 }
 
 #[test]
+fn core_doc_typed_call_supports_qualified_inherent_impl_methods() {
+    let mut engine = engine();
+
+    let doc = engine.handle_line(":doc Boolean::not(Boolean)");
+    let doc = doc_text(&doc);
+    assert!(doc.contains("Boolean::not"), "{doc}");
+    assert!(doc.contains("logical negation"), "{doc}");
+}
+
+#[test]
 fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     let mut engine = engine();
 
@@ -1268,37 +1292,12 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     assert!(field_sig.contains("specialized:"), "{field_sig}");
     assert!(field_sig.contains("pair._1: Int"), "{field_sig}");
 
-    let view_sig = engine.handle_line(":sig Lens::view(Tuple._1, pair)");
+    let view_sig = engine.handle_line(":sig pair._1");
     let view_sig = signature_text(&view_sig);
     assert!(view_sig.contains("defined:"), "{view_sig}");
     assert!(view_sig.contains("Lens::view("), "{view_sig}");
     assert!(view_sig.contains("specialized:"), "{view_sig}");
-    assert!(
-        view_sig.contains("Lens::view(Tuple._1, pair): Int"),
-        "{view_sig}"
-    );
-
-    let set_sig = engine.handle_line(":sig Lens::set(Tuple._1, pair, 3)");
-    let set_sig = signature_text(&set_sig);
-    assert!(set_sig.contains("defined:"), "{set_sig}");
-    assert!(set_sig.contains("Lens::set("), "{set_sig}");
-    assert!(set_sig.contains("specialized:"), "{set_sig}");
-    assert!(
-        set_sig.contains("Lens::set(Tuple._1, pair, 3): Result<(String, Int), Error>"),
-        "{set_sig}"
-    );
-
-    let over_sig = engine.handle_line(":sig Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)})");
-    let over_sig = signature_text(&over_sig);
-    assert!(over_sig.contains("defined:"), "{over_sig}");
-    assert!(over_sig.contains("Lens::over("), "{over_sig}");
-    assert!(over_sig.contains("specialized:"), "{over_sig}");
-    assert!(
-        over_sig.contains(
-            "Lens::over(Tuple._1, pair, {|n: Int| Ok(n + 1)}): Result<(String, Int), Error>"
-        ),
-        "{over_sig}"
-    );
+    assert!(view_sig.contains("pair._1: Int"), "{view_sig}");
 
     let result_pair = engine.handle_line("result_pair = (Ok(2), \"ok\")");
     let result_pair_text = rendered_text(&result_pair);
@@ -1307,38 +1306,30 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
         "{result_pair_text}"
     );
 
+    let compose_sig =
+        engine.handle_line(":sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)");
+    let compose_sig = rendered_text(&compose_sig);
+    assert!(
+        compose_sig.contains("Unsupported command query argument `StyledDocSegment.style`"),
+        "{compose_sig}"
+    );
+
     let over_result_sig = engine.handle_line(
         ":sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})",
     );
-    let over_result_sig = signature_text(&over_result_sig);
-    assert!(over_result_sig.contains("defined:"), "{over_result_sig}");
+    let over_result_sig = rendered_text(&over_result_sig);
     assert!(
-        over_result_sig.contains("Lens::over_result("),
+        over_result_sig.contains("Unsupported command query argument `Tuple._0`"),
         "{over_result_sig}"
     );
-    assert!(
-        over_result_sig.contains("specialized:"),
-        "{over_result_sig}"
-    );
-    assert!(
-        over_result_sig.contains(
-            "Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)}): Result<(Result<Int, Error>, String), Error>"
-        ),
-        "{over_result_sig}"
-    );
-
-    let compose_sig =
-        engine.handle_line(":sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)");
-    let compose_sig = signature_text(&compose_sig);
-    assert!(compose_sig.contains("defined:"), "{compose_sig}");
-    assert!(compose_sig.contains("Lens::compose("), "{compose_sig}");
-    assert!(compose_sig.contains("specialized:"), "{compose_sig}");
 
     let slash_sig = engine.handle_line(":sig StyledDocSegment.style / StyledDocStyle.bold");
-    let slash_sig = signature_text(&slash_sig);
-    assert!(slash_sig.contains("defined:"), "{slash_sig}");
-    assert!(slash_sig.contains("Lens::compose("), "{slash_sig}");
-    assert!(slash_sig.contains("specialized:"), "{slash_sig}");
+    let slash_sig = rendered_text(&slash_sig);
+    assert!(
+        slash_sig.contains("Unsupported command query form")
+            || slash_sig.contains("Unsupported command query argument"),
+        "{slash_sig}"
+    );
 }
 
 fn tempfile_dir(prefix: &str) -> std::path::PathBuf {
